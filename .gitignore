@@ -1,0 +1,56 @@
+# General
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+*.env
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+
+# Type checking / tooling
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.vite/
+.eslintcache
+
+# SQLite databases (runtime artifacts)
+*.sqlite
+*.sqlite3
+*.db
+
+# IDE / editor
+.vscode/
+.idea/
+.history/
+
