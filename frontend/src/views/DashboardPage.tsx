@@ -8,10 +8,9 @@ export function DashboardPage() {
         Dashboard
       </Typography>
       <Typography color="text.secondary">
-        High-level overview of P&amp;L, strategies, and broker connection will appear here in future
-        sprints.
+        High-level overview of P&amp;L, strategies, and broker connection will appear
+        here in future sprints.
       </Typography>
     </Box>
   )
 }
-

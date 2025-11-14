@@ -59,4 +59,3 @@ export function useHealth(pollIntervalMs = 15000) {
     isLoading: status === 'idle' || status === 'loading',
   }
 }
-

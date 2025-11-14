@@ -82,7 +82,11 @@ export function MainLayout({ children }: MainLayoutProps) {
   )
 
   const statusLabel =
-    status === 'ok' ? 'API: Connected' : status === 'error' ? 'API: Error' : 'API: Checking'
+    status === 'ok'
+      ? 'API: Connected'
+      : status === 'error'
+        ? 'API: Error'
+        : 'API: Checking'
 
   const statusColor: 'default' | 'success' | 'error' =
     status === 'ok' ? 'success' : status === 'error' ? 'error' : 'default'
