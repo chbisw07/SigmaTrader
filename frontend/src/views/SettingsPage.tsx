@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react'
 import {
   fetchRiskSettings,
   fetchStrategies,
+  createRiskSettings,
   updateStrategyExecutionMode,
   type RiskSettings,
   type Strategy,
@@ -39,6 +40,16 @@ export function SettingsPage() {
   const [requestToken, setRequestToken] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [updatingStrategyId, setUpdatingStrategyId] = useState<number | null>(null)
+  const [savingRisk, setSavingRisk] = useState(false)
+  const [riskScope, setRiskScope] = useState<'GLOBAL' | 'STRATEGY'>('GLOBAL')
+  const [riskStrategyId, setRiskStrategyId] = useState<string>('')
+  const [riskMaxOrderValue, setRiskMaxOrderValue] = useState<string>('')
+  const [riskMaxQty, setRiskMaxQty] = useState<string>('')
+  const [riskMaxDailyLoss, setRiskMaxDailyLoss] = useState<string>('')
+  const [riskClampMode, setRiskClampMode] = useState<'CLAMP' | 'REJECT'>('CLAMP')
+  const [riskShortSelling, setRiskShortSelling] = useState<'ALLOWED' | 'DISABLED'>(
+    'ALLOWED',
+  )
 
   useEffect(() => {
     let active = true
@@ -143,14 +154,70 @@ export function SettingsPage() {
     }
   }
 
+  const handleSaveRiskSettings = async () => {
+    try {
+      if (riskScope === 'STRATEGY' && !riskStrategyId) {
+        setError('Please select a strategy for STRATEGY scope risk settings.')
+        return
+      }
+
+      const payload: any = {
+        scope: riskScope,
+        strategy_id:
+          riskScope === 'STRATEGY' ? Number(riskStrategyId) : null,
+        allow_short_selling: riskShortSelling === 'ALLOWED',
+        clamp_mode: riskClampMode,
+      }
+
+      if (riskMaxOrderValue.trim() !== '') {
+        const v = Number(riskMaxOrderValue)
+        if (!Number.isFinite(v) || v <= 0) {
+          setError('Max order value must be a positive number.')
+          return
+        }
+        payload.max_order_value = v
+      }
+
+      if (riskMaxQty.trim() !== '') {
+        const v = Number(riskMaxQty)
+        if (!Number.isFinite(v) || v <= 0) {
+          setError('Max quantity per order must be a positive number.')
+          return
+        }
+        payload.max_quantity_per_order = v
+      }
+
+      if (riskMaxDailyLoss.trim() !== '') {
+        const v = Number(riskMaxDailyLoss)
+        if (!Number.isFinite(v) || v <= 0) {
+          setError('Max daily loss must be a positive number.')
+          return
+        }
+        payload.max_daily_loss = v
+      }
+
+      setSavingRisk(true)
+      const created = await createRiskSettings(payload)
+      setRiskSettings((prev) => [...prev, created])
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to save risk settings',
+      )
+    } finally {
+      setSavingRisk(false)
+    }
+  }
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
         Settings
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Read-only view of strategies and risk settings. Editing flows will be added in later
-        sprints.
+        Manage strategies, risk settings, and Zerodha connection details.
       </Typography>
 
       <Paper sx={{ mb: 3, p: 2 }}>
@@ -296,6 +363,103 @@ export function SettingsPage() {
             <Typography variant="h6" gutterBottom>
               Risk Settings
             </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Define global or per-strategy limits. Leave fields blank to skip a particular
+              limit; new rows are added to the table below.
+            </Typography>
+            <Box
+              sx={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 1.5,
+                alignItems: 'center',
+                mb: 2,
+              }}
+            >
+              <TextField
+                select
+                label="Scope"
+                size="small"
+                value={riskScope}
+                onChange={(e) =>
+                  setRiskScope(e.target.value as 'GLOBAL' | 'STRATEGY')
+                }
+              >
+                <MenuItem value="GLOBAL">GLOBAL</MenuItem>
+                <MenuItem value="STRATEGY">STRATEGY</MenuItem>
+              </TextField>
+              {riskScope === 'STRATEGY' && (
+                <TextField
+                  select
+                  label="Strategy"
+                  size="small"
+                  sx={{ minWidth: 160 }}
+                  value={riskStrategyId}
+                  onChange={(e) => setRiskStrategyId(e.target.value)}
+                >
+                  {strategies.map((s) => (
+                    <MenuItem key={s.id} value={s.id}>
+                      {s.name}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+              <TextField
+                label="Max Order Value"
+                size="small"
+                type="number"
+                value={riskMaxOrderValue}
+                onChange={(e) => setRiskMaxOrderValue(e.target.value)}
+              />
+              <TextField
+                label="Max Qty/Order"
+                size="small"
+                type="number"
+                value={riskMaxQty}
+                onChange={(e) => setRiskMaxQty(e.target.value)}
+              />
+              <TextField
+                label="Max Daily Loss"
+                size="small"
+                type="number"
+                value={riskMaxDailyLoss}
+                onChange={(e) => setRiskMaxDailyLoss(e.target.value)}
+              />
+              <TextField
+                select
+                label="Clamp Mode"
+                size="small"
+                value={riskClampMode}
+                onChange={(e) =>
+                  setRiskClampMode(e.target.value as 'CLAMP' | 'REJECT')
+                }
+              >
+                <MenuItem value="CLAMP">CLAMP</MenuItem>
+                <MenuItem value="REJECT">REJECT</MenuItem>
+              </TextField>
+              <TextField
+                select
+                label="Short Selling"
+                size="small"
+                value={riskShortSelling}
+                onChange={(e) =>
+                  setRiskShortSelling(
+                    e.target.value as 'ALLOWED' | 'DISABLED',
+                  )
+                }
+              >
+                <MenuItem value="ALLOWED">Allowed</MenuItem>
+                <MenuItem value="DISABLED">Disabled</MenuItem>
+              </TextField>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={handleSaveRiskSettings}
+                disabled={savingRisk}
+              >
+                {savingRisk ? 'Saving…' : 'Add Risk Row'}
+              </Button>
+            </Box>
             <Table size="small">
               <TableHead>
                 <TableRow>

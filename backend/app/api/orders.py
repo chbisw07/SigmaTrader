@@ -13,6 +13,7 @@ from app.core.crypto import decrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection, Order
 from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
+from app.services.risk import evaluate_order_risk
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -224,6 +225,33 @@ def execute_order(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Order has invalid quantity.",
         )
+
+    # Apply risk checks before contacting Zerodha. This runs for both
+    # manual queue execution and AUTO strategies (which call this endpoint
+    # internally from the webhook handler).
+    risk = evaluate_order_risk(db, order)
+    if risk.blocked:
+        order.status = "REJECTED_RISK"
+        order.error_message = risk.reason
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Order rejected by risk engine: {risk.reason}",
+        )
+
+    if risk.clamped and risk.final_qty != order.qty:
+        order.qty = risk.final_qty
+        # Preserve any previous error message but append the clamp note.
+        clamp_note = risk.reason or "Order quantity clamped by risk engine."
+        if order.error_message:
+            order.error_message = f"{order.error_message}; {clamp_note}"
+        else:
+            order.error_message = clamp_note
+        db.add(order)
+        db.commit()
+        db.refresh(order)
 
     symbol = order.symbol
     exchange = order.exchange or "NSE"

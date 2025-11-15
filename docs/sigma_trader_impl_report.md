@@ -164,7 +164,7 @@ Pending work:
 
 ---
 
-### S02 / G03 – Strategy & risk admin APIs + read-only UI
+### S02 / G03 – Strategy & risk admin APIs + Settings UI
 
 Tasks: `S02_G03_TB001`, `S02_G03_TB002`, `S02_G03_TF003`
 
@@ -192,16 +192,24 @@ Tasks: `S02_G03_TB001`, `S02_G03_TB002`, `S02_G03_TF003`
   - `frontend/src/services/admin.ts` – fetch helpers:
     - `fetchStrategies()` → `GET /api/strategies/`.
     - `fetchRiskSettings()` → `GET /api/risk-settings/`.
+    - Later extended (in S06) with:
+      - `updateStrategyExecutionMode(...)` – `PUT /api/strategies/{id}`.
+      - `createRiskSettings(...)` – `POST /api/risk-settings/`.
   - `frontend/src/views/SettingsPage.tsx`:
     - Loads strategies and risk settings on mount.
-    - Shows loading spinner, error message, or two MUI tables:
-      - Strategies: Name / Mode / Enabled / Description.
-      - Risk Settings: Scope / Strategy ID / Max Order Value / Max Qty / Max Daily Loss / Clamp Mode.
-    - Notes that this is a read-only view for now.
+    - Shows loading spinner, error message, or two MUI sections:
+      - Strategies:
+        - Table with Name / Mode / Enabled / Description.
+        - Mode column is now an editable select (MANUAL/AUTO) wired to `updateStrategyExecutionMode`, allowing per-strategy execution_mode changes from the UI.
+      - Risk Settings:
+        - Inline form for adding GLOBAL or STRATEGY-scoped risk settings:
+          - Fields for Max Order Value, Max Qty/Order, Max Daily Loss, Clamp Mode (CLAMP/REJECT), and Short Selling (Allowed/Disabled).
+          - Uses `createRiskSettings` to create new rows in `/api/risk-settings/`.
+        - Table listing existing risk settings rows with Scope / Strategy ID / Max Order Value / Max Qty / Max Daily Loss / Clamp Mode.
 
 Pending work:
 
-- Add DELETE endpoints, richer validation messages, and editable admin UI once full flows are designed.
+- Add DELETE endpoints, richer validation messages, and more advanced admin UX (editing existing risk rows, bulk operations) as the configuration surface grows.
 
 ---
 
@@ -703,3 +711,111 @@ Pending work:
   - Insert risk checks into both MANUAL (queue) and AUTO (immediate) paths before broker execution, and ensure risk decisions are visible in order records and UI.
 - Consider evolving the webhook response semantics for AUTO mode:
   - For example, returning more explicit status codes or payload fields indicating whether auto-execution succeeded (`SENT`) or failed (`FAILED`), while balancing TradingView’s expectations around HTTP responses.
+
+### S06 / G02 – Risk Engine v1: limits and clamp/reject behaviour
+
+Tasks: `S06_G02_TB001`, `S06_G02_TB002`, `S06_G02_TF003`
+
+- Backend: risk evaluation service and integration:
+  - `backend/app/models/trading.py`:
+    - `RiskSettings` already defines:
+      - `scope` (`GLOBAL` or `STRATEGY`) and `strategy_id`.
+      - `max_order_value`, `max_quantity_per_order`, `max_daily_loss`.
+      - `allow_short_selling`, `max_open_positions`, `clamp_mode` (`CLAMP`/`REJECT`), and symbol allow/deny lists.
+  - `backend/app/services/risk.py`:
+    - New `RiskResult` dataclass:
+      - `blocked: bool` – whether the order should be rejected by risk.
+      - `clamped: bool` – whether the quantity should be adjusted.
+      - `reason: Optional[str]` – human-readable explanation (used in `Order.error_message`).
+      - `original_qty`, `final_qty` – before/after quantities.
+    - `evaluate_order_risk(db, order) -> RiskResult`:
+      - Loads all `RiskSettings` and applies them in order:
+        - Global (`scope="GLOBAL"`) first.
+        - Strategy-specific (`scope="STRATEGY"` and matching `strategy_id`) second.
+      - Rules implemented for v1:
+        - `allow_short_selling`:
+          - If `False` and `order.side == "SELL"` → hard block:
+            - Returns `blocked=True`, `reason="Short selling is disabled in GLOBAL/STRATEGY(...)"`.
+        - `max_quantity_per_order`:
+          - If defined and `abs(qty) > max_quantity`:
+            - If `clamp_mode == "CLAMP"`:
+              - Clamps quantity to `±max_quantity`.
+              - Adds a reason noting the clamp and scope.
+            - If `clamp_mode == "REJECT"`:
+              - Blocks the order with an explanatory reason.
+        - `max_order_value`:
+          - If defined and `order.price` is not `None`:
+            - Computes `value = abs(qty * price)`.
+            - If `value > max_order_value`:
+              - If `clamp_mode == "CLAMP"`:
+                - Computes the maximum allowed quantity for that price and clamps to
+                  an **integer** number of units (using floor) because Zerodha does
+                  not accept fractional quantities.
+                - If the resulting integer quantity would be less than 1:
+                  - Rejects the order with a reason indicating it cannot be clamped
+                    to at least one whole unit.
+                - Otherwise adjusts quantity to that integer value and records
+                  a clamp reason.
+              - If `clamp_mode == "REJECT"`:
+                - Blocks the order with an explanatory reason.
+        - `max_daily_loss`:
+          - Deliberately not enforced yet; will be wired in once realized PnL is tracked (planned for S07).
+      - If no risk settings exist, or no rule is triggered, returns `blocked=False`, `clamped=False` with the original quantity.
+  - `backend/app/schemas/orders.py`:
+    - `AllowedOrderStatus` extended with `"REJECTED_RISK"` for orders blocked by risk rules.
+  - `backend/app/api/orders.py` (`execute_order`):
+    - Before constructing the Zerodha client or calling `place_order`, now:
+      - Calls `evaluate_order_risk(db, order)`.
+      - If `blocked`:
+        - Sets `order.status = "REJECTED_RISK"`.
+        - Sets `order.error_message` to the risk `reason`.
+        - Persists the order and raises `HTTPException(400, "Order rejected by risk engine: <reason>")`.
+        - This behaviour applies to both:
+          - Manual queue execution via `POST /api/orders/{id}/execute`.
+          - AUTO-mode execution invoked internally from the webhook handler.
+      - If `clamped`:
+        - Updates `order.qty` to `final_qty`.
+        - Appends a note to `order.error_message` describing the clamp (if any previous message existed).
+        - Persists the updated order.
+      - If neither blocked nor clamped:
+        - Proceeds as before.
+    - After risk evaluation, order execution continues as in S05/S06:
+      - Uses `_get_zerodha_client`, including AMO fallback for off-hours.
+      - On broker success: sets `status="SENT"`, `zerodha_order_id`, clears `error_message` (except for any risk clamp note already set).
+      - On broker failure: still sets `status="FAILED"` with the broker error message and returns HTTP 502.
+
+- Backend tests:
+  - `backend/tests/test_risk_engine.py`:
+    - Sets up a clean DB with:
+      - `Strategy(name="risk-test-strategy", execution_mode="AUTO", enabled=True)`.
+      - Global `RiskSettings` row with:
+        - `max_order_value=100000`, `max_quantity_per_order=100`, `allow_short_selling=False`, `clamp_mode="CLAMP"`.
+    - `test_risk_clamps_quantity_when_over_max_qty`:
+      - Creates an order with `qty=120`, `price=100`.
+      - Calls `evaluate_order_risk`.
+      - Asserts:
+        - `blocked=False`, `clamped=True`.
+        - `original_qty == 120`, `final_qty == 50` (clamped to the global limit).
+        - Reason string mentions clamping.
+    - `test_risk_blocks_short_selling_when_disabled`:
+      - Creates an order with `side="SELL"`, `qty=10`, `price=100`.
+      - Calls `evaluate_order_risk`.
+      - Asserts:
+        - `blocked=True`, `clamped=False`.
+        - Reason mentions “short selling is disabled”.
+
+- Frontend: surfacing risk decisions:
+  - `frontend/src/views/OrdersPage.tsx`:
+    - Already shows `Status`, `Mode`, `Broker ID`, and `Error` columns.
+    - With the new changes:
+      - Risk-rejected orders appear with `status="REJECTED_RISK"` and their risk explanation in the `Error` column.
+      - Clamped orders (that still execute) show:
+        - `status="SENT"` (or later status after sync).
+        - `Error` including a note such as:
+          - “Quantity clamped from 150.0 to 100.0 due to max_quantity_per_order=100.0 in GLOBAL.”
+    - This satisfies the v1 requirement to “show risk decisions in the UI” via the existing Error column.
+
+Pending work:
+
+- Implement daily loss enforcement once realized PnL is available (S07), and extend the risk service to incorporate `max_daily_loss` and `max_open_positions`.
+- Introduce more UI affordances (e.g., tooltips or icons) to distinguish risk-related notes from broker errors in the Orders view.

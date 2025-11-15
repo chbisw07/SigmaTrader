@@ -15,6 +15,7 @@ AllowedOrderStatus = Literal[
     "PARTIALLY_EXECUTED",
     "CANCELLED",
     "REJECTED",
+    "REJECTED_RISK",
 ]
 
 
