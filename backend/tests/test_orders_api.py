@@ -69,3 +69,35 @@ def test_queue_listing_and_cancel_flow() -> None:
         order = session.get(Order, order_id)
         assert order is not None
         assert order.status == "CANCELLED"
+
+
+def test_edit_order_in_waiting_queue() -> None:
+    order_id = _create_order_via_webhook()
+
+    # Edit qty, price, order_type, and product for the WAITING manual order
+    resp_edit = client.patch(
+        f"/api/orders/{order_id}",
+        json={
+            "qty": 5,
+            "price": 3600.0,
+            "order_type": "LIMIT",
+            "product": "CNC",
+        },
+    )
+    assert resp_edit.status_code == 200
+    edited = resp_edit.json()
+    assert edited["id"] == order_id
+    assert edited["qty"] == 5
+    assert edited["price"] == 3600.0
+    assert edited["order_type"] == "LIMIT"
+    assert edited["product"] == "CNC"
+    assert edited["status"] == "WAITING"
+
+    # Confirm in DB
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        assert order.qty == 5
+        assert order.price == 3600.0
+        assert order.order_type == "LIMIT"
+        assert order.product == "CNC"

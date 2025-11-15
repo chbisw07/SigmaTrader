@@ -35,6 +35,8 @@ class OrderRead(BaseModel):
     simulated: bool
     created_at: datetime
     updated_at: datetime
+    zerodha_order_id: Optional[str] = None
+    error_message: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -44,4 +46,17 @@ class OrderStatusUpdate(BaseModel):
     status: Literal["WAITING", "CANCELLED"]
 
 
-__all__ = ["OrderRead", "OrderStatusUpdate", "AllowedOrderStatus"]
+class OrderUpdate(BaseModel):
+    """Editable fields for a manual queue order.
+
+    For now we restrict editing to order-level parameters that do not
+    change the alert/strategy linkage.
+    """
+
+    qty: Optional[float] = None
+    price: Optional[float] = None
+    order_type: Optional[Literal["MARKET", "LIMIT"]] = None
+    product: Optional[str] = None
+
+
+__all__ = ["OrderRead", "OrderStatusUpdate", "OrderUpdate", "AllowedOrderStatus"]

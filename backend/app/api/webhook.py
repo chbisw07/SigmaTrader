@@ -46,9 +46,22 @@ def tradingview_webhook(
             detail="Invalid webhook secret.",
         )
 
+    # For now we only process alerts targeting Zerodha / generic TradingView.
+    platform_normalized = (payload.platform or "").lower()
+    if platform_normalized and platform_normalized not in {"zerodha", "tradingview"}:
+        logger.info(
+            "Ignoring webhook for unsupported platform=%s strategy=%s",
+            payload.platform,
+            payload.strategy_name,
+        )
+        return {"status": "ignored", "platform": payload.platform}
+
     strategy: Strategy | None = (
         db.query(Strategy).filter(Strategy.name == payload.strategy_name).one_or_none()
     )
+
+    product = (payload.trade_details.product or "MIS").upper()
+    order_type = "MARKET"
 
     alert = Alert(
         strategy_id=strategy.id if strategy else None,
@@ -67,7 +80,13 @@ def tradingview_webhook(
     db.commit()
     db.refresh(alert)
 
-    order = create_order_from_alert(db=db, alert=alert, mode="MANUAL")
+    order = create_order_from_alert(
+        db=db,
+        alert=alert,
+        mode="MANUAL",
+        product=product,
+        order_type=order_type,
+    )
 
     logger.info(
         "Stored alert id=%s symbol=%s action=%s strategy=%s",

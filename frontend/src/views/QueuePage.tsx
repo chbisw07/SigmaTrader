@@ -8,11 +8,19 @@ import TableCell from '@mui/material/TableCell'
 import TableHead from '@mui/material/TableHead'
 import TableRow from '@mui/material/TableRow'
 import Typography from '@mui/material/Typography'
+import Dialog from '@mui/material/Dialog'
+import DialogActions from '@mui/material/DialogActions'
+import DialogContent from '@mui/material/DialogContent'
+import DialogTitle from '@mui/material/DialogTitle'
+import TextField from '@mui/material/TextField'
+import MenuItem from '@mui/material/MenuItem'
 import { useEffect, useState } from 'react'
 
 import {
   cancelOrder,
   fetchQueueOrders,
+  executeOrder,
+  updateOrder,
   type Order,
 } from '../services/orders'
 
@@ -20,7 +28,16 @@ export function QueuePage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<number | null>(null)
+  const [busyCancelId, setBusyCancelId] = useState<number | null>(null)
+  const [busyExecuteId, setBusyExecuteId] = useState<number | null>(null)
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [editQty, setEditQty] = useState<string>('')
+  const [editPrice, setEditPrice] = useState<string>('')
+  const [editOrderType, setEditOrderType] = useState<'MARKET' | 'LIMIT'>(
+    'MARKET',
+  )
+  const [editProduct, setEditProduct] = useState<string>('MIS')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const loadQueue = async () => {
     try {
@@ -39,8 +56,56 @@ export function QueuePage() {
     void loadQueue()
   }, [])
 
+  const openEditDialog = (order: Order) => {
+    setEditingOrder(order)
+    setEditQty(String(order.qty))
+    setEditPrice(order.price != null ? String(order.price) : '')
+    setEditOrderType(order.order_type === 'LIMIT' ? 'LIMIT' : 'MARKET')
+    setEditProduct(order.product)
+    setError(null)
+  }
+
+  const closeEditDialog = () => {
+    setEditingOrder(null)
+    setSavingEdit(false)
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editingOrder) return
+    setSavingEdit(true)
+    try {
+      const qty = Number(editQty)
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new Error('Quantity must be a positive number')
+      }
+
+      const price =
+        editOrderType === 'MARKET' || editPrice.trim() === ''
+          ? null
+          : Number(editPrice)
+      if (price != null && (!Number.isFinite(price) || price < 0)) {
+        throw new Error('Price must be a non-negative number')
+      }
+
+      const updated = await updateOrder(editingOrder.id, {
+        qty,
+        price,
+        order_type: editOrderType,
+        product: editProduct,
+      })
+
+      setOrders((prev) =>
+        prev.map((o) => (o.id === updated.id ? updated : o)),
+      )
+      closeEditDialog()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update order')
+      setSavingEdit(false)
+    }
+  }
+
   const handleCancel = async (orderId: number) => {
-    setBusyId(orderId)
+    setBusyCancelId(orderId)
     try {
       const updated = await cancelOrder(orderId)
       setOrders((prev) =>
@@ -49,7 +114,21 @@ export function QueuePage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to cancel order')
     } finally {
-      setBusyId(null)
+      setBusyCancelId(null)
+    }
+  }
+
+  const handleExecute = async (orderId: number) => {
+    setBusyExecuteId(orderId)
+    try {
+      const updated = await executeOrder(orderId)
+      setOrders((prev) =>
+        prev.filter((o) => o.id !== updated.id),
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to execute order')
+    } finally {
+      setBusyExecuteId(null)
     }
   }
 
@@ -59,8 +138,8 @@ export function QueuePage() {
         Waiting Queue
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Manual review queue for orders in WAITING state. Execute flows will be
-        built in later sprints; for now you can view and cancel pending orders.
+        Manual review queue for orders in WAITING state. You can edit, execute,
+        or cancel pending orders before they are sent to the broker.
       </Typography>
 
       {loading ? (
@@ -77,18 +156,18 @@ export function QueuePage() {
       ) : (
         <Paper>
           <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Created At</TableCell>
-                <TableCell>Symbol</TableCell>
-                <TableCell>Side</TableCell>
-                <TableCell align="right">Qty</TableCell>
-                <TableCell align="right">Price</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Created At</TableCell>
+                  <TableCell>Symbol</TableCell>
+                  <TableCell>Side</TableCell>
+                  <TableCell align="right">Qty</TableCell>
+                  <TableCell align="right">Price</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell align="right">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
               {orders.map((order) => (
                 <TableRow key={order.id}>
                   <TableCell>
@@ -102,14 +181,38 @@ export function QueuePage() {
                   </TableCell>
                   <TableCell>{order.status}</TableCell>
                   <TableCell align="right">
-                    <Button
-                      size="small"
-                      color="error"
-                      disabled={busyId === order.id}
-                      onClick={() => handleCancel(order.id)}
-                    >
-                      {busyId === order.id ? 'Cancelling…' : 'Cancel'}
-                    </Button>
+                    <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={
+                          busyExecuteId === order.id || busyCancelId === order.id
+                        }
+                        onClick={() => openEditDialog(order)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        disabled={
+                          busyExecuteId === order.id || busyCancelId === order.id
+                        }
+                        onClick={() => handleExecute(order.id)}
+                      >
+                        {busyExecuteId === order.id ? 'Executing…' : 'Execute'}
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        disabled={
+                          busyCancelId === order.id || busyExecuteId === order.id
+                        }
+                        onClick={() => handleCancel(order.id)}
+                      >
+                        {busyCancelId === order.id ? 'Cancelling…' : 'Cancel'}
+                      </Button>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))}
@@ -129,6 +232,71 @@ export function QueuePage() {
           </Table>
         </Paper>
       )}
+
+      <Dialog open={editingOrder != null} onClose={closeEditDialog} fullWidth>
+        <DialogTitle>Edit queue order</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          {editingOrder && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+              <Typography variant="body2" color="text.secondary">
+                {editingOrder.symbol} · {editingOrder.side}
+              </Typography>
+              <TextField
+                label="Quantity"
+                type="number"
+                value={editQty}
+                onChange={(e) => setEditQty(e.target.value)}
+                fullWidth
+                size="small"
+              />
+              <TextField
+                label="Order type"
+                select
+                value={editOrderType}
+                onChange={(e) =>
+                  setEditOrderType(
+                    (e.target.value as 'MARKET' | 'LIMIT') || 'MARKET',
+                  )
+                }
+                fullWidth
+                size="small"
+              >
+                <MenuItem value="MARKET">MARKET</MenuItem>
+                <MenuItem value="LIMIT">LIMIT</MenuItem>
+              </TextField>
+              <TextField
+                label="Price"
+                type="number"
+                value={editPrice}
+                onChange={(e) => setEditPrice(e.target.value)}
+                fullWidth
+                size="small"
+                helperText="Leave blank for market orders."
+              />
+              <TextField
+                label="Product"
+                value={editProduct}
+                onChange={(e) => setEditProduct(e.target.value)}
+                fullWidth
+                size="small"
+                helperText="For Zerodha, typical values are MIS or CNC."
+              />
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeEditDialog} disabled={savingEdit}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSaveEdit}
+            variant="contained"
+            disabled={savingEdit}
+          >
+            {savingEdit ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

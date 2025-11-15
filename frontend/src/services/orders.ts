@@ -26,6 +26,8 @@ export type Order = {
   simulated: boolean
   created_at: string
   updated_at: string
+  zerodha_order_id?: string | null
+  error_message?: string | null
 }
 
 export async function fetchQueueOrders(
@@ -54,6 +56,42 @@ export async function cancelOrder(orderId: number): Promise<Order> {
   return (await res.json()) as Order
 }
 
+export async function executeOrder(orderId: number): Promise<Order> {
+  const res = await fetch(`/api/orders/${orderId}/execute`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to execute order (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as Order
+}
+
+export async function updateOrder(
+  orderId: number,
+  payload: {
+    qty?: number
+    price?: number | null
+    order_type?: 'MARKET' | 'LIMIT'
+    product?: string
+  },
+): Promise<Order> {
+  const res = await fetch(`/api/orders/${orderId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to update order (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as Order
+}
+
 export async function fetchOrdersHistory(options?: {
   status?: string
   strategyId?: number
@@ -71,4 +109,3 @@ export async function fetchOrdersHistory(options?: {
   }
   return (await res.json()) as Order[]
 }
-

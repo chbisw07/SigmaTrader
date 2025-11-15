@@ -7,32 +7,31 @@ import { QueuePage } from './views/QueuePage'
 
 describe('QueuePage', () => {
   beforeEach(() => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => [
-          {
-            id: 1,
-            alert_id: 1,
-            strategy_id: null,
-            symbol: 'NSE:TCS',
-            exchange: 'NSE',
-            side: 'BUY',
-            qty: 3,
-            price: 3500,
-            order_type: 'MARKET',
-            product: 'MIS',
-            gtt: false,
-            status: 'WAITING',
-            mode: 'MANUAL',
-            simulated: false,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ],
-      }),
-    )
+    const fetchMock = vi.fn()
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        {
+          id: 1,
+          alert_id: 1,
+          strategy_id: null,
+          symbol: 'NSE:TCS',
+          exchange: 'NSE',
+          side: 'BUY',
+          qty: 3,
+          price: 3500,
+          order_type: 'MARKET',
+          product: 'MIS',
+          gtt: false,
+          status: 'WAITING',
+          mode: 'MANUAL',
+          simulated: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    } as any)
+    vi.stubGlobal('fetch', fetchMock)
   })
 
   afterEach(() => {
@@ -55,4 +54,3 @@ describe('QueuePage', () => {
     })
   })
 })
-

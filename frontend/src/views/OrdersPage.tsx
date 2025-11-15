@@ -59,18 +59,20 @@ export function OrdersPage() {
       ) : (
         <Paper>
           <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Created At</TableCell>
-                <TableCell>Symbol</TableCell>
-                <TableCell>Side</TableCell>
-                <TableCell align="right">Qty</TableCell>
-                <TableCell align="right">Price</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Mode</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Created At</TableCell>
+                  <TableCell>Symbol</TableCell>
+                  <TableCell>Side</TableCell>
+                  <TableCell align="right">Qty</TableCell>
+                  <TableCell align="right">Price</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell>Mode</TableCell>
+                  <TableCell>Broker ID</TableCell>
+                  <TableCell>Error</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
               {orders.map((order) => (
                 <TableRow key={order.id}>
                   <TableCell>
@@ -84,11 +86,13 @@ export function OrdersPage() {
                   </TableCell>
                   <TableCell>{order.status}</TableCell>
                   <TableCell>{order.mode}</TableCell>
+                  <TableCell>{order.zerodha_order_id ?? '-'}</TableCell>
+                  <TableCell>{order.error_message ?? '-'}</TableCell>
                 </TableRow>
               ))}
               {orders.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7}>
+                  <TableCell colSpan={9}>
                     <Typography
                       variant="body2"
                       color="text.secondary"

@@ -348,21 +348,29 @@ Tasks: `S04_G02_TF001`, `S04_G02_TF002`, `S04_G02_TF003`, `S04_G02_TB004`
   - `backend/app/api/orders.py`:
     - `GET /api/orders/queue` – lists manual queue orders (WAITING/MANUAL, non-simulated) with optional `strategy_id` filter.
     - `PATCH /api/orders/{id}/status` – minimal status updates between `WAITING` and `CANCELLED` for manual queue flows.
+    - `PATCH /api/orders/{id}` – edits basic order fields (qty, price, order_type, product) for non-simulated manual orders that are still in `WAITING` state.
 - Frontend Queue UI:
   - `frontend/src/services/orders.ts`:
     - `fetchQueueOrders(strategyId?)` – calls `/api/orders/queue`.
     - `cancelOrder(orderId)` – `PATCH /api/orders/{id}/status` with `{status: "CANCELLED"}`.
+     - `updateOrder(orderId, payload)` – `PATCH /api/orders/{id}` for editing quantity, price, order type, and product.
   - `frontend/src/views/QueuePage.tsx`:
     - Loads queue orders on mount, showing:
       - Created At (localized datetime).
       - Symbol, Side, Qty, Price, Status.
-      - A `Cancel` button per row.
+      - Actions per row:
+        - `Edit` – opens a dialog allowing changes to quantity, order type (`MARKET`/`LIMIT`), price (optional for market orders), and product (e.g., MIS/CNC).
+        - `Execute` – sends the order to the backend execution endpoint (wired in S05/G03).
+        - `Cancel` – cancels the order via status update.
     - Shows loading spinner while fetching and an error message on failure.
-    - On cancel:
-      - Calls `cancelOrder`.
+    - On edit:
+      - Validates basic constraints (positive quantity, non-negative price).
+      - Calls `updateOrder` and updates the in-memory queue row on success.
+      - Surfaces any backend errors at the page level.
+    - On cancel or execute:
+      - Calls the respective service.
       - Removes the order from the in-memory queue on success.
-      - Displays error if the cancel call fails.
-    - Inline editing and “Execute” actions are intentionally deferred to later sprints.
+      - Displays error if the call fails.
 - Tests:
   - `frontend/src/QueuePage.test.tsx`:
     - Mocks `fetch` to return a sample queue with a single order.
@@ -371,7 +379,6 @@ Tasks: `S04_G02_TF001`, `S04_G02_TF002`, `S04_G02_TF003`, `S04_G02_TB004`
 
 Pending work:
 
-- Add inline editing for qty/price/order_type/product and an “Execute” action wired into future backend endpoints.
 - Enhance queue filtering and sorting once real workflows are exercised.
 
 ---
@@ -532,3 +539,82 @@ Pending work:
 
 - Add frontend tests around the Binance connection UI if desired (currently we have end-to-end validation via curl and manual testing for Zerodha only).
 - In S05/G03, use the stored encrypted access token to instantiate `ZerodhaClient` and send real orders from the manual queue “Execute” path, surfacing Zerodha order IDs and errors in the UI.
+
+### S05 / G03 – Send orders from manual queue to Zerodha
+
+Tasks: `S05_G03_TB001`, `S05_G03_TB002`, `S05_G03_TF003`
+
+- Backend: execute endpoint and mapping to Zerodha:
+  - `backend/app/schemas/orders.py`:
+    - `OrderRead` extended with `zerodha_order_id` and `error_message` fields so the API can surface broker IDs and errors.
+  - `backend/app/api/orders.py`:
+    - Internal helper `_get_zerodha_client(db, settings)`:
+      - Looks up `BrokerConnection` for `broker_name="zerodha"`.
+      - Loads `kite_config.json` via `load_kite_config()`.
+      - Decrypts `access_token_encrypted` via `decrypt_token(settings, ...)`.
+      - Instantiates `KiteConnect` with `api_key` and sets the decrypted access token.
+      - Wraps the Kite client in `ZerodhaClient`.
+    - `POST /api/orders/{order_id}/execute`:
+      - Preconditions:
+        - Order exists and is in the manual queue:
+          - `status == "WAITING"`, `mode == "MANUAL"`, `simulated == False`.
+      - Derives `exchange` and `tradingsymbol` from `Order.symbol` / `Order.exchange`:
+        - If symbol like `NSE:INFY` → `exchange="NSE"`, `tradingsymbol="INFY"`.
+        - Otherwise uses `symbol` with default/fallback exchange.
+      - Calls `ZerodhaClient.place_order(...)` using:
+        - `tradingsymbol`, `transaction_type` from `order.side`, `quantity` from `order.qty`, `order_type`, `product`, `exchange`, and `price` only when `order_type` is `LIMIT`.
+        - Initially uses `variety="regular"`.
+      - Error handling and AMO fallback:
+        - On generic broker exceptions:
+          - Sets `order.status = "FAILED"` and records `order.error_message = str(exc)`.
+          - Returns HTTP 502 with a message; Orders history can still show the error.
+        - On Zerodha off-market-hours errors (messages containing phrases like
+          `"Try placing an AMO order"` or `"markets are not open for trading today"`):
+          - Logs an info message and retries the order once with `variety="amo"` while keeping the same product (e.g., `CNC`).
+          - If the AMO retry succeeds:
+            - Sets `order.zerodha_order_id = result.order_id`, `order.status = "SENT"`, and clears `order.error_message`.
+          - If the AMO retry also fails:
+            - Marks the order `FAILED`, stores the AMO error, and returns HTTP 502 indicating AMO placement failure.
+      - On success (either regular or AMO):
+        - Persists the updated order and returns it with status `SENT` and the broker order id.
+
+- Frontend: Execute action and broker info in UI:
+  - `frontend/src/services/orders.ts`:
+    - `Order` type extended with `zerodha_order_id?: string | null` and `error_message?: string | null`.
+    - New `executeOrder(orderId)`:
+      - `POST /api/orders/{id}/execute`.
+      - Throws a detailed error if the response is non-OK (includes response body when available).
+  - `frontend/src/views/QueuePage.tsx`:
+    - Actions column now has two buttons per row:
+      - `Execute`:
+        - Calls `executeOrder(order.id)`.
+        - While in progress shows `Executing…` and disables both buttons for that row.
+        - On success, removes the executed order from the queue list (since it is no longer WAITING).
+      - `Cancel`:
+        - Same as before but with its own busy state; on success removes the order.
+      - Errors from either action surface in the page-level error banner.
+  - `frontend/src/views/OrdersPage.tsx`:
+    - Orders table extended with:
+      - `Broker ID` column showing `zerodha_order_id` (or `-` if missing).
+      - `Error` column showing `error_message` (or `-` if none).
+    - This makes it easy to see for each order whether it was sent successfully or failed at the broker step.
+
+- Tests:
+  - Backend:
+    - `backend/tests/test_order_execute_amo.py`:
+      - Uses a fake Zerodha client injected via monkeypatching `_get_zerodha_client`.
+      - `test_execute_order_retries_as_amo_on_off_hours_error`:
+        - Fake client raises an exception containing the Zerodha AMO hint on the first call and succeeds on the second.
+        - Asserts that the backend calls `place_order` first with `variety="regular"`, then with `variety="amo"`, and that the order ends up with status `SENT` and a broker id.
+      - `test_execute_order_does_not_retry_for_other_errors`:
+        - Fake client always raises a generic error.
+        - Asserts a single `variety="regular"` call, HTTP 502 response, and persisted `status="FAILED"` with the error message on the order.
+  - Frontend:
+    - `frontend/src/QueuePage.test.tsx`:
+      - Adjusted to treat `fetch` as a callable mock (first call returns queue data).
+      - Still asserts that the Queue page renders and displays the mocked symbol; execute-related behaviour is currently validated manually against the running backend.
+
+Pending work:
+
+- Extend error handling to recognize additional Zerodha error patterns and, in later sprints, make AMO fallback and retry behaviour configurable per broker/strategy (for example, choosing automatically between AMO vs GTT for off-market-hours Zerodha orders based on JSON config and strategy-level preferences) instead of being keyed only to specific message substrings.
+- Enhance the frontend Queue and Orders pages with toast/snackbar notifications and clearer error messaging around broker failures in later UX-focused sprints.

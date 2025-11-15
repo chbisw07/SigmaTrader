@@ -6,13 +6,18 @@ from app.models import Alert, Order
 
 
 def create_order_from_alert(
-    db: Session, alert: Alert, *, mode: str = "MANUAL"
+    db: Session,
+    alert: Alert,
+    *,
+    mode: str = "MANUAL",
+    product: str = "MIS",
+    order_type: str = "MARKET",
 ) -> Order:
     """Create and persist an Order in WAITING state derived from an Alert.
 
     This is intentionally simple for Sprint S03 / G02:
     - Uses alert qty/price as-is.
-    - Defaults to MARKET/MIS and MANUAL mode.
+    - Defaults to MARKET/MIS and MANUAL mode unless overridden.
     - No risk checks or execution routing yet.
     """
 
@@ -26,8 +31,8 @@ def create_order_from_alert(
         side=alert.action,
         qty=qty,
         price=alert.price,
-        order_type="MARKET",
-        product="MIS",
+        order_type=order_type,
+        product=product,
         gtt=False,
         status="WAITING",
         mode=mode,
