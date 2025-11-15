@@ -403,3 +403,63 @@ Pending work:
 
 - Add filter controls (date range, strategy, status, symbol) to the Orders page UI.
 - Extend the backend `/api/orders/` endpoint with richer filters (e.g., date range, simulation flag) as needed by the UI.
+
+---
+
+## Sprint S05 – Zerodha integration & execution from queue
+
+### S05 / G01 – Integrate Zerodha Kite Connect client on backend
+
+Tasks: `S05_G01_TB001`, `S05_G01_TB002`, `S05_G01_TB003`
+
+- Configuration:
+  - `Settings` (`backend/app/core/config.py`):
+    - Added `zerodha_api_key: str | None` (env var `ST_ZERODHA_API_KEY`).
+    - Zerodha API secret and access-token management are deferred to S05/G02, which will handle OAuth/token exchange.
+  - `backend/requirements.txt`:
+    - Added `kiteconnect` dependency for the real Zerodha client (`kiteconnect>=5,<6`).
+- Zerodha client wrapper:
+  - `backend/app/clients/zerodha.py`:
+    - `KiteLike` protocol:
+      - Models the subset of `KiteConnect` methods used (`set_access_token`, `place_order`, `orders`, `order_history`).
+      - Enables testing with a fake client (no real network calls).
+    - `ZerodhaOrderResult` dataclass:
+      - Holds `order_id` and `raw` response.
+    - `ZerodhaClient`:
+      - `__init__(self, kite: KiteLike)` – wraps any Kite-like implementation.
+      - `@classmethod from_settings(cls, settings: Settings, access_token: str)`:
+        - Validates `zerodha_api_key` is set; raises `RuntimeError` if not.
+        - Lazily imports `KiteConnect` from `kiteconnect`.
+        - Instantiates `KiteConnect` with `api_key`, sets access token, and builds a `ZerodhaClient`.
+      - `place_order(...) -> ZerodhaOrderResult`:
+        - Builds a parameter dict for KiteConnect `place_order`:
+          - `tradingsymbol`, `transaction_type`, `quantity`, `order_type`, `product`, `variety`, `exchange`, optional `price`, plus any extra kwargs.
+        - Returns `ZerodhaOrderResult(order_id=..., raw=response)`.
+      - `list_orders() -> list[dict]`:
+        - Returns `kite.orders()`.
+      - `get_order_history(order_id: str) -> list[dict]`:
+        - Returns `kite.order_history(order_id)`.
+  - `backend/app/clients/__init__.py` – exports `ZerodhaClient`.
+- Tests:
+  - `backend/tests/test_zerodha_client.py`:
+    - `FakeKite`:
+      - Implements the `KiteLike` protocol in-memory:
+        - Tracks `access_token`, collects placed orders, returns canned responses for `orders` and `order_history`.
+    - `test_place_order_uses_underlying_kite_client`:
+      - Constructs `ZerodhaClient(FakeKite())`.
+      - Calls `place_order` with symbol/side/qty.
+      - Asserts:
+        - Result `order_id` is as returned by `FakeKite`.
+        - Underlying `placed_orders` contains the expected parameters.
+    - `test_list_orders_and_history_delegate_to_kite`:
+      - Asserts `list_orders` and `get_order_history` delegate to `FakeKite` and return the expected payloads.
+    - `test_from_settings_requires_api_key`:
+      - Uses a `Settings` instance with no `zerodha_api_key`.
+      - Asserts `ZerodhaClient.from_settings(settings, ...)` raises `RuntimeError` with a helpful message.
+- Regression:
+  - `pytest` in `backend/` now runs 11 tests (including Zerodha client tests) successfully, without making real network calls.
+
+Pending work:
+
+- In S05/G02, implement the full OAuth/token exchange flow and secure access-token storage so that `from_settings` can be used in production with real Zerodha credentials.
+- In S05/G03, integrate `ZerodhaClient` into the queue execution path to send orders from the manual queue and handle real broker responses.
