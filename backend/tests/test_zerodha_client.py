@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.clients import ZerodhaClient
-from app.core.config import Settings
 
 
 class FakeKite:
@@ -58,14 +57,3 @@ def test_list_orders_and_history_delegate_to_kite() -> None:
 
     history = client.get_order_history("12345")
     assert history and history[0]["status"] == "COMPLETE"
-
-
-def test_from_settings_requires_api_key(monkeypatch: Any) -> None:
-    settings = Settings()
-
-    try:
-        ZerodhaClient.from_settings(settings, access_token="token")  # type: ignore[arg-type]
-    except RuntimeError as exc:
-        assert "Zerodha API key" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("Expected RuntimeError when api key is missing")

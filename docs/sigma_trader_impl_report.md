@@ -463,3 +463,72 @@ Pending work:
 
 - In S05/G02, implement the full OAuth/token exchange flow and secure access-token storage so that `from_settings` can be used in production with real Zerodha credentials.
 - In S05/G03, integrate `ZerodhaClient` into the queue execution path to send orders from the manual queue and handle real broker responses.
+
+### S05 / G02 – Broker connection flow (Connect Zerodha)
+
+Tasks: `S05_G02_TB001`, `S05_G02_TB002`, `S05_G02_TF003`
+
+- JSON config and loader:
+  - `backend/config/config.json.example`:
+    - Global app config including `brokers` and `default_broker` (currently `["zerodha"]`, `zerodha`).
+  - `backend/config/kite_config.json.example`:
+    - `kite_connect.api_key` and `kite_connect.api_secret` placeholders for Zerodha credentials.
+  - `backend/app/config_files.py`:
+    - `AppConfig`, `KiteConnectSection`, `KiteConfig` Pydantic models.
+    - `get_config_dir()` – uses `ST_CONFIG_DIR` if set, otherwise `backend/config`.
+    - `load_app_config()` – loads `config.json` into `AppConfig`.
+    - `load_kite_config()` – loads `kite_config.json` into `KiteConfig`.
+- Token encryption & storage:
+  - `Settings.crypto_key` (`ST_CRYPTO_KEY`) added to `backend/app/core/config.py`.
+  - `backend/app/core/crypto.py`:
+    - `encrypt_token(settings, token)` / `decrypt_token(settings, encrypted)`:
+      - Simple XOR with key derived from `crypto_key`, then Base64 URL-safe encode/decode.
+      - Intended as lightweight obfuscation for local single-user use; can be swapped for stronger crypto later.
+  - `backend/app/models/broker.py` – `BrokerConnection` model:
+    - Fields: `id`, `broker_name`, `access_token_encrypted`, `created_at`, `updated_at`.
+    - Unique constraint on `broker_name` to ensure a single active connection per broker.
+  - Alembic migration `0002_add_broker_connections.py`:
+    - Creates `broker_connections` table with the fields above.
+- Zerodha connect APIs:
+  - `backend/app/api/zerodha.py` (mounted under `/api/zerodha`):
+    - `GET /api/zerodha/login-url`:
+      - Uses `load_kite_config()` and returns:
+        - `{ "login_url": "https://kite.zerodha.com/connect/login?v=3&api_key=<api_key>" }`.
+      - Frontend opens this URL so you can complete the Zerodha login and capture `request_token`.
+    - `POST /api/zerodha/connect`:
+      - Body: `{ "request_token": "<token>" }`.
+      - Uses `load_kite_config()` and `KiteConnect.generate_session(request_token, api_secret=...)` to obtain `access_token`.
+      - Encrypts via `encrypt_token(settings, access_token)`.
+      - Upserts a `BrokerConnection` row with `broker_name="zerodha"` and the encrypted token.
+      - Returns `{ "status": "connected" }`.
+    - `GET /api/zerodha/status`:
+      - Checks `broker_connections` for `broker_name="zerodha"`.
+      - If no token: returns `{ "connected": false }`.
+      - If a token exists:
+        - Decrypts the stored token, instantiates a `KiteConnect` client, and calls `kite.profile()` to verify connectivity.
+        - On success returns `{ "connected": true, "updated_at": "<ISO>", "user_id": "...", "user_name": "..." }`.
+        - On failure returns `{ "connected": false, "updated_at": "<ISO>", "error": "<message>" }`.
+- Frontend connect UI:
+  - `frontend/src/services/zerodha.ts`:
+    - `fetchZerodhaLoginUrl()` → calls `/api/zerodha/login-url`.
+    - `fetchZerodhaStatus()` → calls `/api/zerodha/status` and returns connectivity plus optional user info.
+    - `connectZerodha(requestToken)` → POSTs to `/api/zerodha/connect`.
+  - `frontend/src/views/SettingsPage.tsx`:
+    - Added a “Zerodha Connection” section at the top:
+      - `Open Zerodha Login` button – fetches login URL and opens it in a new tab.
+      - Chip indicator:
+        - `Zerodha: Connected` (green) when `connected=true`.
+        - `Zerodha: Not connected` otherwise.
+      - `request_token` input (`TextField`) and `Connect Zerodha` button:
+        - User pastes the `request_token` from Zerodha after login and clicks Connect.
+        - On success, reloads status and updates:
+          - Chip label (Connected/Not connected).
+          - “Last updated” timestamp (displayed in IST).
+          - A small line with Zerodha user name/id, when available.
+      - Shows broker-specific error messages in case of failures.
+    - Settings page still lists strategies/risk settings as before.
+
+Pending work:
+
+- Add frontend tests around the Binance connection UI if desired (currently we have end-to-end validation via curl and manual testing for Zerodha only).
+- In S05/G03, use the stored encrypted access token to instantiate `ZerodhaClient` and send real orders from the manual queue “Execute” path, surfacing Zerodha order IDs and errors in the UI.

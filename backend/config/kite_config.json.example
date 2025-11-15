@@ -1,0 +1,7 @@
+{
+  "kite_connect": {
+    "api_key": "your_kite_api_key_here",
+    "api_secret": "your_kite_api_secret_here"
+  }
+}
+

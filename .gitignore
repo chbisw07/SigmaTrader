@@ -54,3 +54,7 @@ build/
 .idea/
 .history/
 
+# Backend config (keep examples only)
+backend/config/*.json
+!backend/config/*.json.example
+

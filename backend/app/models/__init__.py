@@ -1,3 +1,4 @@
+from .broker import BrokerConnection
 from .trading import Alert, AnalyticsTrade, Order, Position, RiskSettings, Strategy
 
 __all__ = [
@@ -7,4 +8,5 @@ __all__ = [
     "Position",
     "RiskSettings",
     "Strategy",
+    "BrokerConnection",
 ]

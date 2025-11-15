@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./sigma_trader.db"
     database_echo: bool = False
     zerodha_api_key: str | None = None
+    crypto_key: str | None = None
     tradingview_webhook_secret: str | None = None
 
     class Config:
