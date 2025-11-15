@@ -10,6 +10,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import Alert, Strategy
 from app.schemas.webhook import TradingViewWebhookPayload
+from app.services import create_order_from_alert
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -66,6 +67,8 @@ def tradingview_webhook(
     db.commit()
     db.refresh(alert)
 
+    order = create_order_from_alert(db=db, alert=alert, mode="MANUAL")
+
     logger.info(
         "Stored alert id=%s symbol=%s action=%s strategy=%s",
         alert.id,
@@ -74,7 +77,12 @@ def tradingview_webhook(
         payload.strategy_name,
     )
 
-    return {"id": alert.id, "status": "accepted"}
+    return {
+        "id": alert.id,
+        "alert_id": alert.id,
+        "order_id": order.id,
+        "status": "accepted",
+    }
 
 
 __all__ = ["router"]

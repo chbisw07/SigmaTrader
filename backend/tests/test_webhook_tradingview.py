@@ -52,7 +52,8 @@ def test_webhook_persists_alert_with_valid_secret() -> None:
     assert response.status_code == 201
     data = response.json()
     assert data["status"] == "accepted"
-    alert_id = data["id"]
+    alert_id = data["alert_id"]
+    order_id = data["order_id"]
 
     with SessionLocal() as session:
         alert = session.get(Alert, alert_id)
@@ -61,3 +62,14 @@ def test_webhook_persists_alert_with_valid_secret() -> None:
         assert alert.action == "SELL"
         assert alert.qty == 2
         assert alert.price == 1500.0
+
+        from app.models import Order
+
+        order = session.get(Order, order_id)
+        assert order is not None
+        assert order.alert_id == alert_id
+        assert order.symbol == alert.symbol
+        assert order.side == alert.action
+        assert order.qty == alert.qty
+        assert order.status == "WAITING"
+        assert order.mode == "MANUAL"
