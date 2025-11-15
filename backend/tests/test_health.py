@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
-
 client = TestClient(app)
 
 
@@ -23,4 +22,3 @@ def test_root_endpoint_returns_message() -> None:
 
     assert "message" in payload
     assert "SigmaTrader API" in payload["message"]
-

@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends
 
 from ..core.config import Settings, get_settings
 
+# ruff: noqa: B008  # FastAPI dependency injection pattern
+
 
 router = APIRouter()
 
@@ -28,4 +30,3 @@ def health_check(settings: Settings = Depends(get_settings)) -> dict[str, str]:
 
 
 __all__ = ["router"]
-

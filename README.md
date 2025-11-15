@@ -42,6 +42,36 @@ source .venv/bin/activate
 pytest
 ```
 
+Code quality (backend):
+
+- Format and sort imports with Black/isort:
+
+  ```bash
+  cd backend
+  source .venv/bin/activate
+  black app tests
+  isort app tests
+  ```
+
+- Lint with Ruff:
+
+  ```bash
+  cd backend
+  source .venv/bin/activate
+  ruff check app tests
+  ```
+
+- Optional: install and run `pre-commit` hooks from the repo root:
+
+  ```bash
+  cd backend
+  source .venv/bin/activate
+  pre-commit install
+  # then on each commit, hooks will run automatically
+  # or run manually:
+  pre-commit run --all-files
+  ```
+
 #### Frontend (React + TypeScript)
 
 Frontend code lives under `frontend/` and is built with Vite, React, TypeScript, Material UI, React Router, and Vitest.
@@ -62,3 +92,19 @@ Run frontend tests:
 cd frontend
 npm test
 ```
+
+Code quality (frontend):
+
+- Lint with ESLint:
+
+  ```bash
+  cd frontend
+  npm run lint
+  ```
+
+- Format with Prettier:
+
+  ```bash
+  cd frontend
+  npm run format
+  ```
