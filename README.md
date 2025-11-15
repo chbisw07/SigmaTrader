@@ -42,6 +42,25 @@ source .venv/bin/activate
 pytest
 ```
 
+Database migrations (Alembic):
+
+- To create or upgrade the local SQLite schema using the ORM models:
+
+  ```bash
+  cd backend
+  source .venv/bin/activate
+  alembic upgrade head
+  ```
+
+- To generate a new migration after changing models:
+
+  ```bash
+  cd backend
+  source .venv/bin/activate
+  alembic revision --autogenerate -m "describe your change"
+  alembic upgrade head
+  ```
+
 Code quality (backend):
 
 - Format and sort imports with Black/isort:

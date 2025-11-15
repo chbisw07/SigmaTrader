@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     environment: str = "dev"
     debug: bool = True
     version: str = "0.1.0"
+    database_url: str = "sqlite:///./sigma_trader.db"
+    database_echo: bool = False
 
     class Config:
         env_file = ".env"
@@ -23,6 +25,7 @@ class Settings(BaseSettings):
             "environment": self.environment,
             "debug": self.debug,
             "version": self.version,
+            "database_url": self.database_url,
         }
 
 
