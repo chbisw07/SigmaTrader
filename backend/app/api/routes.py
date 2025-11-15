@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from ..core.config import Settings, get_settings
-from . import risk_settings, strategies, webhook
+from . import orders, risk_settings, strategies, webhook
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -40,6 +40,12 @@ router.include_router(
     risk_settings.router,
     prefix="/api/risk-settings",
     tags=["risk-settings"],
+)
+
+router.include_router(
+    orders.router,
+    prefix="/api/orders",
+    tags=["orders"],
 )
 
 router.include_router(
