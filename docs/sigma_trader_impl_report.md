@@ -320,3 +320,86 @@ This report will continue to evolve as new sprints and groups are implemented. F
 - Tests and how to run them.
 - Deviations from the original plan.
 - Pending work to revisit later.**
+
+---
+
+## Sprint S04 – Manual queue frontend & basic orders UI
+
+### S04 / G01 – Dashboard layout and navigation structure
+
+Tasks: `S04_G01_TF001`, `S04_G01_TF002`
+
+- Navigation:
+  - Top-level navigation (Dashboard, Queue, Orders, Analytics, Settings) and sidebar layout were already implemented in Sprint S01 / G02 via `MainLayout` and routing, so these tasks are considered implemented with that work.
+- Dashboard:
+  - Dashboard page currently shows a simple heading and placeholder text; widgets for P&L, trade count, and connection status will be fleshed out once analytics and broker integration are in place.
+
+Pending work:
+
+- Add actual P&L/trade count widgets and connection health summaries on the Dashboard once we have S05–S07 data and broker connectivity.
+
+---
+
+### S04 / G02 – Waiting queue UI for manual orders
+
+Tasks: `S04_G02_TF001`, `S04_G02_TF002`, `S04_G02_TF003`, `S04_G02_TB004`
+
+- Backend support (started in S03, extended here):
+  - `backend/app/api/orders.py`:
+    - `GET /api/orders/queue` – lists manual queue orders (WAITING/MANUAL, non-simulated) with optional `strategy_id` filter.
+    - `PATCH /api/orders/{id}/status` – minimal status updates between `WAITING` and `CANCELLED` for manual queue flows.
+- Frontend Queue UI:
+  - `frontend/src/services/orders.ts`:
+    - `fetchQueueOrders(strategyId?)` – calls `/api/orders/queue`.
+    - `cancelOrder(orderId)` – `PATCH /api/orders/{id}/status` with `{status: "CANCELLED"}`.
+  - `frontend/src/views/QueuePage.tsx`:
+    - Loads queue orders on mount, showing:
+      - Created At (localized datetime).
+      - Symbol, Side, Qty, Price, Status.
+      - A `Cancel` button per row.
+    - Shows loading spinner while fetching and an error message on failure.
+    - On cancel:
+      - Calls `cancelOrder`.
+      - Removes the order from the in-memory queue on success.
+      - Displays error if the cancel call fails.
+    - Inline editing and “Execute” actions are intentionally deferred to later sprints.
+- Tests:
+  - `frontend/src/QueuePage.test.tsx`:
+    - Mocks `fetch` to return a sample queue with a single order.
+    - Renders `QueuePage` with router/theme.
+    - Asserts that “Waiting Queue” renders and that the mocked symbol (e.g., `NSE:TCS`) appears once data is loaded.
+
+Pending work:
+
+- Add inline editing for qty/price/order_type/product and an “Execute” action wired into future backend endpoints.
+- Enhance queue filtering and sorting once real workflows are exercised.
+
+---
+
+### S04 / G03 – Basic order history UI and backend API
+
+Tasks: `S04_G03_TB001`, `S04_G03_TF002`
+
+- Backend orders history:
+  - `backend/app/api/orders.py`:
+    - `GET /api/orders/`:
+      - Returns orders ordered by `created_at` descending.
+      - Optional filters:
+        - `status` – filter by a single status string.
+        - `strategy_id` – filter by strategy.
+      - Intended as a simple history API; more filters (symbol, date range) can be added later.
+- Frontend Orders history UI:
+  - `frontend/src/services/orders.ts`:
+    - `fetchOrdersHistory({ status?, strategyId? })` – wrapper around `GET /api/orders/`.
+  - `frontend/src/views/OrdersPage.tsx`:
+    - Loads order history on mount.
+    - Shows:
+      - Created At, Symbol, Side, Qty, Price, Status, Mode.
+    - Displays loading spinner and error message similar to the queue page.
+    - Shows a friendly “No orders yet” message when the list is empty.
+    - Filtering controls are not yet exposed in the UI; this page currently uses the default unfiltered history.
+
+Pending work:
+
+- Add filter controls (date range, strategy, status, symbol) to the Orders page UI.
+- Extend the backend `/api/orders/` endpoint with richer filters (e.g., date range, simulation flag) as needed by the UI.

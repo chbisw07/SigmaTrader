@@ -14,6 +14,22 @@ from app.schemas.orders import OrderRead, OrderStatusUpdate
 router = APIRouter()
 
 
+@router.get("/", response_model=List[OrderRead])
+def list_orders(
+    status: Optional[str] = Query(None),
+    strategy_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+) -> List[Order]:
+    """Return a simple order history list with basic filters."""
+
+    query = db.query(Order)
+    if status is not None:
+        query = query.filter(Order.status == status)
+    if strategy_id is not None:
+        query = query.filter(Order.strategy_id == strategy_id)
+    return query.order_by(Order.created_at.desc()).all()
+
+
 @router.get("/queue", response_model=List[OrderRead])
 def list_manual_queue(
     strategy_id: Optional[int] = Query(None),
