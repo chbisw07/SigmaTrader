@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from ..core.config import Settings, get_settings
+from . import risk_settings, strategies
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -27,6 +28,19 @@ def health_check(settings: Settings = Depends(get_settings)) -> dict[str, str]:
         "service": settings.app_name,
         "environment": settings.environment,
     }
+
+
+router.include_router(
+    strategies.router,
+    prefix="/api/strategies",
+    tags=["strategies"],
+)
+
+router.include_router(
+    risk_settings.router,
+    prefix="/api/risk-settings",
+    tags=["risk-settings"],
+)
 
 
 __all__ = ["router"]

@@ -112,6 +112,13 @@ cd frontend
 npm test
 ```
 
+Admin UI (strategies & risk settings):
+
+- The **Settings** page includes a read-only view of:
+  - Strategies loaded from `GET /api/strategies/`.
+  - Risk settings loaded from `GET /api/risk-settings/`.
+- In development, Vite proxies `/api` calls to the FastAPI backend on `http://localhost:8000`.
+
 Code quality (frontend):
 
 - Lint with ESLint:
