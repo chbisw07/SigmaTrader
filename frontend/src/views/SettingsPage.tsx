@@ -10,11 +10,13 @@ import TableHead from '@mui/material/TableHead'
 import TableRow from '@mui/material/TableRow'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import MenuItem from '@mui/material/MenuItem'
 import { useEffect, useState } from 'react'
 
 import {
   fetchRiskSettings,
   fetchStrategies,
+  updateStrategyExecutionMode,
   type RiskSettings,
   type Strategy,
 } from '../services/admin'
@@ -36,6 +38,7 @@ export function SettingsPage() {
   const [brokerError, setBrokerError] = useState<string | null>(null)
   const [requestToken, setRequestToken] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
+  const [updatingStrategyId, setUpdatingStrategyId] = useState<number | null>(null)
 
   useEffect(() => {
     let active = true
@@ -114,6 +117,29 @@ export function SettingsPage() {
       )
     } finally {
       setIsConnecting(false)
+    }
+  }
+
+  const handleChangeExecutionMode = async (
+    strategy: Strategy,
+    newMode: Strategy['execution_mode'],
+  ) => {
+    if (strategy.execution_mode === newMode) return
+    setUpdatingStrategyId(strategy.id)
+    try {
+      const updated = await updateStrategyExecutionMode(strategy.id, newMode)
+      setStrategies((prev) =>
+        prev.map((s) => (s.id === updated.id ? updated : s)),
+      )
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update strategy mode',
+      )
+    } finally {
+      setUpdatingStrategyId(null)
     }
   }
 
@@ -232,7 +258,23 @@ export function SettingsPage() {
                 {strategies.map((strategy) => (
                   <TableRow key={strategy.id}>
                     <TableCell>{strategy.name}</TableCell>
-                    <TableCell>{strategy.execution_mode}</TableCell>
+                    <TableCell>
+                      <TextField
+                        select
+                        size="small"
+                        value={strategy.execution_mode}
+                        onChange={(e) =>
+                          handleChangeExecutionMode(
+                            strategy,
+                            e.target.value as Strategy['execution_mode'],
+                          )
+                        }
+                        disabled={updatingStrategyId === strategy.id}
+                      >
+                        <MenuItem value="MANUAL">MANUAL</MenuItem>
+                        <MenuItem value="AUTO">AUTO</MenuItem>
+                      </TextField>
+                    </TableCell>
                     <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>
                     <TableCell>{strategy.description}</TableCell>
                   </TableRow>

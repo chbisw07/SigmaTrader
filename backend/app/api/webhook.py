@@ -80,13 +80,40 @@ def tradingview_webhook(
     db.commit()
     db.refresh(alert)
 
+    # Determine execution mode routing based on strategy configuration.
+    mode = "MANUAL"
+    auto_execute = False
+    if strategy is not None and strategy.enabled:
+        if strategy.execution_mode == "AUTO":
+            mode = "AUTO"
+            auto_execute = True
+
     order = create_order_from_alert(
         db=db,
         alert=alert,
-        mode="MANUAL",
+        mode=mode,
         product=product,
         order_type=order_type,
     )
+
+    # For AUTO strategies we immediately execute the order via the same
+    # execution path used by the manual queue endpoint. Risk checks and
+    # more advanced routing will be layered in S06/G02+.
+    if auto_execute:
+        try:
+            from app.api.orders import execute_order as execute_order_api
+
+            execute_order_api(order_id=order.id, db=db, settings=settings)
+        except HTTPException:
+            # The execute_order handler has already updated order status /
+            # error_message appropriately; propagate the error to the caller.
+            logger.exception(
+                "AUTO execution failed for alert id=%s order id=%s strategy=%s",
+                alert.id,
+                order.id,
+                payload.strategy_name,
+            )
+            raise
 
     logger.info(
         "Stored alert id=%s symbol=%s action=%s strategy=%s",

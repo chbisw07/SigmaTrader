@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -73,3 +74,73 @@ def test_webhook_persists_alert_with_valid_secret() -> None:
         assert order.qty == alert.qty
         assert order.status == "WAITING"
         assert order.mode == "MANUAL"
+
+
+def test_webhook_auto_strategy_routes_to_auto_and_executes(monkeypatch: Any) -> None:
+    unique_strategy = f"webhook-auto-strategy-{uuid4().hex}"
+
+    # Create an AUTO strategy for this name.
+    from app.models import Order, Strategy  # type: ignore
+
+    with SessionLocal() as session:
+        strategy = Strategy(
+            name=unique_strategy,
+            description="Auto strategy",
+            execution_mode="AUTO",
+            enabled=True,
+        )
+        session.add(strategy)
+        session.commit()
+
+    # Monkeypatch Zerodha client factory so no real broker calls are made.
+    from app.api import orders as orders_api
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def place_order(self, **params: Any) -> Any:
+            self.calls.append(params)
+
+            class _R:
+                order_id = "AUTO123"
+
+            return _R()
+
+    fake_client = _FakeClient()
+
+    def _fake_get_client(db: Any, settings: Any) -> _FakeClient:
+        return fake_client
+
+    monkeypatch.setattr(orders_api, "_get_zerodha_client", _fake_get_client)
+
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:TCS",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "BUY", "quantity": 1, "price": 3500.0},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+    alert_id = data["alert_id"]
+    order_id = data["order_id"]
+
+    # Order should be AUTO mode and already executed (SENT) with a broker id.
+    with SessionLocal() as session:
+        alert = session.get(Alert, alert_id)
+        assert alert is not None
+        assert alert.strategy_id is not None
+
+        order = session.get(Order, order_id)
+        assert order is not None
+        assert order.mode == "AUTO"
+        assert order.status == "SENT"
+        assert order.zerodha_order_id == "AUTO123"
+
+    assert len(fake_client.calls) == 1

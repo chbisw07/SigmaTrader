@@ -618,3 +618,88 @@ Pending work:
 
 - Extend error handling to recognize additional Zerodha error patterns and, in later sprints, make AMO fallback and retry behaviour configurable per broker/strategy (for example, choosing automatically between AMO vs GTT for off-market-hours Zerodha orders based on JSON config and strategy-level preferences) instead of being keyed only to specific message substrings.
 - Enhance the frontend Queue and Orders pages with toast/snackbar notifications and clearer error messaging around broker failures in later UX-focused sprints.
+
+---
+
+## Sprint S06 – Execution Modes & Risk Management v1
+
+### S06 / G01 – AUTO vs MANUAL execution modes per strategy
+
+Tasks: `S06_G01_TB001`, `S06_G01_TB002`, `S06_G01_TF003`
+
+- Backend: strategy execution_mode and alert routing:
+  - `backend/app/models/trading.py`:
+    - `Strategy` already includes `execution_mode` (`'AUTO'` or `'MANUAL'`) and `enabled` flags with appropriate constraints and defaults (`MANUAL`).
+  - `backend/app/schemas/strategies.py`:
+    - `StrategyBase` / `StrategyCreate` / `StrategyUpdate` / `StrategyRead` all expose `execution_mode`:
+      - Defaults to `"MANUAL"` when not specified.
+      - Validated via regex to only allow `"AUTO"` or `"MANUAL"`.
+  - `backend/app/api/strategies.py`:
+    - `POST /api/strategies/` and `PUT /api/strategies/{id}`:
+      - Already accept and persist `execution_mode` from the payload.
+      - We continue to use this to represent the desired routing mode per strategy.
+  - `backend/app/api/webhook.py`:
+    - Previously always created `MANUAL` orders in the WAITING queue.
+    - Now:
+      - Looks up the `Strategy` by `strategy_name` (if present on the payload).
+      - Determines routing based on strategy configuration:
+        - If no strategy is found → falls back to manual queue (same as before).
+        - If strategy exists but `enabled == False` → also falls back to manual queue.
+        - If strategy exists, `enabled == True`, and `execution_mode == "AUTO"`:
+          - Sets `mode = "AUTO"` and `auto_execute = True`.
+        - Otherwise (`MANUAL`) keeps `mode = "MANUAL"` and does not auto-execute.
+      - Calls `create_order_from_alert(...)` with the chosen `mode`, product, and order_type.
+      - For AUTO strategies:
+        - Immediately invokes the existing manual-queue execution path:
+          - `from app.api.orders import execute_order as execute_order_api`
+          - Calls `execute_order_api(order_id=order.id, db=db, settings=settings)`.
+        - This reuses Zerodha client construction, AMO fallback logic, and status updates:
+          - On success: `order.status="SENT"`, `order.zerodha_order_id` set, `order.error_message=None`.
+          - On failure: `execute_order` sets `order.status="FAILED"` and `error_message`, and raises `HTTPException` (the webhook endpoint logs and re-raises the error).
+      - The webhook response payload remains:
+        - `{ "id": alert.id, "alert_id": alert.id, "order_id": order.id, "status": "accepted" }` for successful ingestion; HTTP exceptions from auto-execution propagate as error responses to the caller.
+
+- Backend tests:
+  - `backend/tests/test_webhook_tradingview.py`:
+    - Existing tests continue to validate:
+      - Invalid secret returns 401.
+      - Valid secret without a matching strategy creates an `Alert` and a `WAITING` / `MANUAL` order.
+    - New test `test_webhook_auto_strategy_routes_to_auto_and_executes`:
+      - Creates a `Strategy` with `execution_mode="AUTO"` and `enabled=True` for a unique strategy name.
+      - Monkeypatches `_get_zerodha_client` in `app.api.orders` to return a fake client:
+        - Fake client captures `place_order` calls and returns an object with `order_id="AUTO123"`.
+      - Posts a webhook payload with `strategy_name` matching the AUTO strategy.
+      - Asserts:
+        - Response status code is 201 with `"status": "accepted"`.
+        - The created `Order` has:
+          - `mode == "AUTO"`.
+          - `status == "SENT"`.
+          - `zerodha_order_id == "AUTO123"`.
+        - `fake_client.place_order` is called exactly once.
+
+- Frontend: Settings UI for execution mode:
+  - `frontend/src/services/admin.ts`:
+    - `updateStrategyExecutionMode(strategyId, executionMode)`:
+      - `PUT /api/strategies/{id}` with body `{ execution_mode: "AUTO" | "MANUAL" }`.
+      - Returns the updated `Strategy` object.
+  - `frontend/src/views/SettingsPage.tsx`:
+    - State:
+      - Strategies and risk settings as before.
+      - New `updatingStrategyId` to track which row is currently being updated.
+    - Strategies table:
+      - Mode column is now editable:
+        - Uses a small `TextField` with `select`:
+          - Options: `MANUAL`, `AUTO`.
+          - Disabled while the corresponding strategy update is in-flight.
+      - `handleChangeExecutionMode(strategy, newMode)`:
+        - If mode unchanged, no-op.
+        - Sets `updatingStrategyId`, calls `updateStrategyExecutionMode`, and updates the local `strategies` array with the backend response.
+        - On error, surfaces an error message at the Settings page level.
+    - The rest of the Settings page (strategies list, risk settings, Zerodha connection section) remains as previously implemented.
+
+Pending work:
+
+- When S06 / G02 introduces the Risk Engine:
+  - Insert risk checks into both MANUAL (queue) and AUTO (immediate) paths before broker execution, and ensure risk decisions are visible in order records and UI.
+- Consider evolving the webhook response semantics for AUTO mode:
+  - For example, returning more explicit status codes or payload fields indicating whether auto-execution succeeded (`SENT`) or failed (`FAILED`), while balancing TradingView’s expectations around HTTP responses.

@@ -36,3 +36,22 @@ export async function fetchRiskSettings(): Promise<RiskSettings[]> {
   return (await res.json()) as RiskSettings[]
 }
 
+export async function updateStrategyExecutionMode(
+  strategyId: number,
+  executionMode: Strategy['execution_mode'],
+): Promise<Strategy> {
+  const res = await fetch(`/api/strategies/${strategyId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ execution_mode: executionMode }),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to update strategy (${res.status})${
+        body ? `: ${body}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as Strategy
+}
