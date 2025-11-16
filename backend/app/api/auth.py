@@ -82,6 +82,23 @@ def get_current_user(
     return user
 
 
+def get_current_user_optional(
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> User | None:
+    """Return the current user or None if not authenticated.
+
+    This is useful for admin guards that want to allow either a logged-in
+    admin user or fall back to other mechanisms (e.g., HTTP Basic).
+    """
+
+    try:
+        return get_current_user(request, db=db, settings=settings)
+    except HTTPException:
+        return None
+
+
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def register_user(
     payload: RegisterRequest,
@@ -167,4 +184,4 @@ def change_password(
     db.commit()
 
 
-__all__: list[str] = ["router", "get_current_user"]
+__all__: list[str] = ["router", "get_current_user", "get_current_user_optional"]

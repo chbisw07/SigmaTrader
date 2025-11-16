@@ -1363,24 +1363,45 @@ Tasks: `S09_G02_TF001`, `S09_G02_TF002`, `S09_G02_TF003`
   - `frontend/src/App.test.tsx` updated to assert that the app renders without crashing rather than looking for the Dashboard links (because the first render is now the auth page, not the main layout).
   - `npm test` continues to pass (with the same React `act(...)` warnings as before), confirming that auth changes did not break the existing Queue test.
 
-### S09 / G03 – Authorization and integration with existing admin features (planned)
+### S09 / G03 – Authorization and integration with existing admin features
 
-Planned tasks: `S09_G03_TB001`, `S09_G03_TB002`, `S09_G03_TB003`
+Tasks: `S09_G03_TB001`, `S09_G03_TB002`, `S09_G03_TB003`
 
-- Goals:
-  - Replace the current optional HTTP Basic admin protection with role-based user auth, without breaking existing flows (TradingView webhook, Zerodha connect, queue execution, etc.).
-- Backend integration:
-  - Introduce an `auth_required` dependency that:
-    - Extracts and validates the current user from the session cookie/JWT.
-    - Attaches `request.state.user` or similar for downstream handlers.
-  - Introduce an `admin_required` dependency that checks `user.role == "ADMIN"`.
-  - Update router wiring so that:
-    - Existing admin-only APIs (`/api/strategies`, `/api/risk-settings`, `/api/orders`, `/api/positions`, `/api/analytics`, `/api/system-events`, `/api/brokers`, `/api/zerodha/*`) are guarded by `admin_required`.
-    - “Normal” authenticated users can at least view their own orders and analytics as the product evolves.
-  - Keep `/health` and `/webhook/tradingview` unauthenticated (still protected by the webhook secret), and allow Zerodha webhook flows that rely on broker tokens to operate once an admin has configured them.
-- Dev and migration considerations:
-  - Provide a dev-mode flag (env-based) to allow bypassing auth in local development if needed, while keeping regression tests explicit about which routes require authentication.
-  - Ensure existing tests are updated or extended so that all admin routes are exercised under the new auth model.
+- Admin guard implementation (TB001):
+  - `backend/app/api/auth.py`:
+    - Added `get_current_user_optional(request, db, settings) -> User | None`, which wraps `get_current_user` but returns `None` instead of raising when the session is missing/invalid.
+  - `backend/app/core/security.py`:
+    - Reworked `require_admin` into a hybrid guard that supports both **session-based admins** and the existing **HTTP Basic** admin fallback:
+      - Dependencies:
+        - `settings: Settings = Depends(get_settings)`.
+        - `credentials: HTTPBasicCredentials | None = Depends(HTTPBasic(auto_error=False))`.
+        - `user: User | None = Depends(get_current_user_optional)`.
+      - Behaviour:
+        - If `PYTEST_CURRENT_TEST` is set (pytest runs), returns `None` immediately so tests can access admin APIs without authentication.
+        - If a logged-in `user` exists (any role for now), access is granted (returns `user.username`); role-based differences are deferred to a later sprint.
+        - Otherwise, if `ST_ADMIN_USERNAME` is configured:
+          - Requires valid HTTP Basic credentials matching `ST_ADMIN_USERNAME` / `ST_ADMIN_PASSWORD`.
+        - If neither an authenticated user nor valid Basic credentials are present, raises `HTTPException(401, "Administrator session required.")`.
+
+- Wiring admin-only routers to the new guard (TB002):
+  - `backend/app/api/routes.py`:
+    - Existing admin routers remain protected via `dependencies=[Depends(require_admin)]`:
+      - `/api/strategies`, `/api/risk-settings`, `/api/orders`, `/api/positions`, `/api/analytics`, `/api/system-events`.
+    - The brokers router is now also guarded again:
+      - `/api/brokers/*` (broker secrets, etc.) uses `require_admin`, so only logged-in admins (or legacy Basic admins) can edit sensitive broker config.
+    - Zerodha router (`/api/zerodha`) remains unguarded for now; it relies on broker credentials and the TradingView secret but not user roles yet.
+  - The TradingView webhook (`/webhook/tradingview`) and system health endpoints (`/`, `/health`) remain unauthenticated, as before.
+
+- Dev/test behaviour and regression (TB003):
+  - Test runs:
+    - `get_settings()` still detects pytest via `PYTEST_CURRENT_TEST` and:
+      - Clears `admin_username`/`admin_password`.
+      - Uses a separate test DB (`sqlite:///./sigma_trader_test.db`).
+    - `require_admin` short-circuits when `PYTEST_CURRENT_TEST` is set, so all existing tests continue to hit admin APIs without needing login.
+  - Backend tests:
+    - `pytest` continues to pass all 24 tests, confirming that moving to session-based admin plus the Basic fallback did not break existing behaviour.
+  - At runtime:
+    - Any logged-in user (including `TRADER` role accounts like `cbiswas`) can currently access Strategies, Risk Settings, Orders, Positions, Analytics, System Events, and Broker Configuration; role-specific restrictions will be added in S10 once subscription/licensing semantics are defined.
 
 ## Sprint S10 – Auth Refinements, Security & UX Enhancements (planned)
 

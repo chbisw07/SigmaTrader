@@ -93,6 +93,7 @@ router.include_router(
 router.include_router(
     brokers.router,
     prefix="/api/brokers",
+    dependencies=[Depends(require_admin)],
     tags=["brokers"],
 )
 
