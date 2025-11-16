@@ -1,6 +1,8 @@
 import { ReactNode, useState } from 'react'
 import AppBar from '@mui/material/AppBar'
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
+import Chip from '@mui/material/Chip'
 import CssBaseline from '@mui/material/CssBaseline'
 import Divider from '@mui/material/Divider'
 import Drawer from '@mui/material/Drawer'
@@ -10,26 +12,31 @@ import ListItem from '@mui/material/ListItem'
 import ListItemButton from '@mui/material/ListItemButton'
 import ListItemIcon from '@mui/material/ListItemIcon'
 import ListItemText from '@mui/material/ListItemText'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
+import Stack from '@mui/material/Stack'
 import Toolbar from '@mui/material/Toolbar'
 import Typography from '@mui/material/Typography'
-import MenuIcon from '@mui/icons-material/Menu'
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
+import AnalyticsIcon from '@mui/icons-material/Analytics'
 import DashboardIcon from '@mui/icons-material/Dashboard'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong'
-import AnalyticsIcon from '@mui/icons-material/Analytics'
+import MenuIcon from '@mui/icons-material/Menu'
 import SettingsIcon from '@mui/icons-material/Settings'
-import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
 import ShowChartIcon from '@mui/icons-material/ShowChart'
-import Chip from '@mui/material/Chip'
-import Stack from '@mui/material/Stack'
+import WarningIcon from '@mui/icons-material/Warning'
 import { NavLink } from 'react-router-dom'
 
 import { useHealth } from '../services/health'
+import { logout, type CurrentUser } from '../services/auth'
 
 const drawerWidth = 220
 
 type MainLayoutProps = {
   children: ReactNode
+  currentUser: CurrentUser
+  onAuthChange: (user: CurrentUser | null) => void
 }
 
 type NavItem = {
@@ -49,12 +56,30 @@ const navItems: NavItem[] = [
   { label: 'Settings', to: '/settings', icon: <SettingsIcon /> },
 ]
 
-export function MainLayout({ children }: MainLayoutProps) {
+export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { status, isLoading } = useHealth()
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
+  const open = Boolean(anchorEl)
 
   const handleDrawerToggle = () => {
     setMobileOpen((prev) => !prev)
+  }
+
+  const handleUserMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setAnchorEl(event.currentTarget)
+  }
+
+  const handleUserMenuClose = () => {
+    setAnchorEl(null)
+  }
+
+  const handleLogout = async () => {
+    try {
+      await logout()
+    } finally {
+      onAuthChange(null)
+    }
   }
 
   const drawer = (
@@ -133,6 +158,36 @@ export function MainLayout({ children }: MainLayoutProps) {
                 Health: {status === 'ok' ? 'All systems nominal' : 'See backend logs'}
               </Typography>
             )}
+            <Box>
+              <Button
+                color="inherit"
+                size="small"
+                onClick={handleUserMenuOpen}
+              >
+                {currentUser.display_name || currentUser.username}
+              </Button>
+              <Menu
+                anchorEl={anchorEl}
+                open={open}
+                onClose={handleUserMenuClose}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              >
+                <MenuItem disabled>{currentUser.username}</MenuItem>
+                <MenuItem onClick={handleUserMenuClose}>Profile (coming soon)</MenuItem>
+                <MenuItem onClick={handleUserMenuClose}>
+                  Change password (coming soon)
+                </MenuItem>
+                <MenuItem
+                  onClick={() => {
+                    handleUserMenuClose()
+                    void handleLogout()
+                  }}
+                >
+                  Logout
+                </MenuItem>
+              </Menu>
+            </Box>
           </Stack>
         </Toolbar>
       </AppBar>
@@ -180,4 +235,3 @@ export function MainLayout({ children }: MainLayoutProps) {
 }
 
 export default MainLayout
-import WarningIcon from '@mui/icons-material/Warning'

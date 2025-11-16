@@ -20,6 +20,7 @@ export function AppRoutes() {
       <Route path="/analytics" element={<AnalyticsPage />} />
       <Route path="/system-events" element={<SystemEventsPage />} />
       <Route path="/settings" element={<SettingsPage />} />
+      {/* /auth is handled at the App.tsx level */}
     </Routes>
   )
 }

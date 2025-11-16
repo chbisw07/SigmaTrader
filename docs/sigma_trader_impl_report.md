@@ -1310,35 +1310,58 @@ Tasks: `S09_G01_TB001`, `S09_G01_TB002`, `S09_G01_TB003`
       - `test_default_admin_can_be_created_via_model`:
         - Smoke test for the `User` model with `role="ADMIN"`; the actual seeded admin comes from the Alembic migration.
 
-### S09 / G02 – Frontend auth flows and landing layout (planned)
+### S09 / G02 – Frontend auth flows and landing layout
 
-Planned tasks: `S09_G02_TF001`, `S09_G02_TF002`, `S09_G02_TF003`
+Tasks: `S09_G02_TF001`, `S09_G02_TF002`, `S09_G02_TF003`
 
-- Goals:
-  - Provide a polished entry experience with login/register on the right and a marketing/benefits panel on the left to “sell” SigmaTrader.
-  - Gate the existing app (Dashboard, Queue, Orders, Analytics, Settings, etc.) behind authentication.
-- UI & routing:
-  - New public routes:
-    - `/login` – primary entry point.
-    - `/register` – optional sign-up for new users.
-  - Layout:
-    - Right ~25% of viewport: compact auth card containing login (and link to register). Fields: username, password, login button, and basic error messages.
-    - Left ~75%: marketing/hero area highlighting:
-      - Key benefits (auto/manual execution, risk controls, Zerodha integration, analytics).
-      - Simple visuals (e.g., cards, icons, accent colors like orange) aligned with overall SigmaTrader branding.
-- Auth flows:
-  - Implement React components and hooks that talk to `/api/auth/*`:
-    - Handle loading/error states and basic validations.
-  - Route protection:
-    - Wrap the existing app shell so that:
-      - Unauthenticated users hitting app routes are redirected to `/login`.
-      - Authenticated users see the full app.
-  - Top-right user menu:
-    - When logged in, show the username in the header (replacing or adjacent to the existing status chip area).
-    - Dropdown menu with:
-      - “Profile” (view basic user info).
-      - “Change password”.
-      - “Logout”.
+- Auth services:
+  - `frontend/src/services/auth.ts`:
+    - `fetchCurrentUser()` – calls `/api/auth/me`, returns the current user or `null` on 401.
+    - `login(username, password)` – POSTs to `/api/auth/login`, returning `CurrentUser` on success.
+    - `register(username, password, displayName?)` – POSTs to `/api/auth/register`, creating a new local user.
+    - `logout()` – POSTs to `/api/auth/logout` to clear the session cookie.
+
+- Auth landing page and layout (TF001, TF002):
+  - `frontend/src/views/AuthPage.tsx`:
+    - Provides a combined **Sign in / Sign up** page at `/auth` with:
+      - Right-aligned auth card (on desktop) containing username/password fields, optional display name, and buttons to submit or toggle between login and register.
+      - Left ~¾ of the viewport (desktop only): marketing/hero area with an orange-accent gradient background and copy explaining SigmaTrader’s benefits (alert ingestion, risk controls, Zerodha integration, analytics).
+    - Uses query string `?mode=register` to deep-link into the registration variant.
+    - On success:
+      - Calls `onAuthSuccess(user)` so the app can store the logged-in user.
+      - Redirects to `/` via `navigate('/', { replace: true })`.
+    - On error:
+      - Shows a short error message under the form and records a client log via `recordAppLog('ERROR', ...)`.
+
+- App-level auth state and route gating (TF003):
+  - `frontend/src/App.tsx`:
+    - Tracks `currentUser: CurrentUser | null` and `authChecked: boolean`.
+    - On mount:
+      - Calls `fetchCurrentUser()` once and sets `currentUser` based on the response; then marks `authChecked = true`.
+    - Routing behaviour:
+      - If `!authChecked` – renders `null` (avoids flicker).
+      - If unauthenticated and not on `/auth` – redirects to `/auth`.
+      - If unauthenticated and on `/auth` – renders `<AuthPage onAuthSuccess={...} />`.
+      - If authenticated – renders:
+        - `<MainLayout currentUser={currentUser} onAuthChange={setCurrentUser}>`
+        - `<AppRoutes />`
+    - `AppRoutes` remains responsible for the interior app routes (`/`, `/queue`, `/orders`, etc.); `/auth` is handled at the App level.
+
+- Header user menu and logout (TF003):
+  - `frontend/src/layouts/MainLayout.tsx`:
+    - Props extended to accept `currentUser` and `onAuthChange`.
+    - Top-right area now contains:
+      - The existing API status `Chip` and health text.
+      - A user `Button` showing `display_name` or `username`.
+      - A MUI `Menu` with:
+        - Disabled username row.
+        - “Profile (coming soon)” and “Change password (coming soon)” placeholders.
+        - “Logout” item that calls `logout()` and then `onAuthChange(null)` to bring the app back to `/auth`.
+  - This preserves the existing sidebar and navigation while making authentication explicit and visible in the main layout.
+
+- Tests and adjustments:
+  - `frontend/src/App.test.tsx` updated to assert that the app renders without crashing rather than looking for the Dashboard links (because the first render is now the auth page, not the main layout).
+  - `npm test` continues to pass (with the same React `act(...)` warnings as before), confirming that auth changes did not break the existing Queue test.
 
 ### S09 / G03 – Authorization and integration with existing admin features (planned)
 
