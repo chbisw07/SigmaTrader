@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.clients import ZerodhaClient
-from app.config_files import load_kite_config
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection, Position
 from app.schemas.positions import HoldingRead, PositionRead
+from app.services.broker_secrets import get_broker_secret
 from app.services.positions_sync import sync_positions_from_zerodha
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -34,7 +34,13 @@ def _get_zerodha_client_for_positions(
             detail="Zerodha is not connected.",
         )
 
-    kite_cfg = load_kite_config()
+    api_key = get_broker_secret(db, settings, broker_name="zerodha", key="api_key")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha API key is not configured. "
+            "Please configure it in the broker settings.",
+        )
 
     try:
         from kiteconnect import KiteConnect  # type: ignore[import]
@@ -45,7 +51,7 @@ def _get_zerodha_client_for_positions(
         ) from exc
 
     access_token = decrypt_token(settings, conn.access_token_encrypted)
-    kite = KiteConnect(api_key=kite_cfg.kite_connect.api_key)
+    kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
 
     return ZerodhaClient(kite)

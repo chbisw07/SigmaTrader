@@ -32,4 +32,30 @@ class BrokerConnection(Base):
     )
 
 
-__all__ = ["BrokerConnection"]
+class BrokerSecret(Base):
+    __tablename__ = "broker_secrets"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "broker_name",
+            "key",
+            name="ux_broker_secrets_broker_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    broker_name: Mapped[str] = mapped_column(String(32), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value_encrypted: Mapped[str] = mapped_column(String(1024), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+__all__ = ["BrokerConnection", "BrokerSecret"]

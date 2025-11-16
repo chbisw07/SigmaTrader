@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -22,8 +23,12 @@ def setup_module() -> None:  # type: ignore[override]
 
 def _create_strategy_and_global_risk() -> Strategy:
     with SessionLocal() as session:
+        # Ensure we have a single GLOBAL risk row for these tests.
+        session.query(RiskSettings).delete()
+        session.commit()
+
         strategy = Strategy(
-            name="risk-test-strategy",
+            name=f"risk-test-strategy-{uuid4().hex}",
             description="Risk test strategy",
             execution_mode="AUTO",
             enabled=True,

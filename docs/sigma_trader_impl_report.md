@@ -1185,3 +1185,59 @@ Tasks: `S08_G02_TB001`, `S08_G02_TB002`
 Pending work:
 
 - When deploying behind HTTPS or a reverse proxy, combine this Basic auth with TLS termination and network-level restrictions as appropriate; for the local single-user use case, the current configuration strikes a balance between simplicity and optional hardening.
+
+### S08 / G05 – Broker config UI and secure secret storage
+
+Tasks: `S08_G05_TB001`, `S08_G05_TB002`, `S08_G05_TF003`
+
+- Backend: encrypted broker secrets and APIs
+  - `backend/app/models/broker.py`:
+    - Added `BrokerSecret` model with columns:
+      - `broker_name`, `key`, `value_encrypted`, `created_at`, `updated_at`.
+      - Unique constraint `ux_broker_secrets_broker_key` on `(broker_name, key)`.
+  - Alembic migration:
+    - `backend/alembic/versions/0004_add_broker_secrets.py`:
+      - Creates `broker_secrets` table with the schema above.
+  - Secret management service:
+    - `backend/app/services/broker_secrets.py`:
+      - `get_broker_secret(db, settings, broker_name, key)`:
+        - Decrypts and returns a secret from `broker_secrets` when present; runtime no longer consults `kite_config.json` for broker credentials so that all secrets are managed via the encrypted store + Settings UI.
+      - `set_broker_secret(db, settings, broker_name, key, value)`:
+        - Encrypts `value` using the existing `crypto_key` and upserts a `BrokerSecret` row.
+      - `list_broker_secrets(db, settings, broker_name)`:
+        - Returns all secrets for a broker as decrypted `{ key, value }` pairs for admin UI consumption.
+  - Broker configuration API:
+    - `backend/app/api/brokers.py`:
+      - `GET /api/brokers/` → returns configured brokers from `config.json` (currently `["zerodha"]`) as `{ name, label }`.
+      - `GET /api/brokers/{broker_name}/secrets` → returns decrypted `{ key, value }` pairs for that broker.
+      - `PUT /api/brokers/{broker_name}/secrets/{key}` → creates/updates a secret with JSON body `{ "value": "..." }`, returning the stored `{ key, value }`.
+      - The router is mounted with `dependencies=[Depends(require_admin)]`, so these endpoints are guarded by optional admin Basic auth (no-op when `ST_ADMIN_USERNAME` is unset).
+  - Zerodha integration updated to use broker secrets:
+    - `backend/app/api/zerodha.py`:
+      - `/login-url`, `/connect`, `/status`, and `/sync-orders` now obtain the Zerodha API key (and secret for `/connect`) via `get_broker_secret("zerodha", "api_key"|"api_secret")`, emitting clear `400` errors when they are missing.
+    - `backend/app/api/orders.py` and `backend/app/api/positions.py`:
+      - Internal helpers `_get_zerodha_client(...)` now use `get_broker_secret("zerodha", "api_key")` instead of reading from `kite_config.json` directly, ensuring all broker credentials flow through the encrypted storage layer.
+
+- Frontend: broker selector and key/value secrets editor
+  - `frontend/src/services/brokers.ts`:
+    - `fetchBrokers()` → calls `/api/brokers/` and returns `{ name, label }[]`.
+    - `fetchBrokerSecrets(brokerName)` → calls `/api/brokers/{brokerName}/secrets`.
+    - `updateBrokerSecret(brokerName, key, value)` → `PUT /api/brokers/{brokerName}/secrets/{key}` with `{ value }`.
+  - `frontend/src/views/SettingsPage.tsx`:
+    - New “Broker Configuration” section below the Zerodha Connection card:
+      - Broker select (currently only “Zerodha (Kite)”) populated from `/api/brokers/`.
+      - 2-column table (`Key`, `Value`) representing broker secrets:
+        - Existing secrets rendered as rows with:
+          - Disabled `TextField` for `key`.
+          - Password-like `TextField` for `value` with a Show/Hide toggle.
+          - `Save` button per row to persist changes via `updateBrokerSecret`.
+        - “Add secret” row:
+          - Editable `key` and masked `value` fields with a Show/Hide toggle.
+          - `Add` button to create/update a secret for the selected broker.
+      - Errors in loading/saving broker secrets are surfaced via `brokerError` and also recorded via `recordAppLog`.
+    - Zerodha login/connect flow remains, but now relies on the stored `api_key` / `api_secret` behind the scenes instead of hard-coded JSON.
+
+Pending work:
+
+- Eventually phase out `kite_config.json` once all environments are migrated to DB-backed secrets, or treat JSON strictly as a bootstrap source for the first run.
+- Make it possible to mark specific keys as “non-viewable” in the UI (e.g. only allow overwrite, not readback) if stricter local security is desired.

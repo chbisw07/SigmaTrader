@@ -7,12 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.clients import ZerodhaClient
-from app.config_files import load_kite_config
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection, Order
 from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
+from app.services.broker_secrets import get_broker_secret
 from app.services.risk import evaluate_order_risk
 from app.services.system_events import record_system_event
 
@@ -39,13 +39,20 @@ def _get_zerodha_client(db: Session, settings: Settings) -> ZerodhaClient:
             detail="Zerodha is not connected.",
         )
 
-    kite_cfg = load_kite_config()
+    api_key = get_broker_secret(db, settings, broker_name="zerodha", key="api_key")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha API key is not configured. "
+            "Please configure it in the broker settings.",
+        )
+
     access_token = decrypt_token(settings, conn.access_token_encrypted)
 
     # Import lazily to keep tests independent of the real library.
     from kiteconnect import KiteConnect  # type: ignore[import]
 
-    kite = KiteConnect(api_key=kite_cfg.kite_connect.api_key)
+    kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
 
     return ZerodhaClient(kite)
@@ -220,10 +227,10 @@ def execute_order(
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    if order.status != "WAITING" or order.mode != "MANUAL" or order.simulated:
+    if order.status != "WAITING" or order.simulated:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only non-simulated WAITING MANUAL orders can be executed.",
+            detail="Only non-simulated WAITING orders can be executed.",
         )
 
     if order.qty is None or order.qty <= 0:

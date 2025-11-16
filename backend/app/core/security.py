@@ -10,12 +10,12 @@ from .config import Settings, get_settings
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
 
 
 def require_admin(
     settings: Settings = Depends(get_settings),
-    credentials: HTTPBasicCredentials = Depends(security),
+    credentials: HTTPBasicCredentials | None = Depends(security),
 ) -> Optional[str]:
     """Simple optional HTTP Basic auth for admin APIs.
 
@@ -27,6 +27,13 @@ def require_admin(
 
     if not settings.admin_username:
         return None
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Administrator credentials are required.",
+            headers={"WWW-Authenticate": 'Basic realm="SigmaTrader Admin"'},
+        )
 
     correct_username = secrets.compare_digest(
         credentials.username, settings.admin_username

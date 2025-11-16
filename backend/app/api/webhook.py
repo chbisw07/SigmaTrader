@@ -118,7 +118,12 @@ def tradingview_webhook(
         try:
             from app.api.orders import execute_order as execute_order_api
 
-            execute_order_api(order_id=order.id, db=db, settings=settings)
+            execute_order_api(
+                order_id=order.id,
+                request=request,
+                db=db,
+                settings=settings,
+            )
         except HTTPException:
             # The execute_order handler has already updated order status /
             # error_message appropriately; propagate the error to the caller.

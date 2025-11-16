@@ -7,11 +7,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.clients import ZerodhaClient
-from app.config_files import load_kite_config
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection
+from app.services.broker_secrets import get_broker_secret
 from app.services.order_sync import sync_order_statuses
 from app.services.system_events import record_system_event
 
@@ -29,11 +29,20 @@ class SyncOrdersResponse(BaseModel):
 
 
 @router.get("/login-url")
-def get_login_url() -> Dict[str, str]:
+def get_login_url(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Dict[str, str]:
     """Return the Zerodha login URL for manual OAuth flow."""
 
-    kite_cfg = load_kite_config()
-    api_key = kite_cfg.kite_connect.api_key
+    api_key = get_broker_secret(db, settings, broker_name="zerodha", key="api_key")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha API key is not configured. "
+            "Please configure it in the broker settings.",
+        )
+
     url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
     return {"login_url": url}
 
@@ -47,7 +56,21 @@ def connect_zerodha(
 ) -> Dict[str, str]:
     """Exchange a request_token for access_token and store it encrypted."""
 
-    kite_cfg = load_kite_config()
+    api_key = get_broker_secret(db, settings, broker_name="zerodha", key="api_key")
+    api_secret = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_secret",
+    )
+    if not api_key or not api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Zerodha API key/secret are not configured. "
+                "Please configure them in the broker settings."
+            ),
+        )
 
     try:
         from kiteconnect import KiteConnect  # type: ignore[import]
@@ -57,10 +80,10 @@ def connect_zerodha(
             detail="kiteconnect library is not installed in the backend environment.",
         ) from exc
 
-    kite = KiteConnect(api_key=kite_cfg.kite_connect.api_key)
+    kite = KiteConnect(api_key=api_key)
     session_data = kite.generate_session(
         payload.request_token,
-        api_secret=kite_cfg.kite_connect.api_secret,
+        api_secret=api_secret,
     )
     access_token = session_data.get("access_token")
     if not access_token:  # pragma: no cover - defensive
@@ -131,11 +154,23 @@ def zerodha_status(
     updated_at = conn.updated_at.isoformat() if conn.updated_at else None
 
     try:
-        kite_cfg = load_kite_config()
+        api_key = get_broker_secret(
+            db,
+            settings,
+            broker_name="zerodha",
+            key="api_key",
+        )
+        if not api_key:
+            return {
+                "connected": False,
+                "updated_at": updated_at,
+                "error": "Zerodha API key is not configured.",
+            }
+
         from kiteconnect import KiteConnect  # type: ignore[import]
 
         access_token = decrypt_token(settings, conn.access_token_encrypted)
-        kite = KiteConnect(api_key=kite_cfg.kite_connect.api_key)
+        kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
         profile = kite.profile()
         return {
@@ -170,7 +205,18 @@ def sync_orders(
             detail="Zerodha is not connected.",
         )
 
-    kite_cfg = load_kite_config()
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_key",
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha API key is not configured. "
+            "Please configure it in the broker settings.",
+        )
 
     try:
         from kiteconnect import KiteConnect  # type: ignore[import]
@@ -181,7 +227,7 @@ def sync_orders(
         ) from exc
 
     access_token = decrypt_token(settings, conn.access_token_encrypted)
-    kite = KiteConnect(api_key=kite_cfg.kite_connect.api_key)
+    kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
 
     client = ZerodhaClient(kite)

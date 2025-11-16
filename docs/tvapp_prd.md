@@ -128,6 +128,12 @@ Build a **full-fledged trading companion app** that:
    * Default product type (MIS/CNC).
    * Default order type (MARKET/LIMIT).
    * Max slippage allowed for market → limit conversion, if you want.
+   * Broker configuration & secrets:
+     * Settings page shows supported brokers/platforms (initially Zerodha/Kite) as a selectable list.
+     * For each broker, user can manage key/value credentials (e.g., `api_key`, `api_secret`) via a small editable table:
+       * Two columns: **Key** and **Value**; rows are flexible so different platforms can define their own keys.
+       * Secret values are stored encrypted at rest (using the app’s crypto key) and rendered as password fields with a “show/hide” toggle.
+     * Zerodha request tokens are also captured via a masked field with optional reveal, and when connected the Settings view shows the Zerodha user id.
 
 10. **Quality-of-Life Improvements (Recommended)**
 
