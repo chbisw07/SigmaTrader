@@ -187,6 +187,10 @@ def edit_order(
         order.product = product
         updated = True
 
+    if payload.gtt is not None:
+        order.gtt = payload.gtt
+        updated = True
+
     if not updated:
         return order
 

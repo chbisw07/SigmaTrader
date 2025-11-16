@@ -14,6 +14,8 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
+import Checkbox from '@mui/material/Checkbox'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import { useEffect, useState } from 'react'
 
 import {
@@ -37,6 +39,7 @@ export function QueuePage() {
     'MARKET',
   )
   const [editProduct, setEditProduct] = useState<string>('MIS')
+  const [editGtt, setEditGtt] = useState<boolean>(false)
   const [savingEdit, setSavingEdit] = useState(false)
 
   const loadQueue = async () => {
@@ -62,6 +65,7 @@ export function QueuePage() {
     setEditPrice(order.price != null ? String(order.price) : '')
     setEditOrderType(order.order_type === 'LIMIT' ? 'LIMIT' : 'MARKET')
     setEditProduct(order.product)
+    setEditGtt(order.gtt)
     setError(null)
   }
 
@@ -92,6 +96,7 @@ export function QueuePage() {
         price,
         order_type: editOrderType,
         product: editProduct,
+        gtt: editGtt,
       })
 
       setOrders((prev) =>
@@ -163,6 +168,7 @@ export function QueuePage() {
                   <TableCell>Side</TableCell>
                   <TableCell align="right">Qty</TableCell>
                   <TableCell align="right">Price</TableCell>
+                  <TableCell>Product</TableCell>
                   <TableCell>Status</TableCell>
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
@@ -179,6 +185,7 @@ export function QueuePage() {
                   <TableCell align="right">
                     {order.price ?? '-'}
                   </TableCell>
+                  <TableCell>{order.product}</TableCell>
                   <TableCell>{order.status}</TableCell>
                   <TableCell align="right">
                     <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
@@ -218,7 +225,7 @@ export function QueuePage() {
               ))}
               {orders.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7}>
+                  <TableCell colSpan={8}>
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -275,11 +282,25 @@ export function QueuePage() {
               />
               <TextField
                 label="Product"
+                select
                 value={editProduct}
                 onChange={(e) => setEditProduct(e.target.value)}
                 fullWidth
                 size="small"
-                helperText="For Zerodha, typical values are MIS or CNC."
+                helperText="Select MIS for intraday or CNC for delivery."
+              >
+                <MenuItem value="MIS">MIS (Intraday)</MenuItem>
+                <MenuItem value="CNC">CNC (Delivery)</MenuItem>
+              </TextField>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={editGtt}
+                    onChange={(e) => setEditGtt(e.target.checked)}
+                    size="small"
+                  />
+                }
+                label="Convert to GTT (preference)"
               />
             </Box>
           )}

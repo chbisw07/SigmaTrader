@@ -58,6 +58,7 @@ class OrderUpdate(BaseModel):
     price: Optional[float] = None
     order_type: Optional[Literal["MARKET", "LIMIT"]] = None
     product: Optional[str] = None
+    gtt: Optional[bool] = None
 
 
 __all__ = ["OrderRead", "OrderStatusUpdate", "OrderUpdate", "AllowedOrderStatus"]

@@ -76,6 +76,7 @@ export async function updateOrder(
     price?: number | null
     order_type?: 'MARKET' | 'LIMIT'
     product?: string
+    gtt?: boolean
   },
 ): Promise<Order> {
   const res = await fetch(`/api/orders/${orderId}`, {

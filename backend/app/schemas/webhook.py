@@ -11,6 +11,7 @@ class TradeDetails(BaseModel):
     quantity: Optional[float] = None
     price: Optional[float] = None
     product: Optional[str] = None
+    trade_type: Optional[str] = None
 
     @root_validator(pre=True)
     def _map_alternate_field_names(cls, values: dict[str, Any]) -> dict[str, Any]:
@@ -19,6 +20,15 @@ class TradeDetails(BaseModel):
             values["quantity"] = values.get("order_contracts")
         if "price" not in values and "order_price" in values:
             values["price"] = values.get("order_price")
+        # Derive product from trade_type when product is not explicitly set.
+        product = values.get("product")
+        trade_type = values.get("trade_type")
+        if product is None and trade_type is not None:
+            t_norm = str(trade_type).strip().lower()
+            if t_norm in {"cash_and_carry", "cnc", "delivery"}:
+                values["product"] = "CNC"
+            elif t_norm in {"intraday", "mis"}:
+                values["product"] = "MIS"
         return values
 
     @validator("order_action")

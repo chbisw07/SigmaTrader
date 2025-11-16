@@ -66,6 +66,7 @@ export function OrdersPage() {
                   <TableCell>Side</TableCell>
                   <TableCell align="right">Qty</TableCell>
                   <TableCell align="right">Price</TableCell>
+                  <TableCell>Product</TableCell>
                   <TableCell>Status</TableCell>
                   <TableCell>Mode</TableCell>
                   <TableCell>Broker ID</TableCell>
@@ -84,6 +85,7 @@ export function OrdersPage() {
                   <TableCell align="right">
                     {order.price ?? '-'}
                   </TableCell>
+                  <TableCell>{order.product}</TableCell>
                   <TableCell>{order.status}</TableCell>
                   <TableCell>{order.mode}</TableCell>
                   <TableCell>{order.zerodha_order_id ?? '-'}</TableCell>
@@ -92,7 +94,7 @@ export function OrdersPage() {
               ))}
               {orders.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9}>
+                  <TableCell colSpan={10}>
                     <Typography
                       variant="body2"
                       color="text.secondary"

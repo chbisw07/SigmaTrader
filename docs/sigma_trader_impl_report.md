@@ -819,3 +819,64 @@ Pending work:
 
 - Implement daily loss enforcement once realized PnL is available (S07), and extend the risk service to incorporate `max_daily_loss` and `max_open_positions`.
 - Introduce more UI affordances (e.g., tooltips or icons) to distinguish risk-related notes from broker errors in the Orders view.
+
+### S06 / G03 – Trade type (MIS/CNC) and GTT-related behaviour
+
+Tasks: `S06_G03_TB001`, `S06_G03_TF002`
+
+- Backend: product (MIS/CNC) and GTT fields:
+  - `backend/app/models/trading.py`:
+    - `Order` already includes:
+      - `product: str` (e.g., `"MIS"` for intraday, `"CNC"` for delivery).
+      - `gtt: bool` indicating a preference for GTT-style behaviour (stored but not yet mapped to a full Zerodha GTT order).
+  - `backend/app/schemas/webhook.py`:
+    - `TradeDetails` extended with `trade_type: Optional[str]`.
+    - Root validator now:
+      - Continues to support `order_contracts` / `order_price`.
+      - Derives `product` from `trade_type` when `product` is not explicitly set:
+        - `trade_type` in `{"cash_and_carry", "cnc", "delivery"}` → `product="CNC"`.
+        - `trade_type` in `{"intraday", "mis"}` → `product="MIS"`.
+  - `backend/app/schemas/orders.py`:
+    - `OrderRead` already includes `product` and `gtt`.
+    - `OrderUpdate` extended to include:
+      - `product: Optional[str]`.
+      - `gtt: Optional[bool]`.
+  - `backend/app/api/orders.py`:
+    - `edit_order` (`PATCH /api/orders/{order_id}`):
+      - Now allows updating `product` and `gtt` for non-simulated `WAITING`/`MANUAL` orders:
+        - `product` is upper-cased and must be non-empty (typically `MIS` or `CNC`).
+        - `gtt` toggles the GTT-preference flag on the order.
+      - Still supports qty/price/order_type updates as before.
+    - Execution behaviour (`POST /api/orders/{order_id}/execute`) is unchanged in this slice:
+      - `product` is passed through to Zerodha.
+      - `gtt` is stored and visible on orders but will be used for real GTT placement in a later sprint once the Kite GTT API is integrated.
+
+- Frontend: editing trade type and GTT in the Waiting Queue
+  - `frontend/src/services/orders.ts`:
+    - `Order` type already included `product` and `gtt`.
+    - `updateOrder` payload extended to accept `gtt?: boolean` alongside `product`.
+  - `frontend/src/views/QueuePage.tsx`:
+    - Queue table:
+      - Columns now include `Product` between `Price` and `Status`, showing the current `order.product` (e.g., `MIS` or `CNC`).
+    - Edit dialog:
+      - Fields now include:
+        - `Product` select:
+          - Options: `MIS (Intraday)` and `CNC (Delivery)`.
+          - Initialized from `order.product`.
+        - `Convert to GTT (preference)` checkbox:
+          - Initializes from `order.gtt`.
+          - When toggled and saved, updates `gtt` via `updateOrder`.
+      - On save, the dialog sends:
+        - `qty`, `price`, `order_type`, `product`, and `gtt` to the backend.
+      - The in-memory queue list is updated with the server response so changes are immediately visible.
+
+- Frontend: surfacing product/GTT in Orders history
+  - `frontend/src/views/OrdersPage.tsx`:
+    - Table columns extended to include:
+      - `Product` between `Price` and `Status`, showing `order.product`.
+    - This makes it easy to distinguish MIS vs CNC orders when reviewing history alongside status, mode, broker id, and any risk/broker error messages.
+
+Pending work:
+
+- Wire the `gtt` flag into real Zerodha GTT order placement (e.g., using Kite GTT APIs) and refine error handling for broker responses that explicitly recommend GTT over regular/AMO orders.
+- Extend the UI to more clearly differentiate regular vs GTT-intent orders (e.g., badges, filters) once actual GTT placement is implemented.
