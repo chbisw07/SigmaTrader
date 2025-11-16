@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from ..core.config import Settings, get_settings
+from ..core.security import require_admin
 from . import (
     analytics,
     orders,
@@ -42,36 +43,42 @@ def health_check(settings: Settings = Depends(get_settings)) -> dict[str, str]:
 router.include_router(
     strategies.router,
     prefix="/api/strategies",
+    dependencies=[Depends(require_admin)],
     tags=["strategies"],
 )
 
 router.include_router(
     risk_settings.router,
     prefix="/api/risk-settings",
+    dependencies=[Depends(require_admin)],
     tags=["risk-settings"],
 )
 
 router.include_router(
     orders.router,
     prefix="/api/orders",
+    dependencies=[Depends(require_admin)],
     tags=["orders"],
 )
 
 router.include_router(
     positions.router,
     prefix="/api/positions",
+    dependencies=[Depends(require_admin)],
     tags=["positions"],
 )
 
 router.include_router(
     analytics.router,
     prefix="/api/analytics",
+    dependencies=[Depends(require_admin)],
     tags=["analytics"],
 )
 
 router.include_router(
     system_events.router,
     prefix="/api/system-events",
+    dependencies=[Depends(require_admin)],
     tags=["system-events"],
 )
 

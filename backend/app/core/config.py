@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     zerodha_api_key: str | None = None
     crypto_key: str | None = None
     tradingview_webhook_secret: str | None = None
+    admin_username: str | None = None
+    admin_password: str | None = None
 
     class Config:
         env_file = ".env"

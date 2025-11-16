@@ -1153,3 +1153,35 @@ Pending work:
 
 - Extend logging to include more detailed broker payload/context when diagnosing tricky issues (ensuring sensitive information such as tokens is never logged).
 - Consider integrating with an external log aggregator for long-term storage and richer querying if SigmaTrader is deployed beyond local single-user setups.
+
+### S08 / G02 – Security hardening and configuration management
+
+Tasks: `S08_G02_TB001`, `S08_G02_TB002`
+
+- Configuration and secrets:
+  - `backend/app/core/config.py`:
+    - `Settings` extended with:
+      - `admin_username: str | None` and `admin_password: str | None` (env vars `ST_ADMIN_USERNAME`, `ST_ADMIN_PASSWORD`).
+    - All existing sensitive values (TradingView secret, crypto key, DB URL) continue to be loaded from environment variables or `.env`, aligning with the “secrets via env” goal.
+- Optional HTTP Basic auth for admin APIs:
+  - `backend/app/core/security.py`:
+    - `require_admin` dependency:
+      - Uses FastAPI’s `HTTPBasic` to read credentials.
+      - If `ST_ADMIN_USERNAME` is **not** set:
+        - Acts as a no-op, leaving behaviour unchanged for local single-user development.
+      - If `ST_ADMIN_USERNAME` (and optionally `ST_ADMIN_PASSWORD`) **are** set:
+        - Requires matching Basic auth credentials.
+        - On mismatch raises `HTTPException(401)` with `WWW-Authenticate: Basic realm="SigmaTrader Admin"`.
+  - `backend/app/api/routes.py`:
+    - For core API routers, added `dependencies=[Depends(require_admin)]` so that when admin credentials are configured, the following routes require Basic auth:
+      - `/api/strategies/*`
+      - `/api/risk-settings/*`
+      - `/api/orders/*`
+      - `/api/positions/*`
+      - `/api/analytics/*`
+      - `/api/system-events/*`
+    - System endpoints (`/`, `/health`) and the TradingView webhook (`/webhook/tradingview`) remain unauthenticated by design; the webhook continues to rely on the `ST_TRADINGVIEW_WEBHOOK_SECRET` for protection.
+
+Pending work:
+
+- When deploying behind HTTPS or a reverse proxy, combine this Basic auth with TLS termination and network-level restrictions as appropriate; for the local single-user use case, the current configuration strikes a balance between simplicity and optional hardening.
