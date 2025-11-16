@@ -1241,3 +1241,167 @@ Pending work:
 
 - Eventually phase out `kite_config.json` once all environments are migrated to DB-backed secrets, or treat JSON strictly as a bootstrap source for the first run.
 - Make it possible to mark specific keys as “non-viewable” in the UI (e.g. only allow overwrite, not readback) if stricter local security is desired.
+
+## Sprint S09 – Authentication and Multi-User Support
+
+### S09 / G01 – Authentication backend (users, passwords, sessions)
+
+Tasks: `S09_G01_TB001`, `S09_G01_TB002`, `S09_G01_TB003`
+
+- Password hashing and session design (TB001):
+  - `backend/app/core/auth.py`:
+    - Implements password hashing helpers:
+      - `hash_password(password)` and `verify_password(password, hashed)` using PBKDF2-HMAC-SHA256 with a random salt and 260k iterations.
+      - Hash format: `pbkdf2_sha256$iterations$salt_b64$hash_b64`.
+    - Implements session token helpers:
+      - `create_session_token(settings, user_id, ttl_seconds=…)`:
+        - Encodes a small JSON payload `{sub, exp, alg}` and signs it with HMAC-SHA256 using `settings.crypto_key`.
+        - Returns `base64url(payload).base64url(signature)` as the token value.
+      - `decode_session_token(settings, token)`:
+        - Verifies the signature and expiry and returns `(user_id, payload)` or raises `ValueError` on failure.
+      - `SESSION_COOKIE_NAME = "st_session"` is used by the auth API when setting cookies.
+  - This approach avoids new dependencies while still following industry-standard practices for password hashing and token signing in a local, single-user-friendly app.
+
+- User model and migration (TB002):
+  - `backend/app/models/user.py`:
+    - `User` model with fields:
+      - `id`, `username` (unique, 64 chars), `password_hash`, `role` (`ADMIN` / `TRADER`), `display_name`, `email`, `created_at`, `updated_at`.
+  - `backend/app/models/__init__.py` updated to export `User`.
+  - Alembic migration `backend/alembic/versions/0005_add_users.py`:
+    - Creates `users` table with the schema above and a unique constraint `ux_users_username`.
+    - Seeds a default `ADMIN` user with:
+      - `username="admin"`, `display_name="Administrator"`, and a password hash computed via `hash_password("admin")`.
+    - Tests do not rely on this seed (they create users via the API), but running Alembic against the real DB will provide the initial admin account.
+
+- Auth API endpoints and tests (TB003):
+  - `backend/app/schemas/auth.py`:
+    - `UserRead` – id, username, role, display_name (ORM-compatible).
+    - `RegisterRequest` – username, password, optional display_name.
+    - `LoginRequest` – username, password.
+    - `ChangePasswordRequest` – current_password, new_password.
+  - `backend/app/api/auth.py` (mounted under `/api/auth` in `app/api/routes.py`):
+    - Internal helpers:
+      - `_get_user_by_id`, `_get_user_by_username` – small query helpers.
+      - `_set_session_cookie(response, token, settings)` – sets `st_session` as an HTTP-only, same-site `Lax` cookie (`secure=True` in `prod`).
+      - `_clear_session_cookie(response)` – removes the cookie.
+      - `get_current_user(request, db, settings)` – reads the cookie, validates the session token, loads the `User`, and raises 401 on failure.
+    - Endpoints:
+      - `POST /api/auth/register` → `UserRead`:
+        - Creates a new `TRADER` user with a hashed password and optional display_name (defaulting to username).
+        - Returns 400 if the username is already taken.
+      - `POST /api/auth/login` → `UserRead`:
+        - Verifies username/password via `verify_password`.
+        - On success, issues a session token, sets `st_session` cookie, and returns the user.
+        - On failure, returns 401 with a generic “Invalid username or password” message.
+      - `POST /api/auth/logout`:
+        - Clears the session cookie (204 No Content).
+      - `GET /api/auth/me` → `UserRead`:
+        - Uses `get_current_user` to return the logged-in user.
+      - `POST /api/auth/change-password`:
+        - Requires current user via `get_current_user`.
+        - Verifies `current_password`, then replaces the stored hash with `hash_password(new_password)` and commits.
+  - Tests:
+    - `backend/tests/test_auth_api.py`:
+      - `setup_module` sets `ST_CRYPTO_KEY` so session tokens can be signed and recreates the schema.
+      - `test_register_and_login_creates_session_cookie`:
+        - Registers a new user, logs in, verifies `st_session` cookie is present, and confirms `/api/auth/me` returns the same user.
+      - `test_change_password_and_relogin`:
+        - Registers + logs in, changes password via `/change-password`, verifies old password no longer works, and that logging in with the new password succeeds.
+      - `test_default_admin_can_be_created_via_model`:
+        - Smoke test for the `User` model with `role="ADMIN"`; the actual seeded admin comes from the Alembic migration.
+
+### S09 / G02 – Frontend auth flows and landing layout (planned)
+
+Planned tasks: `S09_G02_TF001`, `S09_G02_TF002`, `S09_G02_TF003`
+
+- Goals:
+  - Provide a polished entry experience with login/register on the right and a marketing/benefits panel on the left to “sell” SigmaTrader.
+  - Gate the existing app (Dashboard, Queue, Orders, Analytics, Settings, etc.) behind authentication.
+- UI & routing:
+  - New public routes:
+    - `/login` – primary entry point.
+    - `/register` – optional sign-up for new users.
+  - Layout:
+    - Right ~25% of viewport: compact auth card containing login (and link to register). Fields: username, password, login button, and basic error messages.
+    - Left ~75%: marketing/hero area highlighting:
+      - Key benefits (auto/manual execution, risk controls, Zerodha integration, analytics).
+      - Simple visuals (e.g., cards, icons, accent colors like orange) aligned with overall SigmaTrader branding.
+- Auth flows:
+  - Implement React components and hooks that talk to `/api/auth/*`:
+    - Handle loading/error states and basic validations.
+  - Route protection:
+    - Wrap the existing app shell so that:
+      - Unauthenticated users hitting app routes are redirected to `/login`.
+      - Authenticated users see the full app.
+  - Top-right user menu:
+    - When logged in, show the username in the header (replacing or adjacent to the existing status chip area).
+    - Dropdown menu with:
+      - “Profile” (view basic user info).
+      - “Change password”.
+      - “Logout”.
+
+### S09 / G03 – Authorization and integration with existing admin features (planned)
+
+Planned tasks: `S09_G03_TB001`, `S09_G03_TB002`, `S09_G03_TB003`
+
+- Goals:
+  - Replace the current optional HTTP Basic admin protection with role-based user auth, without breaking existing flows (TradingView webhook, Zerodha connect, queue execution, etc.).
+- Backend integration:
+  - Introduce an `auth_required` dependency that:
+    - Extracts and validates the current user from the session cookie/JWT.
+    - Attaches `request.state.user` or similar for downstream handlers.
+  - Introduce an `admin_required` dependency that checks `user.role == "ADMIN"`.
+  - Update router wiring so that:
+    - Existing admin-only APIs (`/api/strategies`, `/api/risk-settings`, `/api/orders`, `/api/positions`, `/api/analytics`, `/api/system-events`, `/api/brokers`, `/api/zerodha/*`) are guarded by `admin_required`.
+    - “Normal” authenticated users can at least view their own orders and analytics as the product evolves.
+  - Keep `/health` and `/webhook/tradingview` unauthenticated (still protected by the webhook secret), and allow Zerodha webhook flows that rely on broker tokens to operate once an admin has configured them.
+- Dev and migration considerations:
+  - Provide a dev-mode flag (env-based) to allow bypassing auth in local development if needed, while keeping regression tests explicit about which routes require authentication.
+  - Ensure existing tests are updated or extended so that all admin routes are exercised under the new auth model.
+
+## Sprint S10 – Auth Refinements, Security & UX Enhancements (planned)
+
+### S10 / G01 – Auth security refinements (rate limiting, password reset)
+
+Planned tasks: `S10_G01_TB001`, `S10_G01_TB002`
+
+- Add basic protection against brute-force login attempts:
+  - Track recent failed login attempts per username/IP.
+  - Apply a short delay or temporary lockout after repeated failures, returning a generic error message without leaking whether the username exists.
+- Extend password management:
+  - Keep the normal “change password” flow for logged-in users.
+  - Add an admin-only password reset endpoint so an `ADMIN` can reset another user’s password in controlled scenarios (e.g., local support).
+
+### S10 / G02 – Auth observability and audit logging (planned)
+
+Planned tasks: `S10_G02_TB001`, `S10_G02_TB002`
+
+- Integrate authentication events into the existing observability stack:
+  - Record login success, login failure, logout, and password-change events into the `system_events` table with category `auth`.
+  - Surface these events in the System Events UI with filters so an admin can quickly inspect authentication activity.
+- Optional UX feedback:
+  - Show subtle warnings or banners in the UI if suspicious activity is detected (e.g., multiple recent failures), without overwhelming normal users.
+
+### S10 / G03 – Roles and user experience enhancements (planned)
+
+Planned tasks: `S10_G03_TB001`, `S10_G03_TB002`
+
+- Roles and permissions:
+  - Introduce additional roles beyond `ADMIN`/`TRADER`, such as `VIEW_ONLY`, and wire them into both backend authorization checks and frontend visibility of controls.
+  - Ensure view-only users cannot modify risk settings, strategies, or broker configuration, but can still see their own orders/analytics as appropriate.
+- Per-user preferences:
+  - Store user-specific preferences (e.g., default landing page, theme selection, preferred time zone) in the DB.
+  - Apply these preferences when rendering the app (e.g., remember last visited tab or preferred dark/light variant).
+
+### S10 / G04 – Future multi-broker/multi-account design (auth-aware) (planned)
+
+Planned tasks: `S10_G04_TB001`
+
+- Design-only scope (no implementation yet):
+  - Explore how the current single Zerodha account model can evolve into:
+    - One broker account shared by multiple app users (current model).
+    - Per-user broker credentials, where each SigmaTrader user connects their own Zerodha/Fyers/etc. account.
+  - Document the implications for:
+    - Schema changes (linking `users` to `broker_connections` / `broker_secrets`).
+    - Authorization (who can see or execute which orders).
+    - Migration from the existing single-account setup.

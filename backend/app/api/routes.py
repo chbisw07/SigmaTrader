@@ -4,6 +4,7 @@ from ..core.config import Settings, get_settings
 from ..core.security import require_admin
 from . import (
     analytics,
+    auth,
     brokers,
     orders,
     positions,
@@ -81,6 +82,12 @@ router.include_router(
     prefix="/api/system-events",
     dependencies=[Depends(require_admin)],
     tags=["system-events"],
+)
+
+router.include_router(
+    auth.router,
+    prefix="/api/auth",
+    tags=["auth"],
 )
 
 router.include_router(
