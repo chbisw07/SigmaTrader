@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -9,8 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.models import Order, Strategy
-from app.schemas.analytics import AnalyticsRebuildResponse, AnalyticsSummary
+from app.models import AnalyticsTrade, Order, Strategy
+from app.schemas.analytics import (
+    AnalyticsRebuildResponse,
+    AnalyticsSummary,
+    AnalyticsTradeRead,
+)
 from app.services.analytics import compute_strategy_analytics, rebuild_trades
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -139,6 +143,44 @@ def analytics_summary(
         avg_loss=result.avg_loss,
         max_drawdown=result.max_drawdown,
     )
+
+
+@router.post("/trades", response_model=List[AnalyticsTradeRead])
+def analytics_trades(
+    params: AnalyticsSummaryParams,
+    db: Session = Depends(get_db),
+) -> List[AnalyticsTradeRead]:
+    """Return a list of trades for optional strategy and date filters."""
+
+    query = (
+        db.query(AnalyticsTrade, Order, Strategy)
+        .join(Order, AnalyticsTrade.entry_order_id == Order.id)
+        .outerjoin(Strategy, AnalyticsTrade.strategy_id == Strategy.id)
+    )
+    if params.strategy_id is not None:
+        query = query.filter(AnalyticsTrade.strategy_id == params.strategy_id)
+    if params.date_from is not None:
+        query = query.filter(AnalyticsTrade.closed_at >= params.date_from)
+    if params.date_to is not None:
+        query = query.filter(AnalyticsTrade.closed_at <= params.date_to)
+
+    rows = query.order_by(AnalyticsTrade.closed_at).all()
+
+    trades: List[AnalyticsTradeRead] = []
+    for trade, entry_order, strategy in rows:
+        trades.append(
+            AnalyticsTradeRead(
+                id=trade.id,
+                strategy_id=trade.strategy_id,
+                strategy_name=getattr(strategy, "name", None),
+                symbol=entry_order.symbol,
+                product=entry_order.product,
+                pnl=trade.pnl,
+                opened_at=trade.opened_at,
+                closed_at=trade.closed_at,
+            )
+        )
+    return trades
 
 
 __all__ = ["router"]

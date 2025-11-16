@@ -8,6 +8,17 @@ export type AnalyticsSummary = {
   max_drawdown: number
 }
 
+export type AnalyticsTrade = {
+  id: number
+  strategy_id: number | null
+  strategy_name: string | null
+  symbol: string
+  product: string
+  pnl: number
+  opened_at: string
+  closed_at: string
+}
+
 export async function rebuildAnalyticsTrades(): Promise<{ created: number }> {
   const res = await fetch('/api/analytics/rebuild-trades', {
     method: 'POST',
@@ -24,12 +35,24 @@ export async function rebuildAnalyticsTrades(): Promise<{ created: number }> {
 }
 
 export async function fetchAnalyticsSummary(
-  strategyId: number | null = null,
+  params?: {
+    strategyId?: number | null
+    dateFrom?: string | null
+    dateTo?: string | null
+  },
 ): Promise<AnalyticsSummary> {
+  const body = {
+    strategy_id:
+      params && typeof params.strategyId === 'number'
+        ? params.strategyId
+        : null,
+    date_from: params?.dateFrom ?? null,
+    date_to: params?.dateTo ?? null,
+  }
   const res = await fetch('/api/analytics/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ strategy_id: strategyId }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) {
     const body = await res.text()
@@ -42,3 +65,33 @@ export async function fetchAnalyticsSummary(
   return (await res.json()) as AnalyticsSummary
 }
 
+export async function fetchAnalyticsTrades(
+  params?: {
+    strategyId?: number | null
+    dateFrom?: string | null
+    dateTo?: string | null
+  },
+): Promise<AnalyticsTrade[]> {
+  const body = {
+    strategy_id:
+      params && typeof params.strategyId === 'number'
+        ? params.strategyId
+        : null,
+    date_from: params?.dateFrom ?? null,
+    date_to: params?.dateTo ?? null,
+  }
+  const res = await fetch('/api/analytics/trades', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const bodyText = await res.text()
+    throw new Error(
+      `Failed to load analytics trades (${res.status})${
+        bodyText ? `: ${bodyText}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as AnalyticsTrade[]
+}

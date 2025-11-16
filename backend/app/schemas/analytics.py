@@ -26,4 +26,20 @@ class AnalyticsSummaryQuery(BaseModel):
     date_to: Optional[datetime] = None
 
 
-__all__ = ["AnalyticsSummary", "AnalyticsRebuildResponse", "AnalyticsSummaryQuery"]
+class AnalyticsTradeRead(BaseModel):
+    id: int
+    strategy_id: Optional[int]
+    strategy_name: Optional[str]
+    symbol: str
+    product: str
+    pnl: float
+    opened_at: datetime
+    closed_at: datetime
+
+
+__all__ = [
+    "AnalyticsSummary",
+    "AnalyticsRebuildResponse",
+    "AnalyticsSummaryQuery",
+    "AnalyticsTradeRead",
+]
