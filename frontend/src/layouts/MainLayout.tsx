@@ -18,6 +18,8 @@ import ListAltIcon from '@mui/icons-material/ListAlt'
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
 import SettingsIcon from '@mui/icons-material/Settings'
+import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
+import ShowChartIcon from '@mui/icons-material/ShowChart'
 import Chip from '@mui/material/Chip'
 import Stack from '@mui/material/Stack'
 import { NavLink } from 'react-router-dom'
@@ -40,6 +42,8 @@ const navItems: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: <DashboardIcon /> },
   { label: 'Queue', to: '/queue', icon: <ListAltIcon /> },
   { label: 'Orders', to: '/orders', icon: <ReceiptLongIcon /> },
+  { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
+  { label: 'Holdings', to: '/holdings', icon: <AccountBalanceWalletIcon /> },
   { label: 'Analytics', to: '/analytics', icon: <AnalyticsIcon /> },
   { label: 'Settings', to: '/settings', icon: <SettingsIcon /> },
 ]

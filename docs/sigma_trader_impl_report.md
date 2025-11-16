@@ -946,3 +946,87 @@ Pending work:
 
 - Optionally introduce an actual background scheduler (e.g., APScheduler or an external cron hitting `/api/zerodha/sync-orders`) for automatic periodic sync in production, rather than relying solely on manual refresh.
 - Extend mapping to cover more Zerodha status variants as we see them in real trades, and consider tracking intermediate states (e.g., `OPEN` vs `PARTIALLY_EXECUTED`) with richer UI cues in later analytics-focused sprints.
+
+### S07 / G02 – Positions and holdings view
+
+Tasks: `S07_G02_TB001`, `S07_G02_TB002`, `S07_G02_TF003`
+
+- Backend: positions cache and holdings API:
+  - `backend/app/clients/zerodha.py`:
+    - `KiteLike` protocol extended with:
+      - `positions()` and `holdings()` methods mirroring KiteConnect.
+    - `ZerodhaClient`:
+      - `list_positions()` → `kite.positions()`.
+      - `list_holdings()` → `kite.holdings()`.
+  - `backend/app/services/positions_sync.py`:
+    - `sync_positions_from_zerodha(db, client)`:
+      - Calls `client.list_positions()` and extracts the `net` positions list.
+      - Clears existing rows in the `positions` table for the single-user app.
+      - Inserts one `Position` row per entry using:
+        - `symbol = tradingsymbol`, `product`, `qty = quantity`,
+          `avg_price = average_price`, `pnl = pnl`, `last_updated = now(UTC)`.
+      - Returns the count of inserted/updated positions.
+  - `backend/app/schemas/positions.py`:
+    - `PositionRead` – Pydantic schema exposing `Position` fields.
+    - `HoldingRead` – schema for holdings rows (symbol, quantity, average_price, last_price, pnl).
+  - `backend/app/api/positions.py`:
+    - Helper `_get_zerodha_client_for_positions(db, settings)`:
+      - Similar to the connect/status/sync helpers:
+        - Resolves `BrokerConnection("zerodha")`.
+        - Loads `kite_config.json`, decrypts access token, instantiates `KiteConnect` and wraps in `ZerodhaClient`.
+    - `POST /api/positions/sync`:
+      - Calls `sync_positions_from_zerodha(db, client)` and returns `{ "updated": <count> }`.
+    - `GET /api/positions/`:
+      - Returns cached `Position` rows from the DB ordered by symbol/product.
+    - `GET /api/positions/holdings`:
+      - Calls `client.list_holdings()` directly (no DB cache yet).
+      - Projects Zerodha holdings into `HoldingRead`:
+        - `symbol = tradingsymbol`, `quantity`, `average_price`, `last_price`, and derived `pnl = (last_price - average_price) * quantity` when `last_price` is available.
+- Backend tests:
+  - `backend/tests/test_positions_api.py`:
+    - Seeds a dummy `BrokerConnection("zerodha")`.
+    - Monkeypatches `_get_zerodha_client_for_positions` to return a fake client with a single INFY position.
+    - Calls `POST /api/positions/sync` and asserts `updated == 1`.
+    - Calls `GET /api/positions/` and verifies the cached row has:
+      - `symbol="INFY"`, `product="CNC"`, `qty=10`, `avg_price=1500.0`.
+
+- Frontend: Positions & Holdings pages:
+  - `frontend/src/services/positions.ts`:
+    - Types:
+      - `Position` – matches `PositionRead`.
+      - `Holding` – matches `HoldingRead`.
+    - Functions:
+      - `syncPositions()` → `POST /api/positions/sync`.
+      - `fetchPositions()` → `GET /api/positions/`.
+      - `fetchHoldings()` → `GET /api/positions/holdings`.
+  - `frontend/src/views/PositionsPage.tsx`:
+    - New page under `/positions`:
+      - Loads positions on mount via `fetchPositions()`.
+      - Shows a `Refresh from Zerodha` button that:
+        - Calls `syncPositions()`.
+        - Reloads positions.
+      - Table columns:
+        - `Symbol`, `Product`, `Qty`, `Avg Price`, `P&L`, `Last Updated`.
+      - Uses IST formatting for `last_updated` similar to other pages.
+      - Shows a friendly message when there are no positions.
+  - `frontend/src/views/HoldingsPage.tsx`:
+    - New page under `/holdings`:
+      - Loads holdings on mount via `fetchHoldings()` (no explicit Refresh yet since this is live data).
+      - Table columns:
+        - `Symbol`, `Qty`, `Avg Price`, `Last Price`, `Unrealized P&L`.
+      - Computes and displays P&L via `pnl` supplied by the backend, formatted to two decimals.
+      - Shows a friendly message when there are no holdings.
+  - Navigation & routing:
+    - `frontend/src/layouts/MainLayout.tsx`:
+      - Sidebar nav extended with:
+        - `Positions` (icon: `ShowChartIcon`) → `/positions`.
+        - `Holdings` (icon: `AccountBalanceWalletIcon`) → `/holdings`.
+    - `frontend/src/routes/AppRoutes.tsx`:
+      - New routes:
+        - `/positions` → `PositionsPage`.
+        - `/holdings` → `HoldingsPage`.
+
+Pending work:
+
+- Add DB-level caching for holdings if we decide it is useful beyond the on-demand API call, aligning fully with the “cache in DB” goal.
+- Consider shared “Refresh” controls or background sync for holdings similar to positions once we see how frequently holdings change in real usage.

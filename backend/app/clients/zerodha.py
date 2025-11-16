@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Protocol
+from typing import Any, Dict, List, Protocol
 
 from app.core.config import Settings
 
@@ -25,6 +25,12 @@ class KiteLike(Protocol):
         ...
 
     def order_history(self, order_id: str) -> list[Dict[str, Any]]:  # pragma: no cover
+        ...
+
+    def positions(self) -> Dict[str, Any]:  # pragma: no cover
+        ...
+
+    def holdings(self) -> List[Dict[str, Any]]:  # pragma: no cover
         ...
 
 
@@ -107,6 +113,16 @@ class ZerodhaClient:
         """Return full history for a given order id."""
 
         return self._kite.order_history(order_id)
+
+    def list_positions(self) -> Dict[str, Any]:
+        """Return Zerodha positions payload."""
+
+        return self._kite.positions()
+
+    def list_holdings(self) -> List[Dict[str, Any]]:
+        """Return Zerodha holdings list."""
+
+        return self._kite.holdings()
 
 
 __all__ = ["ZerodhaClient", "ZerodhaOrderResult"]

@@ -23,6 +23,29 @@ class FakeKite:
     def order_history(self, order_id: str) -> List[Dict[str, Any]]:
         return [{"order_id": order_id, "status": "COMPLETE"}]
 
+    def positions(self) -> Dict[str, Any]:
+        return {
+            "net": [
+                {
+                    "tradingsymbol": "INFY",
+                    "product": "CNC",
+                    "quantity": 10,
+                    "average_price": 1500.0,
+                    "pnl": 100.0,
+                }
+            ]
+        }
+
+    def holdings(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "tradingsymbol": "INFY",
+                "quantity": 10,
+                "average_price": 1500.0,
+                "last_price": 1600.0,
+            }
+        ]
+
 
 def test_place_order_uses_underlying_kite_client() -> None:
     kite = FakeKite()
@@ -57,3 +80,9 @@ def test_list_orders_and_history_delegate_to_kite() -> None:
 
     history = client.get_order_history("12345")
     assert history and history[0]["status"] == "COMPLETE"
+
+    positions = client.list_positions()
+    assert positions["net"][0]["tradingsymbol"] == "INFY"
+
+    holdings = client.list_holdings()
+    assert holdings[0]["tradingsymbol"] == "INFY"
