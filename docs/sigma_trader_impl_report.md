@@ -1211,7 +1211,7 @@ Tasks: `S08_G05_TB001`, `S08_G05_TB002`, `S08_G05_TF003`
       - `GET /api/brokers/` → returns configured brokers from `config.json` (currently `["zerodha"]`) as `{ name, label }`.
       - `GET /api/brokers/{broker_name}/secrets` → returns decrypted `{ key, value }` pairs for that broker.
       - `PUT /api/brokers/{broker_name}/secrets/{key}` → creates/updates a secret with JSON body `{ "value": "..." }`, returning the stored `{ key, value }`.
-      - The router is mounted with `dependencies=[Depends(require_admin)]`, so these endpoints are guarded by optional admin Basic auth (no-op when `ST_ADMIN_USERNAME` is unset).
+      - For now these endpoints are not guarded by `require_admin` so that the single local user can manage secrets without HTTP Basic; they will be tied into the new user/role-based auth model in S09/S10.
   - Zerodha integration updated to use broker secrets:
     - `backend/app/api/zerodha.py`:
       - `/login-url`, `/connect`, `/status`, and `/sync-orders` now obtain the Zerodha API key (and secret for `/connect`) via `get_broker_secret("zerodha", "api_key"|"api_secret")`, emitting clear `400` errors when they are missing.

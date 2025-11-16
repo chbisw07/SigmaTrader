@@ -42,11 +42,15 @@ def get_settings() -> Settings:
     settings = Settings()
 
     # During pytest runs we want admin-protected APIs to remain easily
-    # accessible without configuring HTTP Basic credentials. Detect the
-    # test environment via PYTEST_CURRENT_TEST and clear admin auth.
+    # accessible without configuring HTTP Basic credentials and we do not
+    # want to mutate the main development database. Detect the test
+    # environment via PYTEST_CURRENT_TEST and adjust settings accordingly.
     if os.getenv("PYTEST_CURRENT_TEST"):
         settings.admin_username = None
         settings.admin_password = None
+        # Use an isolated SQLite DB for tests so running pytest does not
+        # wipe the primary sigma_trader.db that is used for real data.
+        settings.database_url = "sqlite:///./sigma_trader_test.db"
 
     return settings
 
