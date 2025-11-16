@@ -42,6 +42,13 @@ export function QueuePage() {
   const [editGtt, setEditGtt] = useState<boolean>(false)
   const [savingEdit, setSavingEdit] = useState(false)
 
+  const formatIst = (iso: string): string => {
+    const utc = new Date(iso)
+    const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
+    const ist = new Date(istMs)
+    return ist.toLocaleString('en-IN')
+  }
+
   const loadQueue = async () => {
     try {
       setLoading(true)
@@ -177,7 +184,7 @@ export function QueuePage() {
               {orders.map((order) => (
                 <TableRow key={order.id}>
                   <TableCell>
-                    {new Date(order.created_at).toLocaleString()}
+                    {formatIst(order.created_at)}
                   </TableCell>
                   <TableCell>{order.symbol}</TableCell>
                   <TableCell>{order.side}</TableCell>

@@ -880,3 +880,69 @@ Pending work:
 
 - Wire the `gtt` flag into real Zerodha GTT order placement (e.g., using Kite GTT APIs) and refine error handling for broker responses that explicitly recommend GTT over regular/AMO orders.
 - Extend the UI to more clearly differentiate regular vs GTT-intent orders (e.g., badges, filters) once actual GTT placement is implemented.
+
+---
+
+## Sprint S07 – Status Sync, Positions & Analytics MVP
+
+### S07 / G01 – Order status synchronization with Zerodha
+
+Tasks: `S07_G01_TB001`, `S07_G01_TB002`, `S07_G01_TF003`
+
+- Backend: Zerodha order status sync service and API:
+  - `backend/app/services/order_sync.py`:
+    - `sync_order_statuses(db, client)`:
+      - Calls `client.list_orders()` to fetch the Zerodha order book.
+      - Builds a mapping from `order_id` → entry.
+      - Queries local `Order` rows with a non-null `zerodha_order_id`.
+      - For each matching entry:
+        - Maps Zerodha `status` to internal `Order.status` via `_map_zerodha_status`:
+          - `COMPLETE` → `EXECUTED`.
+          - `CANCELLED`, `CANCELLED AMO` → `CANCELLED`.
+          - `REJECTED` → `REJECTED`.
+          - `OPEN`, `OPEN PENDING`, `TRIGGER PENDING`, `AMO REQ RECEIVED` → `SENT`.
+          - Unknown statuses leave the existing internal status unchanged.
+        - If the mapped status differs from the current one:
+          - Updates `order.status`.
+          - When new status is `REJECTED`, also captures a rejection message from:
+            - `status_message`, `status_message_short`, or `message`, if present.
+          - Increments an `updated` counter and commits all changes at the end.
+        - Returns the number of orders updated.
+  - `backend/app/api/zerodha.py`:
+    - `POST /api/zerodha/sync-orders`:
+      - Reuses the stored `BrokerConnection` and `kite_config.json` to:
+        - Decrypt the Zerodha access token.
+        - Instantiate `KiteConnect` and wrap it in `ZerodhaClient`.
+      - Calls `sync_order_statuses(db, client)` and returns `{ "updated": <count> }`.
+      - Returns 400 if Zerodha is not connected, and 500 if `kiteconnect` is not installed.
+  - Tests:
+    - `backend/tests/test_order_status_sync.py`:
+      - Uses a fake Zerodha client (`_FakeZerodhaClient`) with a canned order book:
+        - Order `1001` → `status="COMPLETE"`.
+        - Order `1002` → `status="REJECTED"`, `status_message="Insufficient funds"`.
+      - Creates two local `Order` rows with `zerodha_order_id` `1001` and `1002`, both initially `status="SENT"`.
+      - After calling `sync_order_statuses`:
+        - Asserts:
+          - Order `1001` now has status `EXECUTED`.
+          - Order `1002` has status `REJECTED` and `error_message` containing “Insufficient funds”.
+
+- Frontend: Orders History refresh tied to Zerodha sync:
+  - `frontend/src/services/zerodha.ts`:
+    - `syncZerodhaOrders()`:
+      - `POST /api/zerodha/sync-orders`.
+      - Throws a descriptive error if the response is non-OK.
+  - `frontend/src/views/OrdersPage.tsx`:
+    - Refactored to use a reusable `loadOrders()` function.
+    - Header area now includes:
+      - Description text: “Basic order history view. Use Refresh to sync latest status from Zerodha.”
+      - A `Refresh from Zerodha` button:
+        - On click:
+          - Calls `syncZerodhaOrders()` to trigger backend sync.
+          - Then reloads orders via `loadOrders()`.
+        - Button label changes to `Refreshing…` while in-flight and is disabled during refresh.
+    - Errors from either sync or reload are surfaced on the page using the existing error banner.
+
+Pending work:
+
+- Optionally introduce an actual background scheduler (e.g., APScheduler or an external cron hitting `/api/zerodha/sync-orders`) for automatic periodic sync in production, rather than relying solely on manual refresh.
+- Extend mapping to cover more Zerodha status variants as we see them in real trades, and consider tracking intermediate states (e.g., `OPEN` vs `PARTIALLY_EXECUTED`) with richer UI cues in later analytics-focused sprints.

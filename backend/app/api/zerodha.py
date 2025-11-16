@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.clients import ZerodhaClient
 from app.config_files import load_kite_config
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection
+from app.services.order_sync import sync_order_statuses
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -19,6 +21,10 @@ router = APIRouter()
 
 class ZerodhaConnectRequest(BaseModel):
     request_token: str
+
+
+class SyncOrdersResponse(BaseModel):
+    updated: int
 
 
 @router.get("/login-url")
@@ -119,6 +125,43 @@ def zerodha_status(
             "updated_at": updated_at,
             "error": str(exc),
         }
+
+
+@router.post("/sync-orders", response_model=SyncOrdersResponse)
+def sync_orders(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Dict[str, int]:
+    """Synchronize local Order rows with Zerodha order statuses."""
+
+    conn = (
+        db.query(BrokerConnection)
+        .filter(BrokerConnection.broker_name == "zerodha")
+        .one_or_none()
+    )
+    if conn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha is not connected.",
+        )
+
+    kite_cfg = load_kite_config()
+
+    try:
+        from kiteconnect import KiteConnect  # type: ignore[import]
+    except ImportError as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="kiteconnect library is not installed in the backend environment.",
+        ) from exc
+
+    access_token = decrypt_token(settings, conn.access_token_encrypted)
+    kite = KiteConnect(api_key=kite_cfg.kite_connect.api_key)
+    kite.set_access_token(access_token)
+
+    client = ZerodhaClient(kite)
+    updated = sync_order_statuses(db, client)
+    return {"updated": updated}
 
 
 __all__ = ["router"]

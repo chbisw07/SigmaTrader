@@ -1,4 +1,5 @@
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import Paper from '@mui/material/Paper'
 import Table from '@mui/material/Table'
@@ -10,42 +11,82 @@ import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
 
 import { fetchOrdersHistory, type Order } from '../services/orders'
+import { syncZerodhaOrders } from '../services/zerodha'
 
 export function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const formatIst = (iso: string): string => {
+    const utc = new Date(iso)
+    const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
+    const ist = new Date(istMs)
+    return ist.toLocaleString('en-IN')
+  }
+
+  const loadOrders = async () => {
+    try {
+      setLoading(true)
+      const data = await fetchOrdersHistory()
+      setOrders(data)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load orders')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    let active = true
-    const load = async () => {
-      try {
-        const data = await fetchOrdersHistory()
-        if (!active) return
-        setOrders(data)
-        setError(null)
-      } catch (err) {
-        if (!active) return
-        setError(err instanceof Error ? err.message : 'Failed to load orders')
-      } finally {
-        if (active) setLoading(false)
-      }
-    }
-    void load()
-    return () => {
-      active = false
-    }
+    void loadOrders()
   }, [])
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      await syncZerodhaOrders()
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to sync orders from Zerodha',
+      )
+    } finally {
+      setRefreshing(false)
+      await loadOrders()
+    }
+  }
 
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
         Orders
       </Typography>
-      <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Basic order history view. Filters and advanced status insights will be
-        added in future sprints.
-      </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          mb: 3,
+          flexWrap: 'wrap',
+          gap: 1,
+        }}
+      >
+        <Typography color="text.secondary">
+          Basic order history view. Use Refresh to sync latest status from
+          Zerodha.
+        </Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={handleRefresh}
+          disabled={loading || refreshing}
+        >
+          {refreshing ? 'Refreshing…' : 'Refresh from Zerodha'}
+        </Button>
+      </Box>
 
       {loading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -77,7 +118,7 @@ export function OrdersPage() {
               {orders.map((order) => (
                 <TableRow key={order.id}>
                   <TableCell>
-                    {new Date(order.created_at).toLocaleString()}
+                    {formatIst(order.created_at)}
                   </TableCell>
                   <TableCell>{order.symbol}</TableCell>
                   <TableCell>{order.side}</TableCell>
