@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.clients import ZerodhaClient
@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models import BrokerConnection, Order
 from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
 from app.services.risk import evaluate_order_risk
+from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -203,6 +204,7 @@ def edit_order(
 @router.post("/{order_id}/execute", response_model=OrderRead)
 def execute_order(
     order_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Order:
@@ -240,6 +242,24 @@ def execute_order(
         db.add(order)
         db.commit()
         db.refresh(order)
+        logger.warning(
+            "Order rejected by risk engine",
+            extra={
+                "extra": {
+                    "correlation_id": getattr(request.state, "correlation_id", None),
+                    "order_id": order.id,
+                    "reason": risk.reason,
+                }
+            },
+        )
+        record_system_event(
+            db,
+            level="WARNING",
+            category="risk",
+            message="Order rejected by risk engine",
+            correlation_id=getattr(request.state, "correlation_id", None),
+            details={"order_id": order.id, "reason": risk.reason},
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Order rejected by risk engine: {risk.reason}",
@@ -297,9 +317,16 @@ def execute_order(
         )
         if any(phrase in message for phrase in amo_hint_phrases):
             logger.info(
-                "Order %s failed with regular variety due to off-market hours; "
-                "retrying as AMO.",
-                order.id,
+                "Order failed with regular variety; retrying as AMO",
+                extra={
+                    "extra": {
+                        "correlation_id": getattr(
+                            request.state, "correlation_id", None
+                        ),
+                        "order_id": order.id,
+                        "error": message,
+                    }
+                },
             )
             try:
                 result = _place(variety="amo")
@@ -309,6 +336,18 @@ def execute_order(
                 db.add(order)
                 db.commit()
                 db.refresh(order)
+                logger.error(
+                    "Zerodha AMO order placement failed",
+                    extra={
+                        "extra": {
+                            "correlation_id": getattr(
+                                request.state, "correlation_id", None
+                            ),
+                            "order_id": order.id,
+                            "error": str(exc_amo),
+                        }
+                    },
+                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Zerodha AMO order placement failed: {exc_amo}",
@@ -319,6 +358,18 @@ def execute_order(
             db.add(order)
             db.commit()
             db.refresh(order)
+            logger.error(
+                "Zerodha order placement failed",
+                extra={
+                    "extra": {
+                        "correlation_id": getattr(
+                            request.state, "correlation_id", None
+                        ),
+                        "order_id": order.id,
+                        "error": message,
+                    }
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Zerodha order placement failed: {message}",
@@ -341,6 +392,20 @@ def execute_order(
     db.add(order)
     db.commit()
     db.refresh(order)
+    record_system_event(
+        db,
+        level="INFO",
+        category="order",
+        message="Order sent to Zerodha",
+        correlation_id=getattr(request.state, "correlation_id", None),
+        details={
+            "order_id": order.id,
+            "zerodha_order_id": order.zerodha_order_id,
+            "symbol": order.symbol,
+            "side": order.side,
+            "qty": order.qty,
+        },
+    )
     return order
 
 

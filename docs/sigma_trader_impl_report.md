@@ -1030,3 +1030,126 @@ Pending work:
 
 - Add DB-level caching for holdings if we decide it is useful beyond the on-demand API call, aligning fully with the “cache in DB” goal.
 - Consider shared “Refresh” controls or background sync for holdings similar to positions once we see how frequently holdings change in real usage.
+
+---
+
+### S07 / G04 – Analytics frontend (charts and tables)
+
+Tasks: `S07_G04_TF001`, `S07_G04_TF002`, `S07_G04_TF003`
+
+- Summary cards and filters:
+  - `frontend/src/services/analytics.ts`:
+    - `rebuildAnalyticsTrades()` – calls `POST /api/analytics/rebuild-trades`.
+    - `fetchAnalyticsSummary(params?)` – posts to `/api/analytics/summary` with optional `strategy_id` and `date_from` / `date_to`.
+    - `fetchAnalyticsTrades(params?)` – posts to `/api/analytics/trades` using the same filter shape, returning a list of trades with strategy name, symbol, product, P&L, and timestamps.
+  - `frontend/src/views/AnalyticsPage.tsx`:
+    - On mount:
+      - Loads strategies via `fetchStrategies()` and analytics summary + trades via the new analytics services.
+    - Filter controls:
+      - Strategy selector:
+        - `All strategies` or a specific strategy from the dropdown.
+      - Date range:
+        - `From` / `To` date pickers (`type="date"`).
+      - `Apply filters` button:
+        - Reloads both summary and trades with the selected filters.
+    - Summary card:
+      - Displays:
+        - `Trades` count.
+        - `Total P&L`.
+        - `Win rate` (%).
+        - `Avg win` and `Avg loss` (or `-` when not applicable).
+        - `Max drawdown` (based on cumulative P&L).
+      - `Rebuild trades` button:
+        - Triggers `rebuildAnalyticsTrades()` and then reloads summary/trades.
+- Charts:
+  - The Analytics page includes lightweight SVG-based mini-charts without extra charting libraries:
+    - `MiniLineChart`:
+      - Draws a simple cumulative P&L line over trades.
+      - Builds a cumulative series from trade P&Ls and scales it into an SVG path.
+      - Shows a friendly “Not enough trades to plot.” message when there are fewer than two trades.
+    - `MiniBarChart`:
+      - Aggregates P&L by symbol.
+      - Renders colored bars (green for positive, red for negative) in an SVG.
+      - Shows “No data to plot.” when there are no bars.
+- Trades table:
+  - `TradesSection` inside `AnalyticsPage`:
+    - Uses `fetchAnalyticsTrades()` results to render a simple table with:
+      - `Closed At` – formatted in IST using the same +5:30 offset used elsewhere.
+      - `Strategy` – strategy name or `-` if missing.
+      - `Symbol`.
+      - `P&L` – right-aligned and colored green for profits, red for losses, with two decimal places.
+    - When no trades match the current filters, shows “No trades in the selected range.”
+
+Pending work:
+
+- Extend the Analytics page with richer views (e.g., P&L by day, per-strategy comparison, more detailed trade drill-down) once more real trading data is available and we decide which insights are most useful.
+
+## Sprint S08 – Hardening, Logging, Security & Deployment
+
+### S08 / G01 – Structured logging, error handling, and observability
+
+Tasks: `S08_G01_TB001`, `S08_G01_TB002`, `S08_G01_TF003`
+
+- Backend: structured logging and correlation IDs
+  - `backend/app/core/logging.py`:
+    - `configure_logging(level=logging.INFO)`:
+      - Configures root logging with a JSON formatter writing to stdout.
+      - Each log record includes `level`, `logger`, `message`, plus any extra fields provided under a nested `extra` dict.
+    - `RequestContextMiddleware`:
+      - Generates or propagates a `correlation_id`:
+        - Uses incoming `X-Request-ID` header if present; otherwise generates a UUID.
+      - Attaches `correlation_id` to `request.state.correlation_id`.
+      - Adds `X-Request-ID` header to HTTP responses.
+      - Logs a `sigma.request` entry for each request with:
+        - `method`, `path`, `status_code`, `duration_ms`, `correlation_id`.
+    - `log_with_correlation(logger, request, level, message, **fields)` helper:
+      - Provides a reusable way to emit logs that automatically include the current request’s `correlation_id`.
+  - `backend/app/main.py`:
+    - Calls `configure_logging()` at startup.
+    - Adds `RequestContextMiddleware` to the FastAPI app so all routes benefit from correlation IDs and request logs.
+  - Webhook and order/broker logs:
+    - `backend/app/api/webhook.py`:
+      - Uses the request’s `correlation_id` in logs.
+      - Logs:
+        - Invalid secrets for TradingView alerts.
+        - Ignored alerts for unsupported platforms.
+        - Successful alert ingestion and order creation, including `alert_id`, `order_id`, `symbol`, `action`, `strategy`, `mode`, and `correlation_id`.
+    - `backend/app/api/orders.py` (execute endpoint):
+      - On risk rejection:
+        - Logs a warning: “Order rejected by risk engine” with `order_id`, `reason`, and `correlation_id`, and returns a normalized 400 error.
+      - On AMO fallback:
+        - Logs an info event when a regular order fails and AMO retry is attempted, including error text and `order_id`.
+      - On Zerodha failures:
+        - Logs errors for both regular and AMO order placement failures with `order_id`, `error`, and `correlation_id`, while still returning 502 responses with a consistent `detail` message.
+    - `backend/app/api/zerodha.py`:
+      - On successful `/connect`:
+        - Logs “Zerodha connection updated” with `broker="zerodha"` and `correlation_id` for auditability.
+
+- Frontend: minimal error observability in UI
+  - `frontend/src/services/logs.ts`:
+    - In-memory client-side log buffer:
+      - `recordAppLog(level: 'INFO' | 'WARNING' | 'ERROR', message: string)`:
+        - Appends a log entry with `id`, `timestamp`, and message, keeping up to 100 recent entries.
+      - `getAppLogs()`:
+        - Exposes the current buffer for UI inspection.
+  - Error capture in existing flows:
+    - `frontend/src/views/SettingsPage.tsx`:
+      - When Zerodha login URL fetch or connect fails, records an `ERROR` log entry via `recordAppLog` in addition to showing the error message on screen.
+    - `frontend/src/views/AnalyticsPage.tsx`:
+      - When analytics summary or rebuild calls fail, records `ERROR` events as well as updating the visible error banner.
+  - System events view:
+    - `frontend/src/views/SystemEventsPage.tsx`:
+      - Page under `/system-events` that now shows:
+        - **Backend events** (from `system_events` table) in a table with:
+          - Time (local), level, category, message, correlation_id.
+        - **Client-side events** (from the in-memory buffer) for this browser session.
+      - Uses `frontend/src/services/systemEvents.ts` to query `/api/system-events/` with optional filters.
+    - `frontend/src/layouts/MainLayout.tsx`:
+      - Sidebar navigation includes `System Events` pointing to `/system-events` (warning icon).
+    - `frontend/src/routes/AppRoutes.tsx`:
+      - Route `/system-events` mapped to `SystemEventsPage`.
+
+Pending work:
+
+- Extend logging to include more detailed broker payload/context when diagnosing tricky issues (ensuring sensitive information such as tokens is never logged).
+- Consider integrating with an external log aggregator for long-term storage and richer querying if SigmaTrader is deployed beyond local single-user setups.

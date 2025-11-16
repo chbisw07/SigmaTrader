@@ -28,6 +28,7 @@ import {
   fetchZerodhaStatus,
   type ZerodhaStatus,
 } from '../services/zerodha'
+import { recordAppLog } from '../services/logs'
 
 export function SettingsPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([])
@@ -105,9 +106,10 @@ export function SettingsPage() {
       const url = await fetchZerodhaLoginUrl()
       window.open(url, '_blank', 'noopener,noreferrer')
     } catch (err) {
-      setBrokerError(
-        err instanceof Error ? err.message : 'Failed to open Zerodha login',
-      )
+      const msg =
+        err instanceof Error ? err.message : 'Failed to open Zerodha login'
+      setBrokerError(msg)
+      recordAppLog('ERROR', msg)
     }
   }
 
@@ -123,9 +125,12 @@ export function SettingsPage() {
       setBrokerStatus(status)
       setBrokerError(null)
     } catch (err) {
-      setBrokerError(
-        err instanceof Error ? err.message : 'Failed to complete Zerodha connect',
-      )
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Failed to complete Zerodha connect'
+      setBrokerError(msg)
+      recordAppLog('ERROR', msg)
     } finally {
       setIsConnecting(false)
     }

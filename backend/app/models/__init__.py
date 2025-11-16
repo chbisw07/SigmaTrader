@@ -1,4 +1,5 @@
 from .broker import BrokerConnection
+from .system_event import SystemEvent
 from .trading import Alert, AnalyticsTrade, Order, Position, RiskSettings, Strategy
 
 __all__ = [
@@ -9,4 +10,5 @@ __all__ = [
     "RiskSettings",
     "Strategy",
     "BrokerConnection",
+    "SystemEvent",
 ]

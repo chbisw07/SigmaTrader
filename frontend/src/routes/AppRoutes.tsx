@@ -7,6 +7,7 @@ import { AnalyticsPage } from '../views/AnalyticsPage'
 import { SettingsPage } from '../views/SettingsPage'
 import { PositionsPage } from '../views/PositionsPage'
 import { HoldingsPage } from '../views/HoldingsPage'
+import { SystemEventsPage } from '../views/SystemEventsPage'
 
 export function AppRoutes() {
   return (
@@ -17,6 +18,7 @@ export function AppRoutes() {
       <Route path="/positions" element={<PositionsPage />} />
       <Route path="/holdings" element={<HoldingsPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
+      <Route path="/system-events" element={<SystemEventsPage />} />
       <Route path="/settings" element={<SettingsPage />} />
     </Routes>
   )

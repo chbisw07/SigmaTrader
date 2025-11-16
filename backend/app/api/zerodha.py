@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,7 @@ from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection
 from app.services.order_sync import sync_order_statuses
+from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -40,6 +41,7 @@ def get_login_url() -> Dict[str, str]:
 @router.post("/connect")
 def connect_zerodha(
     payload: ZerodhaConnectRequest,
+    request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Dict[str, str]:
@@ -84,6 +86,29 @@ def connect_zerodha(
         conn.access_token_encrypted = encrypted
 
     db.commit()
+
+    # Log a minimal audit entry with correlation id.
+    correlation_id = getattr(request.state, "correlation_id", None)
+    import logging
+
+    logging.getLogger(__name__).info(
+        "Zerodha connection updated",
+        extra={
+            "extra": {
+                "correlation_id": correlation_id,
+                "broker": "zerodha",
+            }
+        },
+    )
+
+    record_system_event(
+        db,
+        level="INFO",
+        category="broker",
+        message="Zerodha connection updated",
+        correlation_id=correlation_id,
+        details={"broker": "zerodha"},
+    )
 
     return {"status": "connected"}
 

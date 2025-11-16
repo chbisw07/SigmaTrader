@@ -15,6 +15,7 @@ import {
   type AnalyticsTrade,
 } from '../services/analytics'
 import { fetchStrategies, type Strategy } from '../services/admin'
+import { recordAppLog } from '../services/logs'
 
 export function AnalyticsPage() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null)
@@ -52,9 +53,10 @@ export function AnalyticsPage() {
       setTrades(tradesData)
       setError(null)
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to load analytics',
-      )
+      const msg =
+        err instanceof Error ? err.message : 'Failed to load analytics'
+      setError(msg)
+      recordAppLog('ERROR', msg)
     } finally {
       setLoading(false)
     }
@@ -70,11 +72,12 @@ export function AnalyticsPage() {
       await rebuildAnalyticsTrades()
       await load()
     } catch (err) {
-      setError(
+      const msg =
         err instanceof Error
           ? err.message
-          : 'Failed to rebuild analytics trades',
-      )
+          : 'Failed to rebuild analytics trades'
+      setError(msg)
+      recordAppLog('ERROR', msg)
     } finally {
       setRebuilding(false)
     }

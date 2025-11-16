@@ -1,7 +1,16 @@
 from fastapi import APIRouter, Depends
 
 from ..core.config import Settings, get_settings
-from . import analytics, orders, positions, risk_settings, strategies, webhook, zerodha
+from . import (
+    analytics,
+    orders,
+    positions,
+    risk_settings,
+    strategies,
+    system_events,
+    webhook,
+    zerodha,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -58,6 +67,12 @@ router.include_router(
     analytics.router,
     prefix="/api/analytics",
     tags=["analytics"],
+)
+
+router.include_router(
+    system_events.router,
+    prefix="/api/system-events",
+    tags=["system-events"],
 )
 
 router.include_router(

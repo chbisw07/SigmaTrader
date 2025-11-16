@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models import Alert, Strategy
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
+from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -26,6 +27,7 @@ router = APIRouter()
 )
 def tradingview_webhook(
     payload: TradingViewWebhookPayload,
+    request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Dict[str, Any]:
@@ -35,11 +37,19 @@ def tradingview_webhook(
     when one is set; otherwise a 401 response is returned.
     """
 
+    correlation_id = getattr(request.state, "correlation_id", None)
+
     expected_secret = settings.tradingview_webhook_secret
     if expected_secret and payload.secret != expected_secret:
         logger.warning(
-            "Received webhook with invalid secret for strategy=%s",
-            payload.strategy_name,
+            "Received webhook with invalid secret",
+            extra={
+                "extra": {
+                    "correlation_id": correlation_id,
+                    "strategy": payload.strategy_name,
+                    "platform": payload.platform,
+                }
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -50,9 +60,14 @@ def tradingview_webhook(
     platform_normalized = (payload.platform or "").lower()
     if platform_normalized and platform_normalized not in {"zerodha", "tradingview"}:
         logger.info(
-            "Ignoring webhook for unsupported platform=%s strategy=%s",
-            payload.platform,
-            payload.strategy_name,
+            "Ignoring webhook for unsupported platform",
+            extra={
+                "extra": {
+                    "correlation_id": correlation_id,
+                    "strategy": payload.strategy_name,
+                    "platform": payload.platform,
+                }
+            },
         )
         return {"status": "ignored", "platform": payload.platform}
 
@@ -116,11 +131,35 @@ def tradingview_webhook(
             raise
 
     logger.info(
-        "Stored alert id=%s symbol=%s action=%s strategy=%s",
-        alert.id,
-        alert.symbol,
-        alert.action,
-        payload.strategy_name,
+        "Stored alert and created order",
+        extra={
+            "extra": {
+                "correlation_id": correlation_id,
+                "alert_id": alert.id,
+                "order_id": order.id,
+                "symbol": alert.symbol,
+                "action": alert.action,
+                "strategy": payload.strategy_name,
+                "mode": mode,
+            }
+        },
+    )
+
+    # Persist a structured system event for observability.
+    record_system_event(
+        db,
+        level="INFO",
+        category="alert",
+        message="Alert ingested and order created",
+        correlation_id=correlation_id,
+        details={
+            "alert_id": alert.id,
+            "order_id": order.id,
+            "symbol": alert.symbol,
+            "action": alert.action,
+            "strategy": payload.strategy_name,
+            "mode": mode,
+        },
     )
 
     return {

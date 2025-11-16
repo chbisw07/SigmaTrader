@@ -45,6 +45,7 @@ const navItems: NavItem[] = [
   { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
   { label: 'Holdings', to: '/holdings', icon: <AccountBalanceWalletIcon /> },
   { label: 'Analytics', to: '/analytics', icon: <AnalyticsIcon /> },
+  { label: 'System Events', to: '/system-events', icon: <WarningIcon /> },
   { label: 'Settings', to: '/settings', icon: <SettingsIcon /> },
 ]
 
@@ -179,3 +180,4 @@ export function MainLayout({ children }: MainLayoutProps) {
 }
 
 export default MainLayout
+import WarningIcon from '@mui/icons-material/Warning'
