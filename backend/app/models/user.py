@@ -19,6 +19,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="TRADER")
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    theme_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,

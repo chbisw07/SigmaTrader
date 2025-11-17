@@ -17,6 +17,7 @@ from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ThemeUpdateRequest,
     UserRead,
 )
 
@@ -182,6 +183,21 @@ def change_password(
     user.password_hash = hash_password(payload.new_password)
     db.add(user)
     db.commit()
+
+
+@router.post("/theme", response_model=UserRead)
+def update_theme(
+    payload: ThemeUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserRead:
+    """Update the preferred UI theme for the current user."""
+
+    user.theme_id = payload.theme_id
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return UserRead.from_orm(user)
 
 
 __all__: list[str] = ["router", "get_current_user", "get_current_user_optional"]

@@ -1661,3 +1661,50 @@ Tasks: `S12_G04_TB001`
   - The config mechanism currently focuses on symbol overrides for Zerodha; the same pattern can be extended to:
     - Additional brokers/platforms (Fyers, CoinDCX, internal alert producers) with their own symbol maps.
     - Field-level mapping (side/qty/price/product/alert_type/reason) once we introduce adapters for those platforms, keeping core webhook logic unchanged.
+
+## Sprint S13 – Appearance and theming
+
+### S13 / G01 – Appearance and theming (light/dark + presets)
+
+Tasks: `S13_G01_TF001`, `S13_G01_TF002`, `S13_G01_TB003`
+
+- Theme system:
+  - `frontend/src/theme.tsx` defines:
+    - `ThemeId = 'dark' | 'light' | 'amber'`.
+    - Three preset MUI themes:
+      - `dark`: deep navy backgrounds with soft blue primary (`#90caf9`) and muted pink secondary (`#f48fb1`), tuned for a professional dark dashboard.
+      - `light`: light grey app background with white cards, rich blue primary (`#1565c0`) and subtle orange secondary (`#ff9800`), with dark text for readability.
+      - `amber`: warm dark palette with brownish backgrounds and amber/coral accents (`#ffb300` / `#ff7043`).
+    - Helper `isValidThemeId` and `DEFAULT_THEME_ID = 'dark'`.
+  - `frontend/src/themeContext.tsx`:
+    - `AppThemeProvider` wraps MUI’s `ThemeProvider` + `CssBaseline`.
+    - Holds `themeId` in React state and persists it to `localStorage` under `st_theme_id`.
+    - Exposes `useAppTheme()` hook (`{ themeId, setThemeId }`) for components to read or change the current theme.
+- Wiring into the app:
+  - `frontend/src/main.tsx`:
+    - Wraps the entire app in `<AppThemeProvider>` so all views use the selected theme.
+  - `frontend/src/services/auth.ts`:
+    - Extended `CurrentUser` with `theme_id`.
+    - Added `updateTheme(themeId)` calling `POST /api/auth/theme`.
+  - `frontend/src/App.tsx`:
+    - After `fetchCurrentUser`, if `user.theme_id` is a valid `ThemeId`, calls `setThemeId(user.theme_id)` to apply the user’s preferred theme.
+    - On successful login, applies the same logic so the UI switches to the user’s theme immediately.
+- Backend persistence:
+  - `backend/app/models/user.py` and Alembic `0010_add_user_theme.py` add `theme_id` to the `users` table.
+  - `backend/app/schemas/auth.py::UserRead` now includes `theme_id`, and `ThemeUpdateRequest` models the request payload.
+  - `backend/app/api/auth.py` exposes `POST /api/auth/theme`:
+    - Requires authentication.
+    - Saves the requested `theme_id` on the current user and returns the updated `UserRead`.
+- Appearance settings UI:
+  - `frontend/src/layouts/MainLayout.tsx`:
+    - Adds an **Appearance** entry to the left-hand navigation (`/appearance`) with a palette icon.
+  - `frontend/src/routes/AppRoutes.tsx`:
+    - New route: `/appearance` → `AppearancePage`.
+  - `frontend/src/views/AppearancePage.tsx`:
+    - Simple Appearance panel:
+      - Radio group listing the three themes with user-friendly labels:
+        - Dark (default), Light, Dark (amber accent).
+      - On change:
+        - Immediately updates the theme via `setThemeId`.
+        - Calls `updateTheme(themeId)` to persist the choice server-side.
+      - Shows a small “Saving theme preference...” caption while saving and an error caption if the backend update fails.

@@ -3,6 +3,7 @@ export type CurrentUser = {
   username: string
   role: string
   display_name?: string | null
+  theme_id?: string | null
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {
@@ -72,3 +73,17 @@ export async function logout(): Promise<void> {
   }
 }
 
+export async function updateTheme(themeId: string): Promise<CurrentUser> {
+  const res = await fetch('/api/auth/theme', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ theme_id: themeId }),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to update theme (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as CurrentUser
+}

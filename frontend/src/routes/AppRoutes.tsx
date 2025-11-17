@@ -8,6 +8,7 @@ import { SettingsPage } from '../views/SettingsPage'
 import { PositionsPage } from '../views/PositionsPage'
 import { HoldingsPage } from '../views/HoldingsPage'
 import { SystemEventsPage } from '../views/SystemEventsPage'
+import { AppearancePage } from '../views/AppearancePage'
 
 export function AppRoutes() {
   return (
@@ -19,6 +20,7 @@ export function AppRoutes() {
       <Route path="/holdings" element={<HoldingsPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
       <Route path="/system-events" element={<SystemEventsPage />} />
+      <Route path="/appearance" element={<AppearancePage />} />
       <Route path="/settings" element={<SettingsPage />} />
       {/* /auth is handled at the App.tsx level */}
     </Routes>

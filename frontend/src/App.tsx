@@ -5,12 +5,15 @@ import MainLayout from './layouts/MainLayout'
 import { AppRoutes } from './routes/AppRoutes'
 import { AuthPage } from './views/AuthPage'
 import { fetchCurrentUser, type CurrentUser } from './services/auth'
+import { useAppTheme } from './themeContext'
+import { isValidThemeId, type ThemeId } from './theme'
 
 function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+  const { setThemeId } = useAppTheme()
 
   useEffect(() => {
     let active = true
@@ -19,6 +22,9 @@ function App() {
         const user = await fetchCurrentUser()
         if (!active) return
         setCurrentUser(user)
+        if (user?.theme_id && isValidThemeId(user.theme_id)) {
+          setThemeId(user.theme_id as ThemeId)
+        }
       } catch {
         if (!active) return
         setCurrentUser(null)
@@ -34,6 +40,9 @@ function App() {
 
   const handleAuthSuccess = (user: CurrentUser) => {
     setCurrentUser(user)
+    if (user.theme_id && isValidThemeId(user.theme_id)) {
+      setThemeId(user.theme_id as ThemeId)
+    }
   }
 
   const isAuthRoute = location.pathname === '/auth'

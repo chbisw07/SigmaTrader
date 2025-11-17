@@ -10,6 +10,7 @@ class UserRead(BaseModel):
     username: str
     role: str
     display_name: Optional[str] = None
+    theme_id: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -31,9 +32,14 @@ class ChangePasswordRequest(BaseModel):
     new_password: constr(min_length=6, max_length=128)  # type: ignore[type-arg]
 
 
+class ThemeUpdateRequest(BaseModel):
+    theme_id: constr(min_length=1, max_length=32)  # type: ignore[type-arg]
+
+
 __all__ = [
     "UserRead",
     "RegisterRequest",
     "LoginRequest",
     "ChangePasswordRequest",
+    "ThemeUpdateRequest",
 ]
