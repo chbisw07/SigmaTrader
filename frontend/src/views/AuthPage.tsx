@@ -14,13 +14,17 @@ type Mode = 'login' | 'register'
 
 type AuthPageProps = {
   onAuthSuccess: (user: CurrentUser) => void
+  mode?: Mode
 }
 
-export function AuthPage({ onAuthSuccess }: AuthPageProps) {
+export function AuthPage({ onAuthSuccess, mode: modeProp }: AuthPageProps) {
   const location = useLocation()
   const navigate = useNavigate()
+
   const params = new URLSearchParams(location.search)
-  const initialMode: Mode = params.get('mode') === 'register' ? 'register' : 'login'
+  const initialModeFromQuery: Mode =
+    params.get('mode') === 'register' ? 'register' : 'login'
+  const initialMode: Mode = modeProp ?? initialModeFromQuery
 
   const [mode, setMode] = useState<Mode>(initialMode)
   const [username, setUsername] = useState('')
@@ -70,62 +74,195 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
       sx={{
         minHeight: '100vh',
         display: 'flex',
-        flexDirection: 'row',
+        flexDirection: { xs: 'column', md: 'row' },
+        bgcolor: 'background.default',
       }}
     >
+      {/* Hero / marketing column */}
       <Box
         sx={{
-          flex: { xs: 0, md: 3 },
-          display: { xs: 'none', md: 'flex' },
-          flexDirection: 'column',
+          flex: { xs: '0 0 auto', md: 7 },
+          display: 'flex',
+          alignItems: 'center',
           justifyContent: 'center',
-          alignItems: 'flex-start',
-          px: 6,
-          gap: 3,
-          background:
-            'radial-gradient(circle at top left, #ff9800 0, #121212 45%, #000000 100%)',
+          py: { xs: 6, md: 0 },
+          px: { xs: 3, md: 6 },
+          position: 'relative',
+          overflow: 'hidden',
+          bgcolor: 'background.default',
+          borderRight: { xs: 'none', md: '1px solid' },
+          borderColor: { xs: 'transparent', md: 'divider' },
         }}
       >
-        <Typography variant="h3" fontWeight={700}>
-          Trade smarter with SigmaTrader
-        </Typography>
-        <Typography variant="h6" color="text.secondary">
-          Turn TradingView alerts into risk-controlled Zerodha orders with a clear
-          manual queue, AUTO modes, and rich analytics.
-        </Typography>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <Typography variant="body1">
-            • Capture alerts reliably and see exactly what&apos;s queued.
+        <Box
+          sx={{
+            position: 'relative',
+            maxWidth: 760,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 3.5,
+          }}
+        >
+          <Typography variant="overline" color="primary.main" sx={{ letterSpacing: 1.2 }}>
+            TradingView · Zerodha · Risk engine
           </Typography>
-          <Typography variant="body1">
-            • Apply global and per-strategy risk limits before placing orders.
+          <Typography variant="h3" fontWeight={700}>
+            Trade smarter with SigmaTrader
           </Typography>
-          <Typography variant="body1">
-            • Connect to Zerodha once and track positions, holdings, and P&amp;L.
+          <Typography variant="h6" color="text.secondary">
+            Turn clean, validated TradingView alerts into disciplined Zerodha
+            orders – with a review queue for manual trades, AUTO execution
+            modes, and risk controls that always put capital protection first.
+          </Typography>
+
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: 'repeat(3, 1fr)' },
+              gap: 2,
+            }}
+          >
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 2,
+                borderRadius: 3,
+                bgcolor: 'background.paper',
+                borderColor: 'divider',
+              }}
+            >
+              <Typography variant="subtitle2" color="primary.main">
+                TradingView → Zerodha bridge
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Capture alerts from your strategies and convert them into
+                precise, structured orders for NSE / BSE using your own Zerodha
+                account.
+              </Typography>
+            </Paper>
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 2,
+                borderRadius: 3,
+                bgcolor: 'background.paper',
+                borderColor: 'divider',
+              }}
+            >
+              <Typography variant="subtitle2" color="primary.main">
+                Queue &amp; risk engine
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Review orders in a manual queue, apply per-strategy limits, and
+                let AUTO strategies run within your defined risk.
+              </Typography>
+            </Paper>
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 2,
+                borderRadius: 3,
+                bgcolor: 'background.paper',
+                borderColor: 'divider',
+              }}
+            >
+              <Typography variant="subtitle2" color="primary.main">
+                Analytics &amp; audit trail
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Track P&amp;L, positions, and key system events in one place so
+                you always know what fired, when, and why.
+              </Typography>
+            </Paper>
+          </Box>
+
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+              gap: 2,
+            }}
+          >
+            <Paper
+              sx={{
+                p: 2,
+                minWidth: 220,
+                borderRadius: 3,
+                bgcolor: 'background.paper',
+              }}
+              variant="outlined"
+            >
+              <Typography variant="subtitle2" color="primary.main">
+                Basic – Free
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                For individual traders who want full control without ongoing
+                platform fees.
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                • Local, self-hosted setup
+                <br />
+                • Manual queue + AUTO modes
+                <br />
+                • Core analytics, logs &amp; risk limits
+              </Typography>
+            </Paper>
+            <Paper
+              sx={{
+                p: 2,
+                minWidth: 220,
+                borderRadius: 3,
+                border: '1px solid',
+                borderColor: 'primary.main',
+                bgcolor: 'background.paper',
+              }}
+              variant="outlined"
+            >
+              <Typography variant="subtitle2" color="primary.main">
+                Premium – Coming Soon
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                For active Indian traders who need deeper automation, insights,
+                and support.
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                • Multi-strategy &amp; multi-account workflows
+                <br />
+                • Advanced analytics, reporting &amp; alert tooling
+                <br />
+                • Priority onboarding &amp; support
+              </Typography>
+            </Paper>
+          </Box>
+
+          <Typography variant="caption" color="text.secondary">
+            Local, developer-friendly tool – you stay in control of your keys,
+            risk, and infrastructure.
           </Typography>
         </Box>
-        <Typography variant="caption" color="text.secondary">
-          Local, developer-friendly tool – you stay in control of your keys and risk.
-        </Typography>
       </Box>
 
+      {/* Auth card column */}
       <Box
         sx={{
-          flex: { xs: 1, md: 1 },
+          flex: { xs: '1 0 auto', md: 3 },
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           px: { xs: 2, md: 4 },
-          py: { xs: 4, md: 0 },
+          py: { xs: 6, md: 0 },
         }}
       >
         <Paper
           component="form"
           onSubmit={handleSubmit}
+          elevation={6}
           sx={{
             width: '100%',
             maxWidth: 420,
-            p: 3,
+            p: { xs: 3, md: 4 },
+            borderRadius: 3,
+            bgcolor: 'background.paper',
           }}
         >
           <Typography variant="h5" gutterBottom>
@@ -133,8 +270,8 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {mode === 'login'
-              ? 'Use your SigmaTrader credentials to access your queue, orders, and analytics.'
-              : 'Register a local user account; broker credentials stay in the Settings page.'}
+              ? 'Use your SigmaTrader account to access your queue, orders, and analytics.'
+              : 'Register a local user account. Broker credentials and secrets stay under your control in Settings.'}
           </Typography>
 
           <TextField
@@ -144,6 +281,7 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
             margin="dense"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
           />
           {mode === 'register' && (
             <TextField
@@ -153,6 +291,7 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
               margin="dense"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
+              autoComplete="name"
             />
           )}
           <TextField
@@ -163,6 +302,7 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
             margin="dense"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
           />
 
           {error && (
@@ -223,4 +363,3 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
     </Box>
   )
 }
-

@@ -1,9 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
-import { ThemeProvider } from '@mui/material/styles'
 
-import { theme } from './theme'
 import { QueuePage } from './views/QueuePage'
+import { AppThemeProvider } from './themeContext'
 
 describe('QueuePage', () => {
   beforeEach(() => {
@@ -41,9 +40,9 @@ describe('QueuePage', () => {
   it('renders queue table with orders', async () => {
     render(
       <BrowserRouter>
-        <ThemeProvider theme={theme}>
+        <AppThemeProvider>
           <QueuePage />
-        </ThemeProvider>
+        </AppThemeProvider>
       </BrowserRouter>,
     )
 
