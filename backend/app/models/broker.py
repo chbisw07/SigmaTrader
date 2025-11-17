@@ -13,8 +13,9 @@ class BrokerConnection(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "user_id",
             "broker_name",
-            name="ux_broker_connections_broker_name",
+            name="ux_broker_connections_user_broker",
         ),
     )
 
@@ -42,9 +43,10 @@ class BrokerSecret(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "user_id",
             "broker_name",
             "key",
-            name="ux_broker_secrets_broker_key",
+            name="ux_broker_secrets_user_broker_key",
         ),
     )
 

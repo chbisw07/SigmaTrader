@@ -1456,33 +1456,63 @@ Planned tasks: `S10_G04_TB001`
 
 ### S11 / G01 – Multi-tenant DB schema (per-user broker/alerts/orders)
 
-Planned tasks: `S11_G01_TB001`, `S11_G01_TB002`, `S11_G01_TB003`
+Tasks: `S11_G01_TB001`, `S11_G01_TB002`, `S11_G01_TB003`
 
-- Extend the schema so that all broker connections, secrets, alerts, and orders are explicitly tied to a `user_id`:
-  - Add `user_id` foreign keys to:
-    - `broker_connections`, `broker_secrets`.
-    - `alerts`, `orders` (and identify any other tables that must be user-scoped).
-  - Introduce sensible uniqueness constraints:
-    - `UNIQUE(user_id, broker_name)` for `broker_connections`.
-    - `UNIQUE(user_id, broker_name, key)` for `broker_secrets`.
-  - Alembic migrations:
-    - Given the user is comfortable recreating `sigma_trader.db`, migrations can assume a clean slate but should still be written so they can evolve an existing test DB.
-  - Data bootstrap:
-    - If any global rows exist (e.g., pre-S11 `broker_connections`/`broker_secrets`), migrate them to belong to a chosen user (typically `admin`) so nothing is lost.
+- Schema changes:
+  - Added `user_id` foreign keys to:
+    - `broker_connections`, `broker_secrets` (see `backend/app/models/broker.py`).
+    - `alerts`, `orders` (see `backend/app/models/trading.py`).
+  - Adjusted uniqueness so broker data is per-user:
+    - `broker_connections` now has `UNIQUE(user_id, broker_name)` via constraint `ux_broker_connections_user_broker`.
+    - `broker_secrets` now has `UNIQUE(user_id, broker_name, key)` via constraint `ux_broker_secrets_user_broker_key`.
+- Alembic migrations:
+  - `0006_add_user_scoping.py`:
+    - Adds nullable `user_id` columns and foreign keys from `broker_connections`, `broker_secrets`, `alerts`, and `orders` to `users.id`.
+    - Written idempotently so it can run on DBs where tables already exist.
+  - `0007_adjust_broker_uniqueness.py`:
+    - Boots any existing global broker rows (`user_id IS NULL`) to the `admin` user if present, so existing Zerodha connections/secrets are preserved.
+    - Replaces the old global unique constraints:
+      - Drops `ux_broker_connections_broker_name` and creates `ux_broker_connections_user_broker`.
+      - Drops `ux_broker_secrets_broker_key` and creates `ux_broker_secrets_user_broker_key`.
+- Behaviour and migration notes:
+  - Existing single-user deployments keep working: pre-S11 broker rows are automatically associated with `admin` during upgrade.
+  - New data is created with a concrete `user_id`, but columns remain nullable for now to keep migration flexible; S11/G03 will tighten how `user_id` is populated for alerts/orders based on TradingView routing.
 
-### S11 / G02 – Per-user broker APIs and Settings UI (planned)
+### S11 / G02 – Per-user broker APIs and Settings UI
 
-Planned tasks: `S11_G02_TB001`, `S11_G02_TF002`
+Tasks: `S11_G02_TB001`, `S11_G02_TF002`
 
-- Backend:
-  - Update broker services and APIs to always read/write `broker_connections` and `broker_secrets` for the **current user**:
-    - `get_broker_secret`, `set_broker_secret`, and `delete_broker_secret` will gain a `user_id` parameter or derive it from the request.
-    - `/api/zerodha/login-url`, `/api/zerodha/connect`, `/api/zerodha/status`, `/api/zerodha/sync-orders` will use the per-user connection rather than a global one.
-- Frontend:
-  - Adjust Settings page broker configuration:
-    - When a user logs in, the Broker Configuration section loads secrets for **that user + selected broker**.
-    - Changes are persisted per user so admin vs `cbiswas` no longer overwrite each other’s keys.
-    - The UI can show which account is being configured (e.g., “Broker: Zerodha (user: cbiswas)”).
+- Backend (TB001):
+  - `backend/app/services/broker_secrets.py`:
+    - All helpers now accept a `user_id`:
+      - `get_broker_secret(db, settings, broker_name, key, user_id=None)`:
+        - When `user_id` is provided, looks up secrets for that user.
+        - When `user_id` is `None`, falls back to legacy/global secrets (`user_id IS NULL`) to keep older data usable during migration.
+      - `set_broker_secret(db, settings, broker_name, key, value, user_id)`:
+        - Upserts a `BrokerSecret` row scoped to that user.
+      - `list_broker_secrets(db, settings, broker_name, user_id)` and `delete_broker_secret(db, broker_name, key, user_id)`:
+        - Operate strictly on secrets for the given user.
+  - `backend/app/api/brokers.py`:
+    - Now depends on `get_current_user`:
+      - `GET /api/brokers/{broker_name}/secrets` → returns secrets for the logged-in user.
+      - `PUT /api/brokers/{broker_name}/secrets/{key}` and `DELETE /api/brokers/{broker_name}/secrets/{key}` → create/update/delete secrets for that user.
+  - `backend/app/api/zerodha.py`:
+    - All key/connection-sensitive endpoints now take `user: User = Depends(get_current_user)` and are per-user:
+      - `GET /api/zerodha/login-url` → uses the user’s Zerodha `api_key` via `get_broker_secret(..., user_id=user.id)`.
+      - `POST /api/zerodha/connect`:
+        - Uses the user’s `api_key`/`api_secret`.
+        - Creates or updates a `BrokerConnection` row with `user_id=user.id, broker_name="zerodha"`.
+      - `GET /api/zerodha/status`:
+        - Reads the connection for that user (`BrokerConnection.user_id == user.id`) and returns profile info.
+      - `POST /api/zerodha/sync-orders`:
+        - Syncs orders using that user’s Zerodha connection.
+
+- Frontend (TF002):
+  - `frontend/src/views/SettingsPage.tsx`:
+    - Did not need structural changes in this sprint; it still calls `/api/brokers/...` and `/api/zerodha/...` as before.
+    - Because the backend now scopes secrets and connections to the current user, the same UI automatically loads/saves credentials per user:
+      - Admin and `cbiswas` can each configure their own Zerodha `api_key`/`api_secret` without overwriting each other.
+    - Future sprints (multi-account support) can extend the UI to show the active broker/account (e.g., via Zerodha `user_id`) and provide richer account switching.
 
 ### S11 / G03 – Per-user alert and order scoping (planned)
 

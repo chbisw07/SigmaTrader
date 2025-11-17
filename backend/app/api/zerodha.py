@@ -6,11 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.auth import get_current_user
 from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
-from app.models import BrokerConnection
+from app.models import BrokerConnection, User
 from app.services.broker_secrets import get_broker_secret
 from app.services.order_sync import sync_order_statuses
 from app.services.system_events import record_system_event
@@ -32,10 +33,17 @@ class SyncOrdersResponse(BaseModel):
 def get_login_url(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
 ) -> Dict[str, str]:
     """Return the Zerodha login URL for manual OAuth flow."""
 
-    api_key = get_broker_secret(db, settings, broker_name="zerodha", key="api_key")
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_key",
+        user_id=user.id,
+    )
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -53,15 +61,23 @@ def connect_zerodha(
     request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
 ) -> Dict[str, str]:
     """Exchange a request_token for access_token and store it encrypted."""
 
-    api_key = get_broker_secret(db, settings, broker_name="zerodha", key="api_key")
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_key",
+        user_id=user.id,
+    )
     api_secret = get_broker_secret(
         db,
         settings,
         broker_name="zerodha",
         key="api_secret",
+        user_id=user.id,
     )
     if not api_key or not api_secret:
         raise HTTPException(
@@ -96,11 +112,15 @@ def connect_zerodha(
 
     conn = (
         db.query(BrokerConnection)
-        .filter(BrokerConnection.broker_name == "zerodha")
+        .filter(
+            BrokerConnection.broker_name == "zerodha",
+            BrokerConnection.user_id == user.id,
+        )
         .one_or_none()
     )
     if conn is None:
         conn = BrokerConnection(
+            user_id=user.id,
             broker_name="zerodha",
             access_token_encrypted=encrypted,
         )
@@ -140,12 +160,16 @@ def connect_zerodha(
 def zerodha_status(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Return whether Zerodha is connected and optionally basic profile info."""
 
     conn = (
         db.query(BrokerConnection)
-        .filter(BrokerConnection.broker_name == "zerodha")
+        .filter(
+            BrokerConnection.broker_name == "zerodha",
+            BrokerConnection.user_id == user.id,
+        )
         .one_or_none()
     )
     if conn is None:
@@ -159,6 +183,7 @@ def zerodha_status(
             settings,
             broker_name="zerodha",
             key="api_key",
+            user_id=user.id,
         )
         if not api_key:
             return {
@@ -191,12 +216,16 @@ def zerodha_status(
 def sync_orders(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
 ) -> Dict[str, int]:
     """Synchronize local Order rows with Zerodha order statuses."""
 
     conn = (
         db.query(BrokerConnection)
-        .filter(BrokerConnection.broker_name == "zerodha")
+        .filter(
+            BrokerConnection.broker_name == "zerodha",
+            BrokerConnection.user_id == user.id,
+        )
         .one_or_none()
     )
     if conn is None:
@@ -210,6 +239,7 @@ def sync_orders(
         settings,
         broker_name="zerodha",
         key="api_key",
+        user_id=user.id,
     )
     if not api_key:
         raise HTTPException(
