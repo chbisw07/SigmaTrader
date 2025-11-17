@@ -12,6 +12,7 @@ def create_order_from_alert(
     mode: str = "MANUAL",
     product: str = "MIS",
     order_type: str = "MARKET",
+    user_id: int | None = None,
 ) -> Order:
     """Create and persist an Order in WAITING state derived from an Alert.
 
@@ -26,6 +27,7 @@ def create_order_from_alert(
     order = Order(
         alert_id=alert.id,
         strategy_id=alert.strategy_id,
+        user_id=user_id,
         symbol=alert.symbol,
         exchange=alert.exchange,
         side=alert.action,

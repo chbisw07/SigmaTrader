@@ -37,6 +37,7 @@ class OrderRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     zerodha_order_id: Optional[str] = None
+    broker_account_id: Optional[str] = None
     error_message: Optional[str] = None
 
     class Config:

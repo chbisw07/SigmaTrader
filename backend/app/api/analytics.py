@@ -7,9 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.auth import get_current_user_optional
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.models import AnalyticsTrade, Order, Strategy
+from app.models import AnalyticsTrade, Order, Strategy, User
 from app.schemas.analytics import (
     AnalyticsRebuildResponse,
     AnalyticsSummary,
@@ -125,6 +126,7 @@ def dev_seed_sample_data(
 def analytics_summary(
     params: AnalyticsSummaryParams,
     db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
 ) -> AnalyticsSummary:
     """Return basic P&L analytics for a strategy and optional date range."""
 
@@ -133,6 +135,7 @@ def analytics_summary(
         strategy_id=params.strategy_id,
         date_from=params.date_from,
         date_to=params.date_to,
+        user_id=user.id if user is not None else None,
     )
     return AnalyticsSummary(
         strategy_id=result.strategy_id,
@@ -149,6 +152,7 @@ def analytics_summary(
 def analytics_trades(
     params: AnalyticsSummaryParams,
     db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
 ) -> List[AnalyticsTradeRead]:
     """Return a list of trades for optional strategy and date filters."""
 
@@ -157,6 +161,10 @@ def analytics_trades(
         .join(Order, AnalyticsTrade.entry_order_id == Order.id)
         .outerjoin(Strategy, AnalyticsTrade.strategy_id == Strategy.id)
     )
+    if user is not None:
+        query = query.filter(
+            (Order.user_id == user.id) | (Order.user_id.is_(None)),
+        )
     if params.strategy_id is not None:
         query = query.filter(AnalyticsTrade.strategy_id == params.strategy_id)
     if params.date_from is not None:

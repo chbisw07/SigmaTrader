@@ -26,6 +26,7 @@ class BrokerConnection(Base):
         nullable=True,
     )
     broker_name: Mapped[str] = mapped_column(String(32), nullable=False)
+    broker_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     access_token_encrypted: Mapped[str] = mapped_column(String(512), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)

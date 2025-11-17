@@ -49,6 +49,7 @@ class TradingViewWebhookPayload(BaseModel):
     secret: str
     platform: str = "TRADINGVIEW"
     strategy_name: str
+    st_user_id: Optional[str] = None
     symbol: str
     exchange: Optional[str] = None
     interval: Optional[str] = None

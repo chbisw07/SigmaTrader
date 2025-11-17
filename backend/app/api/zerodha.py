@@ -110,6 +110,14 @@ def connect_zerodha(
 
     encrypted = encrypt_token(settings, access_token)
 
+    # Fetch broker profile so we can persist the broker-side user/account id.
+    kite.set_access_token(access_token)
+    try:
+        profile = kite.profile()
+        broker_user_id = profile.get("user_id")
+    except Exception:  # pragma: no cover - defensive
+        broker_user_id = None
+
     conn = (
         db.query(BrokerConnection)
         .filter(
@@ -123,10 +131,12 @@ def connect_zerodha(
             user_id=user.id,
             broker_name="zerodha",
             access_token_encrypted=encrypted,
+            broker_user_id=broker_user_id,
         )
         db.add(conn)
     else:
         conn.access_token_encrypted = encrypted
+        conn.broker_user_id = broker_user_id or conn.broker_user_id
 
     db.commit()
 
@@ -198,6 +208,16 @@ def zerodha_status(
         kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
         profile = kite.profile()
+
+        # Persist broker-side user id on the connection so that other
+        # parts of the system (e.g. order execution) can stamp it onto
+        # orders without needing to call profile() again.
+        broker_user_id = profile.get("user_id")
+        if broker_user_id and getattr(conn, "broker_user_id", None) != broker_user_id:
+            conn.broker_user_id = broker_user_id  # type: ignore[attr-defined]
+            db.add(conn)
+            db.commit()
+
         return {
             "connected": True,
             "updated_at": updated_at,

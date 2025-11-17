@@ -6,11 +6,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app.api.auth import get_current_user_optional
 from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
-from app.models import BrokerConnection, Order
+from app.models import BrokerConnection, Order, User
 from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
 from app.services.broker_secrets import get_broker_secret
 from app.services.risk import evaluate_order_risk
@@ -31,7 +32,8 @@ def _get_zerodha_client(db: Session, settings: Settings) -> ZerodhaClient:
     conn = (
         db.query(BrokerConnection)
         .filter(BrokerConnection.broker_name == "zerodha")
-        .one_or_none()
+        .order_by(BrokerConnection.updated_at.desc())
+        .first()
     )
     if conn is None:
         raise HTTPException(
@@ -39,7 +41,13 @@ def _get_zerodha_client(db: Session, settings: Settings) -> ZerodhaClient:
             detail="Zerodha is not connected.",
         )
 
-    api_key = get_broker_secret(db, settings, broker_name="zerodha", key="api_key")
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_key",
+        user_id=conn.user_id,
+    )
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -55,7 +63,11 @@ def _get_zerodha_client(db: Session, settings: Settings) -> ZerodhaClient:
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
 
-    return ZerodhaClient(kite)
+    client = ZerodhaClient(kite)
+    # Expose broker-side account id on the client when available so that
+    # callers (e.g. order execution) can stamp it onto orders.
+    client.broker_user_id = getattr(conn, "broker_user_id", None)  # type: ignore[attr-defined]
+    return client
 
 
 @router.get("/", response_model=List[OrderRead])
@@ -63,10 +75,15 @@ def list_orders(
     status: Optional[str] = Query(None),
     strategy_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
 ) -> List[Order]:
     """Return a simple order history list with basic filters."""
 
     query = db.query(Order)
+    if user is not None:
+        query = query.filter(
+            (Order.user_id == user.id) | (Order.user_id.is_(None)),
+        )
     if status is not None:
         query = query.filter(Order.status == status)
     if strategy_id is not None:
@@ -78,6 +95,7 @@ def list_orders(
 def list_manual_queue(
     strategy_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
 ) -> List[Order]:
     """Return orders currently in the manual WAITING queue."""
 
@@ -86,6 +104,10 @@ def list_manual_queue(
         Order.mode == "MANUAL",
         Order.simulated.is_(False),
     )
+    if user is not None:
+        query = query.filter(
+            (Order.user_id == user.id) | (Order.user_id.is_(None)),
+        )
     if strategy_id is not None:
         query = query.filter(Order.strategy_id == strategy_id)
     return query.order_by(Order.created_at).all()
@@ -294,6 +316,9 @@ def execute_order(
         tradingsymbol = symbol
 
     client = _get_zerodha_client(db, settings)
+    broker_account_id = getattr(client, "broker_user_id", None)
+    if broker_account_id:
+        order.broker_account_id = broker_account_id
 
     def _place(
         *,

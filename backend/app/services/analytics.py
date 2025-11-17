@@ -138,10 +138,16 @@ def compute_strategy_analytics(
     strategy_id: Optional[int] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    user_id: Optional[int] = None,
 ) -> StrategyAnalytics:
     """Compute basic P&L analytics for a strategy over a date range."""
 
     query = db.query(AnalyticsTrade)
+    if user_id is not None:
+        query = query.join(Order, AnalyticsTrade.entry_order_id == Order.id)
+        query = query.filter(
+            (Order.user_id == user_id) | (Order.user_id.is_(None)),
+        )
     if strategy_id is not None:
         query = query.filter(AnalyticsTrade.strategy_id == strategy_id)
     if date_from is not None:

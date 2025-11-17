@@ -5,11 +5,12 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
-from app.models import Order
+from app.models import Order, User
 
 client = TestClient(app)
 
@@ -20,11 +21,23 @@ def setup_module() -> None:  # type: ignore[override]
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
+    # Create a dedicated user that webhook alerts can be routed to.
+    with SessionLocal() as session:
+        user = User(
+            username="queue-user",
+            password_hash=hash_password("queue-password"),
+            role="TRADER",
+            display_name="Queue User",
+        )
+        session.add(user)
+        session.commit()
+
 
 def _create_order_via_webhook() -> int:
     payload = {
         "secret": "queue-secret",
         "platform": "TRADINGVIEW",
+        "st_user_id": "queue-user",
         "strategy_name": f"queue-test-strategy-{uuid4().hex}",
         "symbol": "NSE:TCS",
         "exchange": "NSE",

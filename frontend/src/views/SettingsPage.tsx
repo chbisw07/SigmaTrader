@@ -488,7 +488,10 @@ export function SettingsPage() {
             )}
             {brokerStatus?.connected && brokerStatus.user_id && (
               <Typography variant="caption" color="text.secondary">
-                Zerodha user: {brokerStatus.user_name ?? brokerStatus.user_id}
+                Zerodha user:{' '}
+                {brokerStatus.user_name
+                  ? `${brokerStatus.user_name} (${brokerStatus.user_id})`
+                  : brokerStatus.user_id}
               </Typography>
             )}
             {brokerError && (

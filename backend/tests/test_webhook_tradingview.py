@@ -6,11 +6,12 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
-from app.models import Alert
+from app.models import Alert, User
 
 client = TestClient(app)
 
@@ -20,6 +21,17 @@ def setup_module() -> None:  # type: ignore[override]
     get_settings.cache_clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+
+    # Create a dedicated user that webhook alerts can be routed to.
+    with SessionLocal() as session:
+        user = User(
+            username="webhook-user",
+            password_hash=hash_password("webhook-password"),
+            role="TRADER",
+            display_name="Webhook User",
+        )
+        session.add(user)
+        session.commit()
 
 
 def test_webhook_rejects_invalid_secret() -> None:
@@ -42,6 +54,7 @@ def test_webhook_persists_alert_with_valid_secret() -> None:
     payload = {
         "secret": "test-secret",
         "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
         "strategy_name": unique_strategy,
         "symbol": "NSE:INFY",
         "exchange": "NSE",
@@ -117,6 +130,7 @@ def test_webhook_auto_strategy_routes_to_auto_and_executes(monkeypatch: Any) -> 
     payload = {
         "secret": "test-secret",
         "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
         "strategy_name": unique_strategy,
         "symbol": "NSE:TCS",
         "exchange": "NSE",

@@ -27,6 +27,7 @@ export type Order = {
   created_at: string
   updated_at: string
   zerodha_order_id?: string | null
+  broker_account_id?: string | null
   error_message?: string | null
 }
 

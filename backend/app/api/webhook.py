@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.models import Alert, Strategy
+from app.models import Alert, Strategy, User
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
 from app.services.system_events import record_system_event
@@ -71,6 +71,65 @@ def tradingview_webhook(
         )
         return {"status": "ignored", "platform": payload.platform}
 
+    # Route alert to a specific SigmaTrader user. For multi-user safety we
+    # require TradingView payloads to carry an explicit st_user_id that
+    # matches an existing username; otherwise we ignore the alert.
+    st_user = (payload.st_user_id or "").strip()
+    if not st_user:
+        logger.info(
+            "Ignoring webhook without st_user_id",
+            extra={
+                "extra": {
+                    "correlation_id": correlation_id,
+                    "strategy": payload.strategy_name,
+                    "platform": payload.platform,
+                }
+            },
+        )
+        record_system_event(
+            db,
+            level="INFO",
+            category="alert",
+            message="Alert ignored: missing st_user_id",
+            correlation_id=correlation_id,
+            details={
+                "strategy": payload.strategy_name,
+                "platform": payload.platform,
+            },
+        )
+        return {"status": "ignored", "reason": "missing_st_user_id"}
+
+    user: User | None = db.query(User).filter(User.username == st_user).one_or_none()
+    if user is None:
+        logger.warning(
+            "Ignoring webhook for unknown st_user_id",
+            extra={
+                "extra": {
+                    "correlation_id": correlation_id,
+                    "strategy": payload.strategy_name,
+                    "platform": payload.platform,
+                    "st_user_id": st_user,
+                }
+            },
+        )
+        record_system_event(
+            db,
+            level="WARNING",
+            category="alert",
+            message="Alert ignored: unknown st_user_id",
+            correlation_id=correlation_id,
+            details={
+                "strategy": payload.strategy_name,
+                "platform": payload.platform,
+                "st_user_id": st_user,
+            },
+        )
+        return {
+            "status": "ignored",
+            "reason": "unknown_st_user_id",
+            "st_user_id": st_user,
+        }
+
     strategy: Strategy | None = (
         db.query(Strategy).filter(Strategy.name == payload.strategy_name).one_or_none()
     )
@@ -79,6 +138,7 @@ def tradingview_webhook(
     order_type = "MARKET"
 
     alert = Alert(
+        user_id=user.id,
         strategy_id=strategy.id if strategy else None,
         symbol=payload.symbol,
         exchange=payload.exchange,
@@ -109,6 +169,7 @@ def tradingview_webhook(
         mode=mode,
         product=product,
         order_type=order_type,
+        user_id=alert.user_id,
     )
 
     # For AUTO strategies we immediately execute the order via the same

@@ -188,6 +188,7 @@ class Order(Base):
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")
 
     zerodha_order_id: Mapped[Optional[str]] = mapped_column(String(64))
+    broker_account_id: Mapped[Optional[str]] = mapped_column(String(64))
     error_message: Mapped[Optional[str]] = mapped_column(Text())
     simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

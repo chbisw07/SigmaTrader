@@ -1514,17 +1514,35 @@ Tasks: `S11_G02_TB001`, `S11_G02_TF002`
       - Admin and `cbiswas` can each configure their own Zerodha `api_key`/`api_secret` without overwriting each other.
     - Future sprints (multi-account support) can extend the UI to show the active broker/account (e.g., via Zerodha `user_id`) and provide richer account switching.
 
-### S11 / G03 – Per-user alert and order scoping (planned)
+### S11 / G03 – Per-user alert and order scoping
 
-Planned tasks: `S11_G03_TB001`, `S11_G03_TB002`
+Tasks: `S11_G03_TB001`, `S11_G03_TB002`
 
-- Backend:
-  - Add `user_id` to `Alert` and `Order` models (with foreign key to `users.id`).
-  - In the webhook handler:
-    - Derive `user_id` from the TradingView payload (using the routing design in S12/G01–G02) and persist alerts/orders under that user.
-  - In Queue, Orders, Analytics, and related APIs:
-    - Filter by `current_user.id` so each SigmaTrader user sees only their own alerts/orders by default.
-    - Reserve cross-user views for future ADMIN-only reporting.
+- Models and services:
+  - `Alert` and `Order` already have a nullable `user_id` FK to `users.id` from S11/G01.
+  - `backend/app/services/orders.py`:
+    - `create_order_from_alert` now accepts an optional `user_id` argument and persists it on the new `Order` (`Order.user_id = user_id`).
+    - The TradingView webhook calls `create_order_from_alert(..., user_id=alert.user_id)`, so once `alert.user_id` is populated (in S12), user ownership will be propagated automatically from alerts to orders.
+- Queue & Orders APIs:
+  - `backend/app/api/orders.py`:
+    - `list_orders` and `list_manual_queue` now take an optional `user: User | None = Depends(get_current_user_optional)`.
+    - When a user is present, queries are filtered with:
+      - `Order.user_id == user.id OR Order.user_id IS NULL`, so:
+        - Rows explicitly owned by the current user are returned.
+        - Legacy/global rows with `user_id IS NULL` remain visible to all users during the migration period.
+    - Detail and mutation endpoints (`get_order`, `update_order_status`, `edit_order`, `execute_order`) remain id-based and do not yet enforce per-user checks; stricter ownership rules will follow once S12 routing populates `user_id` consistently.
+- Analytics APIs:
+  - `backend/app/services/analytics.py`:
+    - `compute_strategy_analytics` gained an optional `user_id` parameter.
+    - When `user_id` is provided, it joins `AnalyticsTrade` to `Order` on `entry_order_id` and filters on `Order.user_id == user_id OR Order.user_id IS NULL`, so analytics are scoped to the current user plus global trades.
+  - `backend/app/api/analytics.py`:
+    - `analytics_summary` and `analytics_trades` now depend on `get_current_user_optional` and pass the current user id (when available) into analytics queries.
+    - The trades endpoint filters the `(AnalyticsTrade, Order, Strategy)` query with the same `user_id OR NULL` pattern, ensuring that each user sees their own trades plus any legacy/global ones.
+- Scope and future work:
+  - S11/G03 focuses on **API-level scoping**: filtering Queue, Orders, and Analytics by the current user where a session exists, while keeping legacy data visible.
+  - Deriving `alert.user_id` (and thus `order.user_id`) from TradingView payloads is intentionally deferred to S12’s routing/adapter work; once that is in place, we can:
+    - Stop treating `user_id IS NULL` rows as global.
+    - Tighten detail/mutation endpoints so a user cannot act on another user’s orders except via explicit ADMIN tooling.
 
 ## Sprint S12 – TradingView alert v2 and multi-broker routing (planned)
 

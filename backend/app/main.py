@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from sqlalchemy import inspect
+from sqlalchemy.exc import OperationalError
 
 from .api.routes import router as api_router
 from .core.config import get_settings
@@ -21,7 +23,16 @@ def _bootstrap_admin_user() -> None:
     """Ensure the default admin user exists at startup."""
 
     with SessionLocal() as db:
-        ensure_default_admin(db)
+        try:
+            inspector = inspect(db.get_bind())
+            if "users" not in inspector.get_table_names():
+                # Database has not been migrated/created yet; skip bootstrapping.
+                return
+            ensure_default_admin(db)
+        except OperationalError:
+            # If the users table is not yet available (e.g., during early test
+            # setup or before migrations), silently skip bootstrapping.
+            return
 
 
 _bootstrap_admin_user()

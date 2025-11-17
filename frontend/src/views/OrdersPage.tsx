@@ -129,7 +129,11 @@ export function OrdersPage() {
                   <TableCell>{order.product}</TableCell>
                   <TableCell>{order.status}</TableCell>
                   <TableCell>{order.mode}</TableCell>
-                  <TableCell>{order.zerodha_order_id ?? '-'}</TableCell>
+                  <TableCell>
+                    {order.broker_account_id
+                      ? `${order.broker_account_id} / ${order.zerodha_order_id ?? '-'}`
+                      : order.zerodha_order_id ?? '-'}
+                  </TableCell>
                   <TableCell>{order.error_message ?? '-'}</TableCell>
                 </TableRow>
               ))}

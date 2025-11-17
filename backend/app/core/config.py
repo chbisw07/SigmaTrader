@@ -1,4 +1,5 @@
 import os
+import sys
 from functools import lru_cache
 from typing import Any
 
@@ -44,8 +45,10 @@ def get_settings() -> Settings:
     # During pytest runs we want admin-protected APIs to remain easily
     # accessible without configuring HTTP Basic credentials and we do not
     # want to mutate the main development database. Detect the test
-    # environment via PYTEST_CURRENT_TEST and adjust settings accordingly.
-    if os.getenv("PYTEST_CURRENT_TEST"):
+    # environment via the presence of pytest in sys.modules (more
+    # reliable than PYTEST_CURRENT_TEST during early imports) and also
+    # honour PYTEST_CURRENT_TEST for completeness.
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
         settings.admin_username = None
         settings.admin_password = None
         # Use an isolated SQLite DB for tests so running pytest does not
