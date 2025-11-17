@@ -1548,24 +1548,58 @@ Tasks: `S11_G03_TB001`, `S11_G03_TB002`
 
 ### S12 / G01 – TradingView alert schema and routing design
 
-Planned tasks: `S12_G01_TB001`, `S12_G01_TB002`
+Tasks: `S12_G01_TB001`, `S12_G01_TB002`
 
-- Define a normalized internal alert schema separate from the raw TradingView payload:
-  - Core fields: `user_id`, `broker_name`, `strategy_name`, `alert_type` (entry/exit/SL/etc.), `symbol`, `exchange`, `side`, `qty`, `price`, `product`, `timeframe`, timestamps.
-  - Routing:
-    - Decide how each TradingView alert identifies the SigmaTrader user:
-      - Either via a per-user secret, a dedicated `account_tag` field, or both.
-    - Ensure each alert maps unambiguously to one (user, broker) pair or is rejected with a clear error.
+- Normalized alert schema:
+  - Defined an internal logical schema (implemented initially as a Pydantic-style model in code comments and service design) with the following core fields:
+    - Identity: `user_id`, `broker_name`, optional `broker_account_id`, `source_platform`.
+    - Strategy: `strategy_name`, optional `strategy_id`, eventual `alert_type` (entry/exit/SL/etc.).
+    - Trade: `symbol`, `exchange`, `side`, `qty`, `price`, `product`, `timeframe`.
+    - Timestamps: `received_at` (server time), `bar_time` (from payload), and raw payload snapshot.
+  - This schema is not yet a separate DB table; instead, alerts are stored in the existing `alerts` table with:
+    - `alerts.user_id` linking to `users`.
+    - `alerts.strategy_id`, `symbol`, `exchange`, `interval`, `action`, `qty`, `price`, `platform`, `bar_time`, and `raw_payload` capturing the normalized + raw fields.
+- User routing design:
+  - TradingView payloads now include a dedicated `st_user_id` field:
+    - `backend/app/schemas/webhook.py::TradingViewWebhookPayload` gained `st_user_id: Optional[str]`.
+    - We require `st_user_id` to match an existing `users.username` to process an alert.
+  - `backend/app/api/webhook.py`:
+    - If `st_user_id` is missing or blank:
+      - Logs an informational event and records a `system_events` row with message `"Alert ignored: missing st_user_id"`.
+      - Returns a minimal JSON body: `{"status": "ignored", "reason": "missing_st_user_id"}` and does not create `Alert`/`Order` rows.
+    - If `st_user_id` does not match any `User.username`:
+      - Logs a warning and records `"Alert ignored: unknown st_user_id"` in `system_events` with the provided id.
+      - Returns `{"status": "ignored", "reason": "unknown_st_user_id", "st_user_id": "<value>"}`.
+    - If `st_user_id` is valid:
+      - Loads the corresponding `User`.
+      - Creates `Alert` with `alert.user_id = user.id`.
+      - Calls `create_order_from_alert(..., user_id=user.id)` so `Order.user_id` is also set.
+  - Platform/broker routing:
+    - For now we still use the `platform` field to gate processing:
+      - Only `"zerodha"` and `"TRADINGVIEW"` (generic) are accepted; other platforms are ignored with `{"status": "ignored", "platform": "<value>"}`.
+    - Broker selection is anchored on `broker_name="zerodha"` and the per-user `BrokerConnection`/`BrokerSecret` rows introduced in S11; future brokers (Fyers, CoinDCX, etc.) will slot into this pattern.
+- Behavioural impact:
+  - TradingView alerts must now explicitly carry `st_user_id` (e.g., `"st_user_id": "cbiswas"`) to create alerts and orders; this guarantees that every ingested alert is associated with a concrete SigmaTrader user.
+  - Alerts without `st_user_id` or with an unknown id are explicitly ignored but leave an audit trail in `system_events`, making it easy to diagnose misconfigured TradingView templates.
+  - With S11’s API filtering in place, the Queue, Orders, and Analytics views naturally become per-user as new alerts/orders are created with a populated `user_id`.
 
 ### S12 / G02 – Zerodha adapter and per-user account mapping (planned)
 
 Planned tasks: `S12_G02_TB001`, `S12_G02_TB002`
 
-- Implement a Zerodha-specific adapter:
-  - Map the current Zerodha-oriented TradingView payload into the normalized internal alert schema for a given user.
-  - Normalize strategy names via per-user strategy definitions and aliases (to be extended in a later sprint).
+- Zerodha / TradingView adapter:
+  - Map Zerodha-oriented TradingView payloads (using placeholders like `{{ticker}}`, `{{tickerid}}`, `{{strategy.order.action}}`, `{{strategy.order.contracts}}`, `{{strategy.order.price}}`) into the normalized internal alert schema for a given user.
+  - Treat symbols in two layers:
+    - `symbol_display`: the TradingView-facing symbol/name (e.g., `NSE:SCHNEIDER`, full company name).
+    - `broker_symbol` + `broker_exchange`: the exact strings Zerodha expects (typically the same as TV’s symbol, but with room for broker-specific adjustments).
+  - Initially assume Zerodha and TradingView use compatible NSE/BSE symbols and derive `broker_symbol` from TV’s symbol; introduce a small, overridable mapping table for edge cases where Zerodha codes differ.
+  - Normalize strategy names via per-user strategy definitions and aliases so that different TV labels can map to a common internal strategy.
+  - Capture a structured “reason” / “condition description” from the alert:
+    - e.g., a dedicated `reason` field populated from `{{strategy.order.comment}}` or a custom text in the TradingView alert message.
+    - Store this both in `alerts.raw_payload` and a dedicated column (to be added) so analytics can group/filter by condition later.
 - Per-user broker/account mapping:
-  - Allow each SigmaTrader user to link one or more Zerodha accounts to their profile (e.g., by storing the Zerodha `user_id` returned from `/api/zerodha/status`).
+  - Continue to treat Zerodha as `broker_name="zerodha"` with per-user `BrokerConnection` and `BrokerSecret` rows.
+  - For each user, allow one or more Zerodha accounts to be linked (future work) by storing the Zerodha `user_id` (`broker_user_id`) and associating it with alerts/orders via `broker_account_id`.
 
 ### S12 / G03 – Webhook v2 implementation and tests (planned)
 
@@ -1586,5 +1620,11 @@ Planned tasks: `S12_G03_TB001`, `S12_G03_TB002`
 Planned tasks: `S12_G04_TB001`
 
 - Design a configuration-driven approach for platform-specific alert mappings:
-  - External JSON/YAML files describing how to interpret TradingView payloads for each platform (e.g., Zerodha, Fyers, CoinDCX) into the normalized internal schema.
-  - Keep the initial implementation code-centric for Zerodha but structure it so new platforms can be added largely via configuration rather than touching core logic.
+  - External JSON/YAML files describing how to interpret alert payloads (from TradingView or other sources) for each platform/broker into the normalized internal schema:
+    - Symbol mapping per broker:
+      - Rules for deriving `broker_symbol`/`broker_exchange` from TV symbols (e.g., NSE/BSE equities vs F&O contracts).
+      - Optional explicit overrides for instruments where broker codes diverge from TV.
+    - Field mapping:
+      - How to extract `side`, `qty`, `price`, `product`, `alert_type`, and `reason` from each platform’s alert format.
+      - Required vs optional fields for a safe order (e.g., side/qty/symbol must be present; product/price can default).
+  - Keep the initial Zerodha implementation code-centric but structure it so new platforms (Fyers, CoinDCX, internal signal generators) can be added largely via configuration rather than touching core logic.
