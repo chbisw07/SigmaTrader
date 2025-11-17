@@ -114,3 +114,21 @@ def test_edit_order_in_waiting_queue() -> None:
         assert order.price == 3600.0
         assert order.order_type == "LIMIT"
         assert order.product == "CNC"
+
+
+def test_manual_order_cannot_execute_when_broker_not_connected() -> None:
+    """Manual WAITING orders should remain in queue if Zerodha is not connected."""
+
+    order_id = _create_order_via_webhook()
+
+    # No BrokerConnection is created in this test. Executing should fail.
+    resp_execute = client.post(f"/api/orders/{order_id}/execute")
+    assert resp_execute.status_code == 400
+    body = resp_execute.json()
+    assert "Zerodha is not connected." in body.get("detail", "")
+
+    # Order should still be in WAITING status.
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        assert order.status == "WAITING"

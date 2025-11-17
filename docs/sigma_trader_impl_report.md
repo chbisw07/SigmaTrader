@@ -1601,19 +1601,36 @@ Planned tasks: `S12_G02_TB001`, `S12_G02_TB002`
   - Continue to treat Zerodha as `broker_name="zerodha"` with per-user `BrokerConnection` and `BrokerSecret` rows.
   - For each user, allow one or more Zerodha accounts to be linked (future work) by storing the Zerodha `user_id` (`broker_user_id`) and associating it with alerts/orders via `broker_account_id`.
 
-### S12 / G03 – Webhook v2 implementation and tests (planned)
+### S12 / G03 – Webhook v2 implementation and tests
 
-Planned tasks: `S12_G03_TB001`, `S12_G03_TB002`
+Tasks: `S12_G03_TB001`, `S12_G03_TB002`
 
 - Backend:
-  - Update `/webhook/tradingview` to:
-    - Use the new routing+adapter design.
-    - Create per-user alerts and orders and reject alerts that cannot be resolved to a user/broker.
-  - Ensure AUTO vs MANUAL behaviour is explicitly tied to both the user’s strategy config and their broker connection status.
+  - `/webhook/tradingview` is now fully wired to the Zerodha adapter and per-user routing:
+    - Uses `normalize_tradingview_payload_for_zerodha` to derive symbols, side/qty/price/product, timeframe, and a human-readable `reason` from each TradingView payload.
+    - Requires `st_user_id` to resolve to a `User.username`; alerts without `st_user_id` or with an unknown user are ignored with structured `system_events` entries.
+    - Creates `Alert` and `Order` rows with `user_id` populated so that all downstream APIs (Queue, Orders, Analytics) are per-user.
+  - Execution routing:
+    - Strategy execution_mode controls MANUAL vs AUTO behaviour:
+      - `MANUAL` strategies → orders are created with `mode="MANUAL"` and `status="WAITING"`; no broker call is attempted.
+      - `AUTO` strategies → orders are created with `mode="AUTO"` and then executed immediately via the shared `execute_order` endpoint.
+    - Broker connection handling:
+      - If Zerodha is not connected, `execute_order` raises a 400 `"Zerodha is not connected."`.
+      - The webhook catches this specific case, marks the AUTO order as `status="FAILED"` with `error_message="Zerodha is not connected for AUTO mode."`, and records a `system_events` row: `"AUTO order rejected: broker not connected"`.
+      - For connected accounts, AUTO orders proceed through the normal risk + order placement flow.
 - Tests:
-  - Add pytest coverage for:
-    - Per-user Zerodha alerts (AUTO and MANUAL).
-    - Cases where the user is not connected to the broker (AUTO orders rejected with clear errors; MANUAL orders stay in the queue but cannot be executed).
+  - `backend/tests/test_webhook_tradingview.py`:
+    - `test_webhook_persists_alert_with_valid_secret`:
+      - Verifies that alerts with `st_user_id="webhook-user"` create `Alert` and `Order` rows bound to that user, with MANUAL/WAITING status.
+    - `test_webhook_auto_strategy_routes_to_auto_and_executes`:
+      - Uses a fake Zerodha client to confirm that AUTO strategies create orders in `AUTO` mode, mark them as `SENT`, and that the fake broker is called exactly once.
+    - `test_webhook_manual_strategy_creates_waiting_order_for_user`:
+      - Ensures MANUAL strategies create per-user WAITING orders without triggering broker execution.
+    - `test_webhook_auto_strategy_rejected_when_broker_not_connected`:
+      - Confirms that when no Zerodha connection exists, AUTO alerts return HTTP 400 with a clear `"Zerodha is not connected"` message and the corresponding order is persisted with `status="FAILED"` and a helpful error message.
+  - `backend/tests/test_orders_api.py`:
+    - `test_manual_order_cannot_execute_when_broker_not_connected`:
+      - Verifies that manual WAITING orders cannot be executed when Zerodha is not connected: the `/api/orders/{id}/execute` endpoint returns 400 and the order remains in `status="WAITING"`.
 
 ### S12 / G04 – Config-based mapping for future brokers/platforms (planned)
 

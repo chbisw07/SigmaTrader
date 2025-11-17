@@ -12,6 +12,8 @@ class TradeDetails(BaseModel):
     price: Optional[float] = None
     product: Optional[str] = None
     trade_type: Optional[str] = None
+    comment: Optional[str] = None
+    alert_message: Optional[str] = None
 
     @root_validator(pre=True)
     def _map_alternate_field_names(cls, values: dict[str, Any]) -> dict[str, Any]:
@@ -29,6 +31,11 @@ class TradeDetails(BaseModel):
                 values["product"] = "CNC"
             elif t_norm in {"intraday", "mis"}:
                 values["product"] = "MIS"
+        # Map optional descriptive fields that some TV templates use.
+        if "comment" not in values and "order_comment" in values:
+            values["comment"] = values.get("order_comment")
+        if "alert_message" not in values and "order_alert_message" in values:
+            values["alert_message"] = values.get("order_alert_message")
         return values
 
     @validator("order_action")

@@ -12,6 +12,10 @@ from app.models import Alert, Strategy, User
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
 from app.services.system_events import record_system_event
+from app.services.tradingview_zerodha_adapter import (
+    NormalizedAlert,
+    normalize_tradingview_payload_for_zerodha,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -134,21 +138,26 @@ def tradingview_webhook(
         db.query(Strategy).filter(Strategy.name == payload.strategy_name).one_or_none()
     )
 
-    product = (payload.trade_details.product or "MIS").upper()
+    normalized: NormalizedAlert = normalize_tradingview_payload_for_zerodha(
+        payload=payload,
+        user=user,
+    )
+
     order_type = "MARKET"
 
     alert = Alert(
-        user_id=user.id,
+        user_id=normalized.user_id,
         strategy_id=strategy.id if strategy else None,
-        symbol=payload.symbol,
-        exchange=payload.exchange,
-        interval=payload.interval,
-        action=payload.trade_details.order_action,
-        qty=payload.trade_details.quantity,
-        price=payload.trade_details.price,
+        symbol=normalized.symbol_display,
+        exchange=normalized.broker_exchange,
+        interval=normalized.timeframe,
+        action=normalized.side,
+        qty=normalized.qty,
+        price=normalized.price,
         platform=payload.platform,
-        raw_payload=payload.json(),
-        bar_time=payload.bar_time,
+        raw_payload=normalized.raw_payload,
+        bar_time=normalized.bar_time,
+        reason=normalized.reason,
     )
 
     db.add(alert)
@@ -167,7 +176,7 @@ def tradingview_webhook(
         db=db,
         alert=alert,
         mode=mode,
-        product=product,
+        product=normalized.product,
         order_type=order_type,
         user_id=alert.user_id,
     )

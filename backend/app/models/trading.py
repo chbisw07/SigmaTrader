@@ -138,6 +138,7 @@ class Alert(Base):
         String(32), nullable=False, default="TRADINGVIEW"
     )
     raw_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text())
 
     received_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)
