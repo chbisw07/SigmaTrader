@@ -1708,3 +1708,20 @@ Tasks: `S13_G01_TF001`, `S13_G01_TF002`, `S13_G01_TB003`
         - Immediately updates the theme via `setThemeId`.
         - Calls `updateTheme(themeId)` to persist the choice server-side.
       - Shows a small “Saving theme preference...” caption while saving and an error caption if the backend update fails.
+
+### S13 / G02 – Branding and logo integration
+
+Tasks: `S13_G02_TF001`
+
+- Logo asset:
+  - Placed `sigma_trader_logo.png` in `frontend/public`, making it available at `/sigma_trader_logo.png` in the SPA.
+- App shell integration:
+  - `frontend/src/layouts/MainLayout.tsx`:
+    - Sidebar (Drawer):
+      - Toolbar now shows a circular “logo mark” next to the app name:
+        - A 40×40 pill (`LogoMark` component) with `background.paper`, subtle border and shadow, and the `sigma_trader_logo.png` image masked inside.
+    - Top AppBar:
+      - Left side of the top bar also uses `LogoMark` (hidden on extra-small screens to preserve space) next to the “SigmaTrader” title.
+      - Using the theme’s `background.paper` and `divider` colours around the logo ensures it reads cleanly on all three themes (dark, light, amber) from S13/G01.
+- Future branding work:
+  - The logo is intentionally added without changing layout structure; a later sprint can extend this branding to the Auth/landing hero area and possibly add a favicon update if desired.

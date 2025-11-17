@@ -87,9 +87,17 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
   const drawer = (
     <div>
       <Toolbar>
-        <Typography variant="h6" noWrap component="div">
-          SigmaTrader
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box
+            component="img"
+            src="/sigma_trader_logo.png"
+            alt="SigmaTrader logo"
+            sx={{ height: 32, width: 32, borderRadius: 1 }}
+          />
+          <Typography variant="h6" noWrap component="div">
+            SigmaTrader
+          </Typography>
+        </Box>
       </Toolbar>
       <Divider />
       <List>
@@ -134,7 +142,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
         }}
       >
         <Toolbar sx={{ justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
             <IconButton
               color="inherit"
               aria-label="open drawer"
@@ -144,6 +152,12 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
             >
               <MenuIcon />
             </IconButton>
+            <Box
+              component="img"
+              src="/sigma_trader_logo.png"
+              alt="SigmaTrader logo"
+              sx={{ height: 32, width: 32, borderRadius: 1, display: { xs: 'none', sm: 'block' } }}
+            />
             <Typography variant="h6" noWrap component="div">
               SigmaTrader
             </Typography>
