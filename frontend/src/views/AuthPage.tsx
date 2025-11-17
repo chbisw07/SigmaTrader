@@ -106,6 +106,31 @@ export function AuthPage({ onAuthSuccess, mode: modeProp }: AuthPageProps) {
           <Typography variant="overline" color="primary.main" sx={{ letterSpacing: 1.2 }}>
             TradingView · Zerodha · Risk engine
           </Typography>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.5,
+            }}
+          >
+            <Box
+              component="img"
+              src="/sigma_trader_logo.png"
+              alt="SigmaTrader logo"
+              sx={{
+                height: 40,
+                width: 40,
+                borderRadius: 1.5,
+                bgcolor: 'background.paper',
+                boxShadow: 4,
+                p: 0.5,
+                objectFit: 'contain',
+              }}
+            />
+            <Typography variant="h6" fontWeight={700}>
+              SigmaTrader
+            </Typography>
+          </Box>
           <Typography variant="h3" fontWeight={700}>
             Trade smarter with SigmaTrader
           </Typography>
