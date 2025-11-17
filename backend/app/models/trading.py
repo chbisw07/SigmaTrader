@@ -117,6 +117,12 @@ class Alert(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
     strategy_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
     )
@@ -152,6 +158,12 @@ class Order(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
 
     alert_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("alerts.id", ondelete="SET NULL"), nullable=True

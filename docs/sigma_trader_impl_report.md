@@ -1442,10 +1442,101 @@ Planned tasks: `S10_G03_TB001`, `S10_G03_TB002`
 Planned tasks: `S10_G04_TB001`
 
 - Design-only scope (no implementation yet):
-  - Explore how the current single Zerodha account model can evolve into:
-    - One broker account shared by multiple app users (current model).
-    - Per-user broker credentials, where each SigmaTrader user connects their own Zerodha/Fyers/etc. account.
+  - Refine the core model around the triple `(st_user_id, platform, broker_id)`:
+    - Each SigmaTrader login includes a platform/broker context (e.g., Zerodha, Fyers, CoinDCX).
+    - A given broker account (`broker_id` from the broker, such as Zerodha `user_id`) can be linked to one or more SigmaTrader users, but the combination `(st_user_id, platform, broker_id)` is unique.
+  - Near-term constraints:
+    - Initial implementation will focus on **one account per broker per user**, starting with Zerodha; the schema and design must still be forward-compatible with multiple accounts per user in future.
   - Document the implications for:
-    - Schema changes (linking `users` to `broker_connections` / `broker_secrets`).
-    - Authorization (who can see or execute which orders).
-    - Migration from the existing single-account setup.
+    - Schema changes (linking `users` to `broker_connections` / `broker_secrets` using `user_id`, `platform`, and `broker_id`).
+    - How login and Settings UI will surface the current platform/broker context and allow safe account switching later.
+    - How this design feeds into S11 (multi-tenant schema) and S12 (TradingView routing and adapters).
+
+## Sprint S11 – Multi-tenant core & per-user broker config (planned)
+
+### S11 / G01 – Multi-tenant DB schema (per-user broker/alerts/orders)
+
+Planned tasks: `S11_G01_TB001`, `S11_G01_TB002`, `S11_G01_TB003`
+
+- Extend the schema so that all broker connections, secrets, alerts, and orders are explicitly tied to a `user_id`:
+  - Add `user_id` foreign keys to:
+    - `broker_connections`, `broker_secrets`.
+    - `alerts`, `orders` (and identify any other tables that must be user-scoped).
+  - Introduce sensible uniqueness constraints:
+    - `UNIQUE(user_id, broker_name)` for `broker_connections`.
+    - `UNIQUE(user_id, broker_name, key)` for `broker_secrets`.
+  - Alembic migrations:
+    - Given the user is comfortable recreating `sigma_trader.db`, migrations can assume a clean slate but should still be written so they can evolve an existing test DB.
+  - Data bootstrap:
+    - If any global rows exist (e.g., pre-S11 `broker_connections`/`broker_secrets`), migrate them to belong to a chosen user (typically `admin`) so nothing is lost.
+
+### S11 / G02 – Per-user broker APIs and Settings UI (planned)
+
+Planned tasks: `S11_G02_TB001`, `S11_G02_TF002`
+
+- Backend:
+  - Update broker services and APIs to always read/write `broker_connections` and `broker_secrets` for the **current user**:
+    - `get_broker_secret`, `set_broker_secret`, and `delete_broker_secret` will gain a `user_id` parameter or derive it from the request.
+    - `/api/zerodha/login-url`, `/api/zerodha/connect`, `/api/zerodha/status`, `/api/zerodha/sync-orders` will use the per-user connection rather than a global one.
+- Frontend:
+  - Adjust Settings page broker configuration:
+    - When a user logs in, the Broker Configuration section loads secrets for **that user + selected broker**.
+    - Changes are persisted per user so admin vs `cbiswas` no longer overwrite each other’s keys.
+    - The UI can show which account is being configured (e.g., “Broker: Zerodha (user: cbiswas)”).
+
+### S11 / G03 – Per-user alert and order scoping (planned)
+
+Planned tasks: `S11_G03_TB001`, `S11_G03_TB002`
+
+- Backend:
+  - Add `user_id` to `Alert` and `Order` models (with foreign key to `users.id`).
+  - In the webhook handler:
+    - Derive `user_id` from the TradingView payload (using the routing design in S12/G01–G02) and persist alerts/orders under that user.
+  - In Queue, Orders, Analytics, and related APIs:
+    - Filter by `current_user.id` so each SigmaTrader user sees only their own alerts/orders by default.
+    - Reserve cross-user views for future ADMIN-only reporting.
+
+## Sprint S12 – TradingView alert v2 and multi-broker routing (planned)
+
+### S12 / G01 – TradingView alert schema and routing design
+
+Planned tasks: `S12_G01_TB001`, `S12_G01_TB002`
+
+- Define a normalized internal alert schema separate from the raw TradingView payload:
+  - Core fields: `user_id`, `broker_name`, `strategy_name`, `alert_type` (entry/exit/SL/etc.), `symbol`, `exchange`, `side`, `qty`, `price`, `product`, `timeframe`, timestamps.
+  - Routing:
+    - Decide how each TradingView alert identifies the SigmaTrader user:
+      - Either via a per-user secret, a dedicated `account_tag` field, or both.
+    - Ensure each alert maps unambiguously to one (user, broker) pair or is rejected with a clear error.
+
+### S12 / G02 – Zerodha adapter and per-user account mapping (planned)
+
+Planned tasks: `S12_G02_TB001`, `S12_G02_TB002`
+
+- Implement a Zerodha-specific adapter:
+  - Map the current Zerodha-oriented TradingView payload into the normalized internal alert schema for a given user.
+  - Normalize strategy names via per-user strategy definitions and aliases (to be extended in a later sprint).
+- Per-user broker/account mapping:
+  - Allow each SigmaTrader user to link one or more Zerodha accounts to their profile (e.g., by storing the Zerodha `user_id` returned from `/api/zerodha/status`).
+
+### S12 / G03 – Webhook v2 implementation and tests (planned)
+
+Planned tasks: `S12_G03_TB001`, `S12_G03_TB002`
+
+- Backend:
+  - Update `/webhook/tradingview` to:
+    - Use the new routing+adapter design.
+    - Create per-user alerts and orders and reject alerts that cannot be resolved to a user/broker.
+  - Ensure AUTO vs MANUAL behaviour is explicitly tied to both the user’s strategy config and their broker connection status.
+- Tests:
+  - Add pytest coverage for:
+    - Per-user Zerodha alerts (AUTO and MANUAL).
+    - Cases where the user is not connected to the broker (AUTO orders rejected with clear errors; MANUAL orders stay in the queue but cannot be executed).
+
+### S12 / G04 – Config-based mapping for future brokers/platforms (planned)
+
+Planned tasks: `S12_G04_TB001`
+
+- Design a configuration-driven approach for platform-specific alert mappings:
+  - External JSON/YAML files describing how to interpret TradingView payloads for each platform (e.g., Zerodha, Fyers, CoinDCX) into the normalized internal schema.
+  - Keep the initial implementation code-centric for Zerodha but structure it so new platforms can be added largely via configuration rather than touching core logic.

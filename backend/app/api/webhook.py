@@ -124,9 +124,33 @@ def tradingview_webhook(
                 db=db,
                 settings=settings,
             )
-        except HTTPException:
-            # The execute_order handler has already updated order status /
-            # error_message appropriately; propagate the error to the caller.
+        except HTTPException as exc:
+            # The execute_order handler will have updated order status /
+            # error_message appropriately. When Zerodha is not connected
+            # we ensure the order records a clear failure reason so the
+            # manual queue and history views reflect what happened.
+            if exc.status_code == status.HTTP_400_BAD_REQUEST and isinstance(
+                exc.detail,
+                str,
+            ):
+                if "Zerodha is not connected" in exc.detail:
+                    order.status = "FAILED"
+                    order.error_message = "Zerodha is not connected for AUTO mode."
+                    db.add(order)
+                    db.commit()
+                    db.refresh(order)
+                    record_system_event(
+                        db,
+                        level="WARNING",
+                        category="order",
+                        message="AUTO order rejected: broker not connected",
+                        correlation_id=correlation_id,
+                        details={
+                            "order_id": order.id,
+                            "symbol": order.symbol,
+                            "strategy": payload.strategy_name,
+                        },
+                    )
             logger.exception(
                 "AUTO execution failed for alert id=%s order id=%s strategy=%s",
                 alert.id,
