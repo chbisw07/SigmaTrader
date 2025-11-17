@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+from app.config_files import load_zerodha_symbol_map
 from app.models import User
 from app.schemas.webhook import TradingViewWebhookPayload
 
@@ -56,6 +57,15 @@ def normalize_tradingview_payload_for_zerodha(
         ex, ts = symbol_display.split(":", 1)
         broker_exchange = ex or broker_exchange
         broker_symbol = ts or broker_symbol
+
+    # Apply optional config-based symbol mapping for Zerodha so that we can
+    # correct any differences between TradingView and broker symbols.
+    symbol_map = load_zerodha_symbol_map()
+    exch_key = broker_exchange.upper()
+    sym_key = broker_symbol.upper()
+    mapped = symbol_map.get(exch_key, {}).get(sym_key)
+    if mapped:
+        broker_symbol = mapped
 
     timeframe = payload.interval
     bar_time = payload.bar_time

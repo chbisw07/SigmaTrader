@@ -1583,23 +1583,28 @@ Tasks: `S12_G01_TB001`, `S12_G01_TB002`
   - Alerts without `st_user_id` or with an unknown id are explicitly ignored but leave an audit trail in `system_events`, making it easy to diagnose misconfigured TradingView templates.
   - With S11’s API filtering in place, the Queue, Orders, and Analytics views naturally become per-user as new alerts/orders are created with a populated `user_id`.
 
-### S12 / G02 – Zerodha adapter and per-user account mapping (planned)
+### S12 / G02 – Zerodha adapter and per-user account mapping
 
-Planned tasks: `S12_G02_TB001`, `S12_G02_TB002`
+Tasks: `S12_G02_TB001`, `S12_G02_TB002`
 
 - Zerodha / TradingView adapter:
-  - Map Zerodha-oriented TradingView payloads (using placeholders like `{{ticker}}`, `{{tickerid}}`, `{{strategy.order.action}}`, `{{strategy.order.contracts}}`, `{{strategy.order.price}}`) into the normalized internal alert schema for a given user.
-  - Treat symbols in two layers:
-    - `symbol_display`: the TradingView-facing symbol/name (e.g., `NSE:SCHNEIDER`, full company name).
-    - `broker_symbol` + `broker_exchange`: the exact strings Zerodha expects (typically the same as TV’s symbol, but with room for broker-specific adjustments).
-  - Initially assume Zerodha and TradingView use compatible NSE/BSE symbols and derive `broker_symbol` from TV’s symbol; introduce a small, overridable mapping table for edge cases where Zerodha codes differ.
-  - Normalize strategy names via per-user strategy definitions and aliases so that different TV labels can map to a common internal strategy.
-  - Capture a structured “reason” / “condition description” from the alert:
-    - e.g., a dedicated `reason` field populated from `{{strategy.order.comment}}` or a custom text in the TradingView alert message.
-    - Store this both in `alerts.raw_payload` and a dedicated column (to be added) so analytics can group/filter by condition later.
+  - Implemented `backend/app/services/tradingview_zerodha_adapter.py` with:
+    - `NormalizedAlert` dataclass capturing the normalized fields for Zerodha: `user_id`, `broker_name`, `strategy_name`, `symbol_display`, `broker_symbol`, `broker_exchange`, `side`, `qty`, `price`, `product`, `timeframe`, `bar_time`, `reason`, and `raw_payload`.
+    - `normalize_tradingview_payload_for_zerodha(payload, user)`:
+      - Reads side/qty/price/product from `TradeDetails`, with `trade_type`-based defaulting between `MIS`/`CNC`.
+      - Splits TradingView symbols like `NSE:INFY` into `broker_exchange="NSE"` and `broker_symbol="INFY"` while keeping `symbol_display` as the original TV symbol.
+      - Applies the config-based symbol map (`load_zerodha_symbol_map`) so TV symbols can be overridden per exchange when Zerodha uses different codes.
+      - Derives `reason` from `order_comment` / `order_alert_message` via the `comment` / `alert_message` fields in `TradeDetails`.
+- Alert model and storage:
+  - Extended `Alert` with a `reason` column (via Alembic `0009_add_alert_reason.py`) and store the adapter’s `reason` value there, while still keeping the full raw payload in `raw_payload`.
+  - This gives downstream components (queue, history, analytics) a simple, indexed place to access the human-readable trigger description.
 - Per-user broker/account mapping:
-  - Continue to treat Zerodha as `broker_name="zerodha"` with per-user `BrokerConnection` and `BrokerSecret` rows.
-  - For each user, allow one or more Zerodha accounts to be linked (future work) by storing the Zerodha `user_id` (`broker_user_id`) and associating it with alerts/orders via `broker_account_id`.
+  - `BrokerConnection` already has `user_id` and `broker_user_id`:
+    - `connect_zerodha` and `zerodha_status` call `kite.profile()` and persist Zerodha `user_id` as `broker_user_id`.
+  - `Order` now has `broker_account_id`:
+    - `_get_zerodha_client` attaches `broker_user_id` to the Zerodha client.
+    - `execute_order` stamps `order.broker_account_id` from `client.broker_user_id` before placing the order, so both successful and failed executions are tied to the correct Zerodha account.
+  - Together with `Order.user_id` from S11, this gives a clean `(SigmaTrader user, Zerodha account)` mapping for every order created via TradingView.
 
 ### S12 / G03 – Webhook v2 implementation and tests
 
@@ -1632,16 +1637,27 @@ Tasks: `S12_G03_TB001`, `S12_G03_TB002`
     - `test_manual_order_cannot_execute_when_broker_not_connected`:
       - Verifies that manual WAITING orders cannot be executed when Zerodha is not connected: the `/api/orders/{id}/execute` endpoint returns 400 and the order remains in `status="WAITING"`.
 
-### S12 / G04 – Config-based mapping for future brokers/platforms (planned)
+### S12 / G04 – Config-based mapping for future brokers/platforms
 
-Planned tasks: `S12_G04_TB001`
+Tasks: `S12_G04_TB001`
 
-- Design a configuration-driven approach for platform-specific alert mappings:
-  - External JSON/YAML files describing how to interpret alert payloads (from TradingView or other sources) for each platform/broker into the normalized internal schema:
-    - Symbol mapping per broker:
-      - Rules for deriving `broker_symbol`/`broker_exchange` from TV symbols (e.g., NSE/BSE equities vs F&O contracts).
-      - Optional explicit overrides for instruments where broker codes diverge from TV.
-    - Field mapping:
-      - How to extract `side`, `qty`, `price`, `product`, `alert_type`, and `reason` from each platform’s alert format.
-      - Required vs optional fields for a safe order (e.g., side/qty/symbol must be present; product/price can default).
-  - Keep the initial Zerodha implementation code-centric but structure it so new platforms (Fyers, CoinDCX, internal signal generators) can be added largely via configuration rather than touching core logic.
+- Zerodha symbol mapping config:
+  - Introduced a JSON-based symbol map under `backend/config/zerodha_symbol_map.json(.example)` with the shape:
+    - `{ "NSE": { "SCHNEIDER": "SCHNEIDER-EQ" }, "BSE": { ... } }`
+  - Added `load_zerodha_symbol_map()` in `backend/app/config_files.py`:
+    - Reads `zerodha_symbol_map.json` from `ST_CONFIG_DIR` (or `backend/config` by default).
+    - Returns a `dict[exchange][symbol] -> mapped_symbol`, normalizing exchange and symbol keys to upper-case.
+    - Returns `{}` when the file does not exist, so the system safely falls back to a 1:1 TradingView → broker symbol assumption.
+- Adapter integration:
+  - `backend/app/services/tradingview_zerodha_adapter.py` now calls `load_zerodha_symbol_map()` and, when a mapping exists for `(broker_exchange, broker_symbol)`, replaces `broker_symbol` with the configured value while keeping `symbol_display` unchanged.
+  - This allows TradingView symbols that differ from Zerodha’s (e.g., `NSE:SCHNEIDER`) to be mapped to broker-specific codes (`SCHNEIDER-EQ`) without changing code.
+- Tests:
+  - `backend/tests/test_tradingview_zerodha_adapter.py`:
+    - Verifies that `load_zerodha_symbol_map()` returns an empty mapping when no file is present.
+    - Confirms that when a symbol map is configured in a temporary `ST_CONFIG_DIR`, `normalize_tradingview_payload_for_zerodha`:
+      - Uses the mapped `broker_symbol` for Zerodha calls.
+      - Preserves the original TradingView symbol as `symbol_display`.
+- Future extensions:
+  - The config mechanism currently focuses on symbol overrides for Zerodha; the same pattern can be extended to:
+    - Additional brokers/platforms (Fyers, CoinDCX, internal alert producers) with their own symbol maps.
+    - Field-level mapping (side/qty/price/product/alert_type/reason) once we introduce adapters for those platforms, keeping core webhook logic unchanged.

@@ -69,4 +69,51 @@ def load_kite_config() -> KiteConfig:
         raise RuntimeError(f"Invalid kite config in {path}: {exc}") from exc
 
 
-__all__ = ["AppConfig", "KiteConfig", "load_app_config", "load_kite_config"]
+def load_zerodha_symbol_map() -> dict[str, dict[str, str]]:
+    """Load Zerodha symbol mapping config, if present.
+
+    The expected shape is::
+
+        {
+          "NSE": {
+            "SCHNEIDER": "SCHNEIDER-EQ"
+          },
+          "BSE": {
+            ...
+          }
+        }
+
+    Keys are case-insensitive exchange and symbol codes. When the file does
+    not exist we return an empty mapping so that callers can safely fall
+    back to a 1:1 TradingView → broker symbol assumption.
+    """
+
+    path = get_config_dir() / "zerodha_symbol_map.json"
+    if not path.exists():
+        return {}
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        raise RuntimeError(f"Invalid JSON in config file {path}: {exc}") from exc
+
+    result: dict[str, dict[str, str]] = {}
+    for exch, symbols in raw.items():
+        if not isinstance(symbols, dict):
+            continue
+        exch_norm = str(exch).upper()
+        inner: dict[str, str] = {}
+        for sym, mapped in symbols.items():
+            inner[str(sym).upper()] = str(mapped)
+        result[exch_norm] = inner
+    return result
+
+
+__all__ = [
+    "AppConfig",
+    "KiteConfig",
+    "load_app_config",
+    "load_kite_config",
+    "load_zerodha_symbol_map",
+]
