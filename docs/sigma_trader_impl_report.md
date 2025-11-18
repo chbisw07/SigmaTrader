@@ -2030,3 +2030,73 @@ Tasks: `S16_G02_TB001`, `S16_G02_TB002`
     - Registers the `paper` router under `prefix="/api/paper"` with tag `"paper"`.
 
 With S16/G01–G02 in place, SigmaTrader supports a clear separation between LIVE and PAPER execution at the strategy level. Orders for PAPER strategies are never sent to Zerodha; instead, they are simulated and filled using straightforward, LTP-based rules driven by an explicit `/api/paper/poll` call. UI controls and analytics filters for paper vs live trades will follow in S16/G03.
+
+### S16 / G03 – Paper mode UI and analytics integration
+
+Tasks: `S16_G03_TF001`, `S16_G03_TF002`
+
+- Strategy settings UI:
+  - `frontend/src/services/admin.ts`:
+    - `Strategy` type now includes:
+      - `execution_target: 'LIVE' | 'PAPER'`.
+      - `paper_poll_interval_sec?: number | null`.
+    - New helpers:
+      - `updateStrategyExecutionTarget(strategyId, executionTarget)`:
+        - Sends `PUT /api/strategies/{id}` with `{ execution_target }`.
+      - `updateStrategyPaperPollInterval(strategyId, paperPollIntervalSec)`:
+        - Sends `PUT /api/strategies/{id}` with `{ paper_poll_interval_sec }`.
+  - `frontend/src/views/SettingsPage.tsx`:
+    - Strategies table:
+      - Added an **Execution Target** column with a `TextField select` allowing the user to choose `LIVE` or `PAPER` per strategy.
+      - Added a **Paper Poll Interval (sec)** column:
+        - Small numeric `TextField` that shows `paper_poll_interval_sec` when set, or blank to indicate the default.
+        - Helper text “15–14400 sec” to reflect the allowed range.
+      - Both fields respect `updatingStrategyId` to avoid conflicting edits.
+    - The Settings page now makes paper mode configuration visible and editable without touching the DB or API directly.
+
+- Orders UI – simulated vs live:
+  - `frontend/src/views/OrdersPage.tsx`:
+    - State:
+      - `showSimulated: boolean` (defaults to `true`).
+    - Header:
+      - Added explanation text: PAPER orders are marked as simulated and can be toggled.
+      - Added a checkbox labelled **“Show paper (simulated) orders”** next to the “Refresh from Zerodha” button.
+    - Table:
+      - Rows are filtered with `.filter(order => showSimulated || !order.simulated)` so users can hide paper orders on demand.
+      - Simulated rows are visually distinguished:
+        - Slightly shaded background (`backgroundColor: 'action.hover'`).
+        - Slightly reduced opacity on cells.
+      - Status column appends `" (PAPER)"` when `order.simulated` is `true`.
+
+- Queue UI – paper mode hint:
+  - `frontend/src/views/QueuePage.tsx`:
+    - Waiting Queue subtitle now includes a caption explaining that PAPER orders will execute via the simulated engine when the strategy’s `execution_target` is set to PAPER.
+    - No extra controls are added here yet; execution mode remains strategy-driven, not queue-driven.
+
+- Analytics – optional inclusion of paper trades:
+  - Backend:
+    - `backend/app/api/analytics.py`:
+      - `AnalyticsSummaryParams` now includes `include_simulated: bool = False`.
+      - `analytics_summary` passes `include_simulated` through to `compute_strategy_analytics`.
+    - `backend/app/services/analytics.py`:
+      - `compute_strategy_analytics(..., include_simulated: bool = False)`:
+        - For user-scoped analytics (`user_id` not `None`):
+          - Joins `AnalyticsTrade` to `Order` on `entry_order_id`.
+          - When `include_simulated` is `False` (default), adds `Order.simulated IS FALSE` to the query.
+          - When `include_simulated` is `True`, simulated trades are included in the summary and drawdown calculations.
+          - This maintains backwards-compatible behaviour (live-only) unless the caller opts in.
+  - Frontend:
+    - `frontend/src/services/analytics.ts`:
+      - `fetchAnalyticsSummary` and `fetchAnalyticsTrades` functions now accept `includeSimulated?: boolean` and forward it as `include_simulated` in the POST body.
+    - `frontend/src/views/AnalyticsPage.tsx`:
+      - State:
+        - Added `includeSimulated: boolean` (default `false`).
+      - Filters section:
+        - Added a checkbox labelled **“Include paper (simulated) trades”** alongside the date filters.
+      - Load function:
+        - Builds a `filters` object including `includeSimulated` and passes it to both `fetchAnalyticsSummary` and `fetchAnalyticsTrades`.
+      - Result:
+        - By default, analytics remain based on live trades only.
+        - When the checkbox is enabled, both the summary metrics and the trade list incorporate paper trades as well.
+
+Together, S16/G03 completes the first integrated paper-trading experience: strategies can be switched between LIVE and PAPER in the Settings UI, orders and history make simulated trades visible (and filterable), and analytics offer an explicit opt-in to include paper trades in performance calculations. This keeps live results clean by default while still allowing you to evaluate and compare paper runs when desired.

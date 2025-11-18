@@ -18,6 +18,7 @@ export function OrdersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [showSimulated, setShowSimulated] = useState<boolean>(true)
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -74,18 +75,32 @@ export function OrdersPage() {
           gap: 1,
         }}
       >
-        <Typography color="text.secondary">
-          Basic order history view. Use Refresh to sync latest status from
-          Zerodha.
-        </Typography>
-        <Button
-          size="small"
-          variant="outlined"
-          onClick={handleRefresh}
-          disabled={loading || refreshing}
-        >
-          {refreshing ? 'Refreshing…' : 'Refresh from Zerodha'}
-        </Button>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          <Typography color="text.secondary">
+            Basic order history view. Use Refresh to sync latest status from Zerodha.
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            PAPER orders are marked with simulated=true. Toggle visibility below.
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input
+              type="checkbox"
+              checked={showSimulated}
+              onChange={(e) => setShowSimulated(e.target.checked)}
+            />
+            <Typography variant="body2">Show paper (simulated) orders</Typography>
+          </label>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleRefresh}
+            disabled={loading || refreshing}
+          >
+            {refreshing ? 'Refreshing…' : 'Refresh from Zerodha'}
+          </Button>
+        </Box>
       </Box>
 
       {loading ? (
@@ -115,8 +130,18 @@ export function OrdersPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-              {orders.map((order) => (
-                <TableRow key={order.id}>
+              {orders
+                .filter((order) => showSimulated || !order.simulated)
+                .map((order) => (
+                <TableRow
+                  key={order.id}
+                  sx={{
+                    '& td': {
+                      opacity: order.simulated ? 0.9 : 1,
+                    },
+                    backgroundColor: order.simulated ? 'action.hover' : undefined,
+                  }}
+                >
                   <TableCell>
                     {formatIst(order.created_at)}
                   </TableCell>
@@ -127,7 +152,10 @@ export function OrdersPage() {
                     {order.price ?? '-'}
                   </TableCell>
                   <TableCell>{order.product}</TableCell>
-                  <TableCell>{order.status}</TableCell>
+                  <TableCell>
+                    {order.status}
+                    {order.simulated ? ' (PAPER)' : ''}
+                  </TableCell>
                   <TableCell>{order.mode}</TableCell>
                   <TableCell>
                     {order.broker_account_id

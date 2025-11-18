@@ -360,6 +360,10 @@ export function QueuePage() {
             execute, or cancel pending orders before they are sent to the
             broker.
           </Typography>
+          <Typography variant="caption" color="text.secondary">
+            PAPER orders will execute via the simulated engine when their strategy
+            execution target is set to PAPER.
+          </Typography>
         </Box>
         <Button
           variant="outlined"

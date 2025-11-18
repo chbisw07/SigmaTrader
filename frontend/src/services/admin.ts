@@ -3,6 +3,8 @@ export type Strategy = {
   name: string
   description?: string | null
   execution_mode: 'AUTO' | 'MANUAL'
+  execution_target: 'LIVE' | 'PAPER'
+  paper_poll_interval_sec?: number | null
   enabled: boolean
 }
 
@@ -72,6 +74,46 @@ export async function updateStrategyExecutionMode(
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ execution_mode: executionMode }),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to update strategy (${res.status})${
+        body ? `: ${body}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as Strategy
+}
+
+export async function updateStrategyExecutionTarget(
+  strategyId: number,
+  executionTarget: Strategy['execution_target'],
+): Promise<Strategy> {
+  const res = await fetch(`/api/strategies/${strategyId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ execution_target: executionTarget }),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to update strategy (${res.status})${
+        body ? `: ${body}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as Strategy
+}
+
+export async function updateStrategyPaperPollInterval(
+  strategyId: number,
+  paperPollIntervalSec: number | null,
+): Promise<Strategy> {
+  const res = await fetch(`/api/strategies/${strategyId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paper_poll_interval_sec: paperPollIntervalSec }),
   })
   if (!res.ok) {
     const body = await res.text()

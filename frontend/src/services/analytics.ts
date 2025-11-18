@@ -39,6 +39,7 @@ export async function fetchAnalyticsSummary(
     strategyId?: number | null
     dateFrom?: string | null
     dateTo?: string | null
+    includeSimulated?: boolean
   },
 ): Promise<AnalyticsSummary> {
   const body = {
@@ -48,6 +49,7 @@ export async function fetchAnalyticsSummary(
         : null,
     date_from: params?.dateFrom ?? null,
     date_to: params?.dateTo ?? null,
+    include_simulated: params?.includeSimulated ?? false,
   }
   const res = await fetch('/api/analytics/summary', {
     method: 'POST',
@@ -70,6 +72,7 @@ export async function fetchAnalyticsTrades(
     strategyId?: number | null
     dateFrom?: string | null
     dateTo?: string | null
+    includeSimulated?: boolean
   },
 ): Promise<AnalyticsTrade[]> {
   const body = {
@@ -79,6 +82,7 @@ export async function fetchAnalyticsTrades(
         : null,
     date_from: params?.dateFrom ?? null,
     date_to: params?.dateTo ?? null,
+    include_simulated: params?.includeSimulated ?? false,
   }
   const res = await fetch('/api/analytics/trades', {
     method: 'POST',

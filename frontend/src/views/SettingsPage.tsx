@@ -20,6 +20,8 @@ import {
   fetchStrategies,
   createRiskSettings,
   updateStrategyExecutionMode,
+  updateStrategyExecutionTarget,
+  updateStrategyPaperPollInterval,
   type RiskSettings,
   type Strategy,
 } from '../services/admin'
@@ -334,6 +336,61 @@ export function SettingsPage() {
         err instanceof Error
           ? err.message
           : 'Failed to update strategy mode',
+      )
+    } finally {
+      setUpdatingStrategyId(null)
+    }
+  }
+
+  const handleChangeExecutionTarget = async (
+    strategy: Strategy,
+    newTarget: Strategy['execution_target'],
+  ) => {
+    if (strategy.execution_target === newTarget) return
+    setUpdatingStrategyId(strategy.id)
+    try {
+      const updated = await updateStrategyExecutionTarget(strategy.id, newTarget)
+      setStrategies((prev) =>
+        prev.map((s) => (s.id === updated.id ? updated : s)),
+      )
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update strategy execution target',
+      )
+    } finally {
+      setUpdatingStrategyId(null)
+    }
+  }
+
+  const handleChangePaperPollInterval = async (
+    strategy: Strategy,
+    value: string,
+  ) => {
+    const trimmed = value.trim()
+    const parsed =
+      trimmed === '' ? null : Number.isFinite(Number(trimmed)) ? Number(trimmed) : null
+    if (trimmed !== '' && parsed == null) {
+      setError('Paper poll interval must be a number of seconds.')
+      return
+    }
+    setUpdatingStrategyId(strategy.id)
+    try {
+      const updated = await updateStrategyPaperPollInterval(
+        strategy.id,
+        parsed,
+      )
+      setStrategies((prev) =>
+        prev.map((s) => (s.id === updated.id ? updated : s)),
+      )
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update paper poll interval',
       )
     } finally {
       setUpdatingStrategyId(null)
@@ -740,6 +797,8 @@ export function SettingsPage() {
                 <TableRow>
                   <TableCell>Name</TableCell>
                   <TableCell>Mode</TableCell>
+                  <TableCell>Execution Target</TableCell>
+                  <TableCell>Paper Poll Interval (sec)</TableCell>
                   <TableCell>Enabled</TableCell>
                   <TableCell>Description</TableCell>
                 </TableRow>
@@ -765,13 +824,46 @@ export function SettingsPage() {
                         <MenuItem value="AUTO">AUTO</MenuItem>
                       </TextField>
                     </TableCell>
+                    <TableCell>
+                      <TextField
+                        select
+                        size="small"
+                        value={strategy.execution_target}
+                        onChange={(e) =>
+                          handleChangeExecutionTarget(
+                            strategy,
+                            e.target.value as Strategy['execution_target'],
+                          )
+                        }
+                        disabled={updatingStrategyId === strategy.id}
+                      >
+                        <MenuItem value="LIVE">LIVE</MenuItem>
+                        <MenuItem value="PAPER">PAPER</MenuItem>
+                      </TextField>
+                    </TableCell>
+                    <TableCell>
+                      <TextField
+                        size="small"
+                        type="number"
+                        placeholder="Default"
+                        value={
+                          strategy.paper_poll_interval_sec != null
+                            ? String(strategy.paper_poll_interval_sec)
+                            : ''
+                        }
+                        onChange={(e) =>
+                          handleChangePaperPollInterval(strategy, e.target.value)
+                        }
+                        helperText="15–14400 sec"
+                      />
+                    </TableCell>
                     <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>
                     <TableCell>{strategy.description}</TableCell>
                   </TableRow>
                 ))}
                 {strategies.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4}>
+                    <TableCell colSpan={6}>
                       <Typography variant="body2" color="text.secondary">
                         No strategies configured yet.
                       </Typography>

@@ -27,6 +27,7 @@ class AnalyticsSummaryParams(BaseModel):
     strategy_id: Optional[int] = None
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
+    include_simulated: bool = False
 
 
 @router.post("/rebuild-trades", response_model=AnalyticsRebuildResponse)

@@ -139,6 +139,7 @@ def compute_strategy_analytics(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     user_id: Optional[int] = None,
+    include_simulated: bool = False,
 ) -> StrategyAnalytics:
     """Compute basic P&L analytics for a strategy over a date range."""
 
@@ -148,6 +149,8 @@ def compute_strategy_analytics(
         query = query.filter(
             (Order.user_id == user_id) | (Order.user_id.is_(None)),
         )
+        if not include_simulated:
+            query = query.filter(Order.simulated.is_(False))
     if strategy_id is not None:
         query = query.filter(AnalyticsTrade.strategy_id == strategy_id)
     if date_from is not None:

@@ -26,6 +26,7 @@ export function AnalyticsPage() {
   const [selectedStrategyId, setSelectedStrategyId] = useState<number | 'all'>(
     'all',
   )
+  const [includeSimulated, setIncludeSimulated] = useState<boolean>(false)
   const [dateFrom, setDateFrom] = useState<string>('')
   const [dateTo, setDateTo] = useState<string>('')
   const [trades, setTrades] = useState<AnalyticsTrade[]>([])
@@ -43,6 +44,7 @@ export function AnalyticsPage() {
           selectedStrategyId === 'all' ? null : (selectedStrategyId as number),
         dateFrom: dateFrom || null,
         dateTo: dateTo || null,
+        includeSimulated,
       }
 
       const [summaryData, tradesData] = await Promise.all([
@@ -148,6 +150,16 @@ export function AnalyticsPage() {
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
             />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input
+                type="checkbox"
+                checked={includeSimulated}
+                onChange={(e) => setIncludeSimulated(e.target.checked)}
+              />
+              <Typography variant="body2">
+                Include paper (simulated) trades
+              </Typography>
+            </label>
             <Button
               size="small"
               variant="outlined"
