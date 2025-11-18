@@ -33,6 +33,23 @@ class KiteLike(Protocol):
     def holdings(self) -> List[Dict[str, Any]]:  # pragma: no cover
         ...
 
+    def place_gtt(
+        self,
+        trigger_type: str,
+        tradingsymbol: str,
+        exchange: str,
+        trigger_values: List[float],
+        last_price: float,
+        orders: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:  # pragma: no cover
+        ...
+
+    def get_gtts(self) -> List[Dict[str, Any]]:  # pragma: no cover
+        ...
+
+    def delete_gtt(self, trigger_id: int) -> Dict[str, Any]:  # pragma: no cover
+        ...
+
 
 @dataclass
 class ZerodhaOrderResult:
@@ -164,6 +181,53 @@ class ZerodhaClient:
         """Return margin/charges preview for the given order list."""
 
         return self._kite.order_margins(params)
+
+    def place_gtt_single(
+        self,
+        *,
+        tradingsymbol: str,
+        exchange: str,
+        transaction_type: str,
+        quantity: float,
+        product: str,
+        trigger_price: float,
+        order_price: float,
+        last_price: float,
+    ) -> Dict[str, Any]:
+        """Place a single-leg GTT for an equity instrument.
+
+        This is a thin wrapper around KiteConnect.place_gtt with
+        trigger_type=\"single\" and a single LIMIT order.
+        """
+
+        orders = [
+            {
+                "transaction_type": transaction_type,
+                "quantity": int(quantity),
+                "order_type": "LIMIT",
+                "product": product,
+                "price": float(order_price),
+            }
+        ]
+        trigger_values = [float(trigger_price)]
+        return self._kite.place_gtt(
+            "single",
+            tradingsymbol,
+            exchange,
+            trigger_values,
+            float(last_price),
+            orders,
+        )
+
+    def list_gtts(self) -> List[Dict[str, Any]]:
+        """Return list of existing GTTs."""
+
+        return self._kite.get_gtts()
+
+    def delete_gtt(self, trigger_id: int) -> Dict[str, Any]:
+        """Delete a GTT by trigger id."""
+
+        return self._kite.delete_gtt(trigger_id)
 
 
 __all__ = ["ZerodhaClient", "ZerodhaOrderResult"]

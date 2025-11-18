@@ -1891,3 +1891,55 @@ Tasks: `S14_G03_TF001`
   - On the backend, `OrderUpdate` and `edit_order` now accept and persist these trigger fields; execution guardrails (from S14/G01) still validate against broker-side LTP at execution time.
 
 Together, S14/G02 and S14/G03 turn the Waiting Queue edit dialog into a richer, broker-aware order editor: users can adjust side, order type (including SL/SL-M), and trigger levels with LTP-derived helpers and see Required vs Available funds—including charges—before sending orders to Zerodha.
+
+## Sprint S15 – GTT orders and long-duration entry management
+
+### S15 / G01 – Zerodha GTT order support
+
+Tasks: `S15_G01_TB001`, `S15_G01_TB002`, `S15_G01_TF003`
+
+- Zerodha client GTT helpers:
+  - `backend/app/clients/zerodha.py`:
+    - `KiteLike` protocol extended with:
+      - `place_gtt(trigger_type, tradingsymbol, exchange, trigger_values, last_price, orders)`.
+      - `get_gtts()` and `delete_gtt(trigger_id)`.
+    - `ZerodhaClient` gained:
+      - `place_gtt_single(...)`:
+        - Wraps `kite.place_gtt("single", tradingsymbol, exchange, [trigger_price], last_price, orders)` for single-leg equity GTT entries.
+        - Builds a single LIMIT order payload: `{transaction_type, quantity, order_type="LIMIT", product, price}`.
+      - `list_gtts()` → returns `kite.get_gtts()`.
+      - `delete_gtt(trigger_id)` → wraps `kite.delete_gtt(trigger_id)`.
+  - `backend/tests/test_zerodha_client.py`:
+    - `FakeKite` implements `place_gtt`, `get_gtts`, and `delete_gtt` with a simple in-memory list of placed GTTs.
+    - `test_place_gtt_single_uses_underlying_kite_client`:
+      - Verifies that `place_gtt_single` sends the expected payload and that the helper returns the broker `trigger_id`.
+- GTT execution path:
+  - `backend/app/api/orders.py::execute_order`:
+    - After risk checks and Zerodha client creation, before the regular order placement logic:
+      - If `order.gtt` is `True`:
+        - Validates:
+          - `order.order_type == "LIMIT"`, rejecting GTTs for other order types with a 400 error.
+          - `order.price > 0`, ensuring a valid LIMIT price.
+        - Determines `trigger_price`:
+          - Uses `order.trigger_price` when set and positive.
+          - Falls back to `order.price` so the GTT triggers at the limit level when no separate trigger is provided.
+        - Fetches `last_price` via `client.get_ltp(exchange, tradingsymbol)` to satisfy Kite’s GTT API requirement.
+        - Calls `client.place_gtt_single(...)` with the derived values.
+        - On success:
+          - Extracts `trigger_id` from the broker response (`trigger_id` or `id`) and stores it in `order.zerodha_order_id`.
+          - Sets `order.status = "SENT"` and clears `order.error_message`.
+          - Persists the updated order and records a `system_events` entry:
+            - `"GTT created at Zerodha"` with details including `order_id`, `zerodha_gtt_id`, `symbol`, `side`, `qty`, `trigger_price`, and `price`.
+        - On failure:
+          - Marks the order as `status="FAILED"` with the broker error message.
+          - Logs the failure and raises HTTP 502 `"Zerodha GTT placement failed: ..."` so the UI sees a clear error.
+      - If `order.gtt` is false, execution continues through the existing regular/AMO order path unchanged.
+- Queue edit UI integration:
+  - `frontend/src/views/QueuePage.tsx`:
+    - The existing GTT checkbox has been repurposed into a concrete GTT mode:
+      - Label now reads **“Place as GTT at Zerodha”**, reflecting real GTT creation instead of a passive preference.
+      - When the checkbox is turned on while `editOrderType` is `"MARKET"`, the code automatically switches `editOrderType` to `"LIMIT"` to satisfy Zerodha’s GTT requirements.
+      - The `editGtt` state is sent as `gtt: true` in the `updateOrder` payload so the backend can route execution to the GTT path.
+    - All existing SL/trigger fields and funds preview work as before; when `gtt=true`, the backend currently uses the order’s LIMIT price and optional trigger price to define the GTT condition.
+
+This sprint adds a safe, minimal first version of Zerodha GTT support: single-leg equity LIMIT entries that can be created directly from the SigmaTrader queue. More advanced patterns such as OCO GTTs, SL-GTTs, and GTT status synchronisation into SigmaTrader can be layered on in future sprints using the same `ZerodhaClient` wrappers.

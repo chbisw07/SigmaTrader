@@ -344,6 +344,114 @@ def execute_order(
     if broker_account_id:
         order.broker_account_id = broker_account_id
 
+    # Handle GTT orders by creating a Zerodha GTT instead of a
+    # regular/AMO order. We currently support single-leg LIMIT GTTs
+    # for equity; more advanced patterns (OCO, SL GTT) can be layered
+    # on later.
+    if order.gtt:
+        if order.order_type != "LIMIT":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="GTT orders are currently supported only for LIMIT order_type.",
+            )
+        if order.price is None or order.price <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Price must be positive for GTT LIMIT orders.",
+            )
+
+        # Use an explicit trigger price when provided; otherwise fall
+        # back to the limit price so the GTT triggers when price
+        # touches the order level.
+        trigger_price = (
+            float(order.trigger_price)
+            if order.trigger_price is not None and order.trigger_price > 0
+            else float(order.price)
+        )
+
+        try:
+            last_price = client.get_ltp(exchange=exchange, tradingsymbol=tradingsymbol)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "Failed to fetch LTP for GTT placement",
+                extra={
+                    "extra": {
+                        "correlation_id": getattr(
+                            request.state,
+                            "correlation_id",
+                            None,
+                        ),
+                        "symbol": symbol,
+                        "error": str(exc),
+                    }
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch LTP for GTT placement: {exc}",
+            ) from exc
+
+        try:
+            gtt_result = client.place_gtt_single(
+                tradingsymbol=tradingsymbol,
+                exchange=exchange,
+                transaction_type=order.side,
+                quantity=order.qty,
+                product=order.product,
+                trigger_price=trigger_price,
+                order_price=float(order.price),
+                last_price=last_price,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            message = str(exc)
+            order.status = "FAILED"
+            order.error_message = message
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            logger.error(
+                "Zerodha GTT placement failed",
+                extra={
+                    "extra": {
+                        "correlation_id": getattr(
+                            request.state, "correlation_id", None
+                        ),
+                        "order_id": order.id,
+                        "error": message,
+                    }
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Zerodha GTT placement failed: {message}",
+            ) from exc
+
+        trigger_id = str(gtt_result.get("trigger_id") or gtt_result.get("id") or "")
+        if trigger_id:
+            order.zerodha_order_id = trigger_id
+        order.status = "SENT"
+        order.error_message = None
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        record_system_event(
+            db,
+            level="INFO",
+            category="order",
+            message="GTT created at Zerodha",
+            correlation_id=getattr(request.state, "correlation_id", None),
+            details={
+                "order_id": order.id,
+                "zerodha_gtt_id": order.zerodha_order_id,
+                "symbol": order.symbol,
+                "side": order.side,
+                "qty": order.qty,
+                "trigger_price": trigger_price,
+                "price": order.price,
+            },
+        )
+        return order
+
     # For SL/SL-M orders, validate trigger configuration and derive
     # trigger_percent relative to current LTP as a convenience for
     # later analytics and UI display. We also enforce basic guardrails

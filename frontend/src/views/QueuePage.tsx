@@ -607,11 +607,17 @@ export function QueuePage() {
                 control={
                   <Checkbox
                     checked={editGtt}
-                    onChange={(e) => setEditGtt(e.target.checked)}
+                    onChange={(e) => {
+                      const checked = e.target.checked
+                      setEditGtt(checked)
+                      if (checked && editOrderType === 'MARKET') {
+                        setEditOrderType('LIMIT')
+                      }
+                    }}
                     size="small"
                   />
                 }
-                label="Convert to GTT (preference)"
+                label="Place as GTT at Zerodha"
               />
               <Box
                 sx={{
