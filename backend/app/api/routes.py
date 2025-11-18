@@ -7,6 +7,7 @@ from . import (
     auth,
     brokers,
     orders,
+    paper,
     positions,
     risk_settings,
     strategies,
@@ -101,6 +102,12 @@ router.include_router(
     zerodha.router,
     prefix="/api/zerodha",
     tags=["zerodha"],
+)
+
+router.include_router(
+    paper.router,
+    prefix="/api/paper",
+    tags=["paper"],
 )
 
 router.include_router(

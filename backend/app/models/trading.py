@@ -28,7 +28,12 @@ class Strategy(Base):
             "execution_mode IN ('AUTO', 'MANUAL')",
             name="ck_strategies_execution_mode",
         ),
+        CheckConstraint(
+            "execution_target IN ('LIVE', 'PAPER')",
+            name="ck_strategies_execution_target",
+        ),
         Index("ix_strategies_execution_mode", "execution_mode"),
+        Index("ix_strategies_execution_target", "execution_target"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -37,6 +42,10 @@ class Strategy(Base):
     execution_mode: Mapped[str] = mapped_column(
         String(16), nullable=False, default="MANUAL"
     )
+    execution_target: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="LIVE"
+    )
+    paper_poll_interval_sec: Mapped[Optional[int]] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)

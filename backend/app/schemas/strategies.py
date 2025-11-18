@@ -9,6 +9,10 @@ class StrategyBase(BaseModel):
     name: str = Field(..., max_length=255)
     description: Optional[str] = None
     execution_mode: str = Field("MANUAL", regex="^(AUTO|MANUAL)$")
+    execution_target: str = Field("LIVE", regex="^(LIVE|PAPER)$")
+    paper_poll_interval_sec: Optional[int] = Field(
+        None, ge=15, le=4 * 60 * 60
+    )  # 15s to 4h
     enabled: bool = True
 
 
@@ -20,6 +24,8 @@ class StrategyUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = None
     execution_mode: Optional[str] = Field(None, regex="^(AUTO|MANUAL)$")
+    execution_target: Optional[str] = Field(None, regex="^(LIVE|PAPER)$")
+    paper_poll_interval_sec: Optional[int] = Field(None, ge=15, le=4 * 60 * 60)
     enabled: Optional[bool] = None
 
 

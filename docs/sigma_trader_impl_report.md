@@ -1943,3 +1943,90 @@ Tasks: `S15_G01_TB001`, `S15_G01_TB002`, `S15_G01_TF003`
     - All existing SL/trigger fields and funds preview work as before; when `gtt=true`, the backend currently uses the order’s LIMIT price and optional trigger price to define the GTT condition.
 
 This sprint adds a safe, minimal first version of Zerodha GTT support: single-leg equity LIMIT entries that can be created directly from the SigmaTrader queue. More advanced patterns such as OCO GTTs, SL-GTTs, and GTT status synchronisation into SigmaTrader can be layered on in future sprints using the same `ZerodhaClient` wrappers.
+
+## Sprint S16 – Paper trading mode and simulated execution
+
+### S16 / G01 – Paper trading architecture and configuration
+
+Tasks: `S16_G01_TB001`
+
+- Strategy configuration:
+  - `backend/app/models/trading.py`:
+    - `Strategy` now includes:
+      - `execution_target: str` with a check constraint `IN ('LIVE', 'PAPER')`, default `"LIVE"`.
+      - `paper_poll_interval_sec: Optional[int]` – optional poll interval in seconds for paper trading (intended range 15 seconds to 4 hours).
+    - New index: `ix_strategies_execution_target` for efficient querying of PAPER strategies.
+  - Alembic `0012_add_strategy_execution_target.py`:
+    - Adds `execution_target` and `paper_poll_interval_sec` to `strategies` defensively:
+      - Checks table/column existence before altering, so existing DBs migrate cleanly.
+  - `backend/app/schemas/strategies.py`:
+    - `StrategyBase` / `StrategyRead`:
+      - Expose `execution_target: "LIVE" | "PAPER"` (regex-validated, default `"LIVE"`).
+      - Expose `paper_poll_interval_sec?: int` with validation `15 <= value <= 4 * 60 * 60`.
+    - `StrategyUpdate`:
+      - Accepts optional `execution_target` and `paper_poll_interval_sec` with the same constraints.
+  - `backend/app/api/strategies.py`:
+    - `create_strategy` now sets `execution_target` and `paper_poll_interval_sec` when creating new strategies.
+    - `update_strategy` automatically persists these fields via the updated Pydantic models.
+
+### S16 / G02 – Backend paper execution engine and price polling
+
+Tasks: `S16_G02_TB001`, `S16_G02_TB002`
+
+- Paper trading engine:
+  - New module `backend/app/services/paper_trading.py`:
+    - `PaperFillResult` dataclass with `filled_orders: int`.
+    - `_get_price_client(db, settings) -> ZerodhaClient`:
+      - Uses the most recent `BrokerConnection` with `broker_name="zerodha"` and `ST_ZERODHA_API_KEY` to construct a `ZerodhaClient` for price (LTP) only.
+      - If Zerodha is not connected or the API key is missing, raises, and the caller gracefully skips paper fills.
+    - `submit_paper_order(db, settings, order, correlation_id=None) -> Order`:
+      - Marks the order as `simulated=True`.
+      - If the order is in `WAITING` state, transitions it to `SENT` and clears any error message.
+      - Commits the changes and records a `SystemEvent` (`category="paper"`, message `"Paper order submitted"`) with basic order details.
+    - `poll_paper_orders(db, settings) -> PaperFillResult`:
+      - Queries open simulated orders joined to `Strategy`:
+        - `Order.simulated IS TRUE`
+        - `Order.status IN ("SENT", "OPEN")`
+        - `Strategy.execution_target == "PAPER"`.
+      - For each order:
+        - Resolves `exchange` and broker symbol from `Order.symbol` (handling `NSE:INFY` style symbols).
+        - Fetches LTP using `client.get_ltp(exchange, tradingsymbol)`.
+        - Applies simple fill rules:
+          - `MARKET` → always fill at current LTP.
+          - `LIMIT`:
+            - BUY: fill when `LTP <= limit price`.
+            - SELL: fill when `LTP >= limit price`.
+          - (SL/SL-M orders are currently left untouched for v1.)
+        - On fill:
+          - Sets `order.status = "EXECUTED"`.
+          - Updates `order.price` to the execution price (LTP for MARKET, limit price for LIMIT).
+          - Records a `SystemEvent` (`category="paper"`, message `"Paper order executed"`) including symbol, side, qty, price, and LTP.
+      - Commits batched changes when any orders are filled and returns `PaperFillResult(filled_orders=<count>)`.
+
+- Routing execution to PAPER vs LIVE:
+  - `backend/app/api/orders.py::execute_order`:
+    - After risk evaluation and potential clamping, but before contacting Zerodha:
+      - Checks `order.strategy.execution_target`:
+        - If `"PAPER"`:
+          - Calls `submit_paper_order(db, settings, order, correlation_id=...)`.
+          - Returns the updated order immediately, without any Zerodha API calls.
+        - If `"LIVE"` (default):
+          - Proceeds with the existing Zerodha execution path (including SL/SL-M guardrails and AMO retry).
+    - Manual queue executions for PAPER strategies therefore stay entirely on the simulated path.
+  - `backend/app/api/webhook.py`:
+    - For AUTO strategies (`strategy.execution_mode == "AUTO"` and `strategy.enabled`):
+      - If `strategy.execution_target == "PAPER"`:
+        - Calls `submit_paper_order(...)` on the newly created order and returns; the order is marked simulated and `SENT` and will be filled by the paper engine.
+      - Otherwise:
+        - Calls `execute_order` as before, sending AUTO orders to Zerodha.
+
+- Paper polling API:
+  - New router `backend/app/api/paper.py`:
+    - `POST /api/paper/poll` (`run_paper_poll`):
+      - Depends on `get_current_user`, `get_db`, and `get_settings`.
+      - Invokes `poll_paper_orders(db, settings)` and returns `{"filled_orders": <count>}`.
+      - Intended to be called periodically (e.g. via cron or an external scheduler) at the desired poll interval for paper strategies; it does not itself enforce the interval.
+  - `backend/app/api/routes.py`:
+    - Registers the `paper` router under `prefix="/api/paper"` with tag `"paper"`.
+
+With S16/G01–G02 in place, SigmaTrader supports a clear separation between LIVE and PAPER execution at the strategy level. Orders for PAPER strategies are never sent to Zerodha; instead, they are simulated and filled using straightforward, LTP-based rules driven by an explicit `/api/paper/poll` call. UI controls and analytics filters for paper vs live trades will follow in S16/G03.

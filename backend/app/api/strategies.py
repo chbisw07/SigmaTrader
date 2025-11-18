@@ -39,6 +39,8 @@ def create_strategy(
         name=payload.name,
         description=payload.description,
         execution_mode=payload.execution_mode,
+        execution_target=payload.execution_target,
+        paper_poll_interval_sec=payload.paper_poll_interval_sec,
         enabled=payload.enabled,
     )
     db.add(strategy)

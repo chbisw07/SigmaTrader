@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models import Alert, Strategy, User
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
+from app.services.paper_trading import submit_paper_order
 from app.services.system_events import record_system_event
 from app.services.tradingview_zerodha_adapter import (
     NormalizedAlert,
@@ -180,18 +181,27 @@ def tradingview_webhook(
     )
 
     # For AUTO strategies we immediately execute the order via the same
-    # execution path used by the manual queue endpoint. Risk checks and
-    # more advanced routing will be layered in S06/G02+.
-    if auto_execute:
+    # execution path used by the manual queue endpoint. When the
+    # strategy is configured for PAPER execution we instead submit the
+    # order to the paper engine and skip contacting Zerodha.
+    if auto_execute and strategy is not None:
         try:
-            from app.api.orders import execute_order as execute_order_api
+            if getattr(strategy, "execution_target", "LIVE") == "PAPER":
+                submit_paper_order(
+                    db,
+                    settings,
+                    order,
+                    correlation_id=correlation_id,
+                )
+            else:
+                from app.api.orders import execute_order as execute_order_api
 
-            execute_order_api(
-                order_id=order.id,
-                request=request,
-                db=db,
-                settings=settings,
-            )
+                execute_order_api(
+                    order_id=order.id,
+                    request=request,
+                    db=db,
+                    settings=settings,
+                )
         except HTTPException as exc:
             # The execute_order handler will have updated order status /
             # error_message appropriately. When Zerodha is not connected

@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models import BrokerConnection, Order, User
 from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
 from app.services.broker_secrets import get_broker_secret
+from app.services.paper_trading import submit_paper_order
 from app.services.risk import evaluate_order_risk
 from app.services.system_events import record_system_event
 
@@ -329,6 +330,18 @@ def execute_order(
         db.add(order)
         db.commit()
         db.refresh(order)
+
+    # Route PAPER strategies to the paper engine instead of Zerodha.
+    if (
+        order.strategy is not None
+        and getattr(order.strategy, "execution_target", "LIVE") == "PAPER"
+    ):
+        return submit_paper_order(
+            db,
+            settings,
+            order,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
 
     symbol = order.symbol
     exchange = order.exchange or "NSE"
