@@ -1509,10 +1509,9 @@ Tasks: `S11_G02_TB001`, `S11_G02_TF002`
 
 - Frontend (TF002):
   - `frontend/src/views/SettingsPage.tsx`:
-    - Did not need structural changes in this sprint; it still calls `/api/brokers/...` and `/api/zerodha/...` as before.
-    - Because the backend now scopes secrets and connections to the current user, the same UI automatically loads/saves credentials per user:
-      - Admin and `cbiswas` can each configure their own Zerodha `api_key`/`api_secret` without overwriting each other.
-    - Future sprints (multi-account support) can extend the UI to show the active broker/account (e.g., via Zerodha `user_id`) and provide richer account switching.
+    - Shows a single broker-centric card that combines broker selection, Zerodha connection status/login controls, and the broker secrets table under one “Broker Settings” block.
+    - All reads/writes go through `/api/brokers/...` and `/api/zerodha/...`, which are scoped to the current user, so each user manages their own encrypted `api_key`/`api_secret` and Zerodha connection independently.
+    - The card is designed so future brokers (e.g., Fyers, AngelOne) can plug in their own connection controls while reusing the same per-user secret management UI.
 
 ### S11 / G03 – Per-user alert and order scoping
 

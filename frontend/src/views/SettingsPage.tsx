@@ -477,76 +477,81 @@ export function SettingsPage() {
       </Typography>
 
       <Paper sx={{ mb: 3, p: 2 }}>
+        <Typography variant="h6" gutterBottom>
+          Broker Settings
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Select your broker, connect your account where applicable, and manage API keys
+          and secrets. Settings are scoped to the logged-in SigmaTrader user.
+        </Typography>
         <Box
           sx={{
             display: 'flex',
             flexDirection: { xs: 'column', md: 'row' },
-            gap: 2,
-            alignItems: { xs: 'flex-start', md: 'center' },
-            justifyContent: 'space-between',
+            gap: 3,
+            alignItems: { xs: 'flex-start', md: 'flex-start' },
+            mb: 2,
           }}
         >
-          <Box>
-            <Typography variant="h6" gutterBottom>
-              Zerodha Connection
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Use the button below to open the Zerodha login page. After completing login,
-              paste the <code>request_token</code> here and click Connect.
-            </Typography>
-          </Box>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={handleOpenZerodhaLogin}
-              >
-                Open Zerodha Login
-              </Button>
-              <Chip
-                size="small"
-                label={
-                  brokerStatus?.connected ? 'Zerodha: Connected' : 'Zerodha: Not connected'
-                }
-                color={brokerStatus?.connected ? 'success' : 'default'}
-              />
-            </Box>
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Box sx={{ flex: 1, minWidth: 260 }}>
+            <Box
+              sx={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 2,
+                alignItems: 'center',
+                mb: 1.5,
+              }}
+            >
               <TextField
+                select
+                label="Broker"
                 size="small"
-                label="request_token"
-                type={requestTokenVisible ? 'text' : 'password'}
-                value={requestToken}
-                onChange={(e) => setRequestToken(e.target.value)}
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton
-                        size="small"
-                        aria-label="toggle request token visibility"
-                        onClick={() =>
-                          setRequestTokenVisible((prev) => !prev)
-                        }
-                        edge="end"
-                      >
-                        {requestTokenVisible ? 'Hide' : 'Show'}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-              />
-              <Button
-                variant="contained"
-                size="small"
-                disabled={isConnecting}
-                onClick={handleConnectZerodha}
+                sx={{ minWidth: 200 }}
+                value={selectedBroker}
+                onChange={(e) => void handleSelectBroker(e.target.value)}
               >
-                {isConnecting ? 'Connecting…' : 'Connect Zerodha'}
-              </Button>
+                {brokers.map((b) => (
+                  <MenuItem key={b.name} value={b.name}>
+                    {b.label}
+                  </MenuItem>
+                ))}
+                {brokers.length === 0 && (
+                  <MenuItem value="" disabled>
+                    No brokers configured
+                  </MenuItem>
+                )}
+              </TextField>
+              {selectedBroker === 'zerodha' && (
+                <Chip
+                  size="small"
+                  label={
+                    brokerStatus?.connected
+                      ? 'Zerodha: Connected'
+                      : 'Zerodha: Not connected'
+                  }
+                  color={brokerStatus?.connected ? 'success' : 'default'}
+                />
+              )}
             </Box>
-            {brokerStatus?.updated_at && (
-              <Typography variant="caption" color="text.secondary">
+            {selectedBroker === 'zerodha' && brokerStatus?.connected && brokerStatus.user_id && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block' }}
+              >
+                Zerodha user:{' '}
+                {brokerStatus.user_name
+                  ? `${brokerStatus.user_name} (${brokerStatus.user_id})`
+                  : brokerStatus.user_id}
+              </Typography>
+            )}
+            {selectedBroker === 'zerodha' && brokerStatus?.updated_at && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block' }}
+              >
                 Last updated{' '}
                 {(() => {
                   const utc = new Date(brokerStatus.updated_at)
@@ -556,59 +561,70 @@ export function SettingsPage() {
                 })()}
               </Typography>
             )}
-            {brokerStatus?.connected && brokerStatus.user_id && (
-              <Typography variant="caption" color="text.secondary">
-                Zerodha user:{' '}
-                {brokerStatus.user_name
-                  ? `${brokerStatus.user_name} (${brokerStatus.user_id})`
-                  : brokerStatus.user_id}
-              </Typography>
-            )}
-            {brokerError && (
-              <Typography variant="caption" color="error">
-                {brokerError}
-              </Typography>
-            )}
           </Box>
-        </Box>
-      </Paper>
 
-      <Paper sx={{ mb: 3, p: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          Broker Configuration
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Configure broker API keys and secrets. Values are stored encrypted on
-          the backend; use this section instead of editing JSON files directly.
-        </Typography>
-        <Box
-          sx={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 2,
-            alignItems: 'center',
-            mb: 2,
-          }}
-        >
-          <TextField
-            select
-            label="Broker"
-            size="small"
-            sx={{ minWidth: 200 }}
-            value={selectedBroker}
-            onChange={(e) => void handleSelectBroker(e.target.value)}
-          >
-            {brokers.map((b) => (
-              <MenuItem key={b.name} value={b.name}>
-                {b.label}
-              </MenuItem>
-            ))}
-            {brokers.length === 0 && (
-              <MenuItem value="" disabled>
-                No brokers configured
-              </MenuItem>
-            )}
-          </TextField>
+          {selectedBroker === 'zerodha' && (
+            <Box
+              sx={{
+                flex: 1,
+                minWidth: 260,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+              }}
+            >
+              <Typography variant="subtitle2" color="text.secondary">
+                Zerodha connection
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Open the Zerodha login page, complete login, then paste the{' '}
+                <code>request_token</code> you receive here to connect this SigmaTrader
+                user.
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={handleOpenZerodhaLogin}
+                >
+                  Open Zerodha Login
+                </Button>
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <TextField
+                  size="small"
+                  label="request_token"
+                  type={requestTokenVisible ? 'text' : 'password'}
+                  value={requestToken}
+                  onChange={(e) => setRequestToken(e.target.value)}
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          aria-label="toggle request token visibility"
+                          onClick={() =>
+                            setRequestTokenVisible((prev) => !prev)
+                          }
+                          edge="end"
+                        >
+                          {requestTokenVisible ? 'Hide' : 'Show'}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
+                />
+                <Button
+                  variant="contained"
+                  size="small"
+                  disabled={isConnecting}
+                  onClick={handleConnectZerodha}
+                >
+                  {isConnecting ? 'Connecting…' : 'Connect Zerodha'}
+                </Button>
+              </Box>
+            </Box>
+          )}
         </Box>
         {selectedBroker && (
           <Table size="small">
