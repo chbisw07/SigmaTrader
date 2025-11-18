@@ -52,6 +52,10 @@ class OrderPreviewResponse(BaseModel):
     raw: Dict[str, Any]
 
 
+class LtpResponse(BaseModel):
+    ltp: float
+
+
 @router.get("/login-url")
 def get_login_url(
     db: Session = Depends(get_db),
@@ -407,6 +411,46 @@ def zerodha_order_preview(
         currency=currency,
         raw=entry,
     ).dict()
+
+
+@router.get("/ltp", response_model=LtpResponse)
+def zerodha_ltp(
+    symbol: str,
+    exchange: str = "NSE",
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return last traded price (LTP) for the given symbol."""
+
+    kite = _get_kite_for_user(db, settings, user)
+
+    base_symbol = symbol
+    exch = exchange or "NSE"
+    if ":" in symbol:
+        ex, ts = symbol.split(":", 1)
+        if ex:
+            exch = ex
+        base_symbol = ts
+
+    instrument = f"{exch}:{base_symbol}"
+    data = kite.ltp([instrument])
+    if instrument not in data:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"LTP quote for {instrument} not returned by Zerodha.",
+        )
+
+    quote = data[instrument]
+    try:
+        ltp_val = float(quote["last_price"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Invalid LTP payload from Zerodha for {instrument}.",
+        ) from exc
+
+    return LtpResponse(ltp=ltp_val).dict()
 
 
 __all__ = ["router"]

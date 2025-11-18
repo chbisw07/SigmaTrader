@@ -29,6 +29,10 @@ export type ZerodhaOrderPreview = {
   raw: unknown
 }
 
+export type ZerodhaLtp = {
+  ltp: number
+}
+
 export async function fetchZerodhaLoginUrl(): Promise<string> {
   const res = await fetch('/api/zerodha/login-url')
   if (!res.ok) {
@@ -100,4 +104,18 @@ export async function previewZerodhaOrder(
     )
   }
   return (await res.json()) as ZerodhaOrderPreview
+}
+
+export async function fetchZerodhaLtp(
+  symbol: string,
+  exchange: string,
+): Promise<ZerodhaLtp> {
+  const url = new URL('/api/zerodha/ltp', window.location.origin)
+  url.searchParams.set('symbol', symbol)
+  url.searchParams.set('exchange', exchange)
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    throw new Error(`Failed to fetch Zerodha LTP (${res.status})`)
+  }
+  return (await res.json()) as ZerodhaLtp
 }

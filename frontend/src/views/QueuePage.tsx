@@ -27,6 +27,7 @@ import {
 } from '../services/orders'
 import {
   fetchZerodhaMargins,
+  fetchZerodhaLtp,
   previewZerodhaOrder,
 } from '../services/zerodha'
 
@@ -40,9 +41,9 @@ export function QueuePage() {
   const [editQty, setEditQty] = useState<string>('')
   const [editSide, setEditSide] = useState<'BUY' | 'SELL'>('BUY')
   const [editPrice, setEditPrice] = useState<string>('')
-  const [editOrderType, setEditOrderType] = useState<'MARKET' | 'LIMIT'>(
-    'MARKET',
-  )
+  const [editOrderType, setEditOrderType] = useState<
+    'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  >('MARKET')
   const [editProduct, setEditProduct] = useState<string>('MIS')
   const [editGtt, setEditGtt] = useState<boolean>(false)
   const [savingEdit, setSavingEdit] = useState(false)
@@ -51,6 +52,11 @@ export function QueuePage() {
   const [fundsCurrency, setFundsCurrency] = useState<string | null>(null)
   const [fundsLoading, setFundsLoading] = useState(false)
   const [fundsError, setFundsError] = useState<string | null>(null)
+  const [editTriggerPrice, setEditTriggerPrice] = useState<string>('')
+  const [editTriggerPercent, setEditTriggerPercent] = useState<string>('')
+  const [triggerMode, setTriggerMode] = useState<'PRICE' | 'PERCENT'>('PRICE')
+  const [ltp, setLtp] = useState<number | null>(null)
+  const [ltpError, setLtpError] = useState<string | null>(null)
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -88,18 +94,83 @@ export function QueuePage() {
     return () => window.clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    const loadLtp = async () => {
+      if (!editingOrder) return
+      try {
+        setLtpError(null)
+        const data = await fetchZerodhaLtp(
+          editingOrder.symbol,
+          editingOrder.exchange ?? 'NSE',
+        )
+        setLtp(data.ltp)
+      } catch (err) {
+        setLtp(null)
+        setLtpError(
+          err instanceof Error ? err.message : 'Failed to fetch LTP.',
+        )
+      }
+    }
+    if (editingOrder && (editingOrder.order_type === 'SL' || editingOrder.order_type === 'SL-M')) {
+      void loadLtp()
+    }
+  }, [editingOrder])
+
+  useEffect(() => {
+    if (!editingOrder || ltp == null) return
+    if (editOrderType !== 'SL' && editOrderType !== 'SL-M') return
+
+    if (triggerMode === 'PRICE') {
+      const tp = Number(editTriggerPrice)
+      if (Number.isFinite(tp) && ltp > 0) {
+        const pct = ((tp - ltp) / ltp) * 100
+        setEditTriggerPercent(pct.toFixed(2))
+      } else {
+        setEditTriggerPercent('')
+      }
+    } else if (triggerMode === 'PERCENT') {
+      const pct = Number(editTriggerPercent)
+      if (Number.isFinite(pct) && ltp > 0) {
+        const tp = ltp * (1 + pct / 100)
+        setEditTriggerPrice(tp.toFixed(2))
+      } else {
+        setEditTriggerPrice('')
+      }
+    }
+  }, [
+    editingOrder,
+    ltp,
+    editOrderType,
+    triggerMode,
+    editTriggerPrice,
+    editTriggerPercent,
+  ])
+
   const openEditDialog = (order: Order) => {
     setEditingOrder(order)
     setEditQty(String(order.qty))
     setEditSide(order.side === 'SELL' ? 'SELL' : 'BUY')
     setEditPrice(order.price != null ? String(order.price) : '')
-    setEditOrderType(order.order_type === 'LIMIT' ? 'LIMIT' : 'MARKET')
+    if (order.order_type === 'LIMIT' || order.order_type === 'SL' || order.order_type === 'SL-M') {
+      setEditOrderType(order.order_type as 'LIMIT' | 'SL' | 'SL-M')
+    } else {
+      setEditOrderType('MARKET')
+    }
+    setEditTriggerPrice(
+      order.trigger_price != null ? String(order.trigger_price) : '',
+    )
+    setEditTriggerPercent(
+      order.trigger_percent != null ? String(order.trigger_percent) : '',
+    )
     setEditProduct(order.product)
     setEditGtt(order.gtt)
     setFundsAvailable(null)
     setFundsRequired(null)
     setFundsCurrency(null)
     setFundsError(null)
+    setTriggerMode('PRICE')
+    setLtp(null)
+    setLtpError(null)
     setError(null)
   }
 
@@ -126,6 +197,18 @@ export function QueuePage() {
         throw new Error('Enter a non-negative price to preview funds.')
       }
 
+      let triggerPrice: number | null = null
+      if (editOrderType === 'SL' || editOrderType === 'SL-M') {
+        if (editTriggerPrice.trim() === '') {
+          throw new Error('Enter a trigger price for SL / SL-M orders.')
+        }
+        const tp = Number(editTriggerPrice)
+        if (!Number.isFinite(tp) || tp <= 0) {
+          throw new Error('Trigger price must be a positive number.')
+        }
+        triggerPrice = tp
+      }
+
       const margins = await fetchZerodhaMargins()
       const preview = await previewZerodhaOrder({
         symbol: editingOrder.symbol,
@@ -135,7 +218,7 @@ export function QueuePage() {
         product: editProduct,
         order_type: editOrderType,
         price,
-        trigger_price: null,
+        trigger_price: triggerPrice,
       })
 
       setFundsAvailable(margins.available)
@@ -172,14 +255,51 @@ export function QueuePage() {
         throw new Error('Price must be a non-negative number')
       }
 
-      const updated = await updateOrder(editingOrder.id, {
+      let triggerPrice: number | undefined
+      let triggerPercent: number | undefined
+      if (editOrderType === 'SL' || editOrderType === 'SL-M') {
+        if (editTriggerPrice.trim() === '') {
+          throw new Error('Trigger price is required for SL / SL-M orders')
+        }
+        const tp = Number(editTriggerPrice)
+        if (!Number.isFinite(tp) || tp <= 0) {
+          throw new Error('Trigger price must be a positive number')
+        }
+        triggerPrice = tp
+        if (editTriggerPercent.trim() !== '') {
+          const tpc = Number(editTriggerPercent)
+          if (!Number.isFinite(tpc)) {
+            throw new Error('Trigger % must be a valid number')
+          }
+          triggerPercent = tpc
+        }
+      }
+
+      const payload: {
+        qty: number
+        price: number | null
+        side: 'BUY' | 'SELL'
+        order_type: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+        product: string
+        gtt: boolean
+        trigger_price?: number
+        trigger_percent?: number
+      } = {
         qty,
         price,
         side: editSide,
         order_type: editOrderType,
         product: editProduct,
         gtt: editGtt,
-      })
+      }
+      if (triggerPrice !== undefined) {
+        payload.trigger_price = triggerPrice
+      }
+      if (triggerPercent !== undefined) {
+        payload.trigger_percent = triggerPercent
+      }
+
+      const updated = await updateOrder(editingOrder.id, payload)
 
       setOrders((prev) =>
         prev.map((o) => (o.id === updated.id ? updated : o)),
@@ -395,7 +515,8 @@ export function QueuePage() {
                 value={editOrderType}
                 onChange={(e) =>
                   setEditOrderType(
-                    (e.target.value as 'MARKET' | 'LIMIT') || 'MARKET',
+                    (e.target.value as 'MARKET' | 'LIMIT' | 'SL' | 'SL-M') ||
+                      'MARKET',
                   )
                 }
                 fullWidth
@@ -403,6 +524,8 @@ export function QueuePage() {
               >
                 <MenuItem value="MARKET">MARKET</MenuItem>
                 <MenuItem value="LIMIT">LIMIT</MenuItem>
+                <MenuItem value="SL">SL (Stop-loss limit)</MenuItem>
+                <MenuItem value="SL-M">SL-M (Stop-loss market)</MenuItem>
               </TextField>
               <TextField
                 label="Price"
@@ -411,8 +534,63 @@ export function QueuePage() {
                 onChange={(e) => setEditPrice(e.target.value)}
                 fullWidth
                 size="small"
-                helperText="Leave blank for market orders."
+                helperText={
+                  editOrderType === 'MARKET' || editOrderType === 'SL-M'
+                    ? 'Leave blank for pure market orders.'
+                    : 'Limit price for LIMIT / SL orders.'
+                }
               />
+              {(editOrderType === 'SL' || editOrderType === 'SL-M') && (
+                <>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                      mb: 0.5,
+                      gap: 1,
+                    }}
+                  >
+                    <Button
+                      size="small"
+                      variant={triggerMode === 'PRICE' ? 'contained' : 'outlined'}
+                      onClick={() => setTriggerMode('PRICE')}
+                    >
+                      Use price
+                    </Button>
+                    <Button
+                      size="small"
+                      variant={triggerMode === 'PERCENT' ? 'contained' : 'outlined'}
+                      onClick={() => setTriggerMode('PERCENT')}
+                      disabled={ltp == null}
+                    >
+                      Use % vs LTP
+                    </Button>
+                  </Box>
+                  <TextField
+                    label="Trigger price"
+                    type="number"
+                    value={editTriggerPrice}
+                    onChange={(e) => setEditTriggerPrice(e.target.value)}
+                    fullWidth
+                    size="small"
+                    disabled={triggerMode === 'PERCENT'}
+                  />
+                  <TextField
+                    label="Trigger % vs LTP (optional)"
+                    type="number"
+                    value={editTriggerPercent}
+                    onChange={(e) => setEditTriggerPercent(e.target.value)}
+                    fullWidth
+                    size="small"
+                    disabled={triggerMode === 'PRICE' || ltp == null}
+                    helperText={
+                      ltpError
+                        ? ltpError
+                        : 'Percentage relative to last traded price; derived automatically when using the other field.'
+                    }
+                  />
+                </>
+              )}
               <TextField
                 label="Product"
                 select

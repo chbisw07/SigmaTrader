@@ -137,7 +137,7 @@ Build a **full-fledged trading companion app** that:
 
 10. **Quality-of-Life Improvements (Recommended)**
 
-    * **Simulation / Paper Mode**: Same logic, but orders not sent to Zerodha; stored as “simulated” for dry runs.
+    * **Simulation / Paper Mode**: Same logic, but orders are not sent to Zerodha; instead they are routed to a lightweight paper engine that uses price polling (LTP) to fill simulated orders within user-configured intervals.
     * **Strategy Routing**: Use `strategy_name` to route to different configs (different RM rules, modes).
     * **Notification Hooks**: Optional email/Telegram alerts when orders fail or hit risk limits.
     * **Health Panel**: Show TradingView webhook health, Zerodha connectivity status, and DB status.

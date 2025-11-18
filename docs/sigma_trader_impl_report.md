@@ -1794,3 +1794,100 @@ Tasks: `S14_G01_TB001`, `S14_G01_TB002`
     - The current edit dialog still sends only `MARKET`/`LIMIT` and no trigger fields; behaviour remains unchanged until S14/G03 extends the UI.
 
 These changes complete the backend and typing support for advanced Zerodha order types and LTP-aware stop-loss parameters, ready for the richer edit dialog and funds preview planned in S14/G02–G03.
+
+### S14 / G02 – Funds and margin preview for edited orders
+
+Tasks: `S14_G02_TB001`, `S14_G02_TF002`
+
+- Backend preview APIs:
+  - `backend/app/api/zerodha.py`:
+    - Helper `_get_kite_for_user(db, settings, user)` centralises creation of a user-scoped `KiteConnect` client, re-used by multiple endpoints.
+    - `GET /api/zerodha/margins` (`zerodha_margins`):
+      - Calls `kite.margins("equity")` and normalises the segment payload.
+      - Extracts an `available` cash-like value (preferring `available.cash`, then `live_balance` or `opening_balance`) and returns:
+        - `available: float`
+        - `raw: Dict[str, Any]` (entire equity segment) via `MarginsResponse`.
+    - `POST /api/zerodha/order-preview` (`zerodha_order_preview`):
+      - Accepts `OrderPreviewRequest` (symbol, exchange, side, qty, product, order_type, optional price and trigger_price).
+      - Normalises `symbol` into `exchange` and `tradingsymbol`.
+      - Calls `kite.order_margins([...])` with a single order dict mirroring the execution parameters (including `trigger_price` for SL/SL-M).
+      - Returns `OrderPreviewResponse`:
+        - `required`: numeric total margin/amount required (from `total` or `margin` in the broker payload).
+        - `charges`: nested charges dict when present.
+        - `currency`: extracted from `currency` or `settlement_currency`.
+        - `raw`: the full first entry from the broker response.
+- Zerodha client/test helpers:
+  - `backend/app/clients/zerodha.py`:
+    - Added `margins(segment)` and `order_margins(params)` wrappers to decouple the rest of the code from direct KiteConnect usage.
+  - `backend/tests/test_zerodha_client.py`:
+    - `FakeKite` gained `margins(...)` and `order_margins(...)` methods, returning deterministic structures so tests remain self-contained.
+- Frontend funds preview:
+  - `frontend/src/services/zerodha.ts`:
+    - New types:
+      - `ZerodhaMargins` (`available`, `raw`).
+      - `ZerodhaOrderPreviewRequest` / `ZerodhaOrderPreview`.
+    - New helpers:
+      - `fetchZerodhaMargins()` → `GET /api/zerodha/margins`.
+      - `previewZerodhaOrder(payload)` → `POST /api/zerodha/order-preview`.
+  - `frontend/src/views/QueuePage.tsx`:
+    - Edit dialog state now includes:
+      - `fundsAvailable`, `fundsRequired`, `fundsCurrency`, `fundsLoading`, `fundsError`.
+    - Added `refreshFundsPreview()`:
+      - Validates current qty and price (and trigger price for SL/SL-M).
+      - Calls `fetchZerodhaMargins()` and `previewZerodhaOrder(...)` using the current edits (symbol, exchange, side, qty, product, order_type, price, trigger_price).
+      - Populates Required vs Available amounts or a user-friendly error message.
+    - UI:
+      - A “Funds & charges” card in the edit dialog shows:
+        - `Required: <currency> <required> (incl. charges)`
+        - `Available: <currency> <available>`
+      - A “Recalculate” button triggers a fresh preview and shows a small loading state; initial state prompts the user to click Recalculate.
+
+### S14 / G03 – Queue edit UX polish and stop-loss helpers
+
+Tasks: `S14_G03_TF001`
+
+- Side toggles and layout:
+  - `frontend/src/views/QueuePage.tsx`:
+    - The edit dialog header now shows the symbol plus BUY/SELL toggles:
+      - BUY: `variant="contained"` `color="primary"` when active, `outlined` otherwise.
+      - SELL: `variant="contained"` `color="error"` when active, `outlined` otherwise.
+    - `editSide` state tracks the selected side and is sent in the `updateOrder` payload; `OrderUpdate` and `edit_order` were extended to accept and persist `side` as `"BUY"` or `"SELL"`.
+- Order type and trigger fields:
+  - The order type select now supports all advanced Zerodha types:
+    - `MARKET`, `LIMIT`, `SL` (stop-loss limit), and `SL-M` (stop-loss market).
+    - `editOrderType` initialises from the order’s current type.
+  - For SL/SL-M orders, the dialog shows:
+    - A toggle between two trigger modes:
+      - “Use price” → user edits trigger price directly.
+      - “Use % vs LTP” → user edits trigger percent relative to last traded price.
+    - Two complementary fields:
+      - `Trigger price` (numeric).
+      - `Trigger % vs LTP` (numeric).
+- LTP-aware helper behaviour:
+  - `frontend/src/services/zerodha.ts`:
+    - Added `fetchZerodhaLtp(symbol, exchange)` calling `GET /api/zerodha/ltp` and returning `{ ltp }`.
+  - `backend/app/api/zerodha.py`:
+    - New `GET /api/zerodha/ltp` endpoint:
+      - Uses `_get_kite_for_user` and `kite.ltp(...)` to fetch the current `last_price` for `exchange:symbol`.
+      - Returns `LtpResponse(ltp=...)` or a 502 error if the payload is invalid.
+  - In `QueuePage`:
+    - When an SL/SL-M order is edited, the dialog automatically fetches LTP for the symbol (once per open) and stores it in `ltp`/`ltpError`.
+    - A `triggerMode` state (`"PRICE"` or `"PERCENT"`) controls which field is the “driver”:
+      - PRICE mode:
+        - `Trigger price` is editable.
+        - When both LTP and trigger price are valid, `Trigger %` is auto-computed as `((trigger_price - LTP) / LTP) * 100` and shown read-only.
+      - PERCENT mode:
+        - `Trigger %` is editable (disabled when LTP is not available).
+        - When both LTP and trigger percent are valid, `Trigger price` is derived as `LTP * (1 + trigger_percent / 100)` and shown read-only.
+    - If LTP cannot be fetched, percent mode is disabled and the helper text surfaces the LTP error while still allowing pure price entry.
+- Validation and persistence:
+  - When saving:
+    - SL/SL-M orders require a positive trigger price (derived from the active mode).
+    - Optional trigger percent is validated as numeric, then sent along if present.
+  - The payload sent to `updateOrder` contains:
+    - `qty`, `price`, `side`, `order_type`, `product`, `gtt`.
+    - `trigger_price` (mandatory for SL/SL-M).
+    - `trigger_percent` (when provided).
+  - On the backend, `OrderUpdate` and `edit_order` now accept and persist these trigger fields; execution guardrails (from S14/G01) still validate against broker-side LTP at execution time.
+
+Together, S14/G02 and S14/G03 turn the Waiting Queue edit dialog into a richer, broker-aware order editor: users can adjust side, order type (including SL/SL-M), and trigger levels with LTP-derived helpers and see Required vs Available funds—including charges—before sending orders to Zerodha.
