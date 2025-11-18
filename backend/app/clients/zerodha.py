@@ -102,7 +102,19 @@ class ZerodhaClient:
         params.update(extra)
 
         response = self._kite.place_order(**params)
-        return ZerodhaOrderResult(order_id=str(response.get("order_id")), raw=response)
+
+        # The real KiteConnect API returns a plain order_id string, while some
+        # fake clients used in tests may return a dict-like payload. Handle
+        # both shapes defensively so we never assume a `.get` method on a
+        # string and leak an AttributeError into the UI.
+        if isinstance(response, str):
+            order_id = response
+            raw: Dict[str, Any] = {"order_id": response}
+        else:
+            raw = dict(response)
+            order_id = str(raw.get("order_id"))
+
+        return ZerodhaOrderResult(order_id=order_id, raw=raw)
 
     def list_orders(self) -> list[Dict[str, Any]]:
         """Return Zerodha order book."""

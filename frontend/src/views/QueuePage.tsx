@@ -49,21 +49,33 @@ export function QueuePage() {
     return ist.toLocaleString('en-IN')
   }
 
-  const loadQueue = async () => {
+  const loadQueue = async (options: { silent?: boolean } = {}) => {
+    const { silent = false } = options
     try {
-      setLoading(true)
+      if (!silent) {
+        setLoading(true)
+      }
       const data = await fetchQueueOrders()
       setOrders(data)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load queue')
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
   }
 
   useEffect(() => {
     void loadQueue()
+  }, [])
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void loadQueue({ silent: true })
+    }, 5000)
+    return () => window.clearInterval(id)
   }, [])
 
   const openEditDialog = (order: Order) => {
@@ -146,13 +158,37 @@ export function QueuePage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Waiting Queue
-      </Typography>
-      <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Manual review queue for orders in WAITING state. You can edit, execute,
-        or cancel pending orders before they are sent to the broker.
-      </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 2,
+          mb: 2,
+          flexWrap: 'wrap',
+        }}
+      >
+        <Box>
+          <Typography variant="h4" gutterBottom>
+            Waiting Queue
+          </Typography>
+          <Typography color="text.secondary">
+            Manual review queue for orders in WAITING state. You can edit,
+            execute, or cancel pending orders before they are sent to the
+            broker.
+          </Typography>
+        </Box>
+        <Button
+          variant="outlined"
+          size="small"
+          onClick={() => {
+            void loadQueue()
+          }}
+          disabled={loading}
+        >
+          Refresh
+        </Button>
+      </Box>
 
       {loading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

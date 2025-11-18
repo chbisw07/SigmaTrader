@@ -143,8 +143,6 @@ def tradingview_webhook(
         user=user,
     )
 
-    order_type = "MARKET"
-
     alert = Alert(
         user_id=normalized.user_id,
         strategy_id=strategy.id if strategy else None,
@@ -177,7 +175,7 @@ def tradingview_webhook(
         alert=alert,
         mode=mode,
         product=normalized.product,
-        order_type=order_type,
+        order_type=normalized.order_type,
         user_id=alert.user_id,
     )
 

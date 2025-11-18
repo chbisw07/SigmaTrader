@@ -20,6 +20,7 @@ class NormalizedAlert:
     side: str
     qty: float
     price: Optional[float]
+    order_type: str
     product: str
     timeframe: Optional[str]
     bar_time: Optional[datetime]
@@ -48,6 +49,13 @@ def normalize_tradingview_payload_for_zerodha(
 
     price = payload.trade_details.price
     product = (payload.trade_details.product or "MIS").upper()
+
+    # Derive order_type:
+    # - When a price is provided in the TradingView payload we treat this as
+    #   a LIMIT order to avoid accidentally sending market orders at
+    #   unfavourable prices.
+    # - When price is omitted we default to MARKET.
+    order_type = "LIMIT" if price is not None else "MARKET"
 
     symbol_display = payload.symbol
     broker_exchange = payload.exchange or "NSE"
@@ -83,6 +91,7 @@ def normalize_tradingview_payload_for_zerodha(
         side=side,
         qty=qty,
         price=price,
+        order_type=order_type,
         product=product,
         timeframe=timeframe,
         bar_time=bar_time,
