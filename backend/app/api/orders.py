@@ -163,8 +163,9 @@ def edit_order(
 ) -> Order:
     """Edit basic fields for an order in the manual WAITING queue.
 
-    We currently allow updating qty, price, order_type, and product for
-    non-simulated manual orders that are still in WAITING state.
+    We currently allow updating qty, price, trigger fields, order_type,
+    and product for non-simulated manual orders that are still in
+    WAITING state.
     """
 
     order = db.get(Order, order_id)
@@ -188,16 +189,6 @@ def edit_order(
         order.qty = payload.qty
         updated = True
 
-    if payload.order_type is not None:
-        order_type = payload.order_type.upper()
-        if order_type not in {"MARKET", "LIMIT"}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="order_type must be MARKET or LIMIT.",
-            )
-        order.order_type = order_type
-        updated = True
-
     if payload.price is not None:
         if payload.price < 0:
             raise HTTPException(
@@ -205,6 +196,29 @@ def edit_order(
                 detail="Price must be non-negative.",
             )
         order.price = payload.price
+        updated = True
+
+    if payload.trigger_price is not None:
+        if payload.trigger_price <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Trigger price must be positive.",
+            )
+        order.trigger_price = payload.trigger_price
+        updated = True
+
+    if payload.trigger_percent is not None:
+        order.trigger_percent = payload.trigger_percent
+        updated = True
+
+    if payload.order_type is not None:
+        order_type = payload.order_type.upper()
+        if order_type not in {"MARKET", "LIMIT", "SL", "SL-M"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="order_type must be MARKET, LIMIT, SL, or SL-M.",
+            )
+        order.order_type = order_type
         updated = True
 
     if payload.product is not None:
@@ -320,10 +334,91 @@ def execute_order(
     if broker_account_id:
         order.broker_account_id = broker_account_id
 
+    # For SL/SL-M orders, validate trigger configuration and derive
+    # trigger_percent relative to current LTP as a convenience for
+    # later analytics and UI display. We also enforce basic guardrails
+    # so that stop-loss orders are not obviously on the wrong side of
+    # the market.
+    if order.order_type in {"SL", "SL-M"}:
+        if order.trigger_price is None or order.trigger_price <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Trigger price must be positive for SL/SL-M orders.",
+            )
+        if order.order_type == "SL":
+            if order.price is None or order.price <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Price must be positive for SL orders.",
+                )
+        try:
+            ltp = client.get_ltp(exchange=exchange, tradingsymbol=tradingsymbol)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "Failed to fetch LTP for stop-loss validation",
+                extra={
+                    "extra": {
+                        "correlation_id": getattr(
+                            request.state,
+                            "correlation_id",
+                            None,
+                        ),
+                        "symbol": symbol,
+                        "error": str(exc),
+                    }
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to fetch LTP for stop-loss validation: {exc}",
+            ) from exc
+
+        trigger = float(order.trigger_price)
+        # Record trigger_percent relative to LTP so the UI can show a
+        # human-friendly distance from the market at the time of
+        # execution.
+        if ltp > 0:
+            order.trigger_percent = ((trigger - ltp) / ltp) * 100.0
+
+        side = order.side.upper()
+        if side == "BUY" and trigger < ltp:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "For BUY SL/SL-M orders, trigger price should not be "
+                    "below the current market price."
+                ),
+            )
+        if side == "SELL" and trigger > ltp:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "For SELL SL/SL-M orders, trigger price should not be "
+                    "above the current market price."
+                ),
+            )
+
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
     def _place(
         *,
         variety: str,
     ):
+        trigger_price = (
+            float(order.trigger_price)
+            if order.order_type in {"SL", "SL-M"} and order.trigger_price is not None
+            else None
+        )
+        price: float | None
+        if order.order_type == "LIMIT":
+            price = order.price
+        elif order.order_type == "SL":
+            price = order.price
+        else:
+            price = None
+
         return client.place_order(
             tradingsymbol=tradingsymbol,
             transaction_type=order.side,
@@ -331,7 +426,8 @@ def execute_order(
             order_type=order.order_type,
             product=order.product,
             exchange=exchange,
-            price=order.price if order.order_type == "LIMIT" else None,
+            price=price,
+            trigger_price=trigger_price,
             variety=variety,
         )
 

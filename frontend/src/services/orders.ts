@@ -18,6 +18,8 @@ export type Order = {
   side: string
   qty: number
   price?: number | null
+  trigger_price?: number | null
+  trigger_percent?: number | null
   order_type: string
   product: string
   gtt: boolean
@@ -75,7 +77,9 @@ export async function updateOrder(
   payload: {
     qty?: number
     price?: number | null
-    order_type?: 'MARKET' | 'LIMIT'
+    trigger_price?: number | null
+    trigger_percent?: number | null
+    order_type?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
     product?: string
     gtt?: boolean
   },

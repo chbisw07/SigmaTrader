@@ -77,6 +77,7 @@ class ZerodhaClient:
         order_type: str = "MARKET",
         product: str = "MIS",
         price: float | None = None,
+        trigger_price: float | None = None,
         variety: str = "regular",
         exchange: str = "NSE",
         **extra: Any,
@@ -98,6 +99,8 @@ class ZerodhaClient:
         }
         if price is not None:
             params["price"] = price
+        if trigger_price is not None:
+            params["trigger_price"] = trigger_price
 
         params.update(extra)
 
@@ -115,6 +118,22 @@ class ZerodhaClient:
             order_id = str(raw.get("order_id"))
 
         return ZerodhaOrderResult(order_id=order_id, raw=raw)
+
+    def get_ltp(self, *, exchange: str, tradingsymbol: str) -> float:
+        """Return last traded price (LTP) for a single instrument.
+
+        This is a thin wrapper around KiteConnect.ltp, kept here so that
+        the rest of the codebase does not depend directly on the third
+        party client.
+        """
+
+        instrument = f"{exchange}:{tradingsymbol}"
+        data = self._kite.ltp([instrument])
+        if instrument not in data:
+            raise RuntimeError(f"LTP quote for {instrument} not returned by broker.")
+        quote = data[instrument]
+        # The KiteConnect ltp API returns a dict with an `last_price` key.
+        return float(quote["last_price"])
 
     def list_orders(self) -> list[Dict[str, Any]]:
         """Return Zerodha order book."""

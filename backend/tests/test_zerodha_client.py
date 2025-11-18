@@ -46,6 +46,11 @@ class FakeKite:
             }
         ]
 
+    def ltp(self, instruments: list[str]) -> Dict[str, Any]:
+        # Minimal implementation for ZerodhaClient.get_ltp; return a
+        # fixed last_price so tests that exercise guardrails can use it.
+        return {instruments[0]: {"last_price": 100.0}}
+
 
 def test_place_order_uses_underlying_kite_client() -> None:
     kite = FakeKite()

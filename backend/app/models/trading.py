@@ -182,6 +182,8 @@ class Order(Base):
     order_type: Mapped[str] = mapped_column(
         String(16), nullable=False, default="MARKET"
     )
+    trigger_price: Mapped[Optional[float]] = mapped_column(Float)
+    trigger_percent: Mapped[Optional[float]] = mapped_column(Float)
     product: Mapped[str] = mapped_column(String(16), nullable=False, default="MIS")
     gtt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

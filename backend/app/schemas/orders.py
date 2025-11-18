@@ -28,6 +28,8 @@ class OrderRead(BaseModel):
     side: str
     qty: float
     price: Optional[float]
+    trigger_price: Optional[float]
+    trigger_percent: Optional[float]
     order_type: str
     product: str
     gtt: bool
@@ -57,7 +59,9 @@ class OrderUpdate(BaseModel):
 
     qty: Optional[float] = None
     price: Optional[float] = None
-    order_type: Optional[Literal["MARKET", "LIMIT"]] = None
+    trigger_price: Optional[float] = None
+    trigger_percent: Optional[float] = None
+    order_type: Optional[Literal["MARKET", "LIMIT", "SL", "SL-M"]] = None
     product: Optional[str] = None
     gtt: Optional[bool] = None
 
