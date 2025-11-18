@@ -74,6 +74,7 @@ export function SettingsPage() {
   const [editingSecrets, setEditingSecrets] = useState<Record<string, boolean>>({})
   const [editedKeys, setEditedKeys] = useState<Record<string, string>>({})
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
+  const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
 
   useEffect(() => {
     let active = true
@@ -385,13 +386,25 @@ export function SettingsPage() {
       setStrategies((prev) =>
         prev.map((s) => (s.id === updated.id ? updated : s)),
       )
+      setPaperPollDrafts((prev) => {
+        const next = { ...prev }
+        delete next[strategy.id]
+        return next
+      })
       setError(null)
     } catch (err) {
-      setError(
+      const msg =
         err instanceof Error
           ? err.message
-          : 'Failed to update paper poll interval',
-      )
+          : 'Failed to update paper poll interval'
+      if (
+        msg.includes('paper_poll_interval_sec') &&
+        (msg.includes('number.not_ge') || msg.includes('number.not_le'))
+      ) {
+        setError('Paper poll interval must be between 15 and 14400 seconds.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setUpdatingStrategyId(null)
     }
@@ -847,14 +860,32 @@ export function SettingsPage() {
                         type="number"
                         placeholder="Default"
                         value={
-                          strategy.paper_poll_interval_sec != null
+                          paperPollDrafts[strategy.id] ??
+                          (strategy.paper_poll_interval_sec != null
                             ? String(strategy.paper_poll_interval_sec)
-                            : ''
+                            : '')
                         }
                         onChange={(e) =>
-                          handleChangePaperPollInterval(strategy, e.target.value)
+                          setPaperPollDrafts((prev) => ({
+                            ...prev,
+                            [strategy.id]: e.target.value,
+                          }))
                         }
-                        helperText="15–14400 sec"
+                        onBlur={(e) =>
+                          void handleChangePaperPollInterval(
+                            strategy,
+                            e.target.value,
+                          )
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            void handleChangePaperPollInterval(
+                              strategy,
+                              (e.target as HTMLInputElement).value,
+                            )
+                          }
+                        }}
+                        helperText="15–14400 sec (leave blank for default)"
                       />
                     </TableCell>
                     <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>

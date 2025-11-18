@@ -186,9 +186,13 @@ def tradingview_webhook(
     # strategy is configured for PAPER execution we instead submit the
     # order to the paper engine and skip contacting Zerodha. Paper
     # execution respects market hours to avoid filling on stale prices.
-    if auto_execute and strategy is not None:
+    if auto_execute:
         try:
-            if getattr(strategy, "execution_target", "LIVE") == "PAPER":
+            exec_target = "LIVE"
+            if strategy is not None:
+                exec_target = getattr(strategy, "execution_target", "LIVE")
+
+            if exec_target == "PAPER":
                 if not is_market_open_now():
                     order.simulated = True
                     order.status = "FAILED"

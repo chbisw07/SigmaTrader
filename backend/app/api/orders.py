@@ -12,7 +12,7 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
-from app.models import BrokerConnection, Order, User
+from app.models import BrokerConnection, Order, Strategy, User
 from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
 from app.services.broker_secrets import get_broker_secret
 from app.services.paper_trading import submit_paper_order
@@ -333,10 +333,21 @@ def execute_order(
         db.refresh(order)
 
     # Route PAPER strategies to the paper engine instead of Zerodha.
-    if (
-        order.strategy is not None
-        and getattr(order.strategy, "execution_target", "LIVE") == "PAPER"
-    ):
+    exec_target = "LIVE"
+    if order.strategy is not None:
+        exec_target = getattr(order.strategy, "execution_target", "LIVE")
+    else:
+        # Fallback: when no strategy is attached, treat a single
+        # configured strategy as the default execution_target so that
+        # paper mode can still be used in simple setups.
+        try:
+            strategies: list[Strategy] = db.query(Strategy).all()
+            if len(strategies) == 1:
+                exec_target = strategies[0].execution_target
+        except Exception:
+            exec_target = "LIVE"
+
+    if exec_target == "PAPER":
         if not is_market_open_now():
             order.simulated = True
             order.status = "FAILED"
