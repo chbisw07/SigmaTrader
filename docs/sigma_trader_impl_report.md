@@ -2100,3 +2100,60 @@ Tasks: `S16_G03_TF001`, `S16_G03_TF002`
         - When the checkbox is enabled, both the summary metrics and the trade list incorporate paper trades as well.
 
 Together, S16/G03 completes the first integrated paper-trading experience: strategies can be switched between LIVE and PAPER in the Settings UI, orders and history make simulated trades visible (and filterable), and analytics offer an explicit opt-in to include paper trades in performance calculations. This keeps live results clean by default while still allowing you to evaluate and compare paper runs when desired.
+
+### S16 / G04 – Paper mode market-hours awareness
+
+Tasks: `S16_G04_TB001`, `S16_G04_TB002`
+
+- Market-hours helper:
+  - `backend/app/core/market_hours.py`:
+    - Introduced `is_market_open_now() -> bool` modelling Indian cash-market hours (NSE/BSE) with simple, deterministic rules:
+      - Timezone: IST (UTC+5:30) derived from `datetime.now(UTC) + 5h30m`.
+      - Weekends (Saturday/Sunday) are always closed.
+      - Optional holiday overrides:
+        - `_load_indian_holidays()` reads `indian_holidays.json` from the config directory (`get_config_dir()`).
+        - Supports either `{ "YYYY-MM-DD": "Reason" }` or `["YYYY-MM-DD", ...]`.
+        - When missing or invalid, falls back to no holidays.
+      - Session window: 09:15–15:30 IST inclusive.
+        - MIS auto square-off at 15:20 is not modelled yet; both MIS and CNC share the same window.
+    - The function is exposed via `__all__ = ["is_market_open_now"]` and is used by paper-trading code to enforce realistic trading sessions.
+
+- Paper engine integration:
+  - `backend/app/services/paper_trading.py`:
+    - `poll_paper_orders` now short-circuits when the market is closed:
+      - At the top of the function it calls `is_market_open_now()`.
+      - If the market is closed, it returns `PaperFillResult(filled_orders=0)` without fetching LTP or modifying any orders.
+      - This prevents simulated fills from occurring on stale prices when the exchange is shut.
+
+- Manual PAPER execution:
+  - `backend/app/api/orders.py::execute_order`:
+    - Existing routing for PAPER strategies:
+      - Previously, when `order.strategy.execution_target == "PAPER"`, orders were handed to `submit_paper_order` after risk checks.
+    - Now augments this with a market-hours check:
+      - If the strategy targets PAPER and `is_market_open_now()` is `False`:
+        - Marks the order as simulated and failed:
+          - `order.simulated = True`
+          - `order.status = "FAILED"`
+          - `order.error_message = "Paper order rejected: market is closed. Please place during trading hours or use GTT."`
+        - Commits the changes.
+        - Records a `SystemEvent`:
+          - `category="paper"`, message `"Paper order rejected: market closed"`, including `order_id`, symbol, side, qty.
+        - Raises HTTP 400 `"Market is closed; paper order rejected."` so the queue UI surfaces the error immediately.
+      - If the market is open, behaviour is unchanged: the order is passed to `submit_paper_order` and handled by the paper engine.
+
+- AUTO PAPER execution via TradingView:
+  - `backend/app/api/webhook.py`:
+    - For AUTO strategies with `execution_target == "PAPER"`:
+      - Previously, AUTO orders were always passed to `submit_paper_order`.
+      - Now:
+        - If `is_market_open_now()` is `False`:
+          - Marks the order as simulated and failed with:
+            - `status="FAILED"`
+            - `error_message="Paper AUTO order rejected: market is closed."`
+          - Commits and records a `SystemEvent`:
+            - `category="paper"`, message `"AUTO paper order rejected: market closed"`, including `order_id`, symbol, and strategy name.
+          - Does **not** attempt any simulated execution; the webhook still returns a 201 response with the usual payload.
+        - If the market is open:
+          - Continues to submit the order to the paper engine via `submit_paper_order`.
+
+With S16/G04, paper trading now respects Indian market hours: new PAPER orders (manual or AUTO) are rejected when the market is closed, and the paper fill engine only considers simulated orders during trading sessions. This keeps simulated behaviour closer to how Zerodha handles regular orders, while still allowing off-hours GTT creation and live-mode behaviour to rely on Zerodha’s own market-closed errors.

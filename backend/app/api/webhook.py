@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
 from app.models import Alert, Strategy, User
 from app.schemas.webhook import TradingViewWebhookPayload
@@ -183,16 +184,37 @@ def tradingview_webhook(
     # For AUTO strategies we immediately execute the order via the same
     # execution path used by the manual queue endpoint. When the
     # strategy is configured for PAPER execution we instead submit the
-    # order to the paper engine and skip contacting Zerodha.
+    # order to the paper engine and skip contacting Zerodha. Paper
+    # execution respects market hours to avoid filling on stale prices.
     if auto_execute and strategy is not None:
         try:
             if getattr(strategy, "execution_target", "LIVE") == "PAPER":
-                submit_paper_order(
-                    db,
-                    settings,
-                    order,
-                    correlation_id=correlation_id,
-                )
+                if not is_market_open_now():
+                    order.simulated = True
+                    order.status = "FAILED"
+                    order.error_message = "Paper AUTO order rejected: market is closed."
+                    db.add(order)
+                    db.commit()
+                    db.refresh(order)
+                    record_system_event(
+                        db,
+                        level="WARNING",
+                        category="paper",
+                        message="AUTO paper order rejected: market closed",
+                        correlation_id=correlation_id,
+                        details={
+                            "order_id": order.id,
+                            "symbol": order.symbol,
+                            "strategy": payload.strategy_name,
+                        },
+                    )
+                else:
+                    submit_paper_order(
+                        db,
+                        settings,
+                        order,
+                        correlation_id=correlation_id,
+                    )
             else:
                 from app.api.orders import execute_order as execute_order_api
 

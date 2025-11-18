@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.clients import ZerodhaClient
 from app.core.config import Settings
 from app.core.crypto import decrypt_token
+from app.core.market_hours import is_market_open_now
 from app.models import Order, Strategy
 from app.models.broker import BrokerConnection  # type: ignore[attr-defined]
 from app.services.system_events import record_system_event
@@ -94,6 +95,11 @@ def poll_paper_orders(db: Session, settings: Settings) -> PaperFillResult:
 
     More advanced behaviour (SL/SL-M, partial fills, etc.) can be added later.
     """
+
+    # Do not simulate fills when the market is closed; this keeps paper
+    # trading aligned with real-world execution rules.
+    if not is_market_open_now():
+        return PaperFillResult(filled_orders=0)
 
     try:
         client = _get_price_client(db, settings)

@@ -10,6 +10,7 @@ from app.api.auth import get_current_user_optional
 from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
+from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
 from app.models import BrokerConnection, Order, User
 from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
@@ -336,6 +337,33 @@ def execute_order(
         order.strategy is not None
         and getattr(order.strategy, "execution_target", "LIVE") == "PAPER"
     ):
+        if not is_market_open_now():
+            order.simulated = True
+            order.status = "FAILED"
+            order.error_message = (
+                "Paper order rejected: market is closed. "
+                "Please place during trading hours or use GTT."
+            )
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            record_system_event(
+                db,
+                level="WARNING",
+                category="paper",
+                message="Paper order rejected: market closed",
+                correlation_id=getattr(request.state, "correlation_id", None),
+                details={
+                    "order_id": order.id,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "qty": order.qty,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Market is closed; paper order rejected.",
+            )
         return submit_paper_order(
             db,
             settings,
