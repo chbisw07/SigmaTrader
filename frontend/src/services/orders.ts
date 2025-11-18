@@ -77,6 +77,7 @@ export async function updateOrder(
   payload: {
     qty?: number
     price?: number | null
+    side?: 'BUY' | 'SELL'
     trigger_price?: number | null
     trigger_percent?: number | null
     order_type?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'

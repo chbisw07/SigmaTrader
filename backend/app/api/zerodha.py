@@ -29,6 +29,29 @@ class SyncOrdersResponse(BaseModel):
     updated: int
 
 
+class MarginsResponse(BaseModel):
+    available: float
+    raw: Dict[str, Any]
+
+
+class OrderPreviewRequest(BaseModel):
+    symbol: str
+    exchange: str = "NSE"
+    side: str
+    qty: float
+    product: str
+    order_type: str
+    price: float | None = None
+    trigger_price: float | None = None
+
+
+class OrderPreviewResponse(BaseModel):
+    required: float
+    charges: Dict[str, Any] | None = None
+    currency: str | None = None
+    raw: Dict[str, Any]
+
+
 @router.get("/login-url")
 def get_login_url(
     db: Session = Depends(get_db),
@@ -166,6 +189,55 @@ def connect_zerodha(
     return {"status": "connected"}
 
 
+def _get_kite_for_user(
+    db: Session,
+    settings: Settings,
+    user: User,
+):
+    """Construct a KiteConnect client for the given user."""
+
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.broker_name == "zerodha",
+            BrokerConnection.user_id == user.id,
+        )
+        .one_or_none()
+    )
+    if conn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha is not connected.",
+        )
+
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_key",
+        user_id=user.id,
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha API key is not configured. "
+            "Please configure it in the broker settings.",
+        )
+
+    try:
+        from kiteconnect import KiteConnect  # type: ignore[import]
+    except ImportError as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="kiteconnect library is not installed in the backend environment.",
+        ) from exc
+
+    access_token = decrypt_token(settings, conn.access_token_encrypted)
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+    return kite
+
+
 @router.get("/status")
 def zerodha_status(
     db: Session = Depends(get_db),
@@ -188,25 +260,7 @@ def zerodha_status(
     updated_at = conn.updated_at.isoformat() if conn.updated_at else None
 
     try:
-        api_key = get_broker_secret(
-            db,
-            settings,
-            broker_name="zerodha",
-            key="api_key",
-            user_id=user.id,
-        )
-        if not api_key:
-            return {
-                "connected": False,
-                "updated_at": updated_at,
-                "error": "Zerodha API key is not configured.",
-            }
-
-        from kiteconnect import KiteConnect  # type: ignore[import]
-
-        access_token = decrypt_token(settings, conn.access_token_encrypted)
-        kite = KiteConnect(api_key=api_key)
-        kite.set_access_token(access_token)
+        kite = _get_kite_for_user(db, settings, user)
         profile = kite.profile()
 
         # Persist broker-side user id on the connection so that other
@@ -254,35 +308,105 @@ def sync_orders(
             detail="Zerodha is not connected.",
         )
 
-    api_key = get_broker_secret(
-        db,
-        settings,
-        broker_name="zerodha",
-        key="api_key",
-        user_id=user.id,
-    )
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Zerodha API key is not configured. "
-            "Please configure it in the broker settings.",
-        )
-
-    try:
-        from kiteconnect import KiteConnect  # type: ignore[import]
-    except ImportError as exc:  # pragma: no cover - defensive
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="kiteconnect library is not installed in the backend environment.",
-        ) from exc
-
-    access_token = decrypt_token(settings, conn.access_token_encrypted)
-    kite = KiteConnect(api_key=api_key)
-    kite.set_access_token(access_token)
+    kite = _get_kite_for_user(db, settings, user)
 
     client = ZerodhaClient(kite)
     updated = sync_order_statuses(db, client)
     return {"updated": updated}
+
+
+@router.get("/margins", response_model=MarginsResponse)
+def zerodha_margins(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return basic margin/funds information for the current Zerodha user."""
+
+    kite = _get_kite_for_user(db, settings, user)
+    data = kite.margins("equity")
+    # When segment is provided, KiteConnect may either return the segment
+    # object directly or nested under the segment key. Handle both.
+    segment: Dict[str, Any]
+    if isinstance(data, dict) and "equity" in data:
+        segment = data["equity"]
+    else:
+        segment = data
+
+    available_section = segment.get("available") or {}
+    # Prefer cash margin; fall back to any numeric value we can find.
+    available_raw = (
+        available_section.get("cash")
+        or available_section.get("live_balance")
+        or available_section.get("opening_balance")
+        or 0.0
+    )
+    try:
+        available = float(available_raw)
+    except (TypeError, ValueError):
+        available = 0.0
+
+    return MarginsResponse(available=available, raw=segment).dict()
+
+
+@router.post("/order-preview", response_model=OrderPreviewResponse)
+def zerodha_order_preview(
+    payload: OrderPreviewRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return a margin/charges preview for a hypothetical Zerodha order."""
+
+    kite = _get_kite_for_user(db, settings, user)
+
+    symbol = payload.symbol
+    exchange = payload.exchange or "NSE"
+    if ":" in symbol:
+        ex, ts = symbol.split(":", 1)
+        if ex:
+            exchange = ex
+        tradingsymbol = ts
+    else:
+        tradingsymbol = symbol
+
+    order: Dict[str, Any] = {
+        "exchange": exchange,
+        "tradingsymbol": tradingsymbol,
+        "transaction_type": payload.side.upper(),
+        "quantity": int(payload.qty),
+        "product": payload.product.upper(),
+        "order_type": payload.order_type.upper(),
+        "variety": "regular",
+    }
+    if payload.price is not None:
+        order["price"] = float(payload.price)
+    if payload.trigger_price is not None:
+        order["trigger_price"] = float(payload.trigger_price)
+
+    preview_list = kite.order_margins([order])
+    if not preview_list:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Zerodha did not return margin details for the preview request.",
+        )
+
+    entry = preview_list[0]
+    required_raw = entry.get("total") or entry.get("margin") or 0.0
+    try:
+        required = float(required_raw)
+    except (TypeError, ValueError):
+        required = 0.0
+
+    charges = entry.get("charges") or None
+    currency = entry.get("currency") or entry.get("settlement_currency")
+
+    return OrderPreviewResponse(
+        required=required,
+        charges=charges,
+        currency=currency,
+        raw=entry,
+    ).dict()
 
 
 __all__ = ["router"]

@@ -51,6 +51,23 @@ class FakeKite:
         # fixed last_price so tests that exercise guardrails can use it.
         return {instruments[0]: {"last_price": 100.0}}
 
+    def margins(self, segment: str | None = None) -> Dict[str, Any]:
+        return {
+            "equity": {
+                "available": {"cash": 100000.0},
+                "utilised": {"debits": 0.0},
+            }
+        }
+
+    def order_margins(self, params: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "total": 1234.5,
+                "charges": {"brokerage": 10.0},
+                "currency": "INR",
+            }
+        ]
+
 
 def test_place_order_uses_underlying_kite_client() -> None:
     kite = FakeKite()

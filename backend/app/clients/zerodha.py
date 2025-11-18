@@ -155,5 +155,15 @@ class ZerodhaClient:
 
         return self._kite.holdings()
 
+    def margins(self, segment: str | None = None) -> Dict[str, Any]:
+        """Return account margin details for the given segment."""
+
+        return self._kite.margins(segment)
+
+    def order_margins(self, params: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Return margin/charges preview for the given order list."""
+
+        return self._kite.order_margins(params)
+
 
 __all__ = ["ZerodhaClient", "ZerodhaOrderResult"]

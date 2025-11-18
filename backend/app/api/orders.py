@@ -211,6 +211,16 @@ def edit_order(
         order.trigger_percent = payload.trigger_percent
         updated = True
 
+    if payload.side is not None:
+        side = payload.side.upper()
+        if side not in {"BUY", "SELL"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="side must be BUY or SELL.",
+            )
+        order.side = side
+        updated = True
+
     if payload.order_type is not None:
         order_type = payload.order_type.upper()
         if order_type not in {"MARKET", "LIMIT", "SL", "SL-M"}:

@@ -6,6 +6,29 @@ export type ZerodhaStatus = {
   error?: string
 }
 
+export type ZerodhaMargins = {
+  available: number
+  raw: unknown
+}
+
+export type ZerodhaOrderPreviewRequest = {
+  symbol: string
+  exchange: string
+  side: string
+  qty: number
+  product: string
+  order_type: string
+  price?: number | null
+  trigger_price?: number | null
+}
+
+export type ZerodhaOrderPreview = {
+  required: number
+  charges?: unknown
+  currency?: string | null
+  raw: unknown
+}
+
 export async function fetchZerodhaLoginUrl(): Promise<string> {
   const res = await fetch('/api/zerodha/login-url')
   if (!res.ok) {
@@ -50,4 +73,31 @@ export async function syncZerodhaOrders(): Promise<{ updated: number }> {
     )
   }
   return (await res.json()) as { updated: number }
+}
+
+export async function fetchZerodhaMargins(): Promise<ZerodhaMargins> {
+  const res = await fetch('/api/zerodha/margins')
+  if (!res.ok) {
+    throw new Error(`Failed to fetch Zerodha margins (${res.status})`)
+  }
+  return (await res.json()) as ZerodhaMargins
+}
+
+export async function previewZerodhaOrder(
+  payload: ZerodhaOrderPreviewRequest,
+): Promise<ZerodhaOrderPreview> {
+  const res = await fetch('/api/zerodha/order-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to preview Zerodha order (${res.status})${
+        body ? `: ${body}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as ZerodhaOrderPreview
 }

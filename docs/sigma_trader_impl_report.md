@@ -1725,3 +1725,72 @@ Tasks: `S13_G02_TF001`
       - Using the theme’s `background.paper` and `divider` colours around the logo ensures it reads cleanly on all three themes (dark, light, amber) from S13/G01.
 - Future branding work:
   - The logo is intentionally added without changing layout structure; a later sprint can extend this branding to the Auth/landing hero area and possibly add a favicon update if desired.
+
+## Sprint S14 – Advanced order controls and risk-aware execution
+
+### S14 / G01 – Advanced order types and stop-loss controls
+
+Tasks: `S14_G01_TB001`, `S14_G01_TB002`
+
+- Models and schema:
+  - `backend/app/models/trading.py`:
+    - `Order` now has:
+      - `trigger_price: Optional[float]` – absolute trigger for stop-loss orders.
+      - `trigger_percent: Optional[float]` – trigger distance in percent relative to LTP at execution time.
+  - Alembic migration `backend/alembic/versions/0011_add_order_triggers.py`:
+    - Adds `trigger_price` and `trigger_percent` columns to the `orders` table (both nullable `Float`).
+- API schemas:
+  - `backend/app/schemas/orders.py`:
+    - `OrderRead` includes `trigger_price` and `trigger_percent` so the queue/orders UI can display them.
+    - `OrderUpdate` now supports:
+      - `order_type: Literal["MARKET", "LIMIT", "SL", "SL-M"]`.
+      - Optional `trigger_price` and `trigger_percent` fields.
+- Edit-order behaviour:
+  - `backend/app/api/orders.py::edit_order`:
+    - Still restricts edits to non-simulated `WAITING`/`MANUAL` orders.
+    - Supports updating:
+      - `qty` (must be positive).
+      - `price` (must be non-negative).
+      - `trigger_price` (must be positive when provided).
+      - `trigger_percent` (any float, used for display/analytics).
+      - `order_type` (validated against `MARKET`, `LIMIT`, `SL`, `SL-M`).
+      - `product` and `gtt` as before.
+    - Returns a 400 error with a clear message if validation fails.
+- Zerodha client enhancements:
+  - `backend/app/clients/zerodha.py`:
+    - `ZerodhaClient.place_order(...)` now accepts a `trigger_price` argument and forwards it to `kite.place_order` alongside `price` when required.
+    - Added `get_ltp(exchange, tradingsymbol) -> float`:
+      - Wraps `kite.ltp([f"{exchange}:{tradingsymbol}"])`.
+      - Returns the `last_price` for the instrument, raising a `RuntimeError` if the broker payload is missing the expected key.
+    - `backend/tests/test_zerodha_client.py`:
+      - `FakeKite` gained an `ltp(...)` method returning a deterministic `last_price` to support new guardrail logic in tests.
+- Execution and stop-loss guardrails:
+  - `backend/app/api/orders.py::execute_order`:
+    - After risk checks and Zerodha client creation:
+      - For `order.order_type in {"SL", "SL-M"}`:
+        - Requires `order.trigger_price > 0`; otherwise returns `400 "Trigger price must be positive for SL/SL-M orders."`.
+        - For `SL` orders, also requires `order.price > 0`; otherwise returns `400 "Price must be positive for SL orders."`.
+        - Fetches LTP via `client.get_ltp(exchange, tradingsymbol)`.
+        - Computes `trigger_percent = ((trigger_price - LTP) / LTP) * 100.0` and persists it on the order:
+          - This explicitly makes trigger percent relative to **LTP**, matching the intended semantics.
+        - Enforces directional guardrails:
+          - For `BUY` SL/SL-M orders → rejects if `trigger_price < LTP` (stop below market would be immediately unsafe).
+          - For `SELL` SL/SL-M orders → rejects if `trigger_price > LTP`.
+        - Any LTP fetch errors are logged and converted to a `502` with a clear `"Failed to fetch LTP for stop-loss validation: ..."` message.
+      - Internal `_place(...)` helper now:
+        - Computes `trigger_price` parameter for Zerodha only when `order_type` is `SL` or `SL-M` and `order.trigger_price` is set.
+        - Derives `price` as:
+          - `LIMIT` → `order.price`.
+          - `SL` → `order.price`.
+          - `MARKET` and `SL-M` → omit `price` so they behave as market/stop-market orders.
+        - Calls `client.place_order(...)` with the expanded parameter set.
+    - Non-SL orders (`MARKET`/`LIMIT`) continue to behave as before, aside from now carrying nullable trigger fields.
+- Frontend typings:
+  - `frontend/src/services/orders.ts`:
+    - `Order` type now has optional `trigger_price` and `trigger_percent` so the UI can render these if present.
+    - `updateOrder` payload allows:
+      - `order_type?: "MARKET" | "LIMIT" | "SL" | "SL-M"`.
+      - `trigger_price?: number | null`, `trigger_percent?: number | null`.
+    - The current edit dialog still sends only `MARKET`/`LIMIT` and no trigger fields; behaviour remains unchanged until S14/G03 extends the UI.
+
+These changes complete the backend and typing support for advanced Zerodha order types and LTP-aware stop-loss parameters, ready for the richer edit dialog and funds preview planned in S14/G02–G03.

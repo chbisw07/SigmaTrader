@@ -25,6 +25,10 @@ import {
   updateOrder,
   type Order,
 } from '../services/orders'
+import {
+  fetchZerodhaMargins,
+  previewZerodhaOrder,
+} from '../services/zerodha'
 
 export function QueuePage() {
   const [orders, setOrders] = useState<Order[]>([])
@@ -34,6 +38,7 @@ export function QueuePage() {
   const [busyExecuteId, setBusyExecuteId] = useState<number | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
   const [editQty, setEditQty] = useState<string>('')
+  const [editSide, setEditSide] = useState<'BUY' | 'SELL'>('BUY')
   const [editPrice, setEditPrice] = useState<string>('')
   const [editOrderType, setEditOrderType] = useState<'MARKET' | 'LIMIT'>(
     'MARKET',
@@ -41,6 +46,11 @@ export function QueuePage() {
   const [editProduct, setEditProduct] = useState<string>('MIS')
   const [editGtt, setEditGtt] = useState<boolean>(false)
   const [savingEdit, setSavingEdit] = useState(false)
+  const [fundsAvailable, setFundsAvailable] = useState<number | null>(null)
+  const [fundsRequired, setFundsRequired] = useState<number | null>(null)
+  const [fundsCurrency, setFundsCurrency] = useState<string | null>(null)
+  const [fundsLoading, setFundsLoading] = useState(false)
+  const [fundsError, setFundsError] = useState<string | null>(null)
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -81,16 +91,68 @@ export function QueuePage() {
   const openEditDialog = (order: Order) => {
     setEditingOrder(order)
     setEditQty(String(order.qty))
+    setEditSide(order.side === 'SELL' ? 'SELL' : 'BUY')
     setEditPrice(order.price != null ? String(order.price) : '')
     setEditOrderType(order.order_type === 'LIMIT' ? 'LIMIT' : 'MARKET')
     setEditProduct(order.product)
     setEditGtt(order.gtt)
+    setFundsAvailable(null)
+    setFundsRequired(null)
+    setFundsCurrency(null)
+    setFundsError(null)
     setError(null)
   }
 
   const closeEditDialog = () => {
     setEditingOrder(null)
     setSavingEdit(false)
+  }
+
+  const refreshFundsPreview = async () => {
+    if (!editingOrder) return
+    setFundsLoading(true)
+    setFundsError(null)
+    try {
+      const qty = Number(editQty)
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new Error('Enter a positive quantity to preview funds.')
+      }
+
+      const price =
+        editOrderType === 'MARKET' || editPrice.trim() === ''
+          ? null
+          : Number(editPrice)
+      if (price != null && (!Number.isFinite(price) || price < 0)) {
+        throw new Error('Enter a non-negative price to preview funds.')
+      }
+
+      const margins = await fetchZerodhaMargins()
+      const preview = await previewZerodhaOrder({
+        symbol: editingOrder.symbol,
+        exchange: editingOrder.exchange ?? 'NSE',
+        side: editSide,
+        qty,
+        product: editProduct,
+        order_type: editOrderType,
+        price,
+        trigger_price: null,
+      })
+
+      setFundsAvailable(margins.available)
+      setFundsRequired(preview.required)
+      setFundsCurrency(preview.currency ?? '₹')
+    } catch (err) {
+      setFundsError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to fetch funds preview.',
+      )
+      setFundsAvailable(null)
+      setFundsRequired(null)
+      setFundsCurrency(null)
+    } finally {
+      setFundsLoading(false)
+    }
   }
 
   const handleSaveEdit = async () => {
@@ -113,6 +175,7 @@ export function QueuePage() {
       const updated = await updateOrder(editingOrder.id, {
         qty,
         price,
+        side: editSide,
         order_type: editOrderType,
         product: editProduct,
         gtt: editGtt,
@@ -288,9 +351,36 @@ export function QueuePage() {
         <DialogContent sx={{ pt: 2 }}>
           {editingOrder && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-              <Typography variant="body2" color="text.secondary">
-                {editingOrder.symbol} · {editingOrder.side}
-              </Typography>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 2,
+                }}
+              >
+                <Typography variant="body2" color="text.secondary">
+                  {editingOrder.symbol}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant={editSide === 'BUY' ? 'contained' : 'outlined'}
+                    color="primary"
+                    onClick={() => setEditSide('BUY')}
+                  >
+                    BUY
+                  </Button>
+                  <Button
+                    size="small"
+                    variant={editSide === 'SELL' ? 'contained' : 'outlined'}
+                    color="error"
+                    onClick={() => setEditSide('SELL')}
+                  >
+                    SELL
+                  </Button>
+                </Box>
+              </Box>
               <TextField
                 label="Quantity"
                 type="number"
@@ -345,6 +435,54 @@ export function QueuePage() {
                 }
                 label="Convert to GTT (preference)"
               />
+              <Box
+                sx={{
+                  mt: 1,
+                  p: 1.5,
+                  borderRadius: 1,
+                  bgcolor: 'action.hover',
+                }}
+              >
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    mb: 1,
+                    gap: 1,
+                  }}
+                >
+                  <Typography variant="subtitle2">Funds &amp; charges</Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      void refreshFundsPreview()
+                    }}
+                    disabled={fundsLoading}
+                  >
+                    {fundsLoading ? 'Checking…' : 'Recalculate'}
+                  </Button>
+                </Box>
+                {fundsError ? (
+                  <Typography variant="body2" color="error">
+                    {fundsError}
+                  </Typography>
+                ) : fundsAvailable != null && fundsRequired != null ? (
+                  <Typography variant="body2">
+                    Required:{' '}
+                    {fundsCurrency ?? '₹'} {fundsRequired.toFixed(2)} (incl. charges)
+                    <br />
+                    Available:{' '}
+                    {fundsCurrency ?? '₹'} {fundsAvailable.toFixed(2)}
+                  </Typography>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Click Recalculate to see required vs available funds and
+                    charges for this order.
+                  </Typography>
+                )}
+              </Box>
             </Box>
           )}
         </DialogContent>

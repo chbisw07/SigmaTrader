@@ -61,6 +61,7 @@ class OrderUpdate(BaseModel):
     price: Optional[float] = None
     trigger_price: Optional[float] = None
     trigger_percent: Optional[float] = None
+    side: Optional[Literal["BUY", "SELL"]] = None
     order_type: Optional[Literal["MARKET", "LIMIT", "SL", "SL-M"]] = None
     product: Optional[str] = None
     gtt: Optional[bool] = None
