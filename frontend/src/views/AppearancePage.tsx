@@ -15,6 +15,8 @@ import { useAppTheme } from '../themeContext'
 const THEME_LABELS: Record<ThemeId, string> = {
   dark: 'Dark (default)',
   light: 'Light',
+  lightComfort: 'Light (comfortable)',
+  lightHighContrast: 'Light (high contrast)',
   amber: 'Dark (amber accent)',
 }
 
@@ -81,4 +83,3 @@ export function AppearancePage() {
     </Box>
   )
 }
-

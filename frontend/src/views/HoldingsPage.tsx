@@ -1,12 +1,8 @@
 import Box from '@mui/material/Box'
 import CircularProgress from '@mui/material/CircularProgress'
 import Paper from '@mui/material/Paper'
-import Table from '@mui/material/Table'
-import TableBody from '@mui/material/TableBody'
-import TableCell from '@mui/material/TableCell'
-import TableHead from '@mui/material/TableHead'
-import TableRow from '@mui/material/TableRow'
 import Typography from '@mui/material/Typography'
+import { DataGrid, GridToolbar, type GridColDef } from '@mui/x-data-grid'
 import { useEffect, useState } from 'react'
 
 import { fetchHoldings, type Holding } from '../services/positions'
@@ -33,6 +29,45 @@ export function HoldingsPage() {
     void load()
   }, [])
 
+  const columns: GridColDef[] = [
+    {
+      field: 'symbol',
+      headerName: 'Symbol',
+      flex: 1,
+      minWidth: 140,
+    },
+    {
+      field: 'quantity',
+      headerName: 'Qty',
+      type: 'number',
+      width: 100,
+    },
+    {
+      field: 'average_price',
+      headerName: 'Avg Price',
+      type: 'number',
+      width: 130,
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'last_price',
+      headerName: 'Last Price',
+      type: 'number',
+      width: 130,
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'pnl',
+      headerName: 'Unrealized P&L',
+      type: 'number',
+      width: 150,
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+  ]
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -53,47 +88,30 @@ export function HoldingsPage() {
           {error}
         </Typography>
       ) : (
-        <Paper>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Symbol</TableCell>
-                <TableCell align="right">Qty</TableCell>
-                <TableCell align="right">Avg Price</TableCell>
-                <TableCell align="right">Last Price</TableCell>
-                <TableCell align="right">Unrealized P&L</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {holdings.map((h) => (
-                <TableRow key={h.symbol}>
-                  <TableCell>{h.symbol}</TableCell>
-                  <TableCell align="right">{h.quantity}</TableCell>
-                  <TableCell align="right">
-                    {h.average_price.toFixed(2)}
-                  </TableCell>
-                  <TableCell align="right">
-                    {h.last_price != null ? h.last_price.toFixed(2) : '-'}
-                  </TableCell>
-                  <TableCell align="right">
-                    {h.pnl != null ? h.pnl.toFixed(2) : '-'}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {holdings.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5}>
-                    <Typography variant="body2" color="text.secondary">
-                      No holdings found.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <Paper sx={{ mt: 1, height: 600, width: '100%' }}>
+          <DataGrid
+            rows={holdings}
+            columns={columns}
+            getRowId={(row) => row.symbol}
+            density="compact"
+            disableRowSelectionOnClick
+            slots={{ toolbar: GridToolbar }}
+            slotProps={{
+              toolbar: {
+                showQuickFilter: true,
+                quickFilterProps: { debounceMs: 300 },
+              },
+            }}
+            initialState={{
+              pagination: { paginationModel: { pageSize: 25 } },
+            }}
+            pageSizeOptions={[25, 50, 100]}
+            localeText={{
+              noRowsLabel: 'No holdings found.',
+            }}
+          />
         </Paper>
       )}
     </Box>
   )
 }
-

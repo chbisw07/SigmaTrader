@@ -1,8 +1,19 @@
 import { createTheme, type Theme } from '@mui/material/styles'
 
-export type ThemeId = 'dark' | 'light' | 'amber'
+export type ThemeId =
+  | 'dark'
+  | 'light'
+  | 'lightComfort'
+  | 'lightHighContrast'
+  | 'amber'
 
-export const THEME_IDS: ThemeId[] = ['dark', 'light', 'amber']
+export const THEME_IDS: ThemeId[] = [
+  'dark',
+  'light',
+  'lightComfort',
+  'lightHighContrast',
+  'amber',
+]
 
 export const THEMES: Record<ThemeId, Theme> = {
   dark: createTheme({
@@ -32,6 +43,36 @@ export const THEMES: Record<ThemeId, Theme> = {
       text: {
         primary: '#1f2933',
         secondary: '#5f6c80',
+      },
+    },
+  }),
+  lightComfort: createTheme({
+    palette: {
+      mode: 'light',
+      primary: { main: '#1976d2' }, // standard MUI blue
+      secondary: { main: '#26a69a' }, // teal accent
+      background: {
+        default: '#eef3fb',
+        paper: '#ffffff',
+      },
+      text: {
+        primary: '#1b2635',
+        secondary: '#60738a',
+      },
+    },
+  }),
+  lightHighContrast: createTheme({
+    palette: {
+      mode: 'light',
+      primary: { main: '#0d47a1' }, // deep blue
+      secondary: { main: '#c62828' }, // strong red accent
+      background: {
+        default: '#ffffff',
+        paper: '#f5f5f5',
+      },
+      text: {
+        primary: '#111827',
+        secondary: '#374151',
       },
     },
   }),
