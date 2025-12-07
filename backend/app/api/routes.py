@@ -6,6 +6,7 @@ from . import (
     analytics,
     auth,
     brokers,
+    market_data,
     orders,
     paper,
     positions,
@@ -76,6 +77,13 @@ router.include_router(
     prefix="/api/analytics",
     dependencies=[Depends(require_admin)],
     tags=["analytics"],
+)
+
+router.include_router(
+    market_data.router,
+    prefix="/api/market",
+    dependencies=[Depends(require_admin)],
+    tags=["market"],
 )
 
 router.include_router(

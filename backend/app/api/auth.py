@@ -13,6 +13,7 @@ from app.core.auth import (
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import User
+from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -32,6 +33,14 @@ def _get_user_by_id(db: Session, user_id: int) -> User | None:
 
 def _get_user_by_username(db: Session, username: str) -> User | None:
     return db.query(User).filter(User.username == username).one_or_none()
+
+
+def _user_to_schema(user: User) -> UserRead:
+    """Convert a User ORM object into its API schema."""
+
+    if PYDANTIC_V2 and hasattr(UserRead, "model_validate"):
+        return UserRead.model_validate(user)  # type: ignore[arg-type]
+    return UserRead.from_orm(user)
 
 
 def _set_session_cookie(
@@ -127,7 +136,7 @@ def register_user(
     db.add(user)
     db.commit()
     db.refresh(user)
-    return UserRead.from_orm(user)
+    return _user_to_schema(user)
 
 
 @router.post("/login", response_model=UserRead)
@@ -149,10 +158,14 @@ def login(
     token = create_session_token(settings, user_id=user.id)
     _set_session_cookie(response, token, settings)
 
-    return UserRead.from_orm(user)
+    return _user_to_schema(user)
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
 def logout(response: Response) -> None:
     """Clear the current session cookie."""
 
@@ -163,10 +176,14 @@ def logout(response: Response) -> None:
 def read_current_user(user: User = Depends(get_current_user)) -> UserRead:
     """Return the currently authenticated user."""
 
-    return UserRead.from_orm(user)
+    return _user_to_schema(user)
 
 
-@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/change-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
 def change_password(
     payload: ChangePasswordRequest,
     user: User = Depends(get_current_user),
@@ -197,7 +214,7 @@ def update_theme(
     db.add(user)
     db.commit()
     db.refresh(user)
-    return UserRead.from_orm(user)
+    return _user_to_schema(user)
 
 
 __all__: list[str] = ["router", "get_current_user", "get_current_user_optional"]

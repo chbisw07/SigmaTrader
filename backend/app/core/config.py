@@ -3,7 +3,22 @@ import sys
 from functools import lru_cache
 from typing import Any
 
-from pydantic import BaseSettings
+try:  # Pydantic v2 prefers pydantic-settings.
+    from pydantic_settings import (  # type: ignore[import]
+        BaseSettings,
+        SettingsConfigDict,
+    )
+except Exception:  # pragma: no cover - Pydantic v1 compatibility
+    SettingsConfigDict = None  # type: ignore[assignment]
+    try:
+        from pydantic import BaseSettings  # type: ignore[assignment]
+    except Exception:
+        # Fallback for environments with pydantic v2 installed but without the
+        # optional pydantic-settings package. This provides a minimal
+        # BaseSettings-like class that behaves like a plain BaseModel using
+        # default attribute values; env loading is intentionally omitted for
+        # this lightweight compatibility path.
+        from pydantic import BaseModel as BaseSettings  # type: ignore[assignment]
 
 
 class Settings(BaseSettings):
@@ -21,10 +36,21 @@ class Settings(BaseSettings):
     admin_username: str | None = None
     admin_password: str | None = None
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        env_prefix = "ST_"
+    if SettingsConfigDict is not None:
+        # Pydantic v2 / pydantic-settings configuration.
+        model_config = SettingsConfigDict(
+            env_file=".env",
+            env_file_encoding="utf-8",
+            env_prefix="ST_",
+            extra="ignore",
+        )
+    else:  # pragma: no cover - Pydantic v1 configuration
+
+        class Config:
+            env_file = ".env"
+            env_file_encoding = "utf-8"
+            env_prefix = "ST_"
+            extra = "ignore"
 
     def dict_for_logging(self) -> dict[str, Any]:
         return {

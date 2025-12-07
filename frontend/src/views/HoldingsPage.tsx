@@ -7,6 +7,7 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
+import Select from '@mui/material/Select'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import {
@@ -18,16 +19,8 @@ import {
 import { useEffect, useState } from 'react'
 
 import { createManualOrder } from '../services/orders'
+import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
 import { fetchHoldings, type Holding } from '../services/positions'
-
-const formatIst = (iso: string | null | undefined): string => {
-  if (!iso) return '-'
-  const utc = new Date(iso)
-  if (Number.isNaN(utc.getTime())) return '-'
-  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
-  const ist = new Date(istMs)
-  return ist.toLocaleString('en-IN')
-}
 
 export function HoldingsPage() {
   const [holdings, setHoldings] = useState<Holding[]>([])
@@ -45,6 +38,8 @@ export function HoldingsPage() {
   >('MARKET')
   const [tradeSubmitting, setTradeSubmitting] = useState(false)
   const [tradeError, setTradeError] = useState<string | null>(null)
+
+  const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
   const load = async () => {
     try {
@@ -105,7 +100,7 @@ export function HoldingsPage() {
     try {
       await createManualOrder({
         symbol: tradeSymbol,
-        exchange: 'NSE',
+        exchange: holdings.find((h) => h.symbol === tradeSymbol)?.exchange ?? 'NSE',
         side: tradeSide,
         qty: qtyNum,
         price: priceNum,
@@ -139,6 +134,20 @@ export function HoldingsPage() {
       headerName: 'Symbol',
       flex: 1,
       minWidth: 140,
+    },
+    {
+      field: 'chart',
+      headerName: 'Chart',
+      sortable: false,
+      filterable: false,
+      width: 160,
+      renderCell: (params) => (
+        <HoldingChartCell
+          symbol={params.row.symbol as string}
+          exchange={(params.row as Holding).exchange ?? 'NSE'}
+          periodDays={chartPeriodDays}
+        />
+      ),
     },
     {
       field: 'quantity',
@@ -260,10 +269,34 @@ export function HoldingsPage() {
       <Typography variant="h4" gutterBottom>
         Holdings
       </Typography>
-      <Typography color="text.secondary" sx={{ mb: 3 }}>
+      <Typography color="text.secondary" sx={{ mb: 2 }}>
         Live holdings fetched from Zerodha, including unrealized P&amp;L when last
         price is available.
       </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          gap: 1,
+          mb: 1,
+        }}
+      >
+        <Typography variant="caption" color="text.secondary">
+          Chart period:
+        </Typography>
+        <Select
+          size="small"
+          value={String(chartPeriodDays)}
+          onChange={(e) => setChartPeriodDays(Number(e.target.value) || 30)}
+        >
+          <MenuItem value="30">1M</MenuItem>
+          <MenuItem value="90">3M</MenuItem>
+          <MenuItem value="180">6M</MenuItem>
+          <MenuItem value="365">1Y</MenuItem>
+          <MenuItem value="730">2Y</MenuItem>
+        </Select>
+      </Box>
 
       {loading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -397,6 +430,121 @@ export function HoldingsPage() {
           </Button>
         </DialogActions>
       </Dialog>
+    </Box>
+  )
+}
+
+type HoldingChartCellProps = {
+  symbol: string
+  exchange: string
+  periodDays: number
+}
+
+const historyCache = new Map<string, CandlePoint[]>()
+
+function makeHistoryKey(
+  symbol: string,
+  exchange: string,
+  periodDays: number,
+): string {
+  return `${symbol}|${exchange}|1d|${periodDays}`
+}
+
+function HoldingChartCell({
+  symbol,
+  exchange,
+  periodDays,
+}: HoldingChartCellProps) {
+  const [points, setPoints] = useState<CandlePoint[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const key = makeHistoryKey(symbol, exchange, periodDays)
+    const cached = historyCache.get(key)
+    if (cached) {
+      setPoints(cached)
+      return
+    }
+
+    const load = async () => {
+      try {
+        const data = await fetchMarketHistory({
+          symbol,
+          exchange,
+          timeframe: '1d',
+          periodDays,
+        })
+        if (!active) return
+        historyCache.set(key, data)
+        setPoints(data)
+        setError(null)
+      } catch (err) {
+        if (!active) return
+        setError(
+          err instanceof Error ? err.message : 'Failed to load history',
+        )
+      }
+    }
+
+    void load()
+    return () => {
+      active = false
+    }
+  }, [symbol, exchange, periodDays])
+
+  if (error) {
+    return (
+      <Typography variant="caption" color="text.secondary">
+        —
+      </Typography>
+    )
+  }
+
+  if (!points || points.length < 2) {
+    return (
+      <Typography variant="caption" color="text.secondary">
+        …
+      </Typography>
+    )
+  }
+
+  return <MiniSparkline points={points} />
+}
+
+type MiniSparklineProps = {
+  points: CandlePoint[]
+}
+
+function MiniSparkline({ points }: MiniSparklineProps) {
+  const width = 100
+  const height = 32
+
+  const closes = points.map((p) => p.close)
+  const min = Math.min(...closes)
+  const max = Math.max(...closes)
+  const span = max - min || 1
+  const stepX = width / Math.max(points.length - 1, 1)
+
+  const path = points
+    .map((p, i) => {
+      const x = i * stepX
+      const norm = (p.close - min) / span
+      const y = height - norm * (height - 4) - 2
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
+    })
+    .join(' ')
+
+  return (
+    <Box sx={{ width: '100%', height: '100%', minHeight: 24 }}>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height="100%"
+        preserveAspectRatio="none"
+      >
+        <path d={path} fill="none" stroke="currentColor" strokeWidth={1.2} />
+      </svg>
     </Box>
   )
 }

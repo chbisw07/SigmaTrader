@@ -5,6 +5,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+from app.pydantic_compat import PYDANTIC_V2, ConfigDict
+
 AllowedOrderStatus = Literal[
     "WAITING",
     "VALIDATED",
@@ -42,8 +44,12 @@ class OrderRead(BaseModel):
     broker_account_id: Optional[str] = None
     error_message: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:  # pragma: no cover - Pydantic v1
+
+        class Config:
+            orm_mode = True
 
 
 class OrderStatusUpdate(BaseModel):

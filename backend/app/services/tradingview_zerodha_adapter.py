@@ -6,6 +6,7 @@ from typing import Optional
 
 from app.config_files import load_zerodha_symbol_map
 from app.models import User
+from app.pydantic_compat import model_to_json
 from app.schemas.webhook import TradingViewWebhookPayload
 
 
@@ -96,7 +97,7 @@ def normalize_tradingview_payload_for_zerodha(
         timeframe=timeframe,
         bar_time=bar_time,
         reason=reason,
-        raw_payload=payload.json(),
+        raw_payload=model_to_json(payload),
     )
 
 

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import RiskSettings
+from app.pydantic_compat import model_to_dict
 from app.schemas import (
     RiskScope,
     RiskSettingsCreate,
@@ -56,7 +57,7 @@ def create_risk_settings(
             detail="Risk settings for this scope/strategy already exist.",
         )
 
-    entity = RiskSettings(**payload.dict())
+    entity = RiskSettings(**model_to_dict(payload))
     db.add(entity)
     db.commit()
     db.refresh(entity)
@@ -84,7 +85,7 @@ def update_risk_settings(
     if entity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    update_data = payload.dict(exclude_unset=True)
+    update_data = model_to_dict(payload, exclude_unset=True)
 
     if "scope" in update_data or "strategy_id" in update_data:
         scope = update_data.get("scope", entity.scope)

@@ -4,6 +4,8 @@ from typing import Optional
 
 from pydantic import BaseModel, constr
 
+from app.pydantic_compat import PYDANTIC_V2, ConfigDict
+
 
 class UserRead(BaseModel):
     id: int
@@ -12,8 +14,14 @@ class UserRead(BaseModel):
     display_name: Optional[str] = None
     theme_id: Optional[str] = None
 
-    class Config:
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:  # pragma: no cover - Pydantic v1
+
+        class Config:
+            orm_mode = True
+
+        from_attributes = True
 
 
 class RegisterRequest(BaseModel):

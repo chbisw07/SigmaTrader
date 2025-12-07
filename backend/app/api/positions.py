@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models import BrokerConnection, Order, Position, User
 from app.schemas.positions import HoldingRead, PositionRead
 from app.services.broker_secrets import get_broker_secret
+from app.services.market_data import ensure_instrument_from_holding_entry
 from app.services.positions_sync import sync_positions_from_zerodha
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -172,7 +173,18 @@ def list_holdings(
     holdings: List[HoldingRead] = []
 
     for entry in raw:
+        # Best-effort: keep market instrument mappings in sync with Zerodha
+        # holdings so that historical OHLCV can be fetched for the same
+        # symbols without requiring separate manual configuration.
+        try:
+            ensure_instrument_from_holding_entry(db, entry)
+        except Exception:
+            # Ignore mapping errors; holdings API should not fail because of
+            # auxiliary market data maintenance.
+            pass
+
         symbol = entry.get("tradingsymbol")
+        exchange = (entry.get("exchange") or "NSE").upper()
         qty = entry.get("quantity", 0)
         avg = entry.get("average_price", 0)
         last = entry.get("last_price")
@@ -212,6 +224,7 @@ def list_holdings(
                 symbol=symbol,
                 quantity=qty_f,
                 average_price=avg_f,
+                exchange=exchange,
                 last_price=last_f,
                 pnl=pnl,
                 last_purchase_date=last_purchase_date,

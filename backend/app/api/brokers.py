@@ -110,6 +110,7 @@ def update_broker_secret(
 @router.delete(
     "/{broker_name}/secrets/{key}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
 )
 def delete_broker_secret_endpoint(
     broker_name: str = Path(..., min_length=1),

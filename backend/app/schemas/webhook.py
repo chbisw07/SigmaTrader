@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, root_validator, validator
+from pydantic import BaseModel, Field
+
+from app.pydantic_compat import field_validator, model_validator
 
 
 class TradeDetails(BaseModel):
@@ -15,7 +17,8 @@ class TradeDetails(BaseModel):
     comment: Optional[str] = None
     alert_message: Optional[str] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def _map_alternate_field_names(cls, values: dict[str, Any]) -> dict[str, Any]:
         # Support TradingView payloads that use order_contracts / order_price
         if "quantity" not in values and "order_contracts" in values:
@@ -38,7 +41,8 @@ class TradeDetails(BaseModel):
             values["alert_message"] = values.get("order_alert_message")
         return values
 
-    @validator("order_action")
+    @field_validator("order_action")
+    @classmethod
     def _normalize_order_action(cls, v: str) -> str:
         normalized = v.upper()
         if normalized not in {"BUY", "SELL"}:
@@ -63,7 +67,8 @@ class TradingViewWebhookPayload(BaseModel):
     trade_details: TradeDetails
     bar_time: Optional[datetime] = None
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def _normalize_platform(cls, values: dict[str, Any]) -> dict[str, Any]:
         platform = values.get("platform")
         # Accept either a string or a list like ["fyers"]
