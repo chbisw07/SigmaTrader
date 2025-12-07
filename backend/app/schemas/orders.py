@@ -67,4 +67,23 @@ class OrderUpdate(BaseModel):
     gtt: Optional[bool] = None
 
 
-__all__ = ["OrderRead", "OrderStatusUpdate", "OrderUpdate", "AllowedOrderStatus"]
+class ManualOrderCreate(BaseModel):
+    """Payload for creating a new manual WAITING order."""
+
+    symbol: str
+    exchange: Optional[str] = None
+    side: Literal["BUY", "SELL"]
+    qty: float
+    price: Optional[float] = None
+    order_type: Literal["MARKET", "LIMIT", "SL", "SL-M"] = "MARKET"
+    product: str = "CNC"
+    gtt: bool = False
+
+
+__all__ = [
+    "OrderRead",
+    "OrderStatusUpdate",
+    "OrderUpdate",
+    "ManualOrderCreate",
+    "AllowedOrderStatus",
+]

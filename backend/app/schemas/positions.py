@@ -26,6 +26,8 @@ class HoldingRead(BaseModel):
     last_price: Optional[float] = None
     pnl: Optional[float] = None
     last_purchase_date: Optional[datetime] = None
+    total_pnl_percent: Optional[float] = None
+    today_pnl_percent: Optional[float] = None
 
 
 __all__ = ["PositionRead", "HoldingRead"]

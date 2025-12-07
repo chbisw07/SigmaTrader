@@ -33,6 +33,30 @@ export type Order = {
   error_message?: string | null
 }
 
+export async function createManualOrder(payload: {
+  symbol: string
+  exchange?: string | null
+  side: 'BUY' | 'SELL'
+  qty: number
+  price?: number | null
+  order_type: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  product: string
+  gtt?: boolean
+}): Promise<Order> {
+  const res = await fetch('/api/orders/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to create order (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as Order
+}
+
 export async function fetchQueueOrders(
   strategyId?: number,
 ): Promise<Order[]> {

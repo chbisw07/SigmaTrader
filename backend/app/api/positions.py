@@ -176,6 +176,7 @@ def list_holdings(
         qty = entry.get("quantity", 0)
         avg = entry.get("average_price", 0)
         last = entry.get("last_price")
+        day_change_pct_raw = entry.get("day_change_percentage")
 
         if not isinstance(symbol, str):
             continue
@@ -191,6 +192,19 @@ def list_holdings(
         if last_f is not None:
             pnl = (last_f - avg_f) * qty_f
 
+        total_pnl_percent: float | None = None
+        if pnl is not None and qty_f and avg_f:
+            cost = qty_f * avg_f
+            if cost:
+                total_pnl_percent = (pnl / cost) * 100.0
+
+        today_pnl_percent: float | None = None
+        if day_change_pct_raw is not None:
+            try:
+                today_pnl_percent = float(day_change_pct_raw)
+            except (TypeError, ValueError):
+                today_pnl_percent = None
+
         last_purchase_date = last_buy_by_symbol.get(symbol)
 
         holdings.append(
@@ -201,6 +215,8 @@ def list_holdings(
                 last_price=last_f,
                 pnl=pnl,
                 last_purchase_date=last_purchase_date,
+                total_pnl_percent=total_pnl_percent,
+                today_pnl_percent=today_pnl_percent,
             )
         )
 

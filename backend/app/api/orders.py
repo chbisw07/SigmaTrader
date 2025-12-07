@@ -6,14 +6,19 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_current_user_optional
+from app.api.auth import get_current_user, get_current_user_optional
 from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
 from app.models import BrokerConnection, Order, Strategy, User
-from app.schemas.orders import OrderRead, OrderStatusUpdate, OrderUpdate
+from app.schemas.orders import (
+    ManualOrderCreate,
+    OrderRead,
+    OrderStatusUpdate,
+    OrderUpdate,
+)
 from app.services.broker_secrets import get_broker_secret
 from app.services.paper_trading import submit_paper_order
 from app.services.risk import evaluate_order_risk
@@ -91,6 +96,54 @@ def list_orders(
     if strategy_id is not None:
         query = query.filter(Order.strategy_id == strategy_id)
     return query.order_by(Order.created_at.desc()).all()
+
+
+@router.post("/", response_model=OrderRead)
+def create_manual_order(
+    payload: ManualOrderCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Order:
+    """Create a new manual WAITING order for the current user.
+
+    The order is added to the manual queue and can be edited or executed
+    via the existing queue workflow.
+    """
+
+    if payload.qty <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Quantity must be positive.",
+        )
+    if payload.price is not None and payload.price < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Price must be non-negative.",
+        )
+
+    order = Order(
+        user_id=user.id,
+        alert_id=None,
+        strategy_id=None,
+        symbol=payload.symbol,
+        exchange=payload.exchange,
+        side=payload.side,
+        qty=payload.qty,
+        price=payload.price,
+        trigger_price=None,
+        trigger_percent=None,
+        order_type=payload.order_type,
+        product=payload.product,
+        gtt=payload.gtt,
+        status="WAITING",
+        mode="MANUAL",
+        simulated=False,
+    )
+
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    return order
 
 
 @router.get("/queue", response_model=List[OrderRead])

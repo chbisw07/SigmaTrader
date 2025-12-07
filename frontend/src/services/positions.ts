@@ -15,6 +15,8 @@ export type Holding = {
   last_price?: number | null
   pnl?: number | null
   last_purchase_date?: string | null
+   total_pnl_percent?: number | null
+   today_pnl_percent?: number | null
 }
 
 export async function syncPositions(): Promise<{ updated: number }> {
