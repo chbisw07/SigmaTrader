@@ -34,60 +34,305 @@ Once the history endpoint is in place, the chart column and period configurabili
 If I maintain OHLCV data for max 2 years, will I be able to generate alerts based on fulfillment of certain criteria? For example, I may want to set an alert on BSE for selling 10% of the equity when RSI(14) > 80. How complex is the implementation of the alerts for my holding stocks? Later, I may want to use some strategies to generate signals, apply them to one or more stocks and get into trade if signal or alert conditions are met. Can we do it? Can you show me a way on this?
 
 **Answer**  
-Yes, with ~2 years of OHLCV per symbol you can support rules like “Sell 10% when RSI(14) > 80” and general strategy-driven signals. Complexity is moderate and fits well into SigmaTrader’s existing alert/order architecture. A pragmatic design:
+Yes, with ~2 years of OHLCV per symbol you can support indicator‑based alerts (like “Sell 10% when RSI(14) > 80”) and reusable strategy templates. Below is a concrete plan focused on: (a) which indicators and strategies we’ll support, (b) how alerts behave in the UI (TradingView‑style modal), and (c) how the backend alert engine and monitoring loop will work.
 
-1. **Market data store**
-   - Create a `candles` table (or equivalent store) with columns such as:  
-     `symbol`, `exchange`, `timeframe` (`1D`, `1H`, …), `ts`, `open`, `high`, `low`, `close`, `volume`.
-   - Backfill up to 2 years of data per symbol from Zerodha or another provider.
-   - Keep it updated via a scheduled ingestion job (e.g. end-of-day for daily bars, or more frequently for intraday strategies).
+### 2.1 Indicators surfaced in the portfolio
 
-2. **Indicator/analytics engine**
-   - Implement a backend service layer that:
-     - Loads recent candles for a given `(symbol, exchange, timeframe)`.
-     - Computes indicators using `pandas` + a technical-analysis library (RSI, ADX, volatility, VWAP, moving averages, etc.).
-   - Optionally expose an API like:  
-     `GET /api/analytics/indicator?symbol=INFY&indicator=RSI&period=14&timeframe=1D&lookback=60`  
-     for debugging and UI overlays.
+Phase‑1 indicators that will appear as optional Holdings columns:
 
-3. **Rule / alert definitions**
-   - Add a table such as `indicator_rules` describing per-user rules:
-     - `user_id`, `name`.
-     - `universe` (single symbol, `HOLDINGS`, watchlist, explicit list).
-     - `indicator` (e.g. `RSI`) and `params` (e.g. `{ "period": 14 }`).
-     - `timeframe` (`1D`, `1W`, etc.).
-     - `condition` (e.g. `>`, `<`, `crosses_above`, `crosses_below`) and `threshold` (e.g. `80`).
-     - `action` (`ALERT_ONLY`, `SELL_PERCENT`, `BUY`, etc.) plus `action_params` (e.g. `{ "percent": 10 }`).
-     - `enabled` flag and evaluation schedule (e.g. end-of-day, every 15 minutes).
+1. **Trend / regime**
+   - `MA50%`: % distance of last close from 50‑day SMA.
+   - `MA200%`: % distance of last close from 200‑day SMA.
+   - `Trend tag`: `Uptrend / Sideways / Downtrend` derived from MA50 vs MA200 and (optionally) ADX.
 
-4. **Scheduler and evaluation loop**
-   - Run a background job (e.g. APScheduler in the backend) that periodically:
-     - Loads all active rules for each user.
-     - For each rule, resolves its universe:
-       - For holdings rules, query the user’s current holdings (symbols + quantities) from the positions/holdings APIs.
-     - For each symbol in the universe:
-       - Fetch the last N candles for the configured timeframe.
-       - Compute the requested indicator series.
-       - Check the rule condition; for “crosses above 80”, compare the last two values `prev`, `curr` and fire only when `prev <= 80` and `curr > 80`.
-     - When a rule fires:
-       - Create an `Alert` row (e.g. platform `INTERNAL`, reason `"RSI(14) crossed above 80"`).
-       - If the rule’s action is trade-related (e.g. `SELL_PERCENT`):
-         - Derive the trade size from holdings (e.g. `sell_qty = floor(current_qty * 0.10)`).
-         - Create an `Order` row in `WAITING` (manual queue) or `AUTO` mode according to rule/strategy settings.
+2. **Momentum**
+   - `RSI(14)`: classic daily RSI.
+   - `RSI(14) zone`: label or color band – e.g. `Overbought` (>70), `Neutral`, `Oversold` (<30).
 
-5. **Integration with existing strategies and execution**
-   - You already have a `Strategy` model with `execution_mode` (`AUTO` / `MANUAL`) and `execution_target` (`LIVE` / `PAPER`), plus a robust order execution pipeline (risk checks, paper trading, Zerodha integration).
-   - Rules can be:
-     - Attached to strategies (e.g. each rule belongs to a strategy), or
-     - Standalone but specifying whether to auto-execute or just enqueue manual orders.
-   - Once an `Order` is created, everything else (risk engine, paper vs live routing, Zerodha execution, system events) is reused as-is.
+3. **Volatility & participation**
+   - `Volatility 20D %`: standard deviation of daily log returns over 20 sessions, annualised or expressed as a % of price.
+   - `ATR(14) %`: ATR(14) divided by last close, useful for stop sizing.
+   - `Volume vs 20D avg`: today’s volume / 20‑day average volume.
 
-In terms of effort, the main blocks are:
-- Designing and populating the OHLCV store.  
-- Implementing the indicator computation layer.  
-- Creating a simple rule model + scheduler loop that ties indicators to `Alert`/`Order` creation.  
+4. **Time‑window performance**
+   - `1W PnL %`, `1M PnL %`, `3M PnL %`, `1Y PnL %` for the underlying price (independent of your entry price).
+   - Position‑level metrics you already have (`P&L %`, `Today P&L %`) remain; these new columns complement them.
 
-From there you can iteratively add more indicators, conditions, and strategy wiring without needing to change the core trading or broker integration logic.
+All of these are computed from the `candles` store via `load_series(symbol, exchange, timeframe, start, end)` and cached per request so the grid stays fast.
+
+### 2.2 Strategy templates built on top of indicators
+
+These are reusable strategy “blueprints” that can later be mapped to `AUTO` or `MANUAL` execution using your existing `strategies` table:
+
+1. **S1 – RSI mean reversion (trim / add)**
+   - Universe: user’s holdings.
+   - Timeframe: daily.
+   - Logic:
+     - If `RSI(14) > 80` → generate `Trim X%` signal (e.g. 10–20%).
+     - If `RSI(14) < 30` → generate `Add X%` signal (subject to risk limits).
+   - These become two rules per symbol, or one rule with a `direction` parameter.
+
+2. **S2 – Moving‑average trend following**
+   - Universe: holdings or selected watchlists.
+   - Timeframe: daily.
+   - Signals:
+     - `Golden cross`: MA50 crosses above MA200 → “Trend up” alert (optional add/buy).
+     - `Death cross`: MA50 crosses below MA200 → “Trend down” alert (optional exit/trim).
+     - Pullback in uptrend: MA50 > MA200 and ADX>20, price dips more than N% below MA50 → “Buy the dip” alert.
+
+3. **S3 – Breakout with volatility filter**
+   - Condition: `close` breaks above 20‑day high and volatility is within a configured band.
+   - Usage: spot fresh momentum names within your holdings universe.
+
+4. **S4 – VWAP deviation (intraday, optional later)**
+   - For intraday use (e.g. 5m/15m candles):
+     - Alert if price > X% above today’s VWAP (extended).
+     - Alert if price < Y% below VWAP (potential add/mean‑revert).
+
+Phase‑1 implementation will keep these as **alert‑only** strategies; mapping them to real trades is done by wiring `action_type` and `execution_mode` later.
+
+### 2.3 Alert UX – TradingView‑style modal from Holdings
+
+From the Holdings grid:
+
+- Add an `Alerts` column with:
+  - An `Alert` button on each row.
+  - A small badge showing how many active rules exist for that symbol.
+
+Clicking `Alert` opens a per‑symbol modal with three tabs:
+
+1. **Settings**
+   - `Symbol`: read‑only (e.g. `INFY / NSE`).
+   - `Timeframe`: dropdown (`1D, 1W, 1H, 15m`).
+   - `Condition`:
+     - Indicator dropdown: `RSI, Price, MA, MA Cross, Volatility, Volume vs Avg, VWAP`.
+     - Operator dropdown: `>`, `<`, `crosses above`, `crosses below`, `inside range`, `outside range`.
+     - Threshold inputs: `value` or `[lower, upper]` for channel/range conditions.
+   - `Trigger mode`:
+     - `Only once`, `Once per bar`, or `Every time`.
+   - `Action`:
+     - `Alert only` (default).
+     - `Prepare trade` (e.g. `SELL 10%`, `BUY 50 shares` – stored as `action_type` + parameters).
+   - `Expiration`: date‑time picker or “No expiry”.
+
+2. **Message**
+   - Message template with placeholders: `{symbol}`, `{indicator}`, `{value}`, `{threshold}`.
+
+3. **Notifications**
+   - Toggles for:
+     - In‑app banner and Holdings row highlight.
+     - System event entry in the existing `system_events` log.
+     - (Later) Email / Telegram / custom webhook.
+
+These settings are persisted via a new API such as `POST /api/indicator-alerts/` and `GET /api/indicator-alerts?symbol=INFY`.
+
+### 2.4 Backend design for indicator alerts
+
+The backend builds on your existing alerts, orders, and strategies infrastructure.
+
+1. **Rule storage (`indicator_rules` table)**
+   - Columns:
+     - `id, user_id, strategy_id (nullable)`.
+     - `symbol` (or `universe` like `HOLDINGS` / watchlist).
+     - `timeframe`.
+     - `indicator` (enum: `RSI, MA, MA_CROSS, VOLATILITY, VWAP, PRICE, VOLUME_AVG`, etc.).
+     - `indicator_params` (JSON – e.g. `{ "period": 14 }`).
+     - `operator` (`GT, LT, CROSS_ABOVE, CROSS_BELOW, BETWEEN, OUTSIDE`).
+     - `threshold_1`, `threshold_2` (floats).
+     - `trigger_mode` (`ONCE, ONCE_PER_BAR, EVERY_TIME`).
+     - `action_type` (`ALERT_ONLY, SELL_PERCENT, BUY_QUANTITY`, etc.).
+     - `action_params` (JSON).
+     - `last_triggered_at`, `expires_at`, `enabled`.
+
+2. **Indicator engine**
+   - Service that:
+     - Groups rules by `(symbol, exchange, timeframe)`.
+     - Calls `load_series(...)` once per group to fetch the needed candles.
+     - Computes required indicators with `pandas`/TA helpers.
+   - Returns the latest (and previous) values required for crossing logic.
+
+3. **Rule evaluation**
+   - For each rule:
+     - Resolve universe:
+       - If `symbol` is set → that symbol.
+       - If `universe = HOLDINGS` → query holdings for that user.
+     - For each symbol, get indicator values and test condition:
+       - `GT`: `value > threshold_1`.
+       - `CROSS_ABOVE`: `prev <= threshold_1` and `curr > threshold_1`.
+       - Range operations for channels.
+     - Apply `trigger_mode`:
+       - `ONCE` → fire only when `last_triggered_at` is null.
+       - `ONCE_PER_BAR` → fire when `bar_time > last_triggered_at`.
+     - Successful evaluations produce a `Trigger` object containing symbol, values, and recommended action.
+
+4. **Alert + order creation**
+   - When a rule fires:
+     - Insert a row into `alerts` (source = `INTERNAL_INDICATOR`, with `rule_id` and human‑readable message).
+     - If `action_type != ALERT_ONLY`:
+       - For `SELL_PERCENT`:
+         - Look up the holding, compute `sell_qty = floor(current_qty * percent/100)`.
+         - Create a `WAITING` order in the manual queue (or route to AUTO execution based on `strategy.execution_mode`).
+       - Pass the draft order through the existing risk engine (`risk_settings`).
+     - Record a `system_events` entry summarizing the trigger for later audit.
+
+5. **Integration with existing strategies**
+   - Each rule can optionally link to a `Strategy`:
+     - If linked and the strategy is `AUTO` and `LIVE`, triggers may create orders that are immediately executed using the same path as TradingView AUTO alerts.
+     - If `MANUAL` or `PAPER`, triggers only generate alerts and/or paper orders.
+   - No changes are required to your core order execution or broker adapter; the alert engine only decides *when* to create alerts/orders.
+
+### 2.5 Scheduling and monitoring
+
+1. **In‑process scheduler (recommended for your setup)**
+   - Add an `indicator_alerts` scheduler loop similar to the existing market‑data sync:
+     - Runs every N minutes, grouped by timeframe:
+       - E.g. every 5 min for intraday rules, every 30 min for 1h, once per day after close for daily rules.
+     - Uses a fresh `SessionLocal` for each evaluation cycle.
+     - Loads all `enabled` rules whose `expires_at` is in the future and evaluates them.
+   - Uses IST (`UTC+5:30`) from `market_hours` for all scheduling.
+
+2. **Optional external scheduler**
+   - If you prefer not to run background threads inside the app:
+     - Expose `POST /api/indicator-alerts/evaluate?timeframe=1d`.
+     - Trigger it from cron, systemd timers, or a small worker container.
+   - The evaluation service is written independent of how it is called, so switching to an external scheduler later is easy.
+
+### 2.6 High‑level wire diagram
+
+```text
+Holdings Grid (UI)
+    └─ "Alert" button per row
+         └─ opens Alert Modal
+               └─ POST /api/indicator-alerts
+                     └─ writes indicator_rules
+
+Background scheduler / cron
+    └─ loads enabled indicator_rules
+        └─ groups by (symbol, timeframe)
+            └─ uses MarketData.load_series (candles)
+                └─ indicator engine computes RSI/MA/etc.
+                    └─ evaluation engine checks conditions
+                        └─ when triggered:
+                            ├─ insert alerts (source=INTERNAL_INDICATOR)
+                            ├─ optional orders (via risk engine + orders API)
+                            └─ log system_events
+
+UI Alerts panel / Holdings badges
+    └─ GET /api/alerts, /api/indicator-alerts
+        └─ shows active alerts and any queued trades
+```
+
+This design keeps indicators, alerts, and strategies cleanly separated: the OHLCV store provides raw data, the indicator engine computes features, the rules engine decides *when* to act, and your existing orders/risk infrastructure handles *how* to trade when you opt into execution.
+
+---
+
+## 2a. Types of conditions, queries, and combined filters
+
+**Question**  
+What type of conditions will I be able to set? What kind of queries can I make using the indicators beyond the current filters? Can I combine multiple query/filter expressions?
+
+**Answer**  
+The alert and filtering system effectively becomes a mini screener on top of your holdings, and the same “condition language” is used both for one‑shot filters and for persistent alerts.
+
+### 2a.1 Condition types for a single alert rule
+
+For one symbol and timeframe, a rule is built from one or more basic conditions:
+
+1. **Indicator vs value**
+   - Examples:
+     - `RSI(14) > 80`, `RSI(14) < 30`.
+     - `Volatility20D% < 25`.
+     - `ATR(14)% > 3`.
+     - `1M PnL% > 10`, `1Y PnL% < -20`.
+     - `Volume / 20D avg > 1.5`.
+
+2. **Price vs indicator**
+   - Examples:
+     - `Close > MA50`, `Close < MA200`.
+     - `Close crosses above MA50`, `Close crosses below MA200`.
+     - `Close > VWAP * (1 + X%)` (when VWAP is enabled).
+
+3. **Indicator vs indicator** (advanced / later)
+   - Examples:
+     - `MA50 > MA200` (trend confirmation).
+     - `RSI(14) crosses above RSI(50)` (short‑term vs long‑term momentum).
+
+4. **Range / channel**
+   - Examples:
+     - `RSI(14)` inside `[40, 60]` (sideways regime).
+     - `Close` inside or outside a band `[lower, upper]`.
+
+Each condition is expressed as:
+
+```text
+indicator_expression + operator + threshold(s)
+```
+
+where `operator ∈ { GT, LT, CROSS_ABOVE, CROSS_BELOW, BETWEEN, OUTSIDE }`.  
+The rule also specifies `trigger_mode ∈ { ONCE, ONCE_PER_BAR, EVERY_TIME }` and an optional `expires_at`.
+
+### 2a.2 Combining multiple conditions in one alert
+
+Yes, you can combine multiple conditions within a single rule:
+
+- **AND (all conditions must hold)** – default
+  - Example:
+    - `MA50 > MA200`
+    - `RSI(14) > 60`
+    - `Volatility20D% < 30`
+  - Meaning: “Strong uptrend + strong momentum + volatility under control.”
+
+- **OR (any condition can hold)** – configurable
+  - Example:
+    - `RSI(14) < 30` OR `1M PnL% < -10`.
+  - Meaning: “Oversold OR heavy one‑month drawdown.”
+
+The UI models this as a single group:
+
+```text
+Match: [ All conditions ]  or  [ Any condition ]
+Conditions:
+  - ...
+  - ...
+```
+
+Phase‑1 keeps this to a single AND/OR group for clarity. Later, we can extend to nested groups (e.g. `(A & B) OR (C & D)`) by adding a small expression builder.
+
+### 2a.3 Portfolio queries and filters using indicators
+
+The same indicators used for alerts are also exposed as Holdings columns, which turns the grid into a lightweight screener:
+
+1. **Column filters on indicator fields**
+   - Examples:
+     - Show holdings where `RSI(14) < 30` and `1M PnL% < -10` (deep pullbacks).
+     - Show holdings where `MA50% > 0` and `MA200% > 0` (price above both MAs).
+     - Show holdings where `Volatility20D% < 20` and `1Y PnL% > 15` (steady compounders).
+   - Implemented via the DataGrid filter panel (`>=`, `<=`, ranges) on the new columns.
+
+2. **Saved filters / named views (future enhancement)**
+   - Example views:
+     - “Strong uptrend”: `MA50 > MA200`, `1M PnL% > 5`, `RSI(14)` between 50 and 70.
+     - “High‑risk trades”: `Volatility20D% > 40`, `ATR(14)% > 4`, `Position PnL% < -5`.
+   - Internally, these are stored as filter JSON using the same condition schema as alerts, but evaluated immediately in the UI rather than on a schedule.
+
+### 2a.4 Filters vs alerts
+
+- **Filters/queries**
+  - Evaluate immediately on the current holdings snapshot.
+  - Use indicator values already computed for the grid.
+  - No scheduler involved; driven by user interactions (changing filters, reloading the page).
+
+- **Alerts**
+  - Are persistent rules stored in `indicator_rules`.
+  - Evaluated periodically by the background scheduler or an external cron.
+  - When conditions are met:
+    - An alert is recorded (and shown in Alerts / System events).
+    - If the rule carries a trade action, a `WAITING` order is added to the same queue used by TradingView alerts.
+
+Practically, you can:
+
+1. Use filters to **discover** interesting holdings right now (e.g. oversold, high‑volatility, strong uptrends).
+2. Convert those same conditions into **persistent alerts** so the system notifies you (and optionally prepares trades) whenever any holding meets those criteria in the future.
 
 ---
 
@@ -166,4 +411,3 @@ The core idea is to treat your OHLCV as a canonical “candles” store backed b
      - Chart column that calls `/api/market/history` and renders the sparkline.
    - Indicators and alerts:
      - The indicator engine and rule scheduler from the previous Q&A will use `load_series(...)` as their data source, so keeping `candles` up-to-date automatically keeps alerts accurate.
-

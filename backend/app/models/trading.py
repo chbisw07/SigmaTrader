@@ -146,6 +146,14 @@ class Alert(Base):
     platform: Mapped[str] = mapped_column(
         String(32), nullable=False, default="TRADINGVIEW"
     )
+    source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="TRADINGVIEW"
+    )
+
+    rule_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("indicator_rules.id", ondelete="SET NULL"), nullable=True
+    )
+
     raw_payload: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[Optional[str]] = mapped_column(Text())
 
@@ -156,6 +164,7 @@ class Alert(Base):
 
     strategy: Mapped[Optional[Strategy]] = relationship(back_populates="alerts")
     orders: Mapped[List["Order"]] = relationship(back_populates="alert")
+    rule: Mapped[Optional["IndicatorRule"]] = relationship(back_populates="alerts")
 
 
 class Order(Base):
@@ -216,6 +225,66 @@ class Order(Base):
 
     alert: Mapped[Optional[Alert]] = relationship(back_populates="orders")
     strategy: Mapped[Optional[Strategy]] = relationship(back_populates="orders")
+
+
+class IndicatorRule(Base):
+    __tablename__ = "indicator_rules"
+
+    __table_args__ = (
+        Index("ix_indicator_rules_user_symbol", "user_id", "symbol"),
+        Index("ix_indicator_rules_user_timeframe", "user_id", "timeframe"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    strategy_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("strategies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    symbol: Mapped[Optional[str]] = mapped_column(String(128))
+    universe: Mapped[Optional[str]] = mapped_column(String(32))
+    exchange: Mapped[Optional[str]] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False, default="1d")
+
+    logic: Mapped[str] = mapped_column(String(8), nullable=False, default="AND")
+    conditions_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    trigger_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="ONCE",
+    )
+    action_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="ALERT_ONLY",
+    )
+    action_params_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+    last_triggered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    strategy: Mapped[Optional[Strategy]] = relationship()
+    alerts: Mapped[List[Alert]] = relationship(back_populates="rule")
 
 
 class Position(Base):

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import CssBaseline from '@mui/material/CssBaseline'
 import { ThemeProvider } from '@mui/material/styles'
 import {
@@ -72,4 +73,3 @@ export function useAppTheme(): ThemeContextValue {
   }
   return ctx
 }
-

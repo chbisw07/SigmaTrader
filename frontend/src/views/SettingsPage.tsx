@@ -417,7 +417,18 @@ export function SettingsPage() {
         return
       }
 
-      const payload: any = {
+      const payload: {
+        scope: RiskSettings['scope']
+        strategy_id: number | null
+        max_order_value?: number
+        max_quantity_per_order?: number
+        max_daily_loss?: number
+        allow_short_selling: boolean
+        max_open_positions?: number | null
+        clamp_mode: RiskSettings['clamp_mode']
+        symbol_whitelist?: string | null
+        symbol_blacklist?: string | null
+      } = {
         scope: riskScope,
         strategy_id:
           riskScope === 'STRATEGY' ? Number(riskStrategyId) : null,

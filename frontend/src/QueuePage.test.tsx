@@ -29,7 +29,7 @@ describe('QueuePage', () => {
           updated_at: new Date().toISOString(),
         },
       ],
-    } as any)
+    } as unknown as Response)
     vi.stubGlobal('fetch', fetchMock)
   })
 
