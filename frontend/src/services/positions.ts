@@ -14,6 +14,7 @@ export type Holding = {
   average_price: number
   last_price?: number | null
   pnl?: number | null
+  last_purchase_date?: string | null
 }
 
 export async function syncPositions(): Promise<{ updated: number }> {
@@ -46,4 +47,3 @@ export async function fetchHoldings(): Promise<Holding[]> {
   }
   return (await res.json()) as Holding[]
 }
-

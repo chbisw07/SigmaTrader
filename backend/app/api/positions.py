@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,7 +11,7 @@ from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
-from app.models import BrokerConnection, Position, User
+from app.models import BrokerConnection, Order, Position, User
 from app.schemas.positions import HoldingRead, PositionRead
 from app.services.broker_secrets import get_broker_secret
 from app.services.positions_sync import sync_positions_from_zerodha
@@ -149,6 +150,25 @@ def list_holdings(
     client = ZerodhaClient(kite)
 
     raw = client.list_holdings()
+
+    # Pre-compute the last executed BUY order date per symbol for this user so
+    # that the holdings response can surface a "last purchase date" column.
+    buy_orders: List[Order] = (
+        db.query(Order)
+        .filter(
+            Order.user_id == user.id,
+            Order.side == "BUY",
+            Order.status.in_(["EXECUTED", "PARTIALLY_EXECUTED"]),
+        )
+        .order_by(Order.created_at.desc())
+        .all()
+    )
+    last_buy_by_symbol: dict[str, datetime] = {}
+    for o in buy_orders:
+        symbol = o.symbol
+        if symbol not in last_buy_by_symbol:
+            last_buy_by_symbol[symbol] = o.created_at
+
     holdings: List[HoldingRead] = []
 
     for entry in raw:
@@ -171,6 +191,8 @@ def list_holdings(
         if last_f is not None:
             pnl = (last_f - avg_f) * qty_f
 
+        last_purchase_date = last_buy_by_symbol.get(symbol)
+
         holdings.append(
             HoldingRead(
                 symbol=symbol,
@@ -178,6 +200,7 @@ def list_holdings(
                 average_price=avg_f,
                 last_price=last_f,
                 pnl=pnl,
+                last_purchase_date=last_purchase_date,
             )
         )
 

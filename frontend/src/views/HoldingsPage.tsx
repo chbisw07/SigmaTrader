@@ -7,6 +7,15 @@ import { useEffect, useState } from 'react'
 
 import { fetchHoldings, type Holding } from '../services/positions'
 
+const formatIst = (iso: string | null | undefined): string => {
+  if (!iso) return '-'
+  const utc = new Date(iso)
+  if (Number.isNaN(utc.getTime())) return '-'
+  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
+  const ist = new Date(istMs)
+  return ist.toLocaleString('en-IN')
+}
+
 export function HoldingsPage() {
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [loading, setLoading] = useState(true)
@@ -37,6 +46,12 @@ export function HoldingsPage() {
       minWidth: 140,
     },
     {
+      field: 'last_purchase_date',
+      headerName: 'Last Purchase',
+      width: 190,
+      valueFormatter: (value) => formatIst(value as string | null | undefined),
+    },
+    {
       field: 'quantity',
       headerName: 'Qty',
       type: 'number',
@@ -65,6 +80,10 @@ export function HoldingsPage() {
       width: 150,
       valueFormatter: (value) =>
         value != null ? Number(value).toFixed(2) : '-',
+      cellClassName: (params: any) =>
+        params.value != null && Number(params.value) < 0
+          ? 'pnl-negative'
+          : '',
     },
   ]
 
@@ -95,6 +114,11 @@ export function HoldingsPage() {
             getRowId={(row) => row.symbol}
             density="compact"
             disableRowSelectionOnClick
+            sx={{
+              '& .pnl-negative': {
+                color: 'error.main',
+              },
+            }}
             slots={{ toolbar: GridToolbar }}
             slotProps={{
               toolbar: {
