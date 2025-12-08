@@ -16,6 +16,7 @@ import {
   type GridColDef,
   type GridRenderCellParams,
   type GridCellParams,
+  type GridColumnVisibilityModel,
 } from '@mui/x-data-grid'
 import { useEffect, useState } from 'react'
 
@@ -77,6 +78,9 @@ export function HoldingsPage() {
   const [alertSymbol, setAlertSymbol] = useState<string | null>(null)
   const [alertExchange, setAlertExchange] = useState<string | null>(null)
 
+  const [columnVisibilityModel, setColumnVisibilityModel] =
+    useState<GridColumnVisibilityModel>({})
+
   const load = async () => {
     try {
       setLoading(true)
@@ -96,6 +100,21 @@ export function HoldingsPage() {
 
   useEffect(() => {
     void load()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(
+        'st_holdings_column_visibility_v1',
+      )
+      if (raw) {
+        const parsed = JSON.parse(raw) as GridColumnVisibilityModel
+        setColumnVisibilityModel(parsed)
+      }
+    } catch {
+      // Ignore JSON/Storage errors and fall back to defaults.
+    }
   }, [])
 
   const enrichHoldingsWithHistory = async (rows: HoldingRow[]) => {
@@ -468,6 +487,18 @@ export function HoldingsPage() {
             columns={columns}
             getRowId={(row) => row.symbol}
             density="compact"
+            columnVisibilityModel={columnVisibilityModel}
+            onColumnVisibilityModelChange={(model) => {
+              setColumnVisibilityModel(model)
+              try {
+                window.localStorage.setItem(
+                  'st_holdings_column_visibility_v1',
+                  JSON.stringify(model),
+                )
+              } catch {
+                // Ignore persistence errors.
+              }
+            }}
             disableRowSelectionOnClick
             sx={{
               '& .pnl-negative': {
