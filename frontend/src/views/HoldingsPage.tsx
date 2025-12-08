@@ -17,6 +17,7 @@ import {
   type GridRenderCellParams,
   type GridCellParams,
   type GridColumnVisibilityModel,
+  GridLogicOperator,
 } from '@mui/x-data-grid'
 import { useEffect, useState } from 'react'
 
@@ -55,6 +56,196 @@ type HoldingRow = Holding & {
   indicators?: HoldingIndicators
 }
 
+type HoldingsFilterField =
+  | 'symbol'
+  | 'quantity'
+  | 'average_price'
+  | 'invested'
+  | 'last_price'
+  | 'current_value'
+  | 'rsi14'
+  | 'perf1m'
+  | 'perf1y'
+  | 'volatility20d'
+  | 'atr14'
+  | 'volumeVsAvg20d'
+  | 'unrealized_pnl'
+  | 'pnl_percent'
+  | 'today_pnl_percent'
+
+type HoldingsFilterOperator =
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'eq'
+  | 'neq'
+  | 'contains'
+  | 'startsWith'
+  | 'endsWith'
+
+type HoldingsFilter = {
+  id: string
+  field: HoldingsFilterField
+  operator: HoldingsFilterOperator
+  value: string
+}
+
+type HoldingsFilterFieldConfig = {
+  field: HoldingsFilterField
+  label: string
+  type: 'string' | 'number'
+  getValue: (row: HoldingRow) => string | number | null
+}
+
+const HOLDINGS_FILTER_FIELDS: HoldingsFilterFieldConfig[] = [
+  {
+    field: 'symbol',
+    label: 'Symbol',
+    type: 'string',
+    getValue: (row) => row.symbol,
+  },
+  {
+    field: 'quantity',
+    label: 'Qty',
+    type: 'number',
+    getValue: (row) =>
+      row.quantity != null ? Number(row.quantity) : null,
+  },
+  {
+    field: 'average_price',
+    label: 'Avg Price',
+    type: 'number',
+    getValue: (row) =>
+      row.average_price != null ? Number(row.average_price) : null,
+  },
+  {
+    field: 'invested',
+    label: 'Invested',
+    type: 'number',
+    getValue: (row) =>
+      row.quantity != null && row.average_price != null
+        ? Number(row.quantity) * Number(row.average_price)
+        : null,
+  },
+  {
+    field: 'last_price',
+    label: 'Last Price',
+    type: 'number',
+    getValue: (row) =>
+      row.last_price != null ? Number(row.last_price) : null,
+  },
+  {
+    field: 'current_value',
+    label: 'Current Value',
+    type: 'number',
+    getValue: (row) =>
+      row.quantity != null && row.last_price != null
+        ? Number(row.quantity) * Number(row.last_price)
+        : null,
+  },
+  {
+    field: 'rsi14',
+    label: 'RSI(14)',
+    type: 'number',
+    getValue: (row) => row.indicators?.rsi14 ?? null,
+  },
+  {
+    field: 'perf1m',
+    label: '1M PnL %',
+    type: 'number',
+    getValue: (row) => row.indicators?.perf1mPct ?? null,
+  },
+  {
+    field: 'perf1y',
+    label: '1Y PnL %',
+    type: 'number',
+    getValue: (row) => row.indicators?.perf1yPct ?? null,
+  },
+  {
+    field: 'volatility20d',
+    label: 'Vol 20D %',
+    type: 'number',
+    getValue: (row) => row.indicators?.volatility20dPct ?? null,
+  },
+  {
+    field: 'atr14',
+    label: 'ATR(14) %',
+    type: 'number',
+    getValue: (row) => row.indicators?.atr14Pct ?? null,
+  },
+  {
+    field: 'volumeVsAvg20d',
+    label: 'Vol / 20D Avg',
+    type: 'number',
+    getValue: (row) => row.indicators?.volumeVsAvg20d ?? null,
+  },
+  {
+    field: 'unrealized_pnl',
+    label: 'Unrealized P&L',
+    type: 'number',
+    getValue: (row) => (row.pnl != null ? Number(row.pnl) : null),
+  },
+  {
+    field: 'pnl_percent',
+    label: 'P&L %',
+    type: 'number',
+    getValue: (row) =>
+      row.total_pnl_percent != null
+        ? Number(row.total_pnl_percent)
+        : null,
+  },
+  {
+    field: 'today_pnl_percent',
+    label: "Today's P&L %",
+    type: 'number',
+    getValue: (row) =>
+      row.today_pnl_percent != null
+        ? Number(row.today_pnl_percent)
+        : null,
+  },
+]
+
+const NUMERIC_OPERATOR_OPTIONS: {
+  value: HoldingsFilterOperator
+  label: string
+}[] = [
+  { value: 'gt', label: '>' },
+  { value: 'gte', label: '>=' },
+  { value: 'lt', label: '<' },
+  { value: 'lte', label: '<=' },
+  { value: 'eq', label: '=' },
+  { value: 'neq', label: '!=' },
+]
+
+const STRING_OPERATOR_OPTIONS: {
+  value: HoldingsFilterOperator
+  label: string
+}[] = [
+  { value: 'contains', label: 'contains' },
+  { value: 'eq', label: 'equals' },
+  { value: 'startsWith', label: 'starts with' },
+  { value: 'endsWith', label: 'ends with' },
+]
+
+function getFieldConfig(
+  field: HoldingsFilterField,
+): HoldingsFilterFieldConfig {
+  const cfg =
+    HOLDINGS_FILTER_FIELDS.find((f) => f.field === field) ??
+    HOLDINGS_FILTER_FIELDS[0]
+  return cfg
+}
+
+function getOperatorOptions(
+  field: HoldingsFilterField,
+): { value: HoldingsFilterOperator; label: string }[] {
+  const cfg = getFieldConfig(field)
+  return cfg.type === 'string'
+    ? STRING_OPERATOR_OPTIONS
+    : NUMERIC_OPERATOR_OPTIONS
+}
+
 const ANALYTICS_LOOKBACK_DAYS = 730
 
 export function HoldingsPage() {
@@ -80,6 +271,9 @@ export function HoldingsPage() {
   const [alertSymbol, setAlertSymbol] = useState<string | null>(null)
   const [alertExchange, setAlertExchange] = useState<string | null>(null)
 
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
+  const [advancedFilters, setAdvancedFilters] = useState<HoldingsFilter[]>([])
+
   const [columnVisibilityModel, setColumnVisibilityModel] =
     useState<GridColumnVisibilityModel>({})
 
@@ -89,6 +283,7 @@ export function HoldingsPage() {
   const [refreshMinutes, setRefreshMinutes] = useState('5')
   const [refreshSeconds, setRefreshSeconds] = useState('0')
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const load = async () => {
     try {
@@ -219,6 +414,11 @@ export function HoldingsPage() {
     refreshMinutes,
     refreshSeconds,
   ])
+
+  const filteredRows =
+    advancedFilters.length === 0
+      ? holdings
+      : applyAdvancedFilters(holdings, advancedFilters)
 
   const enrichHoldingsWithHistory = async (rows: HoldingRow[]) => {
     for (const row of rows) {
@@ -549,14 +749,139 @@ export function HoldingsPage() {
         Live holdings fetched from Zerodha, including unrealized P&amp;L when last
         price is available.
       </Typography>
+      {refreshError && (
+        <Typography variant="caption" color="error" sx={{ mb: 1, display: 'block' }}>
+          {refreshError}
+        </Typography>
+      )}
+
+      <Dialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Holdings settings</DialogTitle>
+        <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Chart
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                Chart period:
+              </Typography>
+              <Select
+                size="small"
+                value={String(chartPeriodDays)}
+                onChange={(e) =>
+                  setChartPeriodDays(Number(e.target.value) || 30)
+                }
+              >
+                <MenuItem value="30">1M</MenuItem>
+                <MenuItem value="90">3M</MenuItem>
+                <MenuItem value="180">6M</MenuItem>
+                <MenuItem value="365">1Y</MenuItem>
+                <MenuItem value="730">2Y</MenuItem>
+              </Select>
+            </Box>
+          </Box>
+
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Auto refresh
+            </Typography>
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+                flexWrap: 'wrap',
+              }}
+            >
+              <Typography variant="caption" color="text.secondary">
+                Auto refresh every
+              </Typography>
+              <TextField
+                label="DD"
+                size="small"
+                type="number"
+                value={refreshDays}
+                onChange={(e) => setRefreshDays(e.target.value)}
+                sx={{ width: 68 }}
+                inputProps={{ min: 0 }}
+              />
+              <TextField
+                label="HH"
+                size="small"
+                type="number"
+                value={refreshHours}
+                onChange={(e) => setRefreshHours(e.target.value)}
+                sx={{ width: 68 }}
+                inputProps={{ min: 0, max: 23 }}
+              />
+              <TextField
+                label="MM"
+                size="small"
+                type="number"
+                value={refreshMinutes}
+                onChange={(e) => setRefreshMinutes(e.target.value)}
+                sx={{ width: 68 }}
+                inputProps={{ min: 0, max: 59 }}
+              />
+              <TextField
+                label="SS"
+                size="small"
+                type="number"
+                value={refreshSeconds}
+                onChange={(e) => setRefreshSeconds(e.target.value)}
+                sx={{ width: 68 }}
+                inputProps={{ min: 0, max: 59 }}
+              />
+              <Button
+                size="small"
+                variant={autoRefreshEnabled ? 'contained' : 'outlined'}
+                onClick={() => setAutoRefreshEnabled((prev) => !prev)}
+              >
+                {autoRefreshEnabled ? 'Auto-refresh ON' : 'Auto-refresh OFF'}
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  setRefreshDays('0')
+                  setRefreshHours('0')
+                  setRefreshMinutes('5')
+                  setRefreshSeconds('0')
+                }}
+              >
+                Reset interval
+              </Button>
+            </Box>
+            {refreshError && (
+              <Typography
+                variant="caption"
+                color="error"
+                sx={{ mt: 1, display: 'block' }}
+              >
+                {refreshError}
+              </Typography>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSettingsOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
       <Box
         sx={{
+          mb: 1,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexWrap: 'wrap',
           gap: 1,
-          mb: 1,
         }}
       >
         <Box
@@ -567,86 +892,50 @@ export function HoldingsPage() {
             flexWrap: 'wrap',
           }}
         >
-          <Typography variant="caption" color="text.secondary">
-            Chart period:
-          </Typography>
-          <Select
+          <Button
             size="small"
-            value={String(chartPeriodDays)}
-            onChange={(e) => setChartPeriodDays(Number(e.target.value) || 30)}
+            variant={advancedFiltersOpen ? 'contained' : 'outlined'}
+            onClick={() => {
+              setAdvancedFiltersOpen((prev) => !prev)
+              if (!advancedFiltersOpen && advancedFilters.length === 0) {
+                setAdvancedFilters([
+                  {
+                    id: `f-${Date.now()}`,
+                    field: 'symbol',
+                    operator: 'contains',
+                    value: '',
+                  },
+                ])
+              }
+            }}
+            sx={{ mr: 1 }}
           >
-            <MenuItem value="30">1M</MenuItem>
-            <MenuItem value="90">3M</MenuItem>
-            <MenuItem value="180">6M</MenuItem>
-            <MenuItem value="365">1Y</MenuItem>
-            <MenuItem value="730">2Y</MenuItem>
-          </Select>
+            {advancedFiltersOpen ? 'Hide filters' : 'Advanced filters'}
+          </Button>
+          {advancedFiltersOpen && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ verticalAlign: 'middle' }}
+            >
+              All conditions are combined with AND.
+            </Typography>
+          )}
         </Box>
         <Box
           sx={{
             display: 'flex',
-            alignItems: 'center',
-            gap: 0.5,
-            flexWrap: 'wrap',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 1,
           }}
         >
-          <Typography variant="caption" color="text.secondary">
-            Auto refresh every
-          </Typography>
-          <TextField
-            label="DD"
-            size="small"
-            type="number"
-            value={refreshDays}
-            onChange={(e) => setRefreshDays(e.target.value)}
-            sx={{ width: 68 }}
-            inputProps={{ min: 0 }}
-          />
-          <TextField
-            label="HH"
-            size="small"
-            type="number"
-            value={refreshHours}
-            onChange={(e) => setRefreshHours(e.target.value)}
-            sx={{ width: 68 }}
-            inputProps={{ min: 0, max: 23 }}
-          />
-          <TextField
-            label="MM"
-            size="small"
-            type="number"
-            value={refreshMinutes}
-            onChange={(e) => setRefreshMinutes(e.target.value)}
-            sx={{ width: 68 }}
-            inputProps={{ min: 0, max: 59 }}
-          />
-          <TextField
-            label="SS"
-            size="small"
-            type="number"
-            value={refreshSeconds}
-            onChange={(e) => setRefreshSeconds(e.target.value)}
-            sx={{ width: 68 }}
-            inputProps={{ min: 0, max: 59 }}
-          />
-          <Button
-            size="small"
-            variant={autoRefreshEnabled ? 'contained' : 'outlined'}
-            onClick={() => setAutoRefreshEnabled((prev) => !prev)}
-          >
-            {autoRefreshEnabled ? 'Auto-refresh ON' : 'Auto-refresh OFF'}
-          </Button>
           <Button
             size="small"
             variant="outlined"
-            onClick={() => {
-              setRefreshDays('0')
-              setRefreshHours('0')
-              setRefreshMinutes('5')
-              setRefreshSeconds('0')
-            }}
+            onClick={() => setSettingsOpen(true)}
           >
-            Reset
+            View settings
           </Button>
           <Button
             size="small"
@@ -659,10 +948,145 @@ export function HoldingsPage() {
           </Button>
         </Box>
       </Box>
-      {refreshError && (
-        <Typography variant="caption" color="error" sx={{ mb: 1, display: 'block' }}>
-          {refreshError}
-        </Typography>
+
+      {advancedFiltersOpen && (
+        <Paper
+          sx={{
+            mb: 1,
+            p: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1,
+          }}
+        >
+          {advancedFilters.map((filter) => {
+            const operatorOptions = getOperatorOptions(filter.field)
+            return (
+              <Box
+                key={filter.id}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <TextField
+                  label="Column"
+                  select
+                  size="small"
+                  value={filter.field}
+                  onChange={(e) => {
+                    const nextField =
+                      e.target.value as HoldingsFilterField
+                    const nextOperatorOptions =
+                      getOperatorOptions(nextField)
+                    setAdvancedFilters((current) =>
+                      current.map((f) =>
+                        f.id === filter.id
+                          ? {
+                              ...f,
+                              field: nextField,
+                              operator:
+                                nextOperatorOptions[0]?.value ??
+                                f.operator,
+                            }
+                          : f,
+                      ),
+                    )
+                  }}
+                  sx={{ minWidth: 180 }}
+                >
+                  {HOLDINGS_FILTER_FIELDS.map((f) => (
+                    <MenuItem key={f.field} value={f.field}>
+                      {f.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Operator"
+                  select
+                  size="small"
+                  value={filter.operator}
+                  onChange={(e) => {
+                    const nextOp =
+                      e.target.value as HoldingsFilterOperator
+                    setAdvancedFilters((current) =>
+                      current.map((f) =>
+                        f.id === filter.id ? { ...f, operator: nextOp } : f,
+                      ),
+                    )
+                  }}
+                  sx={{ minWidth: 140 }}
+                >
+                  {operatorOptions.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Value"
+                  size="small"
+                  value={filter.value}
+                  onChange={(e) => {
+                    const nextValue = e.target.value
+                    setAdvancedFilters((current) =>
+                      current.map((f) =>
+                        f.id === filter.id ? { ...f, value: nextValue } : f,
+                      ),
+                    )
+                  }}
+                  sx={{ minWidth: 140 }}
+                />
+                <Button
+                  size="small"
+                  onClick={() =>
+                    setAdvancedFilters((current) =>
+                      current.filter((f) => f.id !== filter.id),
+                    )
+                  }
+                >
+                  Remove
+                </Button>
+              </Box>
+            )
+          })}
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              flexWrap: 'wrap',
+            }}
+          >
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() =>
+                setAdvancedFilters((current) => [
+                  ...current,
+                  {
+                    id: `f-${Date.now()}-${current.length + 1}`,
+                    field: 'symbol',
+                    operator: 'contains',
+                    value: '',
+                  },
+                ])
+              }
+            >
+              + Add condition
+            </Button>
+            {advancedFilters.length > 0 && (
+              <Button
+                size="small"
+                onClick={() => setAdvancedFilters([])}
+              >
+                Clear all
+              </Button>
+            )}
+          </Box>
+        </Paper>
       )}
 
       {/* Old chart-period-only box removed; merged into combined toolbar above */}
@@ -703,10 +1127,11 @@ export function HoldingsPage() {
       ) : (
         <Paper sx={{ mt: 1, height: 600, width: '100%' }}>
           <DataGrid
-            rows={holdings}
+            rows={filteredRows}
             columns={columns}
             getRowId={(row) => row.symbol}
             density="compact"
+            disableMultipleColumnsFiltering={false}
             columnVisibilityModel={columnVisibilityModel}
             onColumnVisibilityModelChange={(model) => {
               setColumnVisibilityModel(model)
@@ -730,6 +1155,10 @@ export function HoldingsPage() {
               toolbar: {
                 showQuickFilter: true,
                 quickFilterProps: { debounceMs: 300 },
+              },
+              filterPanel: {
+                // Combine multiple filter rows using AND semantics.
+                logicOperators: [GridLogicOperator.And],
               },
             }}
             initialState={{
@@ -1506,4 +1935,69 @@ function computeHoldingIndicators(points: CandlePoint[]): HoldingIndicators {
   indicators.volumeVsAvg20d = computeVolumeRatio(volumes, 20)
 
   return indicators
+}
+
+function applyAdvancedFilters(
+  rows: HoldingRow[],
+  filters: HoldingsFilter[],
+): HoldingRow[] {
+  if (!filters.length) return rows
+
+  const activeFilters = filters.filter(
+    (f) => String(f.value).trim().length > 0,
+  )
+  if (!activeFilters.length) return rows
+
+  return rows.filter((row) =>
+    activeFilters.every((filter) => {
+      const fieldConfig = getFieldConfig(filter.field)
+      const rawVal = fieldConfig.getValue(row)
+
+      if (rawVal == null) {
+        return false
+      }
+
+      if (fieldConfig.type === 'string') {
+        const value = String(rawVal).toLowerCase()
+        const needle = String(filter.value).toLowerCase()
+        switch (filter.operator) {
+          case 'contains':
+            return value.includes(needle)
+          case 'startsWith':
+            return value.startsWith(needle)
+          case 'endsWith':
+            return value.endsWith(needle)
+          case 'eq':
+            return value === needle
+          case 'neq':
+            return value !== needle
+          default:
+            return true
+        }
+      }
+
+      const numericVal = Number(rawVal)
+      const threshold = Number(filter.value)
+      if (!Number.isFinite(numericVal) || !Number.isFinite(threshold)) {
+        return true
+      }
+
+      switch (filter.operator) {
+        case 'gt':
+          return numericVal > threshold
+        case 'gte':
+          return numericVal >= threshold
+        case 'lt':
+          return numericVal < threshold
+        case 'lte':
+          return numericVal <= threshold
+        case 'eq':
+          return numericVal === threshold
+        case 'neq':
+          return numericVal !== threshold
+        default:
+          return true
+      }
+    }),
+  )
 }
