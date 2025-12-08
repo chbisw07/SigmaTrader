@@ -254,6 +254,13 @@ class IndicatorRule(Base):
 
     logic: Mapped[str] = mapped_column(String(8), nullable=False, default="AND")
     conditions_json: Mapped[str] = mapped_column(Text, nullable=False)
+    expression_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Future-friendly target fields, in addition to the existing
+    # symbol/universe/exchange columns. For now these are mostly used for
+    # planning and can remain NULL for existing rules.
+    target_type: Mapped[Optional[str]] = mapped_column(String(16))
+    target_id: Mapped[Optional[str]] = mapped_column(String(128))
 
     trigger_mode: Mapped[str] = mapped_column(
         String(32),
@@ -267,6 +274,7 @@ class IndicatorRule(Base):
     )
     action_params_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
+    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     last_triggered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
