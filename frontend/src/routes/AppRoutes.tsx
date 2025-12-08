@@ -9,6 +9,7 @@ import { PositionsPage } from '../views/PositionsPage'
 import { HoldingsPage } from '../views/HoldingsPage'
 import { SystemEventsPage } from '../views/SystemEventsPage'
 import { AppearancePage } from '../views/AppearancePage'
+import { AlertsPage } from '../views/AlertsPage'
 
 export function AppRoutes() {
   return (
@@ -18,6 +19,7 @@ export function AppRoutes() {
       <Route path="/orders" element={<OrdersPage />} />
       <Route path="/positions" element={<PositionsPage />} />
       <Route path="/holdings" element={<HoldingsPage />} />
+      <Route path="/alerts" element={<AlertsPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
       <Route path="/system-events" element={<SystemEventsPage />} />
       <Route path="/appearance" element={<AppearancePage />} />

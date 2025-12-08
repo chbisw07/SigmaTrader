@@ -27,6 +27,7 @@ import SettingsIcon from '@mui/icons-material/Settings'
 import ShowChartIcon from '@mui/icons-material/ShowChart'
 import WarningIcon from '@mui/icons-material/Warning'
 import PaletteIcon from '@mui/icons-material/Palette'
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import { NavLink } from 'react-router-dom'
 
 import { useHealth } from '../services/health'
@@ -52,6 +53,7 @@ const navItems: NavItem[] = [
   { label: 'Orders', to: '/orders', icon: <ReceiptLongIcon /> },
   { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
   { label: 'Holdings', to: '/holdings', icon: <AccountBalanceWalletIcon /> },
+   { label: 'Alerts', to: '/alerts', icon: <NotificationsActiveIcon /> },
   { label: 'Analytics', to: '/analytics', icon: <AnalyticsIcon /> },
   { label: 'System Events', to: '/system-events', icon: <WarningIcon /> },
   { label: 'Appearance', to: '/appearance', icon: <PaletteIcon /> },

@@ -37,6 +37,11 @@ import {
   fetchIndicatorPreview,
   type IndicatorPreview,
 } from '../services/indicatorAlerts'
+import {
+  createStrategyTemplate,
+  listStrategyTemplates,
+  type Strategy,
+} from '../services/strategies'
 
 type HoldingIndicators = {
   rsi14?: number
@@ -419,6 +424,11 @@ export function HoldingsPage() {
     advancedFilters.length === 0
       ? holdings
       : applyAdvancedFilters(holdings, advancedFilters)
+
+  const totalActiveAlerts = holdings.reduce((acc, h) => {
+    const found = h as HoldingRow & { _activeAlertCount?: number }
+    return acc + (found._activeAlertCount ?? 0)
+  }, 0)
 
   const enrichHoldingsWithHistory = async (rows: HoldingRow[]) => {
     for (const row of rows) {
@@ -946,6 +956,11 @@ export function HoldingsPage() {
           >
             Refresh now
           </Button>
+          {totalActiveAlerts > 0 && (
+            <Typography variant="caption" color="text.secondary">
+              Active alerts (approx.): {totalActiveAlerts}
+            </Typography>
+          )}
         </Box>
       </Box>
 
@@ -1308,6 +1323,12 @@ function IndicatorAlertDialog({
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
 
+  const [templates, setTemplates] = useState<Strategy[]>([])
+  const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(
+    null,
+  )
+  const [savingTemplate, setSavingTemplate] = useState(false)
+
   useEffect(() => {
     if (!open || !symbol) {
       return
@@ -1332,6 +1353,28 @@ function IndicatorAlertDialog({
       }
     }
     void loadRules()
+    return () => {
+      active = false
+    }
+  }, [open, symbol])
+
+  useEffect(() => {
+    if (!open || !symbol) {
+      return
+    }
+    let active = true
+    const loadTemplates = async () => {
+      try {
+        const data = await listStrategyTemplates(symbol)
+        if (!active) return
+        setTemplates(data)
+      } catch {
+        if (!active) return
+        // Templates are a convenience; we silently ignore failures here.
+        setTemplates([])
+      }
+    }
+    void loadTemplates()
     return () => {
       active = false
     }
@@ -1402,6 +1445,7 @@ function IndicatorAlertDialog({
     setPeriod('14')
     setActionValue('10')
     setError(null)
+    setSelectedStrategyId(null)
   }
 
   const handleClose = () => {
@@ -1473,6 +1517,7 @@ function IndicatorAlertDialog({
     setSaving(true)
     try {
       const created = await createIndicatorRule({
+        strategy_id: selectedStrategyId,
         symbol,
         exchange: exchange ?? 'NSE',
         timeframe,
@@ -1494,6 +1539,70 @@ function IndicatorAlertDialog({
       )
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleSaveAsStrategy = async () => {
+    if (!symbol) return
+
+    const name = window.prompt(
+      'Enter a name for this strategy template:',
+      `${symbol}-indicator-alert`,
+    )
+    if (!name) return
+
+    // Build a simple DSL representation of the current single-condition rule.
+    const periodNum = Number(period) || (indicator === 'RSI' ? 14 : 20)
+    const t1 = Number(threshold1 || '0')
+    const timeframeLabel = timeframe
+
+    const indicatorPart =
+      indicator === 'PRICE'
+        ? `PRICE(${timeframeLabel})`
+        : `${indicator}(${periodNum}, ${timeframeLabel})`
+
+    const operatorLabel =
+      operator === 'GT'
+        ? '>'
+        : operator === 'LT'
+          ? '<'
+          : operator === 'CROSS_ABOVE'
+            ? 'CROSS_ABOVE'
+            : operator === 'CROSS_BELOW'
+              ? 'CROSS_BELOW'
+              : operator === 'BETWEEN'
+                ? 'BETWEEN'
+                : operator === 'OUTSIDE'
+                  ? 'OUTSIDE'
+                  : operator === 'MOVE_UP_PCT'
+                    ? 'MOVE_UP_PCT'
+                    : 'MOVE_DOWN_PCT'
+
+    let dsl = `${indicatorPart} ${operatorLabel} ${t1}`
+    if (operator === 'BETWEEN' || operator === 'OUTSIDE') {
+      const t2 = Number(threshold2 || '0')
+      dsl = `${indicatorPart} ${operatorLabel} ${t1} ${t2}`
+    }
+
+    setSavingTemplate(true)
+    try {
+      const created = await createStrategyTemplate({
+        name,
+        description: `Template created from holdings alert for ${symbol}`,
+        execution_mode: 'MANUAL',
+        execution_target: 'LIVE',
+        enabled: true,
+        scope: 'GLOBAL',
+        dsl_expression: dsl,
+      })
+      setTemplates((prev) => [...prev, created])
+      setSelectedStrategyId(created.id)
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to save strategy template',
+      )
+    } finally {
+      setSavingTemplate(false)
     }
   }
 
@@ -1548,6 +1657,37 @@ function IndicatorAlertDialog({
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
+              label="Strategy template"
+              select
+              size="small"
+              value={selectedStrategyId ?? ''}
+              onChange={(e) => {
+                const v = e.target.value
+                setSelectedStrategyId(v ? Number(v) : null)
+              }}
+              sx={{ minWidth: 260 }}
+              helperText="Optional: tag this alert with a reusable strategy template."
+            >
+              <MenuItem value="">None</MenuItem>
+              {templates.map((tpl) => (
+                <MenuItem key={tpl.id} value={tpl.id}>
+                  {tpl.name}
+                  {tpl.is_builtin ? ' (builtin)' : ''}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleSaveAsStrategy}
+              disabled={savingTemplate || !symbol}
+              sx={{ alignSelf: 'flex-end', mt: 'auto', height: 40 }}
+            >
+              {savingTemplate ? 'Saving…' : 'Save as strategy'}
+            </Button>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            <TextField
               label="Timeframe"
               select
               size="small"
@@ -1557,9 +1697,9 @@ function IndicatorAlertDialog({
             >
               <MenuItem value="1m">1m</MenuItem>
               <MenuItem value="5m">5m</MenuItem>
-              <MenuItem value="1d">1D</MenuItem>
-              <MenuItem value="1h">1H</MenuItem>
               <MenuItem value="15m">15m</MenuItem>
+              <MenuItem value="1h">1H</MenuItem>
+              <MenuItem value="1d">1D</MenuItem>
             </TextField>
             <TextField
               label="Indicator"

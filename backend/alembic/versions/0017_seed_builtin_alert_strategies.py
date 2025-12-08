@@ -8,6 +8,8 @@ Create Date: 2025-12-08
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -22,6 +24,7 @@ def upgrade() -> None:
 
     strategies_table = sa.table(
         "strategies",
+        sa.column("id", sa.Integer),
         sa.column("name", sa.String),
         sa.column("description", sa.Text),
         sa.column("execution_mode", sa.String),
@@ -32,7 +35,11 @@ def upgrade() -> None:
         sa.column("dsl_expression", sa.Text),
         sa.column("expression_json", sa.Text),
         sa.column("is_builtin", sa.Boolean),
+        sa.column("created_at", sa.DateTime),
+        sa.column("updated_at", sa.DateTime),
     )
+
+    now = datetime.now(UTC)
 
     presets = [
         (
@@ -67,6 +74,7 @@ def upgrade() -> None:
     for name, description, dsl in presets:
         conn.execute(
             sa.insert(strategies_table).values(
+                # id is omitted so SQLite autoincrements it.
                 name=name,
                 description=description,
                 execution_mode="MANUAL",
@@ -77,6 +85,8 @@ def upgrade() -> None:
                 dsl_expression=dsl,
                 expression_json=None,
                 is_builtin=True,
+                created_at=now,
+                updated_at=now,
             ),
         )
 
