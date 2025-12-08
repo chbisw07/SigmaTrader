@@ -39,6 +39,21 @@ class Strategy(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text())
+
+    # Ownership and scoping for reusable templates.
+    owner_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    scope: Mapped[Optional[str]] = mapped_column(String(16))  # GLOBAL or LOCAL
+
+    # Optional expression template for indicator-based alerts.
+    dsl_expression: Mapped[Optional[str]] = mapped_column(Text())
+    expression_json: Mapped[Optional[str]] = mapped_column(Text())
+
+    is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     execution_mode: Mapped[str] = mapped_column(
         String(16), nullable=False, default="MANUAL"
     )
