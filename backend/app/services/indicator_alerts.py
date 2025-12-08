@@ -16,6 +16,7 @@ from app.db.session import SessionLocal
 from app.models import Alert, IndicatorRule, Order, Position, User
 from app.schemas.indicator_rules import (
     IndicatorCondition,
+    IndicatorType,
     LogicType,
     OperatorType,
     TriggerMode,
@@ -222,7 +223,10 @@ def _compute_indicator_sample(
     indicator = condition.indicator
     params = condition.params or {}
 
-    if indicator == "RSI":
+    if indicator == "PRICE":
+        value = closes[-1]
+        prev = closes[-2] if len(closes) >= 2 else None
+    elif indicator == "RSI":
         period = int(params.get("period", 14))
         value, prev = _compute_rsi(closes, period)
     elif indicator == "MA":
@@ -283,6 +287,16 @@ def _condition_matches(
         if prev is None:
             return False
         return prev >= t1 and value < t1
+    if op == "MOVE_UP_PCT":
+        if prev is None or prev == 0:
+            return False
+        change_pct = (value - prev) / abs(prev) * 100.0
+        return change_pct >= t1
+    if op == "MOVE_DOWN_PCT":
+        if prev is None or prev == 0:
+            return False
+        change_pct = (prev - value) / abs(prev) * 100.0
+        return change_pct >= t1
     return False
 
 
@@ -547,3 +561,32 @@ __all__ = [
     "evaluate_indicator_rules_once",
     "schedule_indicator_alerts",
 ]
+
+
+def compute_indicator_preview(
+    db: Session,
+    settings: Settings,
+    *,
+    symbol: str,
+    exchange: str,
+    timeframe: Timeframe,
+    indicator: IndicatorType,
+    params: Dict[str, object] | None = None,
+) -> IndicatorSample:
+    """Return the latest indicator sample for ad-hoc preview.
+
+    This is used by the alert configuration UI so that users can see the
+    current indicator value when choosing thresholds.
+    """
+
+    candles = _load_candles_for_rule(db, settings, symbol, exchange, timeframe)
+    if not candles:
+        return IndicatorSample(None, None, None)
+
+    condition = IndicatorCondition(
+        indicator=indicator,
+        operator="GT",
+        threshold_1=0.0,
+        params=params or {},
+    )
+    return _compute_indicator_sample(candles, condition)

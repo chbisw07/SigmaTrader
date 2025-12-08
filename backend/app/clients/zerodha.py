@@ -33,6 +33,9 @@ class KiteLike(Protocol):
     def holdings(self) -> List[Dict[str, Any]]:  # pragma: no cover
         ...
 
+    def ltp(self, instruments: list[str]) -> Dict[str, Any]:  # pragma: no cover
+        ...
+
     def place_gtt(
         self,
         trigger_type: str,
@@ -151,6 +154,39 @@ class ZerodhaClient:
         quote = data[instrument]
         # The KiteConnect ltp API returns a dict with an `last_price` key.
         return float(quote["last_price"])
+
+    def get_ltp_bulk(
+        self,
+        instruments: list[tuple[str, str]],
+    ) -> Dict[tuple[str, str], Dict[str, float | None]]:
+        """Return LTP and previous close for multiple instruments.
+
+        The input is a list of (exchange, tradingsymbol) pairs. The result
+        maps the same pairs to a dict containing:
+        - last_price: current traded price
+        - prev_close: previous close price when available
+        """
+
+        if not instruments:
+            return {}
+
+        codes = [f"{exchange}:{symbol}" for exchange, symbol in instruments]
+        data = self._kite.ltp(codes)
+
+        result: Dict[tuple[str, str], Dict[str, float | None]] = {}
+        for (exchange, symbol), code in zip(instruments, codes, strict=False):
+            quote = data.get(code)
+            if not quote:
+                continue
+            last_price = float(quote.get("last_price", 0.0))
+            ohlc = quote.get("ohlc") or {}
+            close_val = ohlc.get("close")
+            prev_close = float(close_val) if close_val is not None else None
+            result[(exchange, symbol)] = {
+                "last_price": last_price,
+                "prev_close": prev_close,
+            }
+        return result
 
     def list_orders(self) -> list[Dict[str, Any]]:
         """Return Zerodha order book."""

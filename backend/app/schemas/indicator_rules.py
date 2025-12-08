@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 IndicatorType = Literal[
+    "PRICE",
     "RSI",
     "MA",
     "MA_CROSS",
@@ -16,7 +17,16 @@ IndicatorType = Literal[
     "VWAP",
 ]
 
-OperatorType = Literal["GT", "LT", "CROSS_ABOVE", "CROSS_BELOW", "BETWEEN", "OUTSIDE"]
+OperatorType = Literal[
+    "GT",
+    "LT",
+    "CROSS_ABOVE",
+    "CROSS_BELOW",
+    "BETWEEN",
+    "OUTSIDE",
+    "MOVE_UP_PCT",
+    "MOVE_DOWN_PCT",
+]
 TriggerMode = Literal["ONCE", "ONCE_PER_BAR", "EVERY_TIME"]
 ActionType = Literal["ALERT_ONLY", "SELL_PERCENT", "BUY_QUANTITY"]
 LogicType = Literal["AND", "OR"]

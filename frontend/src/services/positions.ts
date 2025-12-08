@@ -44,7 +44,12 @@ export async function fetchPositions(): Promise<Position[]> {
 }
 
 export async function fetchHoldings(): Promise<Holding[]> {
-  const res = await fetch('/api/positions/holdings')
+  const url = new URL('/api/positions/holdings', window.location.origin)
+  // Add a cache-buster so that each refresh button press forces a fresh
+  // request to the backend and, in turn, to Zerodha.
+  url.searchParams.set('_ts', String(Date.now()))
+
+  const res = await fetch(url.toString(), { cache: 'no-store' })
   if (!res.ok) {
     throw new Error(`Failed to load holdings (${res.status})`)
   }

@@ -152,6 +152,18 @@ def list_holdings(
 
     raw = client.list_holdings()
 
+    # Refresh LTP and day-change using Kite's LTP endpoint so that the
+    # Holdings page reflects near-real-time prices instead of relying
+    # solely on the snapshot embedded in the holdings payload.
+    instruments: list[tuple[str, str]] = []
+    for entry in raw:
+        symbol = entry.get("tradingsymbol")
+        exchange = (entry.get("exchange") or "NSE").upper()
+        if isinstance(symbol, str):
+            instruments.append((exchange, symbol))
+
+    ltp_map = client.get_ltp_bulk(instruments)
+
     # Pre-compute the last executed BUY order date per symbol for this user so
     # that the holdings response can surface a "last purchase date" column.
     buy_orders: List[Order] = (
@@ -187,7 +199,9 @@ def list_holdings(
         exchange = (entry.get("exchange") or "NSE").upper()
         qty = entry.get("quantity", 0)
         avg = entry.get("average_price", 0)
-        last = entry.get("last_price")
+
+        ltp_info = ltp_map.get((exchange, symbol), {})
+        last = ltp_info.get("last_price") or entry.get("last_price")
         day_change_pct_raw = entry.get("day_change_percentage")
 
         if not isinstance(symbol, str):
@@ -210,8 +224,26 @@ def list_holdings(
             if cost:
                 total_pnl_percent = (pnl / cost) * 100.0
 
+        prev_close: float | None = None
+        raw_prev_close = ltp_info.get("prev_close")
+        if isinstance(raw_prev_close, (int, float)):
+            prev_close = float(raw_prev_close)
+        elif day_change_pct_raw is not None and entry.get("last_price") is not None:
+            # Fallback: derive previous close from the holdings snapshot
+            # using Zerodha's day_change_percentage and last_price fields.
+            try:
+                snap_last_f = float(entry.get("last_price"))
+                pct_f = float(day_change_pct_raw)
+                denom = 1.0 + pct_f / 100.0
+                if snap_last_f and denom:
+                    prev_close = snap_last_f / denom
+            except (TypeError, ValueError, ZeroDivisionError):
+                prev_close = None
+
         today_pnl_percent: float | None = None
-        if day_change_pct_raw is not None:
+        if prev_close is not None and last_f is not None and prev_close != 0:
+            today_pnl_percent = (last_f - prev_close) / prev_close * 100.0
+        elif day_change_pct_raw is not None:
             try:
                 today_pnl_percent = float(day_change_pct_raw)
             except (TypeError, ValueError):

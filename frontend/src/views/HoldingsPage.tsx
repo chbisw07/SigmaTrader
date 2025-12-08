@@ -33,6 +33,8 @@ import {
   type IndicatorType,
   type OperatorType,
   type TriggerMode,
+  fetchIndicatorPreview,
+  type IndicatorPreview,
 } from '../services/indicatorAlerts'
 
 type HoldingIndicators = {
@@ -81,6 +83,13 @@ export function HoldingsPage() {
   const [columnVisibilityModel, setColumnVisibilityModel] =
     useState<GridColumnVisibilityModel>({})
 
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false)
+  const [refreshDays, setRefreshDays] = useState('0')
+  const [refreshHours, setRefreshHours] = useState('0')
+  const [refreshMinutes, setRefreshMinutes] = useState('5')
+  const [refreshSeconds, setRefreshSeconds] = useState('0')
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+
   const load = async () => {
     try {
       setLoading(true)
@@ -116,6 +125,100 @@ export function HoldingsPage() {
       // Ignore JSON/Storage errors and fall back to defaults.
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(
+        'st_holdings_refresh_config_v1',
+      )
+      if (!raw) return
+      const parsed = JSON.parse(raw) as {
+        enabled?: boolean
+        days?: string
+        hours?: string
+        minutes?: string
+        seconds?: string
+      }
+      if (parsed.enabled != null) {
+        setAutoRefreshEnabled(parsed.enabled)
+      }
+      if (parsed.days != null) setRefreshDays(parsed.days)
+      if (parsed.hours != null) setRefreshHours(parsed.hours)
+      if (parsed.minutes != null) setRefreshMinutes(parsed.minutes)
+      if (parsed.seconds != null) setRefreshSeconds(parsed.seconds)
+    } catch {
+      // Ignore malformed config.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(
+        'st_holdings_refresh_config_v1',
+        JSON.stringify({
+          enabled: autoRefreshEnabled,
+          days: refreshDays,
+          hours: refreshHours,
+          minutes: refreshMinutes,
+          seconds: refreshSeconds,
+        }),
+      )
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [
+    autoRefreshEnabled,
+    refreshDays,
+    refreshHours,
+    refreshMinutes,
+    refreshSeconds,
+  ])
+
+  useEffect(() => {
+    if (!autoRefreshEnabled) {
+      return
+    }
+
+    const days = Number(refreshDays) || 0
+    const hours = Number(refreshHours) || 0
+    const minutes = Number(refreshMinutes) || 0
+    const seconds = Number(refreshSeconds) || 0
+
+    const totalSeconds =
+      days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60 + seconds
+
+    if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
+      setRefreshError('Auto-refresh interval must be greater than zero.')
+      return
+    }
+
+    const minSeconds = 30
+    if (totalSeconds < minSeconds) {
+      setRefreshError(
+        `Minimum auto-refresh interval is ${minSeconds} seconds.`,
+      )
+      return
+    }
+
+    setRefreshError(null)
+    const intervalMs = totalSeconds * 1000
+
+    const id = window.setInterval(() => {
+      void load()
+    }, intervalMs)
+
+    return () => {
+      window.clearInterval(id)
+    }
+  }, [
+    autoRefreshEnabled,
+    refreshDays,
+    refreshHours,
+    refreshMinutes,
+    refreshSeconds,
+  ])
 
   const enrichHoldingsWithHistory = async (rows: HoldingRow[]) => {
     for (const row of rows) {
@@ -450,6 +553,123 @@ export function HoldingsPage() {
         sx={{
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 1,
+          mb: 1,
+        }}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Typography variant="caption" color="text.secondary">
+            Chart period:
+          </Typography>
+          <Select
+            size="small"
+            value={String(chartPeriodDays)}
+            onChange={(e) => setChartPeriodDays(Number(e.target.value) || 30)}
+          >
+            <MenuItem value="30">1M</MenuItem>
+            <MenuItem value="90">3M</MenuItem>
+            <MenuItem value="180">6M</MenuItem>
+            <MenuItem value="365">1Y</MenuItem>
+            <MenuItem value="730">2Y</MenuItem>
+          </Select>
+        </Box>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.5,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Typography variant="caption" color="text.secondary">
+            Auto refresh every
+          </Typography>
+          <TextField
+            label="DD"
+            size="small"
+            type="number"
+            value={refreshDays}
+            onChange={(e) => setRefreshDays(e.target.value)}
+            sx={{ width: 68 }}
+            inputProps={{ min: 0 }}
+          />
+          <TextField
+            label="HH"
+            size="small"
+            type="number"
+            value={refreshHours}
+            onChange={(e) => setRefreshHours(e.target.value)}
+            sx={{ width: 68 }}
+            inputProps={{ min: 0, max: 23 }}
+          />
+          <TextField
+            label="MM"
+            size="small"
+            type="number"
+            value={refreshMinutes}
+            onChange={(e) => setRefreshMinutes(e.target.value)}
+            sx={{ width: 68 }}
+            inputProps={{ min: 0, max: 59 }}
+          />
+          <TextField
+            label="SS"
+            size="small"
+            type="number"
+            value={refreshSeconds}
+            onChange={(e) => setRefreshSeconds(e.target.value)}
+            sx={{ width: 68 }}
+            inputProps={{ min: 0, max: 59 }}
+          />
+          <Button
+            size="small"
+            variant={autoRefreshEnabled ? 'contained' : 'outlined'}
+            onClick={() => setAutoRefreshEnabled((prev) => !prev)}
+          >
+            {autoRefreshEnabled ? 'Auto-refresh ON' : 'Auto-refresh OFF'}
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => {
+              setRefreshDays('0')
+              setRefreshHours('0')
+              setRefreshMinutes('5')
+              setRefreshSeconds('0')
+            }}
+          >
+            Reset
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => {
+              void load()
+            }}
+          >
+            Refresh now
+          </Button>
+        </Box>
+      </Box>
+      {refreshError && (
+        <Typography variant="caption" color="error" sx={{ mb: 1, display: 'block' }}>
+          {refreshError}
+        </Typography>
+      )}
+
+      {/* Old chart-period-only box removed; merged into combined toolbar above */}
+      {/* <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
           justifyContent: 'flex-end',
           gap: 1,
           mb: 1,
@@ -469,7 +689,7 @@ export function HoldingsPage() {
           <MenuItem value="365">1Y</MenuItem>
           <MenuItem value="730">2Y</MenuItem>
         </Select>
-      </Box>
+      </Box> */}
 
       {loading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -643,8 +863,8 @@ function IndicatorAlertDialog({
   const [rules, setRules] = useState<IndicatorRule[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  const [indicator, setIndicator] = useState<IndicatorType>('RSI')
-  const [operator, setOperator] = useState<OperatorType>('GT')
+  const [indicator, setIndicator] = useState<IndicatorType>('PRICE')
+  const [operator, setOperator] = useState<OperatorType>('CROSS_ABOVE')
   const [timeframe, setTimeframe] = useState<string>('1d')
   const [triggerMode, setTriggerMode] =
     useState<TriggerMode>('ONCE_PER_BAR')
@@ -654,6 +874,10 @@ function IndicatorAlertDialog({
   const [threshold2, setThreshold2] = useState<string>('')
   const [period, setPeriod] = useState<string>('14')
   const [actionValue, setActionValue] = useState<string>('10')
+
+  const [preview, setPreview] = useState<IndicatorPreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open || !symbol) {
@@ -684,13 +908,67 @@ function IndicatorAlertDialog({
     }
   }, [open, symbol])
 
+  useEffect(() => {
+    if (!open || !symbol) {
+      return
+    }
+    let active = true
+
+    const loadPreview = async () => {
+      try {
+        setPreviewLoading(true)
+        setPreviewError(null)
+
+        const numericPeriod = Number(period) || undefined
+        const params: {
+          period?: number
+          window?: number
+        } = {}
+
+        if (indicator === 'RSI' || indicator === 'MA' || indicator === 'ATR') {
+          if (numericPeriod != null) params.period = numericPeriod
+        } else if (
+          indicator === 'VOLATILITY' ||
+          indicator === 'PERF_PCT' ||
+          indicator === 'VOLUME_RATIO'
+        ) {
+          if (numericPeriod != null) params.window = numericPeriod
+        }
+
+        const data = await fetchIndicatorPreview({
+          symbol,
+          exchange: exchange ?? 'NSE',
+          timeframe,
+          indicator,
+          ...params,
+        })
+        if (!active) return
+        setPreview(data)
+      } catch (err) {
+        if (!active) return
+        setPreview(null)
+        setPreviewError(
+          err instanceof Error ? err.message : 'Failed to load indicator value',
+        )
+      } finally {
+        if (active) setPreviewLoading(false)
+      }
+    }
+
+    void loadPreview()
+
+    return () => {
+      active = false
+    }
+  }, [open, symbol, exchange, timeframe, indicator, period])
+
   const resetForm = () => {
-    setIndicator('RSI')
-    setOperator('GT')
-    setTimeframe('1d')
+    setIndicator('PRICE')
+    setOperator('CROSS_ABOVE')
+    setTimeframe('1m')
     setTriggerMode('ONCE_PER_BAR')
     setActionType('ALERT_ONLY')
-    setThreshold1('80')
+    setThreshold1('')
     setThreshold2('')
     setPeriod('14')
     setActionValue('10')
@@ -811,6 +1089,26 @@ function IndicatorAlertDialog({
         ? 'Buy quantity'
         : null
 
+  const formatPreviewValue = (): string => {
+    if (!preview || preview.value == null) return '—'
+    const v = preview.value
+    if (indicator === 'PRICE' || indicator === 'MA') {
+      return v.toFixed(2)
+    }
+    if (
+      indicator === 'RSI' ||
+      indicator === 'PERF_PCT' ||
+      indicator === 'VOLATILITY' ||
+      indicator === 'ATR'
+    ) {
+      return v.toFixed(2)
+    }
+    if (indicator === 'VOLUME_RATIO') {
+      return `${v.toFixed(2)}x`
+    }
+    return v.toFixed(2)
+  }
+
   return (
     <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
       <DialogTitle>Create indicator alert</DialogTitle>
@@ -828,6 +1126,8 @@ function IndicatorAlertDialog({
               onChange={(e) => setTimeframe(e.target.value)}
               sx={{ minWidth: 140 }}
             >
+              <MenuItem value="1m">1m</MenuItem>
+              <MenuItem value="5m">5m</MenuItem>
               <MenuItem value="1d">1D</MenuItem>
               <MenuItem value="1h">1H</MenuItem>
               <MenuItem value="15m">15m</MenuItem>
@@ -842,6 +1142,7 @@ function IndicatorAlertDialog({
               }
               sx={{ minWidth: 160 }}
             >
+              <MenuItem value="PRICE">Price (close)</MenuItem>
               <MenuItem value="RSI">RSI</MenuItem>
               <MenuItem value="MA">Moving average</MenuItem>
               <MenuItem value="VOLATILITY">Volatility</MenuItem>
@@ -877,8 +1178,10 @@ function IndicatorAlertDialog({
               <MenuItem value="LT">&lt;</MenuItem>
               <MenuItem value="BETWEEN">Between</MenuItem>
               <MenuItem value="OUTSIDE">Outside</MenuItem>
-              <MenuItem value="CROSS_ABOVE">Crosses above</MenuItem>
-              <MenuItem value="CROSS_BELOW">Crosses below</MenuItem>
+              <MenuItem value="CROSS_ABOVE">Crossing above</MenuItem>
+              <MenuItem value="CROSS_BELOW">Crossing below</MenuItem>
+              <MenuItem value="MOVE_UP_PCT">Moving up %</MenuItem>
+              <MenuItem value="MOVE_DOWN_PCT">Moving down %</MenuItem>
             </TextField>
             <TextField
               label="Threshold"
@@ -886,6 +1189,13 @@ function IndicatorAlertDialog({
               value={threshold1}
               onChange={(e) => setThreshold1(e.target.value)}
               sx={{ minWidth: 140 }}
+              helperText={
+                previewLoading
+                  ? 'Loading current value…'
+                  : previewError
+                    ? 'Current value unavailable'
+                    : `Current ${indicator === 'PRICE' ? 'price' : indicator}: ${formatPreviewValue()}`
+              }
             />
             {showThreshold2 && (
               <TextField

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from typing import List
+from datetime import datetime
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import IndicatorRule, User
 from app.schemas.indicator_rules import (
@@ -13,7 +16,10 @@ from app.schemas.indicator_rules import (
     IndicatorRuleCreate,
     IndicatorRuleRead,
     IndicatorRuleUpdate,
+    IndicatorType,
 )
+from app.services.indicator_alerts import compute_indicator_preview
+from app.services.market_data import Timeframe
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -73,6 +79,51 @@ def _ensure_owner(rule: IndicatorRule, user: User) -> None:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Rule not found.",
         )
+
+
+class IndicatorPreview(BaseModel):
+    value: Optional[float] = None
+    prev_value: Optional[float] = None
+    bar_time: Optional[datetime] = None
+
+
+@router.get("/preview", response_model=IndicatorPreview)
+def preview_indicator_value(
+    symbol: str = Query(..., min_length=1),
+    exchange: str = Query("NSE", min_length=1),
+    timeframe: Timeframe = Query("1d"),
+    indicator: IndicatorType = Query("PRICE"),
+    period: int | None = Query(None, ge=1),
+    window: int | None = Query(None, ge=1),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> IndicatorPreview:
+    """Return the latest indicator value for a symbol/timeframe.
+
+    Used by the alert configuration UI so users can see the current
+    indicator level while choosing thresholds.
+    """
+
+    params: dict[str, Any] = {}
+    if period is not None:
+        params["period"] = period
+    if window is not None:
+        params["window"] = window
+
+    sample = compute_indicator_preview(
+        db,
+        settings,
+        symbol=symbol,
+        exchange=exchange,
+        timeframe=timeframe,
+        indicator=indicator,
+        params=params,
+    )
+    return IndicatorPreview(
+        value=sample.value,
+        prev_value=sample.prev_value,
+        bar_time=sample.bar_time,
+    )
 
 
 @router.get("/", response_model=List[IndicatorRuleRead])

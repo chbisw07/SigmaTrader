@@ -1,4 +1,5 @@
 export type IndicatorType =
+  | 'PRICE'
   | 'RSI'
   | 'MA'
   | 'MA_CROSS'
@@ -15,6 +16,8 @@ export type OperatorType =
   | 'CROSS_BELOW'
   | 'BETWEEN'
   | 'OUTSIDE'
+  | 'MOVE_UP_PCT'
+  | 'MOVE_DOWN_PCT'
 
 export type TriggerMode = 'ONCE' | 'ONCE_PER_BAR' | 'EVERY_TIME'
 
@@ -73,6 +76,12 @@ export type IndicatorRuleUpdate = Partial<
 > & {
   symbol?: string | null
   universe?: UniverseType | null
+}
+
+export type IndicatorPreview = {
+  value: number | null
+  prev_value: number | null
+  bar_time: string | null
 }
 
 export async function listIndicatorRules(
@@ -148,3 +157,36 @@ export async function deleteIndicatorRule(id: number): Promise<void> {
   }
 }
 
+export async function fetchIndicatorPreview(params: {
+  symbol: string
+  exchange?: string
+  timeframe: string
+  indicator: IndicatorType
+  period?: number
+  window?: number
+}): Promise<IndicatorPreview> {
+  const url = new URL('/api/indicator-alerts/preview', window.location.origin)
+  url.searchParams.set('symbol', params.symbol)
+  url.searchParams.set('timeframe', params.timeframe)
+  url.searchParams.set('indicator', params.indicator)
+  if (params.exchange) {
+    url.searchParams.set('exchange', params.exchange)
+  }
+  if (params.period != null) {
+    url.searchParams.set('period', String(params.period))
+  }
+  if (params.window != null) {
+    url.searchParams.set('window', String(params.window))
+  }
+
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to load indicator preview (${res.status})${
+        body ? `: ${body}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as IndicatorPreview
+}
