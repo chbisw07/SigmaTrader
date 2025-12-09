@@ -58,6 +58,21 @@ _ALLOWED_TIMEFRAMES = {
     "1y",
 }
 
+# Supported indicators for the DSL; these should mirror
+# app.schemas.indicator_rules.IndicatorType and the implementations in
+# app.services.indicator_alerts._compute_indicator_sample.
+_ALLOWED_INDICATORS = {
+    "PRICE",
+    "RSI",
+    "MA",
+    "MA_CROSS",
+    "VOLATILITY",
+    "ATR",
+    "PERF_PCT",
+    "VOLUME_RATIO",
+    "VWAP",
+}
+
 
 class _Parser:
     def __init__(self, text: str) -> None:
@@ -195,6 +210,9 @@ class _Parser:
                         "like RSI(14, 1D)"
                     ),
                 )
+            ident_upper = ident.upper()
+            if ident_upper not in _ALLOWED_INDICATORS:
+                raise IndicatorAlertError(f"Unknown indicator '{ident_upper}'")
             self._consume("LPAREN")
             timeframe: Timeframe = "1d"
             params: dict[str, object] = {}

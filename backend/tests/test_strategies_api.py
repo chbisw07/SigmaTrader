@@ -61,3 +61,36 @@ def test_create_and_list_strategies() -> None:
     strategies = list_response.json()
     names = [s["name"] for s in strategies]
     assert unique_name in names
+
+
+def test_delete_own_strategy() -> None:
+    unique_name = f"test-strategy-delete-{uuid4().hex}"
+
+    # Log in and obtain session cookie.
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "strategy-user", "password": "password"},
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        "/api/strategies/",
+        json={
+            "name": unique_name,
+            "description": "Deletable strategy",
+            "execution_mode": "MANUAL",
+            "enabled": True,
+        },
+    )
+    assert response.status_code == 201
+    created = response.json()
+    strategy_id = created["id"]
+
+    delete_response = client.delete(f"/api/strategies/{strategy_id}")
+    assert delete_response.status_code == 204
+
+    list_response = client.get("/api/strategies/")
+    assert list_response.status_code == 200
+    strategies = list_response.json()
+    ids = [s["id"] for s in strategies]
+    assert strategy_id not in ids

@@ -142,4 +142,35 @@ def update_strategy(
     return strategy
 
 
+@router.delete(
+    "/{strategy_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+def delete_strategy(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    """Delete a non-builtin strategy owned by the current user."""
+
+    strategy = db.get(Strategy, strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    if strategy.is_builtin and strategy.owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Built-in strategies cannot be deleted.",
+        )
+    if strategy.owner_id is not None and strategy.owner_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Strategy not found.",
+        )
+
+    db.delete(strategy)
+    db.commit()
+
+
 __all__ = ["router"]

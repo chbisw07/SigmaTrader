@@ -67,3 +67,16 @@ export async function createStrategyTemplate(
   return (await res.json()) as Strategy
 }
 
+export async function deleteStrategy(id: number): Promise<void> {
+  const res = await fetch(`/api/strategies/${id}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to delete strategy (${res.status})${
+        body ? `: ${body}` : ''
+      }`,
+    )
+  }
+}

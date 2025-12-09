@@ -8,6 +8,9 @@ import DialogTitle from '@mui/material/DialogTitle'
 import MenuItem from '@mui/material/MenuItem'
 import Tabs from '@mui/material/Tabs'
 import Tab from '@mui/material/Tab'
+import IconButton from '@mui/material/IconButton'
+import Tooltip from '@mui/material/Tooltip'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import Paper from '@mui/material/Paper'
 import Select from '@mui/material/Select'
 import TextField from '@mui/material/TextField'
@@ -22,6 +25,7 @@ import {
   GridLogicOperator,
 } from '@mui/x-data-grid'
 import { useEffect, useState } from 'react'
+import Editor, { type OnMount } from '@monaco-editor/react'
 
 import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
@@ -42,6 +46,7 @@ import {
 import {
   createStrategyTemplate,
   listStrategyTemplates,
+  deleteStrategy,
   type Strategy,
 } from '../services/strategies'
 
@@ -1333,6 +1338,143 @@ function IndicatorAlertDialog({
 
   const [mode, setMode] = useState<'simple' | 'dsl'>('simple')
   const [dslExpression, setDslExpression] = useState<string>('')
+  const [dslHelpOpen, setDslHelpOpen] = useState(false)
+
+  const selectedTemplate = selectedStrategyId
+    ? templates.find((t) => t.id === selectedStrategyId) ?? null
+    : null
+
+  const handleDeleteStrategyTemplate = async () => {
+    if (!selectedTemplate) return
+    const ok = window.confirm(
+      `Delete strategy "${selectedTemplate.name}"? This cannot be undone.`,
+    )
+    if (!ok) return
+    try {
+      await deleteStrategy(selectedTemplate.id)
+      setTemplates((prev) => prev.filter((t) => t.id !== selectedTemplate.id))
+      setSelectedStrategyId(null)
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to delete strategy',
+      )
+    }
+  }
+
+  const handleDslEditorMount: OnMount = (editor, monaco) => {
+    const languageId = 'sigma-dsl'
+    const alreadyRegistered = monaco.languages
+      .getLanguages()
+      .some((lang) => lang.id === languageId)
+    if (!alreadyRegistered) {
+      monaco.languages.register({ id: languageId })
+
+      const indicatorSuggestions = [
+        'PRICE',
+        'RSI',
+        'MA',
+        'VOLATILITY',
+        'ATR',
+        'PERF_PCT',
+        'VOLUME_RATIO',
+        'VWAP',
+      ]
+      const keywordSuggestions = [
+        'AND',
+        'OR',
+        'NOT',
+        'CROSS_ABOVE',
+        'CROSS_BELOW',
+      ]
+      const timeframeSuggestions = [
+        '1m',
+        '5m',
+        '15m',
+        '1h',
+        '1d',
+        '1mo',
+        '1y',
+      ]
+
+      monaco.languages.registerCompletionItemProvider(languageId, {
+        provideCompletionItems(model, position) {
+          const word = model.getWordUntilPosition(position)
+          const range = new monaco.Range(
+            position.lineNumber,
+            word.startColumn,
+            position.lineNumber,
+            word.endColumn,
+          )
+
+          const makeItems = (
+            labels: string[],
+            kind: monaco.languages.CompletionItemKind,
+          ) =>
+            labels.map((label) => ({
+              label,
+              kind,
+              insertText: label,
+              range,
+            }))
+
+          const suggestions = [
+            ...makeItems(
+              indicatorSuggestions,
+              monaco.languages.CompletionItemKind.Function,
+            ),
+            ...makeItems(
+              keywordSuggestions,
+              monaco.languages.CompletionItemKind.Keyword,
+            ),
+            ...makeItems(
+              timeframeSuggestions,
+              monaco.languages.CompletionItemKind.Constant,
+            ),
+          ]
+          return { suggestions }
+        },
+      })
+    }
+
+    const model = editor.getModel()
+    if (model) {
+      monaco.editor.setModelLanguage(model, languageId)
+    }
+  }
+
+  const buildSimpleDsl = (): string => {
+    const timeframeLabel = timeframe
+    const periodNum = Number(period) || (indicator === 'RSI' ? 14 : 20)
+    const indicatorPart =
+      indicator === 'PRICE'
+        ? `PRICE(${timeframeLabel})`
+        : `${indicator}(${periodNum}, ${timeframeLabel})`
+
+    const operatorLabel =
+      operator === 'GT'
+        ? '>'
+        : operator === 'LT'
+          ? '<'
+          : operator === 'CROSS_ABOVE'
+            ? 'CROSS_ABOVE'
+            : operator === 'CROSS_BELOW'
+              ? 'CROSS_BELOW'
+              : operator === 'BETWEEN'
+                ? 'BETWEEN'
+                : operator === 'OUTSIDE'
+                  ? 'OUTSIDE'
+                  : operator === 'MOVE_UP_PCT'
+                    ? 'MOVE_UP_PCT'
+                    : 'MOVE_DOWN_PCT'
+
+    const t1 = Number(threshold1 || '0')
+    let dsl = `${indicatorPart} ${operatorLabel} ${t1}`
+    if (operator === 'BETWEEN' || operator === 'OUTSIDE') {
+      const t2 = Number(threshold2 || '0')
+      dsl = `${indicatorPart} ${operatorLabel} ${t1} ${t2}`
+    }
+    return dsl
+  }
 
   useEffect(() => {
     if (!open || !symbol) {
@@ -1384,6 +1526,14 @@ function IndicatorAlertDialog({
       active = false
     }
   }, [open, symbol, mode])
+
+  useEffect(() => {
+    if (!selectedStrategyId) return
+    const tpl = templates.find((t) => t.id === selectedStrategyId)
+    if (tpl?.dsl_expression) {
+      setDslExpression(tpl.dsl_expression)
+    }
+  }, [selectedStrategyId, templates])
 
   useEffect(() => {
     if (!open || !symbol) {
@@ -1592,37 +1742,7 @@ function IndicatorAlertDialog({
     if (!name) return
 
     // Build a simple DSL representation of the current single-condition rule.
-    const periodNum = Number(period) || (indicator === 'RSI' ? 14 : 20)
-    const t1 = Number(threshold1 || '0')
-    const timeframeLabel = timeframe
-
-    const indicatorPart =
-      indicator === 'PRICE'
-        ? `PRICE(${timeframeLabel})`
-        : `${indicator}(${periodNum}, ${timeframeLabel})`
-
-    const operatorLabel =
-      operator === 'GT'
-        ? '>'
-        : operator === 'LT'
-          ? '<'
-          : operator === 'CROSS_ABOVE'
-            ? 'CROSS_ABOVE'
-            : operator === 'CROSS_BELOW'
-              ? 'CROSS_BELOW'
-              : operator === 'BETWEEN'
-                ? 'BETWEEN'
-                : operator === 'OUTSIDE'
-                  ? 'OUTSIDE'
-                  : operator === 'MOVE_UP_PCT'
-                    ? 'MOVE_UP_PCT'
-                    : 'MOVE_DOWN_PCT'
-
-    let dsl = `${indicatorPart} ${operatorLabel} ${t1}`
-    if (operator === 'BETWEEN' || operator === 'OUTSIDE') {
-      const t2 = Number(threshold2 || '0')
-      dsl = `${indicatorPart} ${operatorLabel} ${t1} ${t2}`
-    }
+    const dsl = buildSimpleDsl()
 
     setSavingTemplate(true)
     try {
@@ -1694,14 +1814,38 @@ function IndicatorAlertDialog({
         <Typography variant="subtitle1" sx={{ mb: 1 }}>
           {symbol ?? '--'} {exchange ? ` / ${exchange}` : ''}
         </Typography>
-        <Tabs
-          value={mode}
-          onChange={(_event, value) => setMode(value)}
-          sx={{ mb: 1 }}
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            mb: 1,
+          }}
         >
-          <Tab value="simple" label="Simple builder" />
-          <Tab value="dsl" label="DSL expression" />
-        </Tabs>
+          <Tabs
+            value={mode}
+            onChange={(_event, value) => {
+              setMode(value)
+              if (value === 'dsl') {
+                setDslExpression((prev) =>
+                  prev.trim() ? prev : buildSimpleDsl(),
+                )
+              }
+            }}
+          >
+            <Tab value="simple" label="Simple builder" />
+            <Tab value="dsl" label="DSL expression" />
+          </Tabs>
+          <Tooltip title="View DSL syntax and examples">
+            <IconButton
+              size="small"
+              onClick={() => setDslHelpOpen(true)}
+              aria-label="DSL help"
+            >
+              <HelpOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
@@ -1729,10 +1873,21 @@ function IndicatorAlertDialog({
               variant="outlined"
               onClick={handleSaveAsStrategy}
               disabled={savingTemplate || !symbol}
-              sx={{ alignSelf: 'flex-end', mt: 'auto', height: 40 }}
+              sx={{ alignSelf: 'flex-start', height: 40 }}
             >
               {savingTemplate ? 'Saving…' : 'Save as strategy'}
             </Button>
+            {selectedTemplate && !selectedTemplate.is_builtin && (
+              <Button
+                size="small"
+                variant="text"
+                color="error"
+                onClick={handleDeleteStrategyTemplate}
+                sx={{ alignSelf: 'flex-start', height: 40 }}
+              >
+                Delete strategy
+              </Button>
+            )}
           </Box>
           {mode === 'simple' ? (
             <>
@@ -1828,15 +1983,22 @@ function IndicatorAlertDialog({
               </Box>
             </>
           ) : (
-            <TextField
-              label="DSL expression"
-              size="small"
-              value={dslExpression}
-              onChange={(e) => setDslExpression(e.target.value)}
-              multiline
-              minRows={3}
-              helperText="Use the alert DSL, e.g. (RSI(14, 1d) > 80) AND (SMA(20, 1d) CROSS_ABOVE SMA(50, 1d))."
-            />
+            <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1 }}>
+              <Editor
+                height="140px"
+                defaultLanguage="plaintext"
+                value={dslExpression}
+                onChange={(val) => setDslExpression(val ?? '')}
+                onMount={handleDslEditorMount}
+                options={{
+                  minimap: { enabled: false },
+                  lineNumbers: 'off',
+                  wordWrap: 'on',
+                  fontSize: 13,
+                  automaticLayout: true,
+                }}
+              />
+            </Box>
           )}
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
@@ -1939,6 +2101,66 @@ function IndicatorAlertDialog({
           {saving ? 'Saving…' : 'Create alert'}
         </Button>
       </DialogActions>
+      <Dialog
+        open={dslHelpOpen}
+        onClose={() => setDslHelpOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>DSL help</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="subtitle2" gutterBottom>
+            Indicators
+          </Typography>
+          <Typography variant="body2" paragraph>
+            Supported indicator functions:
+            {' '}
+            PRICE, RSI, MA, VOLATILITY, ATR, PERF_PCT, VOLUME_RATIO, VWAP.
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Operators
+          </Typography>
+          <Typography variant="body2" paragraph>
+            Comparisons:
+            {' '}
+            {'>'}
+            , {'>='}, {'<'},
+            {'<='}, {'=='}, {'!='};
+            {' '}
+            cross:
+            {' '}
+            CROSS_ABOVE, CROSS_BELOW;
+            {' '}
+            boolean:
+            {' '}
+            AND, OR, NOT; use parentheses for grouping.
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Timeframes
+          </Typography>
+          <Typography variant="body2" paragraph>
+            1m, 5m, 15m, 1h, 1d, 1mo, 1y.
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Examples
+          </Typography>
+          <Typography variant="body2">
+            RSI overbought:
+            {' '}
+            <code>(RSI(14, 1d) {'>'} 80)</code>
+          </Typography>
+          <Typography variant="body2">
+            Bullish MA crossover:
+            {' '}
+            <code>(SMA(20, 1d) CROSS_ABOVE SMA(50, 1d)) AND PRICE(1d) {'>'} SMA(200, 1d)</code>
+          </Typography>
+          <Typography variant="body2">
+            Intraday pullback:
+            {' '}
+            <code>PRICE(15m) {'<'} SMA(20, 15m) AND PRICE(1d) {'>'} SMA(50, 1d) AND RSI(14, 15m) {'<'} 40</code>
+          </Typography>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }
