@@ -6,6 +6,7 @@ from typing import List, Optional
 from app.services.alert_expression import (
     ComparisonNode,
     ExpressionNode,
+    FieldOperand,
     IndicatorOperand,
     IndicatorSpec,
     LogicalNode,
@@ -56,6 +57,14 @@ _ALLOWED_TIMEFRAMES = {
     "1d",
     "1mo",
     "1y",
+}
+
+_ALLOWED_FIELDS = {
+    "INVESTED",
+    "PNL_PCT",
+    "QTY",
+    "AVG_PRICE",
+    "CURRENT_VALUE",
 }
 
 # Supported indicators for the DSL; these should mirror
@@ -201,15 +210,16 @@ class _Parser:
 
         if tok.kind == "IDENT":
             ident = self._consume("IDENT").value
-            # Indicator call: IDENT '(' args ')'
             next_tok = self._peek()
+
+            # Field reference when there is no '(' after the identifier.
             if not next_tok or next_tok.kind != "LPAREN":
-                raise IndicatorAlertError(
-                    (
-                        f"Unexpected identifier '{ident}'; expected indicator call "
-                        "like RSI(14, 1D)"
-                    ),
-                )
+                name = ident.upper()
+                if name not in _ALLOWED_FIELDS:
+                    raise IndicatorAlertError(f"Unknown field '{name}'")
+                return FieldOperand(name)
+
+            # Indicator call: IDENT '(' args ')'
             ident_upper = ident.upper()
             if ident_upper not in _ALLOWED_INDICATORS:
                 raise IndicatorAlertError(f"Unknown indicator '{ident_upper}'")
@@ -261,7 +271,7 @@ class _Parser:
             self._consume("RPAREN")
 
             spec = IndicatorSpec(
-                kind=ident.upper(),  # type: ignore[arg-type]
+                kind=ident_upper,  # type: ignore[arg-type]
                 timeframe=timeframe,
                 params=params,
             )

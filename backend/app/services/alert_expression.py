@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from app.core.config import Settings
 from app.db.session import Session
+from app.models import Position
 from app.schemas.indicator_rules import IndicatorType
 from app.services.indicator_alerts import (
     IndicatorAlertError,
@@ -47,7 +48,17 @@ class NumberOperand:
         object.__setattr__(self, "value", float(value))
 
 
-Operand = Union[IndicatorOperand, NumberOperand]
+@dataclass(frozen=True)
+class FieldOperand:
+    node_type: str
+    name: str
+
+    def __init__(self, name: str) -> None:
+        object.__setattr__(self, "node_type", "FIELD")
+        object.__setattr__(self, "name", name)
+
+
+Operand = Union[IndicatorOperand, NumberOperand, FieldOperand]
 
 
 ComparisonOp = Union[
@@ -119,6 +130,11 @@ def _operand_to_dict(op: Operand) -> Dict[str, Any]:
             "type": "NUMBER",
             "value": op.value,
         }
+    if isinstance(op, FieldOperand):
+        return {
+            "type": "FIELD",
+            "name": op.name,
+        }
     raise ValueError(f"Unsupported operand: {op!r}")
 
 
@@ -168,6 +184,11 @@ def _dict_to_operand(data: Dict[str, Any]) -> Operand:
             raise IndicatorAlertError(
                 "Invalid numeric operand in expression_json",
             ) from exc
+    if t == "FIELD":
+        name = data.get("name")
+        if not isinstance(name, str):
+            raise IndicatorAlertError("Field operand missing name")
+        return FieldOperand(name)
     raise IndicatorAlertError("Unknown operand type in expression_json")
 
 
@@ -217,6 +238,20 @@ def _indicator_key(spec: IndicatorSpec) -> Tuple[str, str, Tuple[Tuple[str, Any]
     return spec.kind, spec.timeframe, params_items
 
 
+def _iter_field_names(expr: ExpressionNode) -> Iterable[str]:
+    if isinstance(expr, ComparisonNode):
+        for op in (expr.left, expr.right):
+            if isinstance(op, FieldOperand):
+                yield op.name
+        return
+    if isinstance(expr, NotNode):
+        yield from _iter_field_names(expr.child)
+        return
+    if isinstance(expr, LogicalNode):
+        for child in expr.children:
+            yield from _iter_field_names(child)
+
+
 def _compute_indicator_samples_for_expr(
     db: Session,
     settings: Settings,
@@ -247,15 +282,75 @@ def _compute_indicator_samples_for_expr(
     return samples
 
 
+def _compute_field_samples_for_expr(
+    db: Session,
+    settings: Settings,
+    *,
+    symbol: str,
+    exchange: str,
+    expr: ExpressionNode,
+) -> Dict[str, IndicatorSample]:
+    """Compute snapshot-style field values (e.g., INVESTED, PNL_PCT) for a symbol."""
+
+    field_names = {name.upper() for name in _iter_field_names(expr)}
+    if not field_names:
+        return {}
+
+    pos = (
+        db.query(Position)
+        .filter(Position.symbol == symbol, Position.product == "CNC")
+        .one_or_none()
+    )
+    if pos is None:
+        return {}
+
+    qty = float(pos.qty)
+    avg_price = float(pos.avg_price)
+    invested = qty * avg_price
+
+    candles = _load_candles_for_rule(db, settings, symbol, exchange, "1d")
+    closes = [float(c["close"]) for c in candles] if candles else []
+    last_price = closes[-1] if closes else None
+    current_value = qty * last_price if last_price is not None else None
+
+    pnl_pct: Optional[float] = None
+    if invested > 0 and current_value is not None:
+        pnl_pct = (current_value - invested) / invested * 100.0
+
+    bar_time = candles[-1]["ts"] if candles else None
+
+    samples: Dict[str, IndicatorSample] = {}
+
+    def _put(name: str, value: Optional[float]) -> None:
+        if name in field_names:
+            samples[name] = IndicatorSample(value, None, bar_time)
+
+    _put("QTY", qty)
+    _put("AVG_PRICE", avg_price)
+    _put("INVESTED", invested)
+    _put("CURRENT_VALUE", current_value)
+    _put("PNL_PCT", pnl_pct)
+
+    return samples
+
+
 def _resolve_operand_value(
     operand: Operand,
-    samples: Dict[Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample],
+    indicator_samples: Dict[
+        Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample
+    ],
+    field_samples: Dict[str, IndicatorSample],
 ) -> Tuple[Optional[float], Optional[float]]:
     if isinstance(operand, NumberOperand):
         return operand.value, operand.value
     if isinstance(operand, IndicatorOperand):
         key = _indicator_key(operand.spec)
-        sample = samples.get(key)
+        sample = indicator_samples.get(key)
+        if sample is None:
+            return None, None
+        return sample.value, sample.prev_value
+    if isinstance(operand, FieldOperand):
+        sample = field_samples.get(operand.name.upper())
         if sample is None:
             return None, None
         return sample.value, sample.prev_value
@@ -264,11 +359,22 @@ def _resolve_operand_value(
 
 def _evaluate_comparison(
     node: ComparisonNode,
-    samples: Dict[Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample],
+    indicator_samples: Dict[
+        Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample
+    ],
+    field_samples: Dict[str, IndicatorSample],
 ) -> bool:
     op = node.operator.upper()
-    left_curr, left_prev = _resolve_operand_value(node.left, samples)
-    right_curr, right_prev = _resolve_operand_value(node.right, samples)
+    left_curr, left_prev = _resolve_operand_value(
+        node.left,
+        indicator_samples,
+        field_samples,
+    )
+    right_curr, right_prev = _resolve_operand_value(
+        node.right,
+        indicator_samples,
+        field_samples,
+    )
 
     if left_curr is None or (
         right_curr is None and op not in {"CROSS_ABOVE", "CROSS_BELOW"}
@@ -313,18 +419,27 @@ def _evaluate_comparison(
 
 def evaluate_expression(
     expr: ExpressionNode,
-    samples: Dict[Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample],
+    indicator_samples: Dict[
+        Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample
+    ],
+    field_samples: Dict[str, IndicatorSample],
 ) -> bool:
     if isinstance(expr, ComparisonNode):
-        return _evaluate_comparison(expr, samples)
+        return _evaluate_comparison(expr, indicator_samples, field_samples)
     if isinstance(expr, NotNode):
-        return not evaluate_expression(expr.child, samples)
+        return not evaluate_expression(expr.child, indicator_samples, field_samples)
     if isinstance(expr, LogicalNode):
         op = expr.op.upper()
         if op == "AND":
-            return all(evaluate_expression(child, samples) for child in expr.children)
+            return all(
+                evaluate_expression(child, indicator_samples, field_samples)
+                for child in expr.children
+            )
         if op == "OR":
-            return any(evaluate_expression(child, samples) for child in expr.children)
+            return any(
+                evaluate_expression(child, indicator_samples, field_samples)
+                for child in expr.children
+            )
         raise IndicatorAlertError(f"Unsupported logical operator: {expr.op}")
     raise IndicatorAlertError("Unsupported expression node type")
 
@@ -339,20 +454,29 @@ def evaluate_expression_for_symbol(
 ) -> Tuple[bool, Dict[Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample]]:
     """Evaluate an expression for a single symbol/exchange.
 
-    Returns a tuple of (matched, samples_by_indicator).
+    Returns a tuple of (matched, samples_by_indicator) where
+    samples_by_indicator contains indicator values only; field values are
+    used internally for evaluation but are not returned.
     """
 
-    samples = _compute_indicator_samples_for_expr(
+    indicator_samples = _compute_indicator_samples_for_expr(
         db,
         settings,
         symbol=symbol,
         exchange=exchange,
         expr=expr,
     )
-    if not samples:
-        return False, samples
-    matched = evaluate_expression(expr, samples)
-    return matched, samples
+    field_samples = _compute_field_samples_for_expr(
+        db,
+        settings,
+        symbol=symbol,
+        exchange=exchange,
+        expr=expr,
+    )
+    if not indicator_samples and not field_samples:
+        return False, indicator_samples
+    matched = evaluate_expression(expr, indicator_samples, field_samples)
+    return matched, indicator_samples
 
 
 __all__ = [

@@ -570,6 +570,14 @@ export function HoldingsPage() {
         value != null ? Number(value).toFixed(2) : '-',
     },
     {
+      field: 'last_price',
+      headerName: 'Last Price',
+      type: 'number',
+      width: 130,
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
       field: 'invested',
       headerName: 'Invested',
       type: 'number',
@@ -579,14 +587,6 @@ export function HoldingsPage() {
         if (h.quantity == null || h.average_price == null) return null
         return Number(h.quantity) * Number(h.average_price)
       },
-      valueFormatter: (value) =>
-        value != null ? Number(value).toFixed(2) : '-',
-    },
-    {
-      field: 'last_price',
-      headerName: 'Last Price',
-      type: 'number',
-      width: 130,
       valueFormatter: (value) =>
         value != null ? Number(value).toFixed(2) : '-',
     },

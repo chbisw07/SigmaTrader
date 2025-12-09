@@ -7,7 +7,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app  # noqa: F401  # ensure routes are imported
-from app.models import Candle
+from app.models import Candle, Position
 from app.services.alert_expression import (
     ComparisonNode,
     IndicatorOperand,
@@ -61,6 +61,15 @@ def setup_module() -> None:  # type: ignore[override]
                 volume=1000.0,
             )
             session.add(c)
+        # Seed a simple CNC position for field-based tests.
+        pos = Position(
+            symbol="TEST",
+            product="CNC",
+            qty=10.0,
+            avg_price=100.0,
+            pnl=0.0,
+        )
+        session.add(pos)
         session.commit()
 
 
@@ -113,6 +122,25 @@ def test_dsl_parses_and_evaluates_complex_expression() -> None:
     # evaluated. For the seeded price path, PRICE(1d) moved from 103 to 106,
     # so it has recently crossed above 104.
     dsl = "(PRICE(1d) > 100) AND PRICE(1d) CROSS_ABOVE 104"
+    expr = parse_expression(dsl)
+
+    settings = get_settings()
+    with SessionLocal() as session:
+        matched, _ = evaluate_expression_for_symbol(
+            session,
+            settings,
+            symbol="TEST",
+            exchange="NSE",
+            expr=expr,
+        )
+
+    assert matched
+
+
+def test_dsl_can_use_fields_and_indicators() -> None:
+    # With qty=10, avg_price=100 and last close=106, INVESTED=1000 and
+    # PNL_PCT ~= 6%, so the field-based subexpression should match.
+    dsl = "INVESTED > 500 AND PNL_PCT > 5"
     expr = parse_expression(dsl)
 
     settings = get_settings()
