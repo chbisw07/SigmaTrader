@@ -270,6 +270,7 @@ class IndicatorRule(Base):
     logic: Mapped[str] = mapped_column(String(8), nullable=False, default="AND")
     conditions_json: Mapped[str] = mapped_column(Text, nullable=False)
     expression_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    dsl_expression: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Future-friendly target fields, in addition to the existing
     # symbol/universe/exchange columns. For now these are mostly used for

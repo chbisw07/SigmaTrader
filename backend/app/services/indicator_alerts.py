@@ -470,6 +470,60 @@ def _evaluate_rule_for_symbol(
     rule.last_triggered_at = bar_time or _now_ist_naive()
 
 
+def _evaluate_rule_expression_for_symbol(
+    db: Session,
+    settings: Settings,
+    rule: IndicatorRule,
+    symbol: str,
+    exchange: str,
+) -> None:
+    """Evaluate an expression_json-backed rule for a single symbol."""
+
+    from app.services.alert_expression import (
+        evaluate_expression_for_symbol,
+        expression_from_dict,
+    )
+
+    if not rule.expression_json:
+        return
+
+    try:
+        expr_dict = json.loads(rule.expression_json)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        msg = f"Invalid expression_json for rule {rule.id}: {exc}"
+        raise IndicatorAlertError(msg) from exc
+
+    expr = expression_from_dict(expr_dict)
+    matched, samples_by_key = evaluate_expression_for_symbol(
+        db,
+        settings,
+        symbol=symbol,
+        exchange=exchange,
+        expr=expr,
+    )
+    if not matched or not samples_by_key:
+        return
+
+    # Derive a bar_time from the underlying indicator samples.
+    bar_times = [s.bar_time for s in samples_by_key.values() if s.bar_time is not None]
+    bar_time = max(bar_times) if bar_times else None
+
+    trigger_mode: TriggerMode = rule.trigger_mode or "ONCE"  # type: ignore[assignment]
+
+    if trigger_mode == "ONCE" and rule.last_triggered_at is not None:
+        return
+    if trigger_mode == "ONCE_PER_BAR":
+        if bar_time is None:
+            return
+        if rule.last_triggered_at is not None and rule.last_triggered_at >= bar_time:
+            return
+
+    # Reuse the first indicator sample as the payload summary.
+    sample = next(iter(samples_by_key.values()))
+    _create_alert_and_order(db, rule, settings, symbol, exchange, sample)
+    rule.last_triggered_at = bar_time or _now_ist_naive()
+
+
 def evaluate_indicator_rules_once() -> None:
     """Evaluate all enabled indicator rules once.
 
@@ -497,24 +551,40 @@ def evaluate_indicator_rules_once() -> None:
 
         for rule in rules:
             try:
-                logic, conditions = _deserialize_conditions(rule)
+                # Prefer DSL/AST-backed evaluation when expression_json is present;
+                # fall back to the legacy per-condition engine otherwise.
+                if rule.expression_json:
+                    for symbol, exchange in _iter_rule_symbols(db, settings, rule):
+                        try:
+                            _evaluate_rule_expression_for_symbol(
+                                db,
+                                settings,
+                                rule,
+                                symbol,
+                                exchange,
+                            )
+                        except IndicatorAlertError:
+                            continue
+                else:
+                    logic, conditions = _deserialize_conditions(rule)
+                    for symbol, exchange in _iter_rule_symbols(db, settings, rule):
+                        try:
+                            _evaluate_rule_for_symbol(
+                                db,
+                                settings,
+                                rule,
+                                symbol,
+                                exchange,
+                                logic,
+                                conditions,
+                            )
+                        except IndicatorAlertError:
+                            continue
+
+                rule.last_evaluated_at = now
             except IndicatorAlertError:
                 # Skip malformed rules without failing the whole batch.
                 continue
-
-            for symbol, exchange in _iter_rule_symbols(db, settings, rule):
-                try:
-                    _evaluate_rule_for_symbol(
-                        db,
-                        settings,
-                        rule,
-                        symbol,
-                        exchange,
-                        logic,
-                        conditions,
-                    )
-                except IndicatorAlertError:
-                    continue
 
         db.commit()
 

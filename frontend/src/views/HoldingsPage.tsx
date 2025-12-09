@@ -6,6 +6,8 @@ import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import MenuItem from '@mui/material/MenuItem'
+import Tabs from '@mui/material/Tabs'
+import Tab from '@mui/material/Tab'
 import Paper from '@mui/material/Paper'
 import Select from '@mui/material/Select'
 import TextField from '@mui/material/TextField'
@@ -1329,6 +1331,9 @@ function IndicatorAlertDialog({
   )
   const [savingTemplate, setSavingTemplate] = useState(false)
 
+  const [mode, setMode] = useState<'simple' | 'dsl'>('simple')
+  const [dslExpression, setDslExpression] = useState<string>('')
+
   useEffect(() => {
     if (!open || !symbol) {
       return
@@ -1359,7 +1364,7 @@ function IndicatorAlertDialog({
   }, [open, symbol])
 
   useEffect(() => {
-    if (!open || !symbol) {
+    if (!open || !symbol || mode !== 'simple') {
       return
     }
     let active = true
@@ -1378,7 +1383,7 @@ function IndicatorAlertDialog({
     return () => {
       active = false
     }
-  }, [open, symbol])
+  }, [open, symbol, mode])
 
   useEffect(() => {
     if (!open || !symbol) {
@@ -1432,7 +1437,7 @@ function IndicatorAlertDialog({
     return () => {
       active = false
     }
-  }, [open, symbol, exchange, timeframe, indicator, period])
+  }, [open, symbol, exchange, timeframe, indicator, period, mode])
 
   const resetForm = () => {
     setIndicator('PRICE')
@@ -1446,6 +1451,8 @@ function IndicatorAlertDialog({
     setActionValue('10')
     setError(null)
     setSelectedStrategyId(null)
+    setMode('simple')
+    setDslExpression('')
   }
 
   const handleClose = () => {
@@ -1457,61 +1464,93 @@ function IndicatorAlertDialog({
   const handleCreate = async () => {
     if (!symbol) return
 
-    const t1 = Number(threshold1)
-    if (!Number.isFinite(t1)) {
-      setError('Primary threshold must be a number.')
-      return
-    }
-
-    let t2: number | null = null
-    if (operator === 'BETWEEN' || operator === 'OUTSIDE') {
-      if (!threshold2.trim()) {
-        setError('Second threshold is required for range operators.')
-        return
+    const buildActionParams = (): Record<string, unknown> => {
+      const actionParams: Record<string, unknown> = {}
+      if (actionType === 'SELL_PERCENT') {
+        const v = Number(actionValue)
+        if (!Number.isFinite(v) || v <= 0) {
+          throw new Error('Percent must be a positive number.')
+        }
+        actionParams.percent = v
+      } else if (actionType === 'BUY_QUANTITY') {
+        const v = Number(actionValue)
+        if (!Number.isFinite(v) || v <= 0) {
+          throw new Error('Quantity must be a positive number.')
+        }
+        actionParams.quantity = v
       }
-      t2 = Number(threshold2)
-      if (!Number.isFinite(t2)) {
-        setError('Second threshold must be a number.')
-        return
-      }
-    }
-
-    const periodNum =
-      Number(period) || (indicator === 'RSI' ? 14 : 20)
-
-    const cond: IndicatorCondition = {
-      indicator,
-      operator,
-      threshold_1: t1,
-      threshold_2: t2,
-      params: {},
-    }
-
-    if (indicator === 'RSI' || indicator === 'MA' || indicator === 'ATR') {
-      cond.params = { period: periodNum }
-    } else if (
-      indicator === 'VOLATILITY' ||
-      indicator === 'PERF_PCT' ||
-      indicator === 'VOLUME_RATIO'
-    ) {
-      cond.params = { window: periodNum }
+      return actionParams
     }
 
     const actionParams: Record<string, unknown> = {}
-    if (actionType === 'SELL_PERCENT') {
-      const v = Number(actionValue)
-      if (!Number.isFinite(v) || v <= 0) {
-        setError('Percent must be a positive number.')
+    try {
+      Object.assign(actionParams, buildActionParams())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid action settings.')
+      return
+    }
+
+    let conditions: IndicatorCondition[] = []
+    let dslExprToSend: string | undefined
+
+    if (mode === 'dsl') {
+      if (!dslExpression.trim()) {
+        setError('DSL expression cannot be empty.')
         return
       }
-      actionParams.percent = v
-    } else if (actionType === 'BUY_QUANTITY') {
-      const v = Number(actionValue)
-      if (!Number.isFinite(v) || v <= 0) {
-        setError('Quantity must be a positive number.')
+      dslExprToSend = dslExpression.trim()
+      // Provide a minimal placeholder condition; evaluation for DSL-backed
+      // rules uses expression_json instead of conditions_json.
+      conditions = [
+        {
+          indicator: 'PRICE',
+          operator: 'GT',
+          threshold_1: 0,
+          params: {},
+        },
+      ]
+    } else {
+      const t1 = Number(threshold1)
+      if (!Number.isFinite(t1)) {
+        setError('Primary threshold must be a number.')
         return
       }
-      actionParams.quantity = v
+
+      let t2: number | null = null
+      if (operator === 'BETWEEN' || operator === 'OUTSIDE') {
+        if (!threshold2.trim()) {
+          setError('Second threshold is required for range operators.')
+          return
+        }
+        t2 = Number(threshold2)
+        if (!Number.isFinite(t2)) {
+          setError('Second threshold must be a number.')
+          return
+        }
+      }
+
+      const periodNum =
+        Number(period) || (indicator === 'RSI' ? 14 : 20)
+
+      const cond: IndicatorCondition = {
+        indicator,
+        operator,
+        threshold_1: t1,
+        threshold_2: t2,
+        params: {},
+      }
+
+      if (indicator === 'RSI' || indicator === 'MA' || indicator === 'ATR') {
+        cond.params = { period: periodNum }
+      } else if (
+        indicator === 'VOLATILITY' ||
+        indicator === 'PERF_PCT' ||
+        indicator === 'VOLUME_RATIO'
+      ) {
+        cond.params = { window: periodNum }
+      }
+
+      conditions = [cond]
     }
 
     setSaving(true)
@@ -1522,7 +1561,8 @@ function IndicatorAlertDialog({
         exchange: exchange ?? 'NSE',
         timeframe,
         logic: 'AND',
-        conditions: [cond],
+        conditions,
+        dsl_expression: dslExprToSend,
         trigger_mode: triggerMode,
         action_type: actionType,
         action_params: actionParams,
@@ -1654,6 +1694,14 @@ function IndicatorAlertDialog({
         <Typography variant="subtitle1" sx={{ mb: 1 }}>
           {symbol ?? '--'} {exchange ? ` / ${exchange}` : ''}
         </Typography>
+        <Tabs
+          value={mode}
+          onChange={(_event, value) => setMode(value)}
+          sx={{ mb: 1 }}
+        >
+          <Tab value="simple" label="Simple builder" />
+          <Tab value="dsl" label="DSL expression" />
+        </Tabs>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
@@ -1686,96 +1734,110 @@ function IndicatorAlertDialog({
               {savingTemplate ? 'Saving…' : 'Save as strategy'}
             </Button>
           </Box>
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          {mode === 'simple' ? (
+            <>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <TextField
+                  label="Timeframe"
+                  select
+                  size="small"
+                  value={timeframe}
+                  onChange={(e) => setTimeframe(e.target.value)}
+                  sx={{ minWidth: 140 }}
+                >
+                  <MenuItem value="1m">1m</MenuItem>
+                  <MenuItem value="5m">5m</MenuItem>
+                  <MenuItem value="15m">15m</MenuItem>
+                  <MenuItem value="1h">1H</MenuItem>
+                  <MenuItem value="1d">1D</MenuItem>
+                </TextField>
+                <TextField
+                  label="Indicator"
+                  select
+                  size="small"
+                  value={indicator}
+                  onChange={(e) =>
+                    setIndicator(e.target.value as IndicatorType)
+                  }
+                  sx={{ minWidth: 160 }}
+                >
+                  <MenuItem value="PRICE">Price (close)</MenuItem>
+                  <MenuItem value="RSI">RSI</MenuItem>
+                  <MenuItem value="MA">Moving average</MenuItem>
+                  <MenuItem value="VOLATILITY">Volatility</MenuItem>
+                  <MenuItem value="ATR">ATR</MenuItem>
+                  <MenuItem value="PERF_PCT">Performance %</MenuItem>
+                  <MenuItem value="VOLUME_RATIO">Volume vs avg</MenuItem>
+                </TextField>
+                <TextField
+                  label="Period / window"
+                  size="small"
+                  value={period}
+                  onChange={(e) => setPeriod(e.target.value)}
+                  sx={{ minWidth: 140 }}
+                  helperText={
+                    indicator === 'PERF_PCT'
+                      ? 'Bars lookback for performance'
+                      : 'Typical values: 14, 20, 50'
+                  }
+                />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <TextField
+                  label="Operator"
+                  select
+                  size="small"
+                  value={operator}
+                  onChange={(e) =>
+                    setOperator(e.target.value as OperatorType)
+                  }
+                  sx={{ minWidth: 160 }}
+                >
+                  <MenuItem value="GT">&gt;</MenuItem>
+                  <MenuItem value="LT">&lt;</MenuItem>
+                  <MenuItem value="BETWEEN">Between</MenuItem>
+                  <MenuItem value="OUTSIDE">Outside</MenuItem>
+                  <MenuItem value="CROSS_ABOVE">Crossing above</MenuItem>
+                  <MenuItem value="CROSS_BELOW">Crossing below</MenuItem>
+                  <MenuItem value="MOVE_UP_PCT">Moving up %</MenuItem>
+                  <MenuItem value="MOVE_DOWN_PCT">Moving down %</MenuItem>
+                </TextField>
+                <TextField
+                  label="Threshold"
+                  size="small"
+                  value={threshold1}
+                  onChange={(e) => setThreshold1(e.target.value)}
+                  sx={{ minWidth: 140 }}
+                  helperText={
+                    previewLoading
+                      ? 'Loading current value…'
+                      : previewError
+                        ? 'Current value unavailable'
+                        : `Current ${indicator === 'PRICE' ? 'price' : indicator}: ${formatPreviewValue()}`
+                  }
+                />
+                {showThreshold2 && (
+                  <TextField
+                    label="Second threshold"
+                    size="small"
+                    value={threshold2}
+                    onChange={(e) => setThreshold2(e.target.value)}
+                    sx={{ minWidth: 140 }}
+                  />
+                )}
+              </Box>
+            </>
+          ) : (
             <TextField
-              label="Timeframe"
-              select
+              label="DSL expression"
               size="small"
-              value={timeframe}
-              onChange={(e) => setTimeframe(e.target.value)}
-              sx={{ minWidth: 140 }}
-            >
-              <MenuItem value="1m">1m</MenuItem>
-              <MenuItem value="5m">5m</MenuItem>
-              <MenuItem value="15m">15m</MenuItem>
-              <MenuItem value="1h">1H</MenuItem>
-              <MenuItem value="1d">1D</MenuItem>
-            </TextField>
-            <TextField
-              label="Indicator"
-              select
-              size="small"
-              value={indicator}
-              onChange={(e) =>
-                setIndicator(e.target.value as IndicatorType)
-              }
-              sx={{ minWidth: 160 }}
-            >
-              <MenuItem value="PRICE">Price (close)</MenuItem>
-              <MenuItem value="RSI">RSI</MenuItem>
-              <MenuItem value="MA">Moving average</MenuItem>
-              <MenuItem value="VOLATILITY">Volatility</MenuItem>
-              <MenuItem value="ATR">ATR</MenuItem>
-              <MenuItem value="PERF_PCT">Performance %</MenuItem>
-              <MenuItem value="VOLUME_RATIO">Volume vs avg</MenuItem>
-            </TextField>
-            <TextField
-              label="Period / window"
-              size="small"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-              sx={{ minWidth: 140 }}
-              helperText={
-                indicator === 'PERF_PCT'
-                  ? 'Bars lookback for performance'
-                  : 'Typical values: 14, 20, 50'
-              }
+              value={dslExpression}
+              onChange={(e) => setDslExpression(e.target.value)}
+              multiline
+              minRows={3}
+              helperText="Use the alert DSL, e.g. (RSI(14, 1d) > 80) AND (SMA(20, 1d) CROSS_ABOVE SMA(50, 1d))."
             />
-          </Box>
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-            <TextField
-              label="Operator"
-              select
-              size="small"
-              value={operator}
-              onChange={(e) =>
-                setOperator(e.target.value as OperatorType)
-              }
-              sx={{ minWidth: 160 }}
-            >
-              <MenuItem value="GT">&gt;</MenuItem>
-              <MenuItem value="LT">&lt;</MenuItem>
-              <MenuItem value="BETWEEN">Between</MenuItem>
-              <MenuItem value="OUTSIDE">Outside</MenuItem>
-              <MenuItem value="CROSS_ABOVE">Crossing above</MenuItem>
-              <MenuItem value="CROSS_BELOW">Crossing below</MenuItem>
-              <MenuItem value="MOVE_UP_PCT">Moving up %</MenuItem>
-              <MenuItem value="MOVE_DOWN_PCT">Moving down %</MenuItem>
-            </TextField>
-            <TextField
-              label="Threshold"
-              size="small"
-              value={threshold1}
-              onChange={(e) => setThreshold1(e.target.value)}
-              sx={{ minWidth: 140 }}
-              helperText={
-                previewLoading
-                  ? 'Loading current value…'
-                  : previewError
-                    ? 'Current value unavailable'
-                    : `Current ${indicator === 'PRICE' ? 'price' : indicator}: ${formatPreviewValue()}`
-              }
-            />
-            {showThreshold2 && (
-              <TextField
-                label="Second threshold"
-                size="small"
-                value={threshold2}
-                onChange={(e) => setThreshold2(e.target.value)}
-                sx={{ minWidth: 140 }}
-              />
-            )}
-          </Box>
+          )}
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
               label="Trigger"
@@ -1846,7 +1908,10 @@ function IndicatorAlertDialog({
                   }}
                 >
                   <Typography variant="body2">
-                    {rule.name || rule.conditions[0]?.indicator}{' '}
+                    {rule.name ||
+                      (rule.dsl_expression
+                        ? 'DSL rule'
+                        : rule.conditions[0]?.indicator)}{' '}
                     ({rule.timeframe}, {rule.trigger_mode})
                   </Typography>
                   <Button

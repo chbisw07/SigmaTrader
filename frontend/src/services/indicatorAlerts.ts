@@ -39,6 +39,7 @@ export type IndicatorRule = {
   id: number
   strategy_id?: number | null
   name?: string | null
+  dsl_expression?: string | null
   symbol?: string | null
   universe?: UniverseType | null
   exchange?: string | null
@@ -58,6 +59,7 @@ export type IndicatorRule = {
 export type IndicatorRuleCreate = {
   strategy_id?: number | null
   name?: string | null
+  dsl_expression?: string | null
   symbol?: string | null
   universe?: UniverseType | null
   exchange?: string | null

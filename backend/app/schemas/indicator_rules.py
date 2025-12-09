@@ -54,6 +54,7 @@ class IndicatorRuleBase(BaseModel):
 
     logic: LogicType = "AND"
     conditions: List[IndicatorCondition]
+    dsl_expression: Optional[str] = None
 
     trigger_mode: TriggerMode = "ONCE"
     action_type: ActionType = "ALERT_ONLY"
@@ -86,6 +87,7 @@ class IndicatorRuleRead(IndicatorRuleBase):
     id: int
     strategy_id: Optional[int] = None
     last_triggered_at: Optional[datetime] = None
+    last_evaluated_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

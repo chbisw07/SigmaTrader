@@ -18,7 +18,12 @@ from app.schemas.indicator_rules import (
     IndicatorRuleUpdate,
     IndicatorType,
 )
-from app.services.indicator_alerts import compute_indicator_preview
+from app.services.alert_expression import expression_to_dict
+from app.services.alert_expression_dsl import parse_expression
+from app.services.indicator_alerts import (
+    IndicatorAlertError,
+    compute_indicator_preview,
+)
 from app.services.market_data import Timeframe
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -47,6 +52,11 @@ def _indicator_rule_to_read(rule: IndicatorRule) -> IndicatorRuleRead:
     import json
 
     conditions = _deserialize_conditions_json(rule)
+    if rule.dsl_expression or rule.expression_json:
+        # For DSL/AST-backed rules, conditions_json is considered an
+        # implementation detail; expose an empty list to the UI and rely
+        # on dsl_expression for display.
+        conditions = []
     try:
         action_params = json.loads(rule.action_params_json or "{}")
     except json.JSONDecodeError:
@@ -62,12 +72,14 @@ def _indicator_rule_to_read(rule: IndicatorRule) -> IndicatorRuleRead:
         timeframe=rule.timeframe,
         logic=rule.logic,  # type: ignore[arg-type]
         conditions=conditions,
+        dsl_expression=rule.dsl_expression,
         trigger_mode=rule.trigger_mode,  # type: ignore[arg-type]
         action_type=rule.action_type,  # type: ignore[arg-type]
         action_params=action_params,
         expires_at=rule.expires_at,
         enabled=rule.enabled,
         last_triggered_at=rule.last_triggered_at,
+        last_evaluated_at=rule.last_evaluated_at,
         created_at=rule.created_at,
         updated_at=rule.updated_at,
     )
@@ -178,6 +190,19 @@ def create_indicator_rule(
     )
     action_params_json = json.dumps(payload.action_params or {}, default=str)
 
+    expr_json: str | None = None
+    dsl_expr = payload.dsl_expression or None
+    if dsl_expr:
+        try:
+            expr = parse_expression(dsl_expr)
+            expr_dict = expression_to_dict(expr)
+            expr_json = json.dumps(expr_dict, default=str)
+        except IndicatorAlertError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid DSL expression: {exc}",
+            ) from exc
+
     entity = IndicatorRule(
         user_id=user.id,
         strategy_id=payload.strategy_id,
@@ -188,6 +213,8 @@ def create_indicator_rule(
         timeframe=payload.timeframe,
         logic=payload.logic,
         conditions_json=conditions_json,
+        expression_json=expr_json,
+        dsl_expression=dsl_expr,
         trigger_mode=payload.trigger_mode,
         action_type=payload.action_type,
         action_params_json=action_params_json,
@@ -236,6 +263,24 @@ def update_indicator_rule(
     if "action_params" in data:
         action_params = data.pop("action_params") or {}
         entity.action_params_json = json.dumps(action_params, default=str)
+
+    if "dsl_expression" in data:
+        dsl_expr = data.pop("dsl_expression")
+        if dsl_expr:
+            try:
+                expr = parse_expression(dsl_expr)
+                expr_dict = expression_to_dict(expr)
+                entity.expression_json = json.dumps(expr_dict, default=str)
+                entity.dsl_expression = dsl_expr
+            except IndicatorAlertError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid DSL expression: {exc}",
+                ) from exc
+        else:
+            # Clearing the DSL expression also clears the compiled AST.
+            entity.dsl_expression = None
+            entity.expression_json = None
 
     for field, value in data.items():
         setattr(entity, field, value)
