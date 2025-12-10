@@ -874,7 +874,16 @@ export function SettingsPage() {
                   <TableCell>Name</TableCell>
                   <TableCell>Mode</TableCell>
                   <TableCell>Execution Target</TableCell>
-                  <TableCell>Paper Poll Interval (sec)</TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                      <Typography variant="body2">
+                        Paper Poll Interval (sec)
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        15–14400 sec (leave blank for default)
+                      </Typography>
+                    </Box>
+                  </TableCell>
                   <TableCell>Enabled</TableCell>
                   <TableCell>Available for alert</TableCell>
                   <TableCell>Description</TableCell>
@@ -949,7 +958,6 @@ export function SettingsPage() {
                             )
                           }
                         }}
-                        helperText="15–14400 sec (leave blank for default)"
                       />
                     </TableCell>
                     <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>

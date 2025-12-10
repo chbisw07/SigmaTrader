@@ -161,12 +161,6 @@ def update_strategy(
     if strategy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    # Only allow editing of non-builtin strategies that belong to the user.
-    if strategy.is_builtin and strategy.owner_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Built-in strategies cannot be modified.",
-        )
     if strategy.owner_id is not None and strategy.owner_id != user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -174,6 +168,18 @@ def update_strategy(
         )
 
     update_data = payload.dict(exclude_unset=True)
+
+    # Built-in strategies are largely immutable from the API, but we allow
+    # toggling a small, safe subset of fields (currently: available_for_alert)
+    # so that users can control which built-ins appear in alert templates.
+    if strategy.is_builtin and strategy.owner_id is None:
+        allowed_for_builtin = {"available_for_alert"}
+        disallowed = set(update_data.keys()) - allowed_for_builtin
+        if disallowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Built-in strategies cannot be modified.",
+            )
 
     if "dsl_expression" in update_data:
         dsl_expr = update_data.pop("dsl_expression")
