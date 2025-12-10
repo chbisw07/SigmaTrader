@@ -88,6 +88,9 @@ def list_strategy_templates(
     # is_builtin=True) and user-owned templates.
     query = query.filter((Strategy.owner_id.is_(None)) | (Strategy.owner_id == user.id))
 
+    # Only expose strategies that are marked as available for alert usage.
+    query = query.filter(Strategy.available_for_alert.is_(True))
+
     if symbol:
         # For now, LOCAL strategies are symbol-agnostic; symbol-specific
         # scoping can be added later via an additional column. The filter is
@@ -126,6 +129,7 @@ def create_strategy(
         enabled=payload.enabled,
         owner_id=user.id,
         scope=payload.scope,
+        available_for_alert=payload.available_for_alert,
         dsl_expression=dsl_expr,
         expression_json=expr_json,
     )

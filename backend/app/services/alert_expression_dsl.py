@@ -80,6 +80,8 @@ _ALLOWED_INDICATORS = {
     "PERF_PCT",
     "VOLUME_RATIO",
     "VWAP",
+    "PVT",
+    "PVT_SLOPE",
 }
 
 

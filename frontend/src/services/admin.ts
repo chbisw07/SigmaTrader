@@ -6,6 +6,7 @@ export type Strategy = {
   execution_target: 'LIVE' | 'PAPER'
   paper_poll_interval_sec?: number | null
   enabled: boolean
+  available_for_alert: boolean
 }
 
 export type RiskSettings = {

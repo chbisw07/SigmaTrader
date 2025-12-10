@@ -15,6 +15,9 @@ import Paper from '@mui/material/Paper'
 import Select from '@mui/material/Select'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import Radio from '@mui/material/Radio'
+import RadioGroup from '@mui/material/RadioGroup'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import {
   DataGrid,
   GridToolbar,
@@ -1339,6 +1342,7 @@ function IndicatorAlertDialog({
   const [mode, setMode] = useState<'simple' | 'dsl'>('simple')
   const [dslExpression, setDslExpression] = useState<string>('')
   const [dslHelpOpen, setDslHelpOpen] = useState(false)
+  const [applyScope, setApplyScope] = useState<'symbol' | 'holdings'>('symbol')
 
   const selectedTemplate = selectedStrategyId
     ? templates.find((t) => t.id === selectedStrategyId) ?? null
@@ -1378,6 +1382,8 @@ function IndicatorAlertDialog({
         'PERF_PCT',
         'VOLUME_RATIO',
         'VWAP',
+        'PVT',
+        'PVT_SLOPE',
       ]
       const keywordSuggestions = [
         'AND',
@@ -1531,6 +1537,11 @@ function IndicatorAlertDialog({
     if (!selectedStrategyId) return
     const tpl = templates.find((t) => t.id === selectedStrategyId)
     if (tpl?.dsl_expression) {
+      // When a template with a DSL expression is selected, switch the
+      // dialog into DSL mode and load the strategy expression so that
+      // the alert actually follows the strategy logic instead of the
+      // simple builder defaults.
+      setMode('dsl')
       setDslExpression(tpl.dsl_expression)
     }
   }, [selectedStrategyId, templates])
@@ -1557,7 +1568,8 @@ function IndicatorAlertDialog({
         } else if (
           indicator === 'VOLATILITY' ||
           indicator === 'PERF_PCT' ||
-          indicator === 'VOLUME_RATIO'
+          indicator === 'VOLUME_RATIO' ||
+          indicator === 'PVT_SLOPE'
         ) {
           if (numericPeriod != null) params.window = numericPeriod
         }
@@ -1603,6 +1615,7 @@ function IndicatorAlertDialog({
     setSelectedStrategyId(null)
     setMode('simple')
     setDslExpression('')
+    setApplyScope('symbol')
   }
 
   const handleClose = () => {
@@ -1703,21 +1716,24 @@ function IndicatorAlertDialog({
       conditions = [cond]
     }
 
+    const payload = {
+      strategy_id: selectedStrategyId ?? undefined,
+      symbol: applyScope === 'symbol' ? symbol : undefined,
+      universe: applyScope === 'holdings' ? 'HOLDINGS' : undefined,
+      exchange: applyScope === 'symbol' ? exchange ?? 'NSE' : undefined,
+      timeframe,
+      logic: 'AND' as const,
+      conditions,
+      dsl_expression: dslExprToSend,
+      trigger_mode: triggerMode,
+      action_type: actionType,
+      action_params: actionParams,
+      enabled: true,
+    }
+
     setSaving(true)
     try {
-      const created = await createIndicatorRule({
-        strategy_id: selectedStrategyId,
-        symbol,
-        exchange: exchange ?? 'NSE',
-        timeframe,
-        logic: 'AND',
-        conditions,
-        dsl_expression: dslExprToSend,
-        trigger_mode: triggerMode,
-        action_type: actionType,
-        action_params: actionParams,
-        enabled: true,
-      })
+      const created = await createIndicatorRule(payload)
       setRules((prev) => [created, ...prev])
       resetForm()
       onClose()
@@ -1797,7 +1813,8 @@ function IndicatorAlertDialog({
       indicator === 'RSI' ||
       indicator === 'PERF_PCT' ||
       indicator === 'VOLATILITY' ||
-      indicator === 'ATR'
+      indicator === 'ATR' ||
+      indicator === 'PVT_SLOPE'
     ) {
       return v.toFixed(2)
     }
@@ -1889,6 +1906,26 @@ function IndicatorAlertDialog({
               </Button>
             )}
           </Box>
+          <RadioGroup
+            row
+            value={applyScope}
+            onChange={(e) =>
+              setApplyScope(
+                e.target.value === 'holdings' ? 'holdings' : 'symbol',
+              )
+            }
+          >
+            <FormControlLabel
+              value="symbol"
+              control={<Radio size="small" />}
+              label="Apply to this stock only"
+            />
+            <FormControlLabel
+              value="holdings"
+              control={<Radio size="small" />}
+              label="Apply to all holdings"
+            />
+          </RadioGroup>
           {mode === 'simple' ? (
             <>
               <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
@@ -1923,6 +1960,8 @@ function IndicatorAlertDialog({
                   <MenuItem value="ATR">ATR</MenuItem>
                   <MenuItem value="PERF_PCT">Performance %</MenuItem>
                   <MenuItem value="VOLUME_RATIO">Volume vs avg</MenuItem>
+                  <MenuItem value="PVT">PVT (cumulative)</MenuItem>
+                  <MenuItem value="PVT_SLOPE">PVT slope %</MenuItem>
                 </TextField>
                 <TextField
                   label="Period / window"
@@ -2044,7 +2083,11 @@ function IndicatorAlertDialog({
               {error}
             </Typography>
           )}
-          {loading ? (
+          {applyScope === 'holdings' ? (
+            <Typography variant="body2" color="text.secondary">
+              Alerts that apply to all holdings are managed from the Alerts page.
+            </Typography>
+          ) : loading ? (
             <Typography variant="body2" color="text.secondary">
               Loading existing alerts…
             </Typography>
@@ -2115,7 +2158,8 @@ function IndicatorAlertDialog({
           <Typography variant="body2" paragraph>
             Supported indicator functions:
             {' '}
-            PRICE, RSI, MA, VOLATILITY, ATR, PERF_PCT, VOLUME_RATIO, VWAP.
+            PRICE, RSI, MA, VOLATILITY, ATR, PERF_PCT, VOLUME_RATIO, VWAP,
+            PVT, PVT_SLOPE.
           </Typography>
           <Typography variant="subtitle2" gutterBottom>
             Operators

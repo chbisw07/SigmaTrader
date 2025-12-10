@@ -15,6 +15,8 @@ IndicatorType = Literal[
     "PERF_PCT",
     "VOLUME_RATIO",
     "VWAP",
+    "PVT",
+    "PVT_SLOPE",
 ]
 
 OperatorType = Literal[

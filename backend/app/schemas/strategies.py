@@ -22,6 +22,7 @@ class StrategyBase(BaseModel):
         le=4 * 60 * 60,
     )  # 15s to 4h
     enabled: bool = True
+    available_for_alert: bool = True
 
     # Optional reusable alert template information. For many strategies this
     # will remain empty; templates can later be attached to indicator rules.
@@ -44,6 +45,7 @@ class StrategyUpdate(BaseModel):
         le=4 * 60 * 60,
     )
     enabled: Optional[bool] = None
+    available_for_alert: Optional[bool] = None
     scope: Optional[StrategyScope] = None
     dsl_expression: Optional[str] = None
 

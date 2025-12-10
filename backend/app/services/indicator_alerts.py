@@ -180,6 +180,30 @@ def _compute_volume_ratio(volumes: Sequence[float], window: int) -> Optional[flo
     return today / avg
 
 
+def _compute_pvt_series(
+    closes: Sequence[float],
+    volumes: Sequence[float],
+) -> List[float]:
+    """Compute cumulative Price Volume Trend (PVT) series.
+
+    PVT_t = PVT_{t-1} + volume_t * (close_t - close_{t-1}) / close_{t-1}
+    with PVT_0 = 0.
+    """
+
+    if len(closes) < 2 or len(volumes) < 2:
+        return []
+
+    pvt: List[float] = [0.0]
+    for i in range(1, min(len(closes), len(volumes))):
+        prev_close = closes[i - 1]
+        if prev_close == 0:
+            delta = 0.0
+        else:
+            delta = volumes[i] * (closes[i] - prev_close) / prev_close
+        pvt.append(pvt[-1] + delta)
+    return pvt
+
+
 def _load_candles_for_rule(
     db: Session,
     settings: Settings,
@@ -233,7 +257,7 @@ def _compute_indicator_sample(
         period = int(params.get("period", 50))
         value, prev = _compute_sma(closes, period)
     elif indicator == "VOLATILITY":
-        window = int(params.get("window", 20))
+        window = int(params.get("window", params.get("period", 20)))
         value = _compute_volatility_pct(closes, window)
         prev = None
     elif indicator == "ATR":
@@ -241,13 +265,42 @@ def _compute_indicator_sample(
         value = _compute_atr_pct(highs, lows, closes, period)
         prev = None
     elif indicator == "PERF_PCT":
-        window = int(params.get("window", 20))
+        window = int(params.get("window", params.get("period", 20)))
         value = _compute_perf_pct(closes, window)
         prev = None
     elif indicator == "VOLUME_RATIO":
-        window = int(params.get("window", 20))
+        window = int(params.get("window", params.get("period", 20)))
         value = _compute_volume_ratio(volumes, window)
         prev = None
+    elif indicator == "PVT":
+        pvt = _compute_pvt_series(closes, volumes)
+        if not pvt:
+            return IndicatorSample(None, None, bar_time)
+        value = pvt[-1]
+        prev = pvt[-2] if len(pvt) >= 2 else None
+    elif indicator == "PVT_SLOPE":
+        window = int(params.get("window", params.get("period", 20)))
+        pvt = _compute_pvt_series(closes, volumes)
+        n = len(pvt)
+        if window <= 0 or n <= window:
+            return IndicatorSample(None, None, bar_time)
+        base_idx = n - window - 1
+        if base_idx < 0:
+            return IndicatorSample(None, None, bar_time)
+        base = pvt[base_idx]
+        curr = pvt[-1]
+        if base == 0:
+            return IndicatorSample(None, None, bar_time)
+        value = (curr - base) / abs(base) * 100.0
+        prev_value: Optional[float] = None
+        if n - 1 > window:
+            prev_base_idx = n - window - 2
+            if prev_base_idx >= 0:
+                prev_base = pvt[prev_base_idx]
+                prev_curr = pvt[-2]
+                if prev_base != 0:
+                    prev_value = (prev_curr - prev_base) / abs(prev_base) * 100.0
+        prev = prev_value
     else:
         raise IndicatorAlertError(f"Unsupported indicator: {indicator}")
 

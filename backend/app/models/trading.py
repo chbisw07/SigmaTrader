@@ -62,6 +62,11 @@ class Strategy(Base):
     )
     paper_poll_interval_sec: Mapped[Optional[int]] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    available_for_alert: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)
     )

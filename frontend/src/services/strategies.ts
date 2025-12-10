@@ -13,6 +13,7 @@ export type Strategy = {
   scope?: StrategyScope | null
   dsl_expression?: string | null
   is_builtin: boolean
+  available_for_alert: boolean
 }
 
 export type StrategyCreate = {
@@ -24,6 +25,7 @@ export type StrategyCreate = {
   enabled?: boolean
   scope?: StrategyScope | null
   dsl_expression?: string | null
+  available_for_alert?: boolean
 }
 
 export async function listStrategyTemplates(

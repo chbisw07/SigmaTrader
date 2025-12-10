@@ -133,6 +133,17 @@ export function AlertsPage() {
     }
   }
 
+  const formatIstDateTime = (value: unknown): string => {
+    if (!value) return '—'
+    const raw = new Date(value as string)
+    if (Number.isNaN(raw.getTime())) return '—'
+    // Treat stored timestamps as UTC and convert to IST (UTC+5:30) so that
+    // display matches the user's local trading timezone.
+    const istOffsetMs = 5.5 * 60 * 60 * 1000
+    const ist = new Date(raw.getTime() + istOffsetMs)
+    return ist.toLocaleString()
+  }
+
   const columns: GridColDef[] = [
     {
       field: 'symbol',
@@ -177,13 +188,13 @@ export function AlertsPage() {
       field: 'last_triggered_at',
       headerName: 'Last triggered',
       width: 190,
-      valueFormatter: (v) => (v ? new Date(v as string).toLocaleString() : '—'),
+      valueFormatter: (v) => formatIstDateTime(v),
     },
     {
       field: 'created_at',
       headerName: 'Created at',
       width: 190,
-      valueFormatter: (v) => new Date(v as string).toLocaleString(),
+      valueFormatter: (v) => formatIstDateTime(v),
     },
     {
       field: 'actions',

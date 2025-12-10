@@ -410,6 +410,42 @@ export function SettingsPage() {
     }
   }
 
+  const handleToggleAvailableForAlert = async (
+    strategy: Strategy,
+    value: boolean,
+  ) => {
+    if (strategy.available_for_alert === value) return
+    setUpdatingStrategyId(strategy.id)
+    try {
+      const res = await fetch(`/api/strategies/${strategy.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ available_for_alert: value }),
+      })
+      if (!res.ok) {
+        const body = await res.text()
+        throw new Error(
+          `Failed to update strategy (${res.status})${
+            body ? `: ${body}` : ''
+          }`,
+        )
+      }
+      const updated = (await res.json()) as Strategy
+      setStrategies((prev) =>
+        prev.map((s) => (s.id === updated.id ? updated : s)),
+      )
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update alert availability',
+      )
+    } finally {
+      setUpdatingStrategyId(null)
+    }
+  }
+
   const handleSaveRiskSettings = async () => {
     try {
       if (riskScope === 'STRATEGY' && !riskStrategyId) {
@@ -840,6 +876,7 @@ export function SettingsPage() {
                   <TableCell>Execution Target</TableCell>
                   <TableCell>Paper Poll Interval (sec)</TableCell>
                   <TableCell>Enabled</TableCell>
+                  <TableCell>Available for alert</TableCell>
                   <TableCell>Description</TableCell>
                 </TableRow>
               </TableHead>
@@ -885,7 +922,7 @@ export function SettingsPage() {
                       <TextField
                         size="small"
                         type="number"
-                        placeholder="Default"
+                        placeholder="60"
                         value={
                           paperPollDrafts[strategy.id] ??
                           (strategy.paper_poll_interval_sec != null
@@ -916,12 +953,26 @@ export function SettingsPage() {
                       />
                     </TableCell>
                     <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={strategy.available_for_alert ? 'Yes' : 'No'}
+                        size="small"
+                        color={strategy.available_for_alert ? 'success' : 'default'}
+                        onClick={() =>
+                          void handleToggleAvailableForAlert(
+                            strategy,
+                            !strategy.available_for_alert,
+                          )
+                        }
+                        sx={{ cursor: 'pointer' }}
+                      />
+                    </TableCell>
                     <TableCell>{strategy.description}</TableCell>
                   </TableRow>
                 ))}
                 {strategies.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6}>
+                    <TableCell colSpan={7}>
                       <Typography variant="body2" color="text.secondary">
                         No strategies configured yet.
                       </Typography>

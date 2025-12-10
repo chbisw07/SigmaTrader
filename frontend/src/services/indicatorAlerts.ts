@@ -8,6 +8,8 @@ export type IndicatorType =
   | 'PERF_PCT'
   | 'VOLUME_RATIO'
   | 'VWAP'
+  | 'PVT'
+  | 'PVT_SLOPE'
 
 export type OperatorType =
   | 'GT'
