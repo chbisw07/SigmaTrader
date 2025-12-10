@@ -10,10 +10,44 @@ from app.db.session import get_db
 from app.models import Strategy, User
 from app.schemas import StrategyCreate, StrategyRead, StrategyUpdate
 from app.schemas.strategies import StrategyScope
+from app.services.alert_expression import expression_to_dict
+from app.services.alert_expression_dsl import parse_expression
+from app.services.indicator_alerts import IndicatorAlertError
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
 router = APIRouter()
+
+
+def _compile_dsl_expression(
+    dsl_expr: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Validate and compile a DSL expression for storage on Strategy.
+
+    Returns a tuple of (normalized_dsl_expression, expression_json). Both
+    values may be None when the input is empty.
+    """
+
+    import json
+
+    if not dsl_expr:
+        return None, None
+
+    text = dsl_expr.strip()
+    if not text:
+        return None, None
+
+    try:
+        expr = parse_expression(text)
+        expr_dict = expression_to_dict(expr)
+        expr_json = json.dumps(expr_dict, default=str)
+    except IndicatorAlertError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid DSL expression: {exc}",
+        ) from exc
+
+    return text, expr_json
 
 
 @router.get("/", response_model=List[StrategyRead])
@@ -81,6 +115,8 @@ def create_strategy(
             detail="Strategy with this name already exists.",
         )
 
+    dsl_expr, expr_json = _compile_dsl_expression(payload.dsl_expression)
+
     strategy = Strategy(
         name=payload.name,
         description=payload.description,
@@ -90,7 +126,8 @@ def create_strategy(
         enabled=payload.enabled,
         owner_id=user.id,
         scope=payload.scope,
-        dsl_expression=payload.dsl_expression,
+        dsl_expression=dsl_expr,
+        expression_json=expr_json,
     )
     db.add(strategy)
     db.commit()
@@ -133,6 +170,13 @@ def update_strategy(
         )
 
     update_data = payload.dict(exclude_unset=True)
+
+    if "dsl_expression" in update_data:
+        dsl_expr = update_data.pop("dsl_expression")
+        compiled_expr, expr_json = _compile_dsl_expression(dsl_expr)
+        strategy.dsl_expression = compiled_expr
+        strategy.expression_json = expr_json
+
     for field, value in update_data.items():
         setattr(strategy, field, value)
 
