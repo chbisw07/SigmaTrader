@@ -298,7 +298,7 @@ export function AlertsPage() {
           rows={rows}
           columns={columns}
           density="compact"
-          loading={loading || clusterLoading}
+          loading={loading}
           getRowId={(row) => row.id}
           disableRowSelectionOnClick
           initialState={{

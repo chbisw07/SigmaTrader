@@ -20,6 +20,11 @@ import {
 import { fetchStrategies, type Strategy } from '../services/admin'
 import { recordAppLog } from '../services/logs'
 
+const CORR_SETTINGS_STORAGE_KEY = 'st_analytics_corr_settings_v1'
+const CORR_RESULT_STORAGE_KEY = 'st_analytics_corr_result_v1'
+const DEFAULT_CORR_WINDOW_DAYS = '90'
+const DEFAULT_CORR_THRESHOLD = '0.6'
+
 export function AnalyticsPage() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -33,11 +38,33 @@ export function AnalyticsPage() {
   const [dateFrom, setDateFrom] = useState<string>('')
   const [dateTo, setDateTo] = useState<string>('')
   const [trades, setTrades] = useState<AnalyticsTrade[]>([])
-  const [corrWindowDays, setCorrWindowDays] = useState<string>('90')
+  const [corrWindowDays, setCorrWindowDays] = useState<string>(() => {
+    if (typeof window === 'undefined') return DEFAULT_CORR_WINDOW_DAYS
+    try {
+      const raw = window.localStorage.getItem(CORR_SETTINGS_STORAGE_KEY)
+      if (!raw) return DEFAULT_CORR_WINDOW_DAYS
+      const parsed = JSON.parse(raw) as {
+        windowDays?: string
+        threshold?: string
+      }
+      return parsed.windowDays ?? DEFAULT_CORR_WINDOW_DAYS
+    } catch {
+      return DEFAULT_CORR_WINDOW_DAYS
+    }
+  })
   const [corrLoading, setCorrLoading] = useState(false)
   const [corrError, setCorrError] = useState<string | null>(null)
   const [corrResult, setCorrResult] =
-    useState<HoldingsCorrelationResult | null>(null)
+    useState<HoldingsCorrelationResult | null>(() => {
+      if (typeof window === 'undefined') return null
+      try {
+        const raw = window.localStorage.getItem(CORR_RESULT_STORAGE_KEY)
+        if (!raw) return null
+        return JSON.parse(raw) as HoldingsCorrelationResult
+      } catch {
+        return null
+      }
+    })
 
   const load = async (opts?: { withStrategies?: boolean }) => {
     try {
@@ -74,21 +101,6 @@ export function AnalyticsPage() {
 
   useEffect(() => {
     void load({ withStrategies: true })
-    void (async () => {
-      try {
-        setCorrLoading(true)
-        const data = await fetchHoldingsCorrelation({ windowDays: 90 })
-        setCorrResult(data)
-      } catch (err) {
-        setCorrError(
-          err instanceof Error
-            ? err.message
-            : 'Failed to load holdings correlation',
-        )
-      } finally {
-        setCorrLoading(false)
-      }
-    })()
   }, [])
 
   const handleRebuild = async () => {
@@ -276,6 +288,16 @@ export function AnalyticsPage() {
                   windowDays: windowDaysNum,
                 })
                 setCorrResult(data)
+                if (typeof window !== 'undefined') {
+                  try {
+                    window.localStorage.setItem(
+                      CORR_RESULT_STORAGE_KEY,
+                      JSON.stringify(data),
+                    )
+                  } catch {
+                    // Ignore persistence errors.
+                  }
+                }
               } catch (err) {
                 setCorrError(
                   err instanceof Error
@@ -425,7 +447,20 @@ function CorrelationSection({
   result,
   onRefresh,
 }: CorrelationSectionProps) {
-  const [threshold, setThreshold] = useState<string>('0.6')
+  const [threshold, setThreshold] = useState<string>(() => {
+    if (typeof window === 'undefined') return DEFAULT_CORR_THRESHOLD
+    try {
+      const raw = window.localStorage.getItem(CORR_SETTINGS_STORAGE_KEY)
+      if (!raw) return DEFAULT_CORR_THRESHOLD
+      const parsed = JSON.parse(raw) as {
+        windowDays?: string
+        threshold?: string
+      }
+      return parsed.threshold ?? DEFAULT_CORR_THRESHOLD
+    } catch {
+      return DEFAULT_CORR_THRESHOLD
+    }
+  })
   const [showHeatmap, setShowHeatmap] = useState(false)
 
   const thresholdNum = Number(threshold) || 0.6
@@ -449,6 +484,37 @@ function CorrelationSection({
     positivePairs.sort((a, b) => b.corr - a.corr)
     negativePairs.sort((a, b) => a.corr - b.corr)
   }
+
+  // Persist correlation settings so that lookback and highlight threshold
+  // survive page reloads.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(CORR_SETTINGS_STORAGE_KEY)
+      let existing: { windowDays?: string; threshold?: string } = {}
+      if (raw) {
+        try {
+          existing = JSON.parse(raw) as {
+            windowDays?: string
+            threshold?: string
+          }
+        } catch {
+          existing = {}
+        }
+      }
+      const next = {
+        ...existing,
+        windowDays,
+        threshold,
+      }
+      window.localStorage.setItem(
+        CORR_SETTINGS_STORAGE_KEY,
+        JSON.stringify(next),
+      )
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [windowDays, threshold])
 
   return (
     <Paper sx={{ p: 2 }}>
@@ -490,6 +556,16 @@ function CorrelationSection({
             onChange={(e) => setThreshold(e.target.value)}
             InputProps={{ inputProps: { min: 0, max: 1, step: 0.05 } }}
           />
+          <Button
+            size="small"
+            variant="text"
+            onClick={() => {
+              setWindowDays(DEFAULT_CORR_WINDOW_DAYS)
+              setThreshold(DEFAULT_CORR_THRESHOLD)
+            }}
+          >
+            Reset
+          </Button>
           <Button
             size="small"
             variant="outlined"
