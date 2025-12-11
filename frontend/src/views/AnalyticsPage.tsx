@@ -11,8 +11,10 @@ import {
   fetchAnalyticsTrades,
   fetchAnalyticsSummary,
   rebuildAnalyticsTrades,
+  fetchHoldingsCorrelation,
   type AnalyticsSummary,
   type AnalyticsTrade,
+  type HoldingsCorrelationResult,
 } from '../services/analytics'
 import { fetchStrategies, type Strategy } from '../services/admin'
 import { recordAppLog } from '../services/logs'
@@ -30,6 +32,11 @@ export function AnalyticsPage() {
   const [dateFrom, setDateFrom] = useState<string>('')
   const [dateTo, setDateTo] = useState<string>('')
   const [trades, setTrades] = useState<AnalyticsTrade[]>([])
+  const [corrWindowDays, setCorrWindowDays] = useState<string>('90')
+  const [corrLoading, setCorrLoading] = useState(false)
+  const [corrError, setCorrError] = useState<string | null>(null)
+  const [corrResult, setCorrResult] =
+    useState<HoldingsCorrelationResult | null>(null)
 
   const load = async (opts?: { withStrategies?: boolean }) => {
     try {
@@ -66,6 +73,21 @@ export function AnalyticsPage() {
 
   useEffect(() => {
     void load({ withStrategies: true })
+    void (async () => {
+      try {
+        setCorrLoading(true)
+        const data = await fetchHoldingsCorrelation({ windowDays: 90 })
+        setCorrResult(data)
+      } catch (err) {
+        setCorrError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load holdings correlation',
+        )
+      } finally {
+        setCorrLoading(false)
+      }
+    })()
   }, [])
 
   const handleRebuild = async () => {
@@ -238,6 +260,32 @@ export function AnalyticsPage() {
           )}
 
           <TradesSection trades={trades} />
+          <CorrelationSection
+            windowDays={corrWindowDays}
+            setWindowDays={setCorrWindowDays}
+            loading={corrLoading}
+            error={corrError}
+            result={corrResult}
+            onRefresh={async () => {
+              try {
+                setCorrLoading(true)
+                setCorrError(null)
+                const windowDaysNum = Number(corrWindowDays) || 90
+                const data = await fetchHoldingsCorrelation({
+                  windowDays: windowDaysNum,
+                })
+                setCorrResult(data)
+              } catch (err) {
+                setCorrError(
+                  err instanceof Error
+                    ? err.message
+                    : 'Failed to load holdings correlation',
+                )
+              } finally {
+                setCorrLoading(false)
+              }
+            }}
+          />
         </Box>
       )}
     </Box>
@@ -356,6 +404,368 @@ function TradesSection({ trades }: TradesSectionProps) {
         </Box>
       </Paper>
     </Box>
+  )
+}
+
+type CorrelationSectionProps = {
+  windowDays: string
+  setWindowDays: (value: string) => void
+  loading: boolean
+  error: string | null
+  result: HoldingsCorrelationResult | null
+  onRefresh: () => void
+}
+
+function CorrelationSection({
+  windowDays,
+  setWindowDays,
+  loading,
+  error,
+  result,
+  onRefresh,
+}: CorrelationSectionProps) {
+  const [threshold, setThreshold] = useState<string>('0.6')
+  const [showHeatmap, setShowHeatmap] = useState(false)
+
+  const thresholdNum = Number(threshold) || 0.6
+
+  const positivePairs: { x: string; y: string; corr: number }[] = []
+  const negativePairs: { x: string; y: string; corr: number }[] = []
+
+  if (result && result.matrix.length > 0) {
+    const { symbols, matrix } = result
+    for (let i = 0; i < symbols.length; i += 1) {
+      for (let j = i + 1; j < symbols.length; j += 1) {
+        const val = matrix[i]?.[j]
+        if (val == null) continue
+        if (val >= thresholdNum) {
+          positivePairs.push({ x: symbols[i], y: symbols[j], corr: val })
+        } else if (val <= -thresholdNum) {
+          negativePairs.push({ x: symbols[i], y: symbols[j], corr: val })
+        }
+      }
+    }
+    positivePairs.sort((a, b) => b.corr - a.corr)
+    negativePairs.sort((a, b) => a.corr - b.corr)
+  }
+
+  return (
+    <Paper sx={{ p: 2 }}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          flexWrap: 'wrap',
+          gap: 2,
+          mb: 2,
+        }}
+      >
+        <Box>
+          <Typography variant="h6" gutterBottom>
+            Holdings correlation &amp; diversification
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Based on daily returns for your current holdings over the selected
+            lookback window.
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <TextField
+            label="Lookback (days)"
+            size="small"
+            type="number"
+            sx={{ width: 140 }}
+            value={windowDays}
+            onChange={(e) => setWindowDays(e.target.value)}
+            InputProps={{ inputProps: { min: 30, max: 730 } }}
+          />
+          <TextField
+            label="Highlight |corr| ≥"
+            size="small"
+            type="number"
+            sx={{ width: 140 }}
+            value={threshold}
+            onChange={(e) => setThreshold(e.target.value)}
+            InputProps={{ inputProps: { min: 0, max: 1, step: 0.05 } }}
+          />
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={onRefresh}
+            disabled={loading}
+          >
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onClick={() => setShowHeatmap((prev) => !prev)}
+          >
+            {showHeatmap ? 'Hide heatmap' : 'Show heatmap'}
+          </Button>
+        </Box>
+      </Box>
+      {error && (
+        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
+          {error}
+        </Typography>
+      )}
+      {!result ? (
+        <Typography variant="body2" color="text.secondary">
+          No correlation analysis available yet.
+        </Typography>
+      ) : result.matrix.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          {result.summary}
+        </Typography>
+      ) : (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Box>
+            <Typography variant="body2" sx={{ mb: 0.5 }}>
+              {result.summary}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Observations used:
+              {' '}
+              <strong>{result.observations}</strong>
+              {' · '}
+              Average correlation:
+              {' '}
+              <strong>
+                {result.average_correlation != null
+                  ? result.average_correlation.toFixed(2)
+                  : '—'}
+              </strong>
+            </Typography>
+          </Box>
+          {result.recommendations.length > 0 && (
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                Diversification suggestions
+              </Typography>
+              {result.recommendations.map((rec) => (
+                <Typography
+                  key={rec}
+                  variant="body2"
+                  color="text.secondary"
+                >
+                  •
+                  {' '}
+                  {rec}
+                </Typography>
+              ))}
+            </Box>
+          )}
+          {showHeatmap && (
+            <HoldingsCorrelationHeatmap
+              symbols={result.symbols}
+              matrix={result.matrix}
+            />
+          )}
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: { xs: 'column', md: 'row' },
+              gap: 2,
+            }}
+          >
+            <CorrelationPairsTable
+              title="Highly positively correlated pairs"
+              pairs={positivePairs}
+              emptyMessage="No pairs exceed the positive correlation threshold."
+            />
+            <CorrelationPairsTable
+              title="Strongly negative (diversifying) pairs"
+              pairs={negativePairs}
+              emptyMessage="No pairs exceed the negative correlation threshold (in absolute value)."
+            />
+          </Box>
+        </Box>
+      )}
+    </Paper>
+  )
+}
+
+type HeatmapProps = {
+  symbols: string[]
+  matrix: (number | null)[][]
+}
+
+function colorForCorrelation(value: number | null): string {
+  if (value == null) return '#f5f5f5'
+  const v = Math.max(-1, Math.min(1, value))
+  if (v >= 0) {
+    const intensity = v
+    const g = Math.round(255 * (1 - intensity))
+    const b = Math.round(255 * (1 - intensity))
+    return `rgb(255, ${g}, ${b})`
+  }
+  const intensity = -v
+  const r = Math.round(255 * (1 - intensity))
+  const g = Math.round(255 * (1 - intensity))
+  return `rgb(${r}, ${g}, 255)`
+}
+
+function HoldingsCorrelationHeatmap({ symbols, matrix }: HeatmapProps) {
+  if (!symbols.length || !matrix.length) return null
+
+  return (
+    <Box sx={{ overflowX: 'auto' }}>
+      <Box
+        component="table"
+        sx={{
+          borderCollapse: 'collapse',
+          minWidth: 360,
+        }}
+      >
+        <Box component="thead">
+          <Box component="tr">
+            <Box component="th" sx={{ p: 0.5 }} />
+            {symbols.map((sym) => (
+              <Box
+                key={sym}
+                component="th"
+                sx={{
+                  p: 0.5,
+                  fontSize: 11,
+                  textAlign: 'center',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {sym}
+              </Box>
+            ))}
+          </Box>
+        </Box>
+        <Box component="tbody">
+          {symbols.map((symRow, i) => (
+            <Box component="tr" key={symRow}>
+              <Box
+                component="td"
+                sx={{
+                  p: 0.5,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {symRow}
+              </Box>
+              {symbols.map((symCol, j) => {
+                const val = matrix[i]?.[j] ?? null
+                const bg = colorForCorrelation(val)
+                const textColor =
+                  val != null && Math.abs(val) > 0.7 ? '#fff' : '#000'
+                return (
+                  <Box
+                    key={`${symRow}-${symCol}`}
+                    component="td"
+                    sx={{
+                      width: 42,
+                      height: 32,
+                      textAlign: 'center',
+                      fontSize: 11,
+                      bgcolor: bg,
+                      color: textColor,
+                      border: '1px solid rgba(0,0,0,0.04)',
+                    }}
+                  >
+                    {val != null ? val.toFixed(2) : '–'}
+                  </Box>
+                )
+              })}
+            </Box>
+          ))}
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
+type CorrelationPairsTableProps = {
+  title: string
+  pairs: { x: string; y: string; corr: number }[]
+  emptyMessage: string
+}
+
+function CorrelationPairsTable({
+  title,
+  pairs,
+  emptyMessage,
+}: CorrelationPairsTableProps) {
+  return (
+    <Paper sx={{ p: 2, flex: 1, minWidth: 260 }}>
+      <Typography variant="subtitle2" gutterBottom>
+        {title}
+      </Typography>
+      {pairs.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          {emptyMessage}
+        </Typography>
+      ) : (
+        <Box sx={{ maxHeight: 220, overflowY: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th
+                  style={{
+                    textAlign: 'left',
+                    padding: '4px 8px',
+                    fontSize: 12,
+                  }}
+                >
+                  Symbol A
+                </th>
+                <th
+                  style={{
+                    textAlign: 'left',
+                    padding: '4px 8px',
+                    fontSize: 12,
+                  }}
+                >
+                  Symbol B
+                </th>
+                <th
+                  style={{
+                    textAlign: 'right',
+                    padding: '4px 8px',
+                    fontSize: 12,
+                  }}
+                >
+                  Corr
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {pairs.map((p) => (
+                <tr key={`${p.x}-${p.y}`}>
+                  <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.x}</td>
+                  <td style={{ padding: '4px 8px', fontSize: 12 }}>{p.y}</td>
+                  <td
+                    style={{
+                      padding: '4px 8px',
+                      textAlign: 'right',
+                      fontSize: 12,
+                      color:
+                        p.corr >= 0
+                          ? p.corr >= 0.6
+                            ? '#d32f2f'
+                            : '#1976d2'
+                          : p.corr <= -0.6
+                            ? '#1565c0'
+                            : '#388e3c',
+                    }}
+                  >
+                    {p.corr.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Box>
+      )}
+    </Paper>
   )
 }
 

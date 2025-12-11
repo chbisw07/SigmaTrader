@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -37,9 +37,30 @@ class AnalyticsTradeRead(BaseModel):
     closed_at: datetime
 
 
+class CorrelationPair(BaseModel):
+    symbol_x: str
+    symbol_y: str
+    correlation: float
+
+
+class HoldingsCorrelationResult(BaseModel):
+    symbols: List[str]
+    matrix: List[List[Optional[float]]]
+    window_days: int
+    observations: int
+    average_correlation: Optional[float]
+    diversification_rating: str
+    summary: str
+    recommendations: List[str]
+    top_positive: List[CorrelationPair]
+    top_negative: List[CorrelationPair]
+
+
 __all__ = [
     "AnalyticsSummary",
     "AnalyticsRebuildResponse",
     "AnalyticsSummaryQuery",
     "AnalyticsTradeRead",
+    "CorrelationPair",
+    "HoldingsCorrelationResult",
 ]

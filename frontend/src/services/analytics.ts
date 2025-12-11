@@ -19,6 +19,25 @@ export type AnalyticsTrade = {
   closed_at: string
 }
 
+export type CorrelationPair = {
+  symbol_x: string
+  symbol_y: string
+  correlation: number
+}
+
+export type HoldingsCorrelationResult = {
+  symbols: string[]
+  matrix: (number | null)[][]
+  window_days: number
+  observations: number
+  average_correlation: number | null
+  diversification_rating: string
+  summary: string
+  recommendations: string[]
+  top_positive: CorrelationPair[]
+  top_negative: CorrelationPair[]
+}
+
 export async function rebuildAnalyticsTrades(): Promise<{ created: number }> {
   const res = await fetch('/api/analytics/rebuild-trades', {
     method: 'POST',
@@ -98,4 +117,27 @@ export async function fetchAnalyticsTrades(
     )
   }
   return (await res.json()) as AnalyticsTrade[]
+}
+
+export async function fetchHoldingsCorrelation(params?: {
+  windowDays?: number
+}): Promise<HoldingsCorrelationResult> {
+  const url = new URL(
+    '/api/analytics/holdings-correlation',
+    window.location.origin,
+  )
+  if (params?.windowDays != null) {
+    url.searchParams.set('window_days', String(params.windowDays))
+  }
+
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to load holdings correlation (${res.status})${
+        body ? `: ${body}` : ''
+      }`,
+    )
+  }
+  return (await res.json()) as HoldingsCorrelationResult
 }
