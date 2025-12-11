@@ -27,6 +27,10 @@ import {
   type TriggerMode,
 } from '../services/indicatorAlerts'
 import { listStrategyTemplates, type Strategy } from '../services/strategies'
+import {
+  fetchHoldingsCorrelation,
+  type HoldingsCorrelationResult,
+} from '../services/analytics'
 
 type RuleRow = IndicatorRule & {
   id: number
@@ -40,6 +44,10 @@ export function AlertsPage() {
   const [error, setError] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [selectedRule, setSelectedRule] = useState<RuleRow | null>(null)
+  const [corrSummary, setCorrSummary] =
+    useState<HoldingsCorrelationResult | null>(null)
+  const [clusterError, setClusterError] = useState<string | null>(null)
+  const [clusterLoading, setClusterLoading] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -79,6 +87,33 @@ export function AlertsPage() {
       }
     }
     void load()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const loadClusters = async () => {
+      try {
+        setClusterLoading(true)
+        setClusterError(null)
+        const res = await fetchHoldingsCorrelation({ windowDays: 90 })
+        if (!active) return
+        setCorrSummary(res)
+      } catch (err) {
+        if (!active) return
+        setClusterError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load holdings correlation clusters.',
+        )
+      } finally {
+        if (active) setClusterLoading(false)
+      }
+    }
+
+    void loadClusters()
     return () => {
       active = false
     }
@@ -150,6 +185,19 @@ export function AlertsPage() {
       headerName: 'Symbol',
       width: 140,
       valueGetter: (_value, row) => row.symbol ?? row.universe ?? '-',
+    },
+    {
+      field: 'cluster',
+      headerName: 'Cluster',
+      width: 100,
+      valueGetter: (_value, row) => {
+        const symbol = row.symbol as string | null
+        if (!symbol || !corrSummary) return null
+        const found = corrSummary.symbol_stats.find(
+          (s) => s.symbol === symbol,
+        )
+        return found?.cluster ?? null
+      },
     },
     {
       field: 'strategy_name',
@@ -240,12 +288,17 @@ export function AlertsPage() {
           {error}
         </Typography>
       )}
+      {clusterError && (
+        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
+          {clusterError}
+        </Typography>
+      )}
       <Paper sx={{ height: 520, width: '100%' }}>
         <DataGrid
           rows={rows}
           columns={columns}
           density="compact"
-          loading={loading}
+          loading={loading || clusterLoading}
           getRowId={(row) => row.id}
           disableRowSelectionOnClick
           initialState={{

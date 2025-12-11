@@ -43,6 +43,23 @@ class CorrelationPair(BaseModel):
     correlation: float
 
 
+class SymbolCorrelationStats(BaseModel):
+    symbol: str
+    average_correlation: Optional[float]
+    most_correlated_symbol: Optional[str] = None
+    most_correlated_value: Optional[float] = None
+    cluster: Optional[str] = None
+    weight_fraction: Optional[float] = None
+
+
+class CorrelationClusterSummary(BaseModel):
+    id: str
+    symbols: List[str]
+    weight_fraction: Optional[float]
+    average_internal_correlation: Optional[float]
+    average_to_others: Optional[float]
+
+
 class HoldingsCorrelationResult(BaseModel):
     symbols: List[str]
     matrix: List[List[Optional[float]]]
@@ -54,6 +71,9 @@ class HoldingsCorrelationResult(BaseModel):
     recommendations: List[str]
     top_positive: List[CorrelationPair]
     top_negative: List[CorrelationPair]
+    symbol_stats: List[SymbolCorrelationStats]
+    clusters: List[CorrelationClusterSummary]
+    effective_independent_bets: Optional[float]
 
 
 __all__ = [
@@ -62,5 +82,7 @@ __all__ = [
     "AnalyticsSummaryQuery",
     "AnalyticsTradeRead",
     "CorrelationPair",
+    "SymbolCorrelationStats",
+    "CorrelationClusterSummary",
     "HoldingsCorrelationResult",
 ]

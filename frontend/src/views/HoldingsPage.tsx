@@ -34,6 +34,10 @@ import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
 import { fetchHoldings, type Holding } from '../services/positions'
 import {
+  fetchHoldingsCorrelation,
+  type HoldingsCorrelationResult,
+} from '../services/analytics'
+import {
   createIndicatorRule,
   deleteIndicatorRule,
   listIndicatorRules,
@@ -69,6 +73,8 @@ type HoldingIndicators = {
 type HoldingRow = Holding & {
   history?: CandlePoint[]
   indicators?: HoldingIndicators
+  correlationCluster?: string
+  correlationWeight?: number
 }
 
 type HoldingsFilterField =
@@ -300,6 +306,11 @@ export function HoldingsPage() {
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
+  const [corrSummary, setCorrSummary] =
+    useState<HoldingsCorrelationResult | null>(null)
+  const [corrLoading, setCorrLoading] = useState(false)
+  const [corrError, setCorrError] = useState<string | null>(null)
+
   const load = async () => {
     try {
       setLoading(true)
@@ -319,6 +330,59 @@ export function HoldingsPage() {
 
   useEffect(() => {
     void load()
+  }, [])
+
+  // Load a lightweight correlation summary so that each holding can be
+  // tagged with its high-level correlation cluster and approximate
+  // portfolio weight. This runs independently of the main holdings
+  // fetch and is best-effort only.
+  useEffect(() => {
+    let active = true
+    const loadCorrelation = async () => {
+      try {
+        setCorrLoading(true)
+        setCorrError(null)
+        const res = await fetchHoldingsCorrelation({ windowDays: 90 })
+        if (!active) return
+        setCorrSummary(res)
+        const bySymbol: Record<
+          string,
+          { cluster?: string; weight?: number | null }
+        > = {}
+        res.symbol_stats.forEach((s) => {
+          bySymbol[s.symbol] = {
+            cluster: s.cluster ?? undefined,
+            weight: s.weight_fraction,
+          }
+        })
+        setHoldings((current) =>
+          current.map((h) => {
+            const info = bySymbol[h.symbol]
+            if (!info) return h
+            return {
+              ...h,
+              correlationCluster: info.cluster,
+              correlationWeight: info.weight ?? undefined,
+            }
+          }),
+        )
+      } catch (err) {
+        if (!active) return
+        setCorrError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load holdings correlation clusters.',
+        )
+      } finally {
+        if (active) setCorrLoading(false)
+      }
+    }
+
+    void loadCorrelation()
+
+    return () => {
+      active = false
+    }
   }, [])
 
   useEffect(() => {
@@ -544,6 +608,27 @@ export function HoldingsPage() {
       headerName: 'Symbol',
       flex: 1,
       minWidth: 140,
+    },
+    {
+      field: 'correlation_cluster',
+      headerName: 'Cluster',
+      sortable: false,
+      filterable: false,
+      width: 100,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const label = row.correlationCluster ?? '—'
+        const weight = row.correlationWeight
+        const tooltip =
+          weight != null
+            ? `Approx. portfolio weight in this holding: ${(weight * 100).toFixed(1)}%`
+            : undefined
+        return (
+          <Tooltip title={tooltip ?? ''}>
+            <span>{label}</span>
+          </Tooltip>
+        )
+      },
     },
     {
       field: 'chart',
@@ -772,6 +857,15 @@ export function HoldingsPage() {
       {refreshError && (
         <Typography variant="caption" color="error" sx={{ mb: 1, display: 'block' }}>
           {refreshError}
+        </Typography>
+      )}
+      {corrError && (
+        <Typography
+          variant="caption"
+          color="error"
+          sx={{ mb: 1, display: 'block' }}
+        >
+          {corrError}
         </Typography>
       )}
 

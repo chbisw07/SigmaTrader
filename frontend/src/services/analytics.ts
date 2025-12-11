@@ -25,6 +25,23 @@ export type CorrelationPair = {
   correlation: number
 }
 
+export type SymbolCorrelationStats = {
+  symbol: string
+  average_correlation: number | null
+  most_correlated_symbol: string | null
+  most_correlated_value: number | null
+  cluster: string | null
+  weight_fraction: number | null
+}
+
+export type CorrelationClusterSummary = {
+  id: string
+  symbols: string[]
+  weight_fraction: number | null
+  average_internal_correlation: number | null
+  average_to_others: number | null
+}
+
 export type HoldingsCorrelationResult = {
   symbols: string[]
   matrix: (number | null)[][]
@@ -36,6 +53,9 @@ export type HoldingsCorrelationResult = {
   recommendations: string[]
   top_positive: CorrelationPair[]
   top_negative: CorrelationPair[]
+  symbol_stats: SymbolCorrelationStats[]
+  clusters: CorrelationClusterSummary[]
+  effective_independent_bets: number | null
 }
 
 export async function rebuildAnalyticsTrades(): Promise<{ created: number }> {
@@ -121,6 +141,8 @@ export async function fetchAnalyticsTrades(
 
 export async function fetchHoldingsCorrelation(params?: {
   windowDays?: number
+  minWeightFraction?: number
+  clusterThreshold?: number
 }): Promise<HoldingsCorrelationResult> {
   const url = new URL(
     '/api/analytics/holdings-correlation',
@@ -129,6 +151,15 @@ export async function fetchHoldingsCorrelation(params?: {
   if (params?.windowDays != null) {
     url.searchParams.set('window_days', String(params.windowDays))
   }
+   if (params?.minWeightFraction != null) {
+     url.searchParams.set(
+       'min_weight_fraction',
+       String(params.minWeightFraction),
+     )
+   }
+   if (params?.clusterThreshold != null) {
+     url.searchParams.set('cluster_threshold', String(params.clusterThreshold))
+   }
 
   const res = await fetch(url.toString())
   if (!res.ok) {

@@ -16,8 +16,10 @@ from app.schemas.analytics import (
     AnalyticsRebuildResponse,
     AnalyticsSummary,
     AnalyticsTradeRead,
+    CorrelationClusterSummary,
     CorrelationPair,
     HoldingsCorrelationResult,
+    SymbolCorrelationStats,
 )
 from app.services.analytics import compute_strategy_analytics, rebuild_trades
 from app.services.market_data import Timeframe, load_series
@@ -231,6 +233,24 @@ def holdings_correlation(
         "1d",
         description="Timeframe for correlation calculation (currently 1d only).",
     ),
+    min_weight_fraction: float = Query(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum approximate portfolio weight (0–1) for a holding to be "
+            "included in the correlation matrix."
+        ),
+    ),
+    cluster_threshold: float = Query(
+        0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Correlation threshold used when grouping holdings into "
+            "high-correlation clusters."
+        ),
+    ),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     user: User | None = Depends(get_current_user_optional),
@@ -252,25 +272,39 @@ def holdings_correlation(
     from app.api.positions import list_holdings
 
     holdings = list_holdings(db=db, settings=settings, user=user)
-    symbols_exchanges: List[Tuple[str, str]] = []
+
+    # Aggregate an approximate portfolio value per symbol so that we can
+    # (optionally) exclude very small positions from the correlation view
+    # and compute cluster weights.
+    symbol_values: Dict[str, float] = {}
+    symbol_exchange: Dict[str, str] = {}
+    ordered_symbols: List[str] = []
+
     for h in holdings:
         if h.quantity <= 0:
             continue
         symbol = h.symbol
+        if not symbol:
+            continue
         exchange = (h.exchange or "NSE").upper()
-        symbols_exchanges.append((symbol, exchange))
+        last_price = h.last_price if h.last_price is not None else h.average_price
 
-    # Deduplicate symbols while preserving order.
-    seen: set[Tuple[str, str]] = set()
-    unique_symbols: List[Tuple[str, str]] = []
-    for pair in symbols_exchanges:
-        if pair not in seen:
-            seen.add(pair)
-            unique_symbols.append(pair)
+        try:
+            qty_f = float(h.quantity)
+            price_f = float(last_price) if last_price is not None else None
+        except (TypeError, ValueError):
+            continue
 
-    if len(unique_symbols) < 2:
+        value = qty_f * price_f if price_f is not None and price_f > 0 else 0.0
+        symbol_values[symbol] = symbol_values.get(symbol, 0.0) + value
+        if symbol not in symbol_exchange:
+            symbol_exchange[symbol] = exchange
+        if symbol not in ordered_symbols:
+            ordered_symbols.append(symbol)
+
+    if len(symbol_values) < 2:
         return HoldingsCorrelationResult(
-            symbols=[s for s, _ in unique_symbols],
+            symbols=list(symbol_values.keys()),
             matrix=[],
             window_days=window_days,
             observations=0,
@@ -288,6 +322,57 @@ def holdings_correlation(
             ],
             top_positive=[],
             top_negative=[],
+            symbol_stats=[],
+            clusters=[],
+            effective_independent_bets=None,
+        )
+
+    total_value = sum(symbol_values.values())
+    weights_by_symbol: Dict[str, float] = {}
+    if total_value > 0:
+        for sym, val in symbol_values.items():
+            weights_by_symbol[sym] = val / total_value
+    else:
+        # Fall back to equal weights when we cannot infer a meaningful
+        # portfolio value (e.g. missing prices).
+        n_syms = len(symbol_values)
+        equal_weight = 1.0 / n_syms if n_syms else 0.0
+        for sym in symbol_values.keys():
+            weights_by_symbol[sym] = equal_weight
+
+    included_symbols: List[str] = []
+    for sym in ordered_symbols:
+        if sym not in symbol_values:
+            continue
+        weight = weights_by_symbol.get(sym, 0.0)
+        if weight < min_weight_fraction:
+            continue
+        included_symbols.append(sym)
+
+    if len(included_symbols) < 2:
+        return HoldingsCorrelationResult(
+            symbols=included_symbols,
+            matrix=[],
+            window_days=window_days,
+            observations=0,
+            average_correlation=None,
+            diversification_rating="insufficient-data",
+            summary=(
+                "Not enough holdings above the minimum weight threshold to "
+                "compute correlations."
+            ),
+            recommendations=[
+                (
+                    "Lower the minimum weight filter or increase position "
+                    "sizes so that more holdings participate in the "
+                    "diversification analysis."
+                ),
+            ],
+            top_positive=[],
+            top_negative=[],
+            symbol_stats=[],
+            clusters=[],
+            effective_independent_bets=None,
         )
 
     now_ist = datetime.now(UTC) + IST_OFFSET
@@ -297,7 +382,8 @@ def holdings_correlation(
     returns_by_symbol: Dict[str, Dict[datetime, float]] = {}
     date_sets: List[set[datetime]] = []
 
-    for symbol, exchange in unique_symbols:
+    for symbol in included_symbols:
+        exchange = symbol_exchange.get(symbol, "NSE")
         rows = load_series(
             db,
             settings,
@@ -329,9 +415,8 @@ def holdings_correlation(
         date_sets.append(set(series.keys()))
 
     if len(returns_by_symbol) < 2 or not date_sets:
-        syms = list(returns_by_symbol.keys())
         return HoldingsCorrelationResult(
-            symbols=syms,
+            symbols=list(returns_by_symbol.keys()),
             matrix=[],
             window_days=window_days,
             observations=0,
@@ -349,13 +434,15 @@ def holdings_correlation(
             ],
             top_positive=[],
             top_negative=[],
+            symbol_stats=[],
+            clusters=[],
+            effective_independent_bets=None,
         )
 
     common_dates = set.intersection(*date_sets)
     if len(common_dates) < 5:
-        syms = list(returns_by_symbol.keys())
         return HoldingsCorrelationResult(
-            symbols=syms,
+            symbols=list(returns_by_symbol.keys()),
             matrix=[],
             window_days=window_days,
             observations=len(common_dates),
@@ -373,12 +460,28 @@ def holdings_correlation(
             ],
             top_positive=[],
             top_negative=[],
+            symbol_stats=[],
+            clusters=[],
+            effective_independent_bets=None,
         )
 
     dates_sorted = sorted(common_dates)
     observations = len(dates_sorted)
 
     symbol_list = sorted(returns_by_symbol.keys())
+
+    # Re-normalise weights on the final symbol set in case some holdings
+    # were dropped due to missing history.
+    weights_used: Dict[str, float] = {}
+    total_weight_used = sum(weights_by_symbol.get(sym, 0.0) for sym in symbol_list)
+    if total_weight_used > 0:
+        for sym in symbol_list:
+            weights_used[sym] = weights_by_symbol.get(sym, 0.0) / total_weight_used
+    else:
+        n_syms = len(symbol_list)
+        equal_weight = 1.0 / n_syms if n_syms else 0.0
+        for sym in symbol_list:
+            weights_used[sym] = equal_weight
     vectors: Dict[str, List[float]] = {}
     for symbol in symbol_list:
         series = returns_by_symbol[symbol]
@@ -519,6 +622,125 @@ def holdings_correlation(
                 CorrelationPair(symbol_x=sym_i, symbol_y=sym_j, correlation=corr),
             )
 
+    # Correlation-based clusters: treat pairs above cluster_threshold as
+    # edges in an undirected graph and compute connected components.
+    idx_by_symbol: Dict[str, int] = {sym: i for i, sym in enumerate(symbol_list)}
+    adjacency: Dict[str, set[str]] = {sym: set() for sym in symbol_list}
+    for sym_i, sym_j, corr in pairs:
+        if corr >= cluster_threshold:
+            adjacency[sym_i].add(sym_j)
+            adjacency[sym_j].add(sym_i)
+
+    raw_clusters: List[List[str]] = []
+    visited: set[str] = set()
+    for sym in symbol_list:
+        if sym in visited:
+            continue
+        stack = [sym]
+        visited.add(sym)
+        members: List[str] = []
+        while stack:
+            current = stack.pop()
+            members.append(current)
+            for neigh in adjacency[current]:
+                if neigh not in visited:
+                    visited.add(neigh)
+                    stack.append(neigh)
+        raw_clusters.append(members)
+
+    def _cluster_weight(symbols: Sequence[str]) -> float:
+        return sum(weights_used.get(sym, 0.0) for sym in symbols)
+
+    cluster_label_by_symbol: Dict[str, str] = {}
+    cluster_summaries: List[CorrelationClusterSummary] = []
+
+    cluster_name_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    sorted_clusters = sorted(
+        raw_clusters,
+        key=lambda members: _cluster_weight(members),
+        reverse=True,
+    )
+
+    for idx, members in enumerate(sorted_clusters):
+        if idx < len(cluster_name_alphabet):
+            label = cluster_name_alphabet[idx]
+        else:
+            label = f"C{idx + 1}"
+        for sym in members:
+            cluster_label_by_symbol[sym] = label
+
+        internal_corrs: List[float] = []
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                sym_i = members[i]
+                sym_j = members[j]
+                val = matrix[idx_by_symbol[sym_i]][idx_by_symbol[sym_j]]
+                if val is not None:
+                    internal_corrs.append(val)
+
+        avg_internal: Optional[float] = None
+        if internal_corrs:
+            avg_internal = sum(internal_corrs) / len(internal_corrs)
+
+        cross_corrs: List[float] = []
+        others = [s for s in symbol_list if s not in members]
+        for sym_i in members:
+            for sym_j in others:
+                val = matrix[idx_by_symbol[sym_i]][idx_by_symbol[sym_j]]
+                if val is not None:
+                    cross_corrs.append(val)
+
+        avg_to_others: Optional[float] = None
+        if cross_corrs:
+            avg_to_others = sum(cross_corrs) / len(cross_corrs)
+
+        weight_fraction = _cluster_weight(members)
+        cluster_summaries.append(
+            CorrelationClusterSummary(
+                id=label,
+                symbols=members,
+                weight_fraction=weight_fraction if weight_fraction > 0 else None,
+                average_internal_correlation=avg_internal,
+                average_to_others=avg_to_others,
+            ),
+        )
+
+    # Per-symbol stats combining cluster labels, weights, and local
+    # correlation structure.
+    symbol_pairs: Dict[str, List[Tuple[str, float]]] = {sym: [] for sym in symbol_list}
+    for sym_i, sym_j, corr in pairs:
+        symbol_pairs.setdefault(sym_i, []).append((sym_j, corr))
+        symbol_pairs.setdefault(sym_j, []).append((sym_i, corr))
+
+    symbol_stats: List[SymbolCorrelationStats] = []
+    for sym in symbol_list:
+        corrs_for_sym = symbol_pairs.get(sym, [])
+        avg_for_sym: Optional[float] = None
+        most_sym: Optional[str] = None
+        most_val: Optional[float] = None
+        if corrs_for_sym:
+            values = [c for _, c in corrs_for_sym]
+            avg_for_sym = sum(values) / len(values)
+            most_sym, most_val = max(corrs_for_sym, key=lambda p: abs(p[1]))
+        symbol_stats.append(
+            SymbolCorrelationStats(
+                symbol=sym,
+                average_correlation=avg_for_sym,
+                most_correlated_symbol=most_sym,
+                most_correlated_value=most_val,
+                cluster=cluster_label_by_symbol.get(sym),
+                weight_fraction=weights_used.get(sym),
+            ),
+        )
+
+    # Simple notion of “effective independent bets” based on cluster
+    # weights: 1 / sum(w_i^2) where w_i are cluster weights.
+    effective_independent_bets: Optional[float] = None
+    cluster_weights = [c.weight_fraction or 0.0 for c in cluster_summaries]
+    denom = sum(w * w for w in cluster_weights if w > 0)
+    if denom > 0:
+        effective_independent_bets = 1.0 / denom
+
     return HoldingsCorrelationResult(
         symbols=symbol_list,
         matrix=matrix,
@@ -530,6 +752,9 @@ def holdings_correlation(
         recommendations=recommendations,
         top_positive=top_positive,
         top_negative=top_negative,
+        symbol_stats=symbol_stats,
+        clusters=cluster_summaries,
+        effective_independent_bets=effective_independent_bets,
     )
 
 

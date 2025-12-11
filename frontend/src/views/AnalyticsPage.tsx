@@ -15,6 +15,7 @@ import {
   type AnalyticsSummary,
   type AnalyticsTrade,
   type HoldingsCorrelationResult,
+  type SymbolCorrelationStats,
 } from '../services/analytics'
 import { fetchStrategies, type Strategy } from '../services/admin'
 import { recordAppLog } from '../services/logs'
@@ -537,6 +538,16 @@ function CorrelationSection({
                   ? result.average_correlation.toFixed(2)
                   : '—'}
               </strong>
+              {result.effective_independent_bets != null && (
+                <>
+                  {' · '}
+                  Approx. independent clusters:
+                  {' '}
+                  <strong>
+                    {result.effective_independent_bets.toFixed(1)}
+                  </strong>
+                </>
+              )}
             </Typography>
           </Box>
           {result.recommendations.length > 0 && (
@@ -556,6 +567,9 @@ function CorrelationSection({
                 </Typography>
               ))}
             </Box>
+          )}
+          {result.symbol_stats && result.symbol_stats.length > 0 && (
+            <SymbolCorrelationStatsTable stats={result.symbol_stats} />
           )}
           {showHeatmap && (
             <HoldingsCorrelationHeatmap
@@ -765,6 +779,124 @@ function CorrelationPairsTable({
           </table>
         </Box>
       )}
+    </Paper>
+  )
+}
+
+type SymbolCorrelationStatsTableProps = {
+  stats: SymbolCorrelationStats[]
+}
+
+function SymbolCorrelationStatsTable({
+  stats,
+}: SymbolCorrelationStatsTableProps) {
+  if (!stats.length) return null
+
+  const sorted = [...stats].sort(
+    (a, b) => (b.weight_fraction ?? 0) - (a.weight_fraction ?? 0),
+  )
+
+  return (
+    <Paper sx={{ p: 2 }}>
+      <Typography variant="subtitle2" gutterBottom>
+        Per-symbol correlation profile
+      </Typography>
+      <Box sx={{ maxHeight: 260, overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th
+                style={{
+                  textAlign: 'left',
+                  padding: '4px 8px',
+                  fontSize: 12,
+                }}
+              >
+                Symbol
+              </th>
+              <th
+                style={{
+                  textAlign: 'left',
+                  padding: '4px 8px',
+                  fontSize: 12,
+                }}
+              >
+                Cluster
+              </th>
+              <th
+                style={{
+                  textAlign: 'right',
+                  padding: '4px 8px',
+                  fontSize: 12,
+                }}
+              >
+                Weight
+              </th>
+              <th
+                style={{
+                  textAlign: 'right',
+                  padding: '4px 8px',
+                  fontSize: 12,
+                }}
+              >
+                Avg corr
+              </th>
+              <th
+                style={{
+                  textAlign: 'left',
+                  padding: '4px 8px',
+                  fontSize: 12,
+                }}
+              >
+                Most correlated with
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((s) => {
+              const weightPct =
+                s.weight_fraction != null ? s.weight_fraction * 100 : null
+              const partner =
+                s.most_correlated_symbol && s.most_correlated_value != null
+                  ? `${s.most_correlated_symbol} (${s.most_correlated_value.toFixed(2)})`
+                  : '—'
+              return (
+                <tr key={s.symbol}>
+                  <td style={{ padding: '4px 8px', fontSize: 12 }}>
+                    {s.symbol}
+                  </td>
+                  <td style={{ padding: '4px 8px', fontSize: 12 }}>
+                    {s.cluster ?? '—'}
+                  </td>
+                  <td
+                    style={{
+                      padding: '4px 8px',
+                      fontSize: 12,
+                      textAlign: 'right',
+                    }}
+                  >
+                    {weightPct != null ? `${weightPct.toFixed(1)}%` : '—'}
+                  </td>
+                  <td
+                    style={{
+                      padding: '4px 8px',
+                      fontSize: 12,
+                      textAlign: 'right',
+                    }}
+                  >
+                    {s.average_correlation != null
+                      ? s.average_correlation.toFixed(2)
+                      : '—'}
+                  </td>
+                  <td style={{ padding: '4px 8px', fontSize: 12 }}>
+                    {partner}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </Box>
     </Paper>
   )
 }
