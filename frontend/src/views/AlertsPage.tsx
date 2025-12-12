@@ -47,7 +47,6 @@ export function AlertsPage() {
   const [corrSummary, setCorrSummary] =
     useState<HoldingsCorrelationResult | null>(null)
   const [clusterError, setClusterError] = useState<string | null>(null)
-  const [clusterLoading, setClusterLoading] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -96,7 +95,6 @@ export function AlertsPage() {
     let active = true
     const loadClusters = async () => {
       try {
-        setClusterLoading(true)
         setClusterError(null)
         const res = await fetchHoldingsCorrelation({ windowDays: 90 })
         if (!active) return
@@ -109,7 +107,10 @@ export function AlertsPage() {
             : 'Failed to load holdings correlation clusters.',
         )
       } finally {
-        if (active) setClusterLoading(false)
+        if (active) {
+          // No-op; we avoid wiring cluster loading into the grid spinner so
+          // that slow correlation calls do not block alert management.
+        }
       }
     }
 

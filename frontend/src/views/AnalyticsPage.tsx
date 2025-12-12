@@ -6,6 +6,11 @@ import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
+import {
+  DataGrid,
+  GridToolbar,
+  type GridColDef,
+} from '@mui/x-data-grid'
 
 import {
   fetchAnalyticsTrades,
@@ -279,13 +284,14 @@ export function AnalyticsPage() {
             loading={corrLoading}
             error={corrError}
             result={corrResult}
-            onRefresh={async () => {
+            onRefresh={async ({ clusterThreshold }) => {
               try {
                 setCorrLoading(true)
                 setCorrError(null)
                 const windowDaysNum = Number(corrWindowDays) || 90
                 const data = await fetchHoldingsCorrelation({
                   windowDays: windowDaysNum,
+                  clusterThreshold,
                 })
                 setCorrResult(data)
                 if (typeof window !== 'undefined') {
@@ -436,7 +442,7 @@ type CorrelationSectionProps = {
   loading: boolean
   error: string | null
   result: HoldingsCorrelationResult | null
-  onRefresh: () => void
+  onRefresh: (opts: { clusterThreshold: number }) => void
 }
 
 function CorrelationSection({
@@ -447,7 +453,7 @@ function CorrelationSection({
   result,
   onRefresh,
 }: CorrelationSectionProps) {
-  const [threshold, setThreshold] = useState<string>(() => {
+  const [highlightThreshold, setHighlightThreshold] = useState<string>(() => {
     if (typeof window === 'undefined') return DEFAULT_CORR_THRESHOLD
     try {
       const raw = window.localStorage.getItem(CORR_SETTINGS_STORAGE_KEY)
@@ -456,14 +462,37 @@ function CorrelationSection({
         windowDays?: string
         threshold?: string
       }
-      return parsed.threshold ?? DEFAULT_CORR_THRESHOLD
+      return (
+        (parsed as { highlightThreshold?: string }).highlightThreshold
+        ?? parsed.threshold
+        ?? DEFAULT_CORR_THRESHOLD
+      )
+    } catch {
+      return DEFAULT_CORR_THRESHOLD
+    }
+  })
+  const [clusterThreshold, setClusterThreshold] = useState<string>(() => {
+    if (typeof window === 'undefined') return DEFAULT_CORR_THRESHOLD
+    try {
+      const raw = window.localStorage.getItem(CORR_SETTINGS_STORAGE_KEY)
+      if (!raw) return DEFAULT_CORR_THRESHOLD
+      const parsed = JSON.parse(raw) as {
+        windowDays?: string
+        threshold?: string
+        clusterThreshold?: string
+      }
+      return (
+        parsed.clusterThreshold
+        ?? parsed.threshold
+        ?? DEFAULT_CORR_THRESHOLD
+      )
     } catch {
       return DEFAULT_CORR_THRESHOLD
     }
   })
   const [showHeatmap, setShowHeatmap] = useState(false)
 
-  const thresholdNum = Number(threshold) || 0.6
+  const highlightNum = Number(highlightThreshold) || 0.6
 
   const positivePairs: { x: string; y: string; corr: number }[] = []
   const negativePairs: { x: string; y: string; corr: number }[] = []
@@ -474,9 +503,9 @@ function CorrelationSection({
       for (let j = i + 1; j < symbols.length; j += 1) {
         const val = matrix[i]?.[j]
         if (val == null) continue
-        if (val >= thresholdNum) {
+        if (val >= highlightNum) {
           positivePairs.push({ x: symbols[i], y: symbols[j], corr: val })
-        } else if (val <= -thresholdNum) {
+        } else if (val <= -highlightNum) {
           negativePairs.push({ x: symbols[i], y: symbols[j], corr: val })
         }
       }
@@ -491,13 +520,15 @@ function CorrelationSection({
     if (typeof window === 'undefined') return
     try {
       const raw = window.localStorage.getItem(CORR_SETTINGS_STORAGE_KEY)
-      let existing: { windowDays?: string; threshold?: string } = {}
+      let existing: {
+        windowDays?: string
+        threshold?: string
+        highlightThreshold?: string
+        clusterThreshold?: string
+      } = {}
       if (raw) {
         try {
-          existing = JSON.parse(raw) as {
-            windowDays?: string
-            threshold?: string
-          }
+          existing = JSON.parse(raw) as typeof existing
         } catch {
           existing = {}
         }
@@ -505,7 +536,8 @@ function CorrelationSection({
       const next = {
         ...existing,
         windowDays,
-        threshold,
+        highlightThreshold,
+        clusterThreshold,
       }
       window.localStorage.setItem(
         CORR_SETTINGS_STORAGE_KEY,
@@ -514,7 +546,7 @@ function CorrelationSection({
     } catch {
       // Ignore persistence errors.
     }
-  }, [windowDays, threshold])
+  }, [windowDays, highlightThreshold, clusterThreshold])
 
   return (
     <Paper sx={{ p: 2 }}>
@@ -552,8 +584,17 @@ function CorrelationSection({
             size="small"
             type="number"
             sx={{ width: 140 }}
-            value={threshold}
-            onChange={(e) => setThreshold(e.target.value)}
+            value={highlightThreshold}
+            onChange={(e) => setHighlightThreshold(e.target.value)}
+            InputProps={{ inputProps: { min: 0, max: 1, step: 0.05 } }}
+          />
+          <TextField
+            label="Cluster corr ≥"
+            size="small"
+            type="number"
+            sx={{ width: 140 }}
+            value={clusterThreshold}
+            onChange={(e) => setClusterThreshold(e.target.value)}
             InputProps={{ inputProps: { min: 0, max: 1, step: 0.05 } }}
           />
           <Button
@@ -561,7 +602,8 @@ function CorrelationSection({
             variant="text"
             onClick={() => {
               setWindowDays(DEFAULT_CORR_WINDOW_DAYS)
-              setThreshold(DEFAULT_CORR_THRESHOLD)
+              setHighlightThreshold(DEFAULT_CORR_THRESHOLD)
+              setClusterThreshold(DEFAULT_CORR_THRESHOLD)
             }}
           >
             Reset
@@ -569,7 +611,10 @@ function CorrelationSection({
           <Button
             size="small"
             variant="outlined"
-            onClick={onRefresh}
+            onClick={() => {
+              const clusterNum = Number(clusterThreshold) || 0.6
+              onRefresh({ clusterThreshold: clusterNum })
+            }}
             disabled={loading}
           >
             {loading ? 'Refreshing…' : 'Refresh'}
@@ -598,6 +643,9 @@ function CorrelationSection({
         </Typography>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {result.clusters && result.clusters.length > 0 && (
+            <ClusterSummaryCards clusters={result.clusters} />
+          )}
           <Box>
             <Typography variant="body2" sx={{ mb: 0.5 }}>
               {result.summary}
@@ -859,6 +907,82 @@ function CorrelationPairsTable({
   )
 }
 
+type ClusterSummaryCardsProps = {
+  clusters: {
+    id: string
+    symbols: string[]
+    weight_fraction: number | null
+    average_internal_correlation: number | null
+    average_to_others: number | null
+  }[]
+}
+
+function ClusterSummaryCards({ clusters }: ClusterSummaryCardsProps) {
+  if (!clusters.length) return null
+
+  const sorted = [...clusters].sort(
+    (a, b) => (b.weight_fraction ?? 0) - (a.weight_fraction ?? 0),
+  )
+
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: { xs: 'column', md: 'row' },
+        gap: 1.5,
+        mb: 1,
+        flexWrap: 'wrap',
+      }}
+    >
+      {sorted.map((c) => {
+        const weightPct =
+          c.weight_fraction != null ? c.weight_fraction * 100 : null
+        const internal =
+          c.average_internal_correlation != null
+            ? c.average_internal_correlation.toFixed(2)
+            : '—'
+        const cross =
+          c.average_to_others != null
+            ? c.average_to_others.toFixed(2)
+            : '—'
+        return (
+          <Paper
+            key={c.id}
+            sx={{
+              p: 1.25,
+              minWidth: 180,
+              flex: '0 0 auto',
+            }}
+          >
+            <Typography variant="subtitle2" sx={{ mb: 0.25 }}>
+              Cluster
+              {' '}
+              {c.id}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Weight:
+              {' '}
+              <strong>
+                {weightPct != null ? `${weightPct.toFixed(1)}%` : '—'}
+              </strong>
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Avg internal corr:
+              {' '}
+              <strong>{internal}</strong>
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Avg vs others:
+              {' '}
+              <strong>{cross}</strong>
+            </Typography>
+          </Paper>
+        )
+      })}
+    </Box>
+  )
+}
+
 type SymbolCorrelationStatsTableProps = {
   stats: SymbolCorrelationStats[]
 }
@@ -868,114 +992,95 @@ function SymbolCorrelationStatsTable({
 }: SymbolCorrelationStatsTableProps) {
   if (!stats.length) return null
 
-  const sorted = [...stats].sort(
-    (a, b) => (b.weight_fraction ?? 0) - (a.weight_fraction ?? 0),
-  )
-
   return (
     <Paper sx={{ p: 2 }}>
       <Typography variant="subtitle2" gutterBottom>
         Per-symbol correlation profile
       </Typography>
-      <Box sx={{ maxHeight: 260, overflowY: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr>
-              <th
-                style={{
-                  textAlign: 'left',
-                  padding: '4px 8px',
-                  fontSize: 12,
-                }}
-              >
-                Symbol
-              </th>
-              <th
-                style={{
-                  textAlign: 'left',
-                  padding: '4px 8px',
-                  fontSize: 12,
-                }}
-              >
-                Cluster
-              </th>
-              <th
-                style={{
-                  textAlign: 'right',
-                  padding: '4px 8px',
-                  fontSize: 12,
-                }}
-              >
-                Weight
-              </th>
-              <th
-                style={{
-                  textAlign: 'right',
-                  padding: '4px 8px',
-                  fontSize: 12,
-                }}
-              >
-                Avg corr
-              </th>
-              <th
-                style={{
-                  textAlign: 'left',
-                  padding: '4px 8px',
-                  fontSize: 12,
-                }}
-              >
-                Most correlated with
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((s) => {
-              const weightPct =
-                s.weight_fraction != null ? s.weight_fraction * 100 : null
-              const partner =
-                s.most_correlated_symbol && s.most_correlated_value != null
-                  ? `${s.most_correlated_symbol} (${s.most_correlated_value.toFixed(2)})`
-                  : '—'
-              return (
-                <tr key={s.symbol}>
-                  <td style={{ padding: '4px 8px', fontSize: 12 }}>
-                    {s.symbol}
-                  </td>
-                  <td style={{ padding: '4px 8px', fontSize: 12 }}>
-                    {s.cluster ?? '—'}
-                  </td>
-                  <td
-                    style={{
-                      padding: '4px 8px',
-                      fontSize: 12,
-                      textAlign: 'right',
-                    }}
-                  >
-                    {weightPct != null ? `${weightPct.toFixed(1)}%` : '—'}
-                  </td>
-                  <td
-                    style={{
-                      padding: '4px 8px',
-                      fontSize: 12,
-                      textAlign: 'right',
-                    }}
-                  >
-                    {s.average_correlation != null
-                      ? s.average_correlation.toFixed(2)
-                      : '—'}
-                  </td>
-                  <td style={{ padding: '4px 8px', fontSize: 12 }}>
-                    {partner}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+      <Box sx={{ height: 320, width: '100%' }}>
+        <DataGrid
+          rows={stats.map((s) => ({
+            id: s.symbol,
+            symbol: s.symbol,
+            role: s.role ?? '—',
+            cluster: s.cluster ?? '—',
+            weightDisplay:
+              s.weight_fraction != null
+                ? `${(s.weight_fraction * 100).toFixed(1)}%`
+                : '—',
+            avgCorrDisplay:
+              s.average_correlation != null
+                ? s.average_correlation.toFixed(2)
+                : '—',
+            mostCorrelatedDisplay:
+              s.most_correlated_symbol && s.most_correlated_value != null
+                ? `${s.most_correlated_symbol} (${s.most_correlated_value.toFixed(2)})`
+                : '—',
+          }))}
+          columns={symbolCorrelationColumns}
+          density="compact"
+          disableRowSelectionOnClick
+          slots={{ toolbar: GridToolbar }}
+          slotProps={{
+            toolbar: {
+              showQuickFilter: true,
+              quickFilterProps: { debounceMs: 300 },
+            },
+          }}
+          initialState={{
+            sorting: {
+              sortModel: [
+                {
+                  field: 'weightDisplay',
+                  sort: 'desc',
+                },
+              ],
+            },
+            pagination: {
+              paginationModel: { pageSize: 10 },
+            },
+          }}
+          pageSizeOptions={[10, 25, 50]}
+        />
       </Box>
     </Paper>
   )
 }
+
+const symbolCorrelationColumns: GridColDef[] = [
+  {
+    field: 'symbol',
+    headerName: 'Symbol',
+    flex: 1,
+    minWidth: 110,
+  },
+  {
+    field: 'role',
+    headerName: 'Role',
+    width: 120,
+  },
+  {
+    field: 'cluster',
+    headerName: 'Cluster',
+    width: 100,
+  },
+  {
+    field: 'weightDisplay',
+    headerName: 'Weight',
+    width: 120,
+  },
+  {
+    field: 'avgCorrDisplay',
+    headerName: 'Avg corr',
+    width: 110,
+  },
+  {
+    field: 'mostCorrelatedDisplay',
+    headerName: 'Most correlated with',
+    flex: 1.2,
+    minWidth: 180,
+  },
+]
 
 type ChartPoint = { x: number; y: number }
 

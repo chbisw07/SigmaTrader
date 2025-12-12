@@ -50,6 +50,7 @@ class SymbolCorrelationStats(BaseModel):
     most_correlated_value: Optional[float] = None
     cluster: Optional[str] = None
     weight_fraction: Optional[float] = None
+    role: Optional[str] = None
 
 
 class CorrelationClusterSummary(BaseModel):

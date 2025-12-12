@@ -414,7 +414,8 @@ def holdings_correlation(
         returns_by_symbol[symbol] = series
         date_sets.append(set(series.keys()))
 
-    if len(returns_by_symbol) < 2 or not date_sets:
+    included_count = len(returns_by_symbol)
+    if included_count < 2 or not date_sets:
         return HoldingsCorrelationResult(
             symbols=list(returns_by_symbol.keys()),
             matrix=[],
@@ -623,7 +624,9 @@ def holdings_correlation(
             )
 
     # Correlation-based clusters: treat pairs above cluster_threshold as
-    # edges in an undirected graph and compute connected components.
+    # edges in an undirected graph and compute connected components. When
+    # the graph collapses into a single component, we later add a simple
+    # two-cluster split to reveal A/B-style groups.
     idx_by_symbol: Dict[str, int] = {sym: i for i, sym in enumerate(symbol_list)}
     adjacency: Dict[str, set[str]] = {sym: set() for sym in symbol_list}
     for sym_i, sym_j, corr in pairs:
@@ -647,6 +650,56 @@ def holdings_correlation(
                     visited.add(neigh)
                     stack.append(neigh)
         raw_clusters.append(members)
+
+    # If everything ends up in a single graph component but there are at
+    # least a few symbols, derive a light-weight two-way split based on
+    # similarity to two “centres” so that the analytics view can still
+    # show A/B-style clusters.
+    if len(raw_clusters) == 1 and len(symbol_list) >= 3:
+        members = raw_clusters[0]
+        idxs = [idx_by_symbol[sym] for sym in members]
+
+        def _sim(i: int, j: int) -> float:
+            val = matrix[i][j]
+            if val is None or val < 0:
+                return 0.0
+            return float(val)
+
+        # First centre: symbol with highest average positive similarity.
+        centre1: int = idxs[0]
+        best_avg = -1.0
+        for i in idxs:
+            vals = [_sim(i, j) for j in idxs if j != i]
+            if not vals:
+                continue
+            avg = sum(vals) / len(vals)
+            if avg > best_avg:
+                best_avg = avg
+                centre1 = i
+
+        # Second centre: symbol least similar to centre1.
+        centre2: int = idxs[0]
+        worst_sim = 2.0
+        for j in idxs:
+            if j == centre1:
+                continue
+            s_val = _sim(centre1, j)
+            if s_val < worst_sim:
+                worst_sim = s_val
+                centre2 = j
+
+        cluster_a: List[str] = []
+        cluster_b: List[str] = []
+        for i in idxs:
+            s1 = _sim(i, centre1)
+            s2 = _sim(i, centre2)
+            if s1 >= s2:
+                cluster_a.append(symbol_list[i])
+            else:
+                cluster_b.append(symbol_list[i])
+
+        if cluster_a and cluster_b:
+            raw_clusters = [cluster_a, cluster_b]
 
     def _cluster_weight(symbols: Sequence[str]) -> float:
         return sum(weights_used.get(sym, 0.0) for sym in symbols)
@@ -722,6 +775,17 @@ def holdings_correlation(
             values = [c for _, c in corrs_for_sym]
             avg_for_sym = sum(values) / len(values)
             most_sym, most_val = max(corrs_for_sym, key=lambda p: abs(p[1]))
+
+        weight = weights_used.get(sym)
+        role: Optional[str] = None
+        if avg_for_sym is not None and weight is not None:
+            if weight >= 0.04 and avg_for_sym >= 0.4:
+                role = "core-driver"
+            elif avg_for_sym <= 0.1:
+                role = "diversifier"
+            else:
+                role = "satellite"
+
         symbol_stats.append(
             SymbolCorrelationStats(
                 symbol=sym,
@@ -730,6 +794,7 @@ def holdings_correlation(
                 most_correlated_value=most_val,
                 cluster=cluster_label_by_symbol.get(sym),
                 weight_fraction=weights_used.get(sym),
+                role=role,
             ),
         )
 
@@ -740,6 +805,26 @@ def holdings_correlation(
     denom = sum(w * w for w in cluster_weights if w > 0)
     if denom > 0:
         effective_independent_bets = 1.0 / denom
+
+    # Add robustness hints: very small sample sizes and excluded holdings
+    # make correlation-driven insights more tentative.
+    if observations < 20:
+        recommendations.append(
+            (
+                "Correlation estimates are based on a limited number of "
+                "observations; treat diversification insights as tentative."
+            ),
+        )
+
+    excluded_count = max(0, len(symbol_values) - len(symbol_list))
+    if excluded_count > 0:
+        recommendations.append(
+            (
+                f"{excluded_count} holding(s) were excluded due to missing or "
+                "insufficient price history; only the symbols shown below are "
+                "included in this analysis."
+            ),
+        )
 
     return HoldingsCorrelationResult(
         symbols=symbol_list,

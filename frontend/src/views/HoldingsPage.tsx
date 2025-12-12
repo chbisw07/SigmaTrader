@@ -306,9 +306,9 @@ export function HoldingsPage() {
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const [corrSummary, setCorrSummary] =
+  const [, setCorrSummary] =
     useState<HoldingsCorrelationResult | null>(null)
-  const [corrLoading, setCorrLoading] = useState(false)
+  const [, setCorrLoading] = useState(false)
   const [corrError, setCorrError] = useState<string | null>(null)
 
   const load = async () => {
