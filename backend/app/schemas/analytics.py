@@ -77,6 +77,20 @@ class HoldingsCorrelationResult(BaseModel):
     effective_independent_bets: Optional[float]
 
 
+class RiskSizingRequest(BaseModel):
+    entry_price: float
+    stop_price: float
+    risk_budget: float
+    max_qty: Optional[int] = None
+
+
+class RiskSizingResponse(BaseModel):
+    qty: int
+    notional: float
+    risk_per_share: float
+    max_loss: float
+
+
 __all__ = [
     "AnalyticsSummary",
     "AnalyticsRebuildResponse",
@@ -86,4 +100,6 @@ __all__ = [
     "SymbolCorrelationStats",
     "CorrelationClusterSummary",
     "HoldingsCorrelationResult",
+    "RiskSizingRequest",
+    "RiskSizingResponse",
 ]

@@ -58,6 +58,20 @@ export type HoldingsCorrelationResult = {
   effective_independent_bets: number | null
 }
 
+export type RiskSizingRequest = {
+  entry_price: number
+  stop_price: number
+  risk_budget: number
+  max_qty?: number | null
+}
+
+export type RiskSizingResponse = {
+  qty: number
+  notional: number
+  risk_per_share: number
+  max_loss: number
+}
+
 export async function rebuildAnalyticsTrades(): Promise<{ created: number }> {
   const res = await fetch('/api/analytics/rebuild-trades', {
     method: 'POST',
@@ -171,4 +185,27 @@ export async function fetchHoldingsCorrelation(params?: {
     )
   }
   return (await res.json()) as HoldingsCorrelationResult
+}
+
+export async function computeRiskSizing(
+  payload: RiskSizingRequest,
+): Promise<RiskSizingResponse> {
+  const res = await fetch('/api/analytics/risk-sizing', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    let message = `Failed to compute risk sizing (${res.status})`
+    try {
+      const data = (await res.json()) as { detail?: string }
+      if (data.detail) {
+        message = data.detail
+      }
+    } catch {
+      // Ignore parse errors.
+    }
+    throw new Error(message)
+  }
+  return (await res.json()) as RiskSizingResponse
 }

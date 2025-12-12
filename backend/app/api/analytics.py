@@ -19,10 +19,13 @@ from app.schemas.analytics import (
     CorrelationClusterSummary,
     CorrelationPair,
     HoldingsCorrelationResult,
+    RiskSizingRequest,
+    RiskSizingResponse,
     SymbolCorrelationStats,
 )
 from app.services.analytics import compute_strategy_analytics, rebuild_trades
 from app.services.market_data import Timeframe, load_series
+from app.services.risk_sizing import compute_risk_position_size
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -34,6 +37,36 @@ class AnalyticsSummaryParams(BaseModel):
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
     include_simulated: bool = False
+
+
+@router.post("/risk-sizing", response_model=RiskSizingResponse)
+def risk_sizing_endpoint(payload: RiskSizingRequest) -> RiskSizingResponse:
+    """Compute risk-based position size from entry, stop, and risk budget.
+
+    This is a pure helper that does not touch the database. It is
+    intended for frontend tools and strategies to size positions based
+    on a maximum per-trade loss.
+    """
+
+    try:
+        result = compute_risk_position_size(
+            entry_price=payload.entry_price,
+            stop_price=payload.stop_price,
+            risk_budget=payload.risk_budget,
+            max_qty=payload.max_qty,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return RiskSizingResponse(
+        qty=result.qty,
+        notional=result.notional,
+        risk_per_share=result.risk_per_share,
+        max_loss=result.max_loss,
+    )
 
 
 @router.post("/rebuild-trades", response_model=AnalyticsRebuildResponse)

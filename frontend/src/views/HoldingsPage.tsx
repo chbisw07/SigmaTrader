@@ -38,6 +38,10 @@ import {
   type HoldingsCorrelationResult,
 } from '../services/analytics'
 import {
+  computeRiskSizing,
+  type RiskSizingResponse,
+} from '../services/analytics'
+import {
   createIndicatorRule,
   deleteIndicatorRule,
   listIndicatorRules,
@@ -282,7 +286,7 @@ export function HoldingsPage() {
   const [tradeAmount, setTradeAmount] = useState<string>('')
   const [tradePctEquity, setTradePctEquity] = useState<string>('')
   const [tradeSizeMode, setTradeSizeMode] = useState<
-    'QTY' | 'AMOUNT' | 'PCT_EQUITY'
+    'QTY' | 'AMOUNT' | 'PCT_POSITION' | 'PCT_PORTFOLIO' | 'RISK'
   >('QTY')
   const [tradePrice, setTradePrice] = useState<string>('')
   const [tradeProduct, setTradeProduct] = useState<'CNC' | 'MIS'>('CNC')
@@ -291,6 +295,12 @@ export function HoldingsPage() {
   >('MARKET')
   const [tradeSubmitting, setTradeSubmitting] = useState(false)
   const [tradeError, setTradeError] = useState<string | null>(null)
+  const [tradeRiskBudget, setTradeRiskBudget] = useState<string>('')
+  const [tradeRiskBudgetMode, setTradeRiskBudgetMode] = useState<
+    'ABSOLUTE' | 'PORTFOLIO_PCT'
+  >('ABSOLUTE')
+  const [tradeStopPrice, setTradeStopPrice] = useState<string>('')
+  const [tradeMaxLoss, setTradeMaxLoss] = useState<number | null>(null)
 
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
@@ -312,6 +322,8 @@ export function HoldingsPage() {
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
+  const [portfolioValue, setPortfolioValue] = useState<number | null>(null)
+
   const [, setCorrSummary] =
     useState<HoldingsCorrelationResult | null>(null)
   const [, setCorrLoading] = useState(false)
@@ -322,6 +334,31 @@ export function HoldingsPage() {
       setLoading(true)
       const raw = await fetchHoldings()
       const baseRows: HoldingRow[] = raw.map((h) => ({ ...h }))
+
+      // Compute a simple live portfolio value estimate so that sizing
+      // modes such as % of portfolio and risk-based sizing can use it.
+      let total = 0
+      for (const h of baseRows) {
+        const qty =
+          h.quantity != null && Number.isFinite(Number(h.quantity))
+            ? Number(h.quantity)
+            : 0
+        const priceCandidate =
+          h.last_price != null
+            ? Number(h.last_price)
+            : h.average_price != null
+              ? Number(h.average_price)
+              : 0
+        if (
+          Number.isFinite(qty)
+          && qty > 0
+          && Number.isFinite(priceCandidate)
+          && priceCandidate > 0
+        ) {
+          total += qty * priceCandidate
+        }
+      }
+      setPortfolioValue(total > 0 ? total : null)
       setHoldings(baseRows)
       setError(null)
 
@@ -684,8 +721,10 @@ export function HoldingsPage() {
     }
 
     if (!Number.isFinite(qty) || qty <= 0) {
+      // Below the minimum needed for one share: treat as 0% of position.
       setTradeQty('')
       setTradeAmount('')
+      setTradePctEquity('0')
       return
     }
 
@@ -695,6 +734,49 @@ export function HoldingsPage() {
 
     const pct = (normalisedAmount / positionValue) * 100
     setTradePctEquity(pct.toFixed(2))
+  }
+
+  const recalcFromPctPortfolio = (pctStr: string) => {
+    const holding = tradeHolding
+    const price = getSizingPrice(holding)
+    const total = portfolioValue
+
+    const rawPct = Number(pctStr)
+    if (
+      !Number.isFinite(rawPct)
+      || rawPct <= 0
+      || price == null
+      || !Number.isFinite(price)
+      || price <= 0
+      || total == null
+      || total <= 0
+    ) {
+      setTradeQty('')
+      setTradeAmount('')
+      return
+    }
+
+    const targetNotional = (rawPct / 100) * total
+    let qty = Math.floor(targetNotional / price)
+
+    if (tradeSide === 'SELL' && holding?.quantity != null) {
+      const maxQty = Math.floor(Number(holding.quantity))
+      if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
+        qty = maxQty
+      }
+    }
+
+    if (!Number.isFinite(qty) || qty <= 0) {
+      // Below the minimum needed for one share: treat as 0% of portfolio.
+      setTradeQty('')
+      setTradeAmount('')
+      setTradePctEquity('0')
+      return
+    }
+
+    setTradeQty(String(qty))
+    const notional = qty * price
+    setTradeAmount(notional.toFixed(2))
   }
 
   const openTradeDialog = (holding: HoldingRow, side: 'BUY' | 'SELL') => {
@@ -787,6 +869,98 @@ export function HoldingsPage() {
     sizingPrice != null && Number.isFinite(sizingPrice) && sizingPrice > 0
       ? sizingPrice
       : 1
+  const positionNotional = getPositionValue(tradeHolding, sizingPrice)
+  const pctStepPosition =
+    sizingPrice != null
+    && Number.isFinite(sizingPrice)
+    && sizingPrice > 0
+    && positionNotional != null
+    && positionNotional > 0
+      ? (sizingPrice / positionNotional) * 100
+      : 1
+  const pctStepPortfolio =
+    sizingPrice != null
+    && Number.isFinite(sizingPrice)
+    && sizingPrice > 0
+    && portfolioValue != null
+    && portfolioValue > 0
+      ? (sizingPrice / portfolioValue) * 100
+      : 1
+
+  const recalcFromRisk = async () => {
+    const holding = tradeHolding
+    const entry =
+      tradeOrderType === 'MARKET' || tradePrice.trim() === ''
+        ? getSizingPrice(holding)
+        : Number(tradePrice)
+    const stop = Number(tradeStopPrice)
+
+    if (
+      entry == null
+      || !Number.isFinite(entry)
+      || entry <= 0
+      || !Number.isFinite(stop)
+      || stop <= 0
+    ) {
+      setTradeError(
+        'Please provide a valid entry price (or price field) and stop price for risk sizing.',
+      )
+      return
+    }
+
+    let riskBudgetAbs: number | null = null
+    const budgetRaw = Number(tradeRiskBudget)
+    if (!Number.isFinite(budgetRaw) || budgetRaw <= 0) {
+      setTradeError('Risk budget must be a positive number.')
+      return
+    }
+
+    if (tradeRiskBudgetMode === 'ABSOLUTE') {
+      riskBudgetAbs = budgetRaw
+    } else {
+      const total = portfolioValue
+      if (total == null || total <= 0) {
+        setTradeError(
+          'Portfolio value is not available; cannot interpret risk as % of portfolio.',
+        )
+        return
+      }
+      riskBudgetAbs = (budgetRaw / 100) * total
+    }
+
+    const maxQty =
+      tradeSide === 'SELL' && holding?.quantity != null
+        ? Math.floor(Number(holding.quantity))
+        : null
+
+    try {
+      const res: RiskSizingResponse = await computeRiskSizing({
+        entry_price: entry,
+        stop_price: stop,
+        risk_budget: riskBudgetAbs,
+        max_qty: maxQty ?? undefined,
+      })
+      if (res.qty <= 0) {
+        setTradeError(
+          'Risk budget is too small for at least one share at this entry/stop.',
+        )
+        setTradeQty('')
+        setTradeAmount('')
+        setTradeMaxLoss(null)
+        return
+      }
+      setTradeError(null)
+      setTradeQty(String(res.qty))
+      setTradeAmount(res.notional.toFixed(2))
+      setTradeMaxLoss(res.max_loss)
+    } catch (err) {
+      setTradeError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to compute risk-based position size.',
+      )
+    }
+  }
 
   const columns: GridColDef[] = [
     {
@@ -1523,16 +1697,22 @@ export function HoldingsPage() {
                   const mode =
                     e.target.value === 'AMOUNT'
                       ? 'AMOUNT'
-                      : e.target.value === 'PCT_EQUITY'
-                        ? 'PCT_EQUITY'
-                        : 'QTY'
+                      : e.target.value === 'PCT_POSITION'
+                        ? 'PCT_POSITION'
+                        : e.target.value === 'PCT_PORTFOLIO'
+                          ? 'PCT_PORTFOLIO'
+                          : e.target.value === 'RISK'
+                            ? 'RISK'
+                            : 'QTY'
                   setTradeSizeMode(mode)
                   if (mode === 'QTY') {
                     recalcFromQty(tradeQty, tradeSide)
                   } else if (mode === 'AMOUNT') {
                     recalcFromAmount(tradeAmount, tradeSide)
-                  } else {
+                  } else if (mode === 'PCT_POSITION') {
                     recalcFromPctEquity(tradePctEquity, tradeSide)
+                  } else if (mode === 'PCT_PORTFOLIO') {
+                    recalcFromPctPortfolio(tradePctEquity)
                   }
                 }}
               >
@@ -1547,9 +1727,14 @@ export function HoldingsPage() {
                   label="Amount"
                 />
                 <FormControlLabel
-                  value="PCT_EQUITY"
+                  value="PCT_POSITION"
                   control={<Radio size="small" />}
-                  label="% of equity"
+                  label="% of position"
+                />
+                <FormControlLabel
+                  value="PCT_PORTFOLIO"
+                  control={<Radio size="small" />}
+                  label="% of portfolio"
                 />
               </RadioGroup>
             </Box>
@@ -1587,23 +1772,106 @@ export function HoldingsPage() {
               inputProps={{ step: amountStep }}
             />
             <TextField
-              label="% of equity"
+              label={
+                tradeSizeMode === 'PCT_PORTFOLIO'
+                  ? '% of portfolio'
+                  : '% of position'
+              }
               type="number"
               value={tradePctEquity}
               onChange={(e) => {
                 const value = e.target.value
-                setTradeSizeMode('PCT_EQUITY')
+                // If we are already in a percent-based mode, keep it;
+                // otherwise default to % of position.
+                const nextMode =
+                  tradeSizeMode === 'PCT_PORTFOLIO'
+                    ? 'PCT_PORTFOLIO'
+                    : 'PCT_POSITION'
+                setTradeSizeMode(nextMode)
                 setTradePctEquity(value)
               }}
               onBlur={() => {
-                if (tradeSizeMode === 'PCT_EQUITY') {
+                if (tradeSizeMode === 'PCT_POSITION') {
                   recalcFromPctEquity(tradePctEquity, tradeSide)
+                } else if (tradeSizeMode === 'PCT_PORTFOLIO') {
+                  recalcFromPctPortfolio(tradePctEquity)
                 }
               }}
               fullWidth
               size="small"
-              disabled={tradeSizeMode !== 'PCT_EQUITY'}
+              disabled={
+                tradeSizeMode !== 'PCT_POSITION'
+                && tradeSizeMode !== 'PCT_PORTFOLIO'
+              }
+              inputProps={{
+                step:
+                  tradeSizeMode === 'PCT_PORTFOLIO'
+                    ? pctStepPortfolio
+                    : pctStepPosition,
+              }}
             />
+            {tradeSizeMode === 'RISK' && (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Risk sizing
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  <TextField
+                    label="Risk budget"
+                    type="number"
+                    value={tradeRiskBudget}
+                    onChange={(e) => setTradeRiskBudget(e.target.value)}
+                    size="small"
+                    sx={{ flex: 1, minWidth: 140 }}
+                  />
+                  <TextField
+                    label="Mode"
+                    select
+                    size="small"
+                    value={tradeRiskBudgetMode}
+                    onChange={(e) =>
+                      setTradeRiskBudgetMode(
+                        e.target.value === 'PORTFOLIO_PCT'
+                          ? 'PORTFOLIO_PCT'
+                          : 'ABSOLUTE',
+                      )
+                    }
+                    sx={{ width: 180 }}
+                  >
+                    <MenuItem value="ABSOLUTE">₹ per trade</MenuItem>
+                    <MenuItem value="PORTFOLIO_PCT">% of portfolio</MenuItem>
+                  </TextField>
+                </Box>
+                <TextField
+                  label="Stop price"
+                  type="number"
+                  value={tradeStopPrice}
+                  onChange={(e) => setTradeStopPrice(e.target.value)}
+                  size="small"
+                />
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 1,
+                  }}
+                >
+                  <Typography variant="body2" color="text.secondary">
+                    {tradeMaxLoss != null
+                      ? `Approx. max loss at stop: ₹${tradeMaxLoss.toFixed(2)}`
+                      : 'Max loss will be estimated from entry, stop, and risk.'}
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => void recalcFromRisk()}
+                  >
+                    Update from risk
+                  </Button>
+                </Box>
+              </Box>
+            )}
             <TextField
               label="Order type"
               select
