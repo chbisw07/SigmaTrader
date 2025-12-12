@@ -5,6 +5,9 @@ import Paper from '@mui/material/Paper'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
 import { useEffect, useState } from 'react'
 import {
   DataGrid,
@@ -918,68 +921,148 @@ type ClusterSummaryCardsProps = {
 }
 
 function ClusterSummaryCards({ clusters }: ClusterSummaryCardsProps) {
+  const [selected, setSelected] = useState<
+    ClusterSummaryCardsProps['clusters'][number] | null
+  >(null)
+
   if (!clusters.length) return null
 
   const sorted = [...clusters].sort(
     (a, b) => (b.weight_fraction ?? 0) - (a.weight_fraction ?? 0),
   )
 
+  const handleClose = () => {
+    setSelected(null)
+  }
+
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: { xs: 'column', md: 'row' },
-        gap: 1.5,
-        mb: 1,
-        flexWrap: 'wrap',
-      }}
-    >
-      {sorted.map((c) => {
-        const weightPct =
-          c.weight_fraction != null ? c.weight_fraction * 100 : null
-        const internal =
-          c.average_internal_correlation != null
-            ? c.average_internal_correlation.toFixed(2)
-            : '—'
-        const cross =
-          c.average_to_others != null
-            ? c.average_to_others.toFixed(2)
-            : '—'
-        return (
-          <Paper
-            key={c.id}
-            sx={{
-              p: 1.25,
-              minWidth: 180,
-              flex: '0 0 auto',
-            }}
-          >
-            <Typography variant="subtitle2" sx={{ mb: 0.25 }}>
-              Cluster
-              {' '}
-              {c.id}
-            </Typography>
+    <>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          gap: 1.5,
+          mb: 1,
+          flexWrap: 'wrap',
+        }}
+      >
+        {sorted.map((c) => {
+          const weightPct =
+            c.weight_fraction != null ? c.weight_fraction * 100 : null
+          const internal =
+            c.average_internal_correlation != null
+              ? c.average_internal_correlation.toFixed(2)
+              : '—'
+          const cross =
+            c.average_to_others != null
+              ? c.average_to_others.toFixed(2)
+              : '—'
+          const title =
+            c.symbols && c.symbols.length
+              ? `Click to see ${c.symbols.length} symbols in Cluster ${c.id}`
+              : ''
+          return (
+            <Paper
+              key={c.id}
+              onClick={() => {
+                if (c.symbols && c.symbols.length) {
+                  setSelected(c)
+                }
+              }}
+              sx={{
+                p: 1.25,
+                minWidth: 180,
+                flex: '0 0 auto',
+                cursor: c.symbols.length ? 'pointer' : 'default',
+                '&:hover': {
+                  boxShadow: (theme) =>
+                    c.symbols.length
+                      ? theme.shadows[4]
+                      : theme.shadows[1],
+                },
+              }}
+              title={title}
+            >
+              <Typography variant="subtitle2" sx={{ mb: 0.25 }}>
+                Cluster
+                {' '}
+                {c.id}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Weight:
+                {' '}
+                <strong>
+                  {weightPct != null ? `${weightPct.toFixed(1)}%` : '—'}
+                </strong>
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Avg internal corr:
+                {' '}
+                <strong>{internal}</strong>
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Avg vs others:
+                {' '}
+                <strong>{cross}</strong>
+              </Typography>
+            </Paper>
+          )
+        })}
+      </Box>
+
+      <Dialog
+        open={selected != null}
+        onClose={handleClose}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>
+          {selected
+            ? `Cluster ${selected.id} constituents`
+            : 'Cluster constituents'}
+        </DialogTitle>
+        <DialogContent dividers>
+          {!selected || selected.symbols.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
-              Weight:
-              {' '}
-              <strong>
-                {weightPct != null ? `${weightPct.toFixed(1)}%` : '—'}
-              </strong>
+              No symbols in this cluster.
             </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Avg internal corr:
-              {' '}
-              <strong>{internal}</strong>
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Avg vs others:
-              {' '}
-              <strong>{cross}</strong>
-            </Typography>
-          </Paper>
-        )
-      })}
-    </Box>
+          ) : (
+            <Box sx={{ maxHeight: 360, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th
+                      style={{
+                        textAlign: 'left',
+                        padding: '4px 8px',
+                        fontSize: 12,
+                      }}
+                    >
+                      Symbol
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selected.symbols.map((sym) => (
+                    <tr key={sym}>
+                      <td
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: 12,
+                          borderTop: '1px solid rgba(255,255,255,0.08)',
+                        }}
+                      >
+                        {sym}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
