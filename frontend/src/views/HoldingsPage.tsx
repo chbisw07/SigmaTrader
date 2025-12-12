@@ -275,9 +275,15 @@ export function HoldingsPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [tradeOpen, setTradeOpen] = useState(false)
+  const [tradeHolding, setTradeHolding] = useState<HoldingRow | null>(null)
   const [tradeSide, setTradeSide] = useState<'BUY' | 'SELL'>('BUY')
   const [tradeSymbol, setTradeSymbol] = useState<string>('')
   const [tradeQty, setTradeQty] = useState<string>('')
+  const [tradeAmount, setTradeAmount] = useState<string>('')
+  const [tradePctEquity, setTradePctEquity] = useState<string>('')
+  const [tradeSizeMode, setTradeSizeMode] = useState<
+    'QTY' | 'AMOUNT' | 'PCT_EQUITY'
+  >('QTY')
   const [tradePrice, setTradePrice] = useState<string>('')
   const [tradeProduct, setTradeProduct] = useState<'CNC' | 'MIS'>('CNC')
   const [tradeOrderType, setTradeOrderType] = useState<
@@ -532,17 +538,188 @@ export function HoldingsPage() {
     setAlertOpen(true)
   }
 
+  const getSizingPrice = (holding: HoldingRow | null): number | null => {
+    const fromField =
+      tradePrice.trim() !== '' ? Number(tradePrice.trim()) : null
+    if (fromField != null && Number.isFinite(fromField) && fromField > 0) {
+      return fromField
+    }
+    if (!holding) return null
+    const base =
+      holding.last_price != null
+        ? Number(holding.last_price)
+        : holding.average_price != null
+          ? Number(holding.average_price)
+          : null
+    return base != null && Number.isFinite(base) && base > 0 ? base : null
+  }
+
+  const getPositionValue = (
+    holding: HoldingRow | null,
+    price: number | null,
+  ): number | null => {
+    if (!holding || price == null || !Number.isFinite(price) || price <= 0) {
+      return null
+    }
+    const qty = holding.quantity != null ? Number(holding.quantity) : 0
+    if (!Number.isFinite(qty) || qty <= 0) return null
+    return qty * price
+  }
+
+  const recalcFromQty = (qtyStr: string, side: 'BUY' | 'SELL') => {
+    const holding = tradeHolding
+    const price = getSizingPrice(holding)
+    const positionValue = getPositionValue(holding, price)
+
+    const rawQty = Math.floor(Number(qtyStr))
+    if (
+      !Number.isFinite(rawQty)
+      || rawQty <= 0
+      || price == null
+      || !Number.isFinite(price)
+      || price <= 0
+    ) {
+      setTradeAmount('')
+      setTradePctEquity('')
+      return
+    }
+
+    let qty = rawQty
+    if (side === 'SELL' && holding?.quantity != null) {
+      const maxQty = Math.floor(Number(holding.quantity))
+      if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
+        qty = maxQty
+      }
+    }
+
+    setTradeQty(String(qty))
+
+    const notional = qty * price
+    setTradeAmount(notional.toFixed(2))
+    if (positionValue != null && positionValue > 0) {
+      const pct = (notional / positionValue) * 100
+      setTradePctEquity(pct.toFixed(2))
+    } else {
+      setTradePctEquity('')
+    }
+  }
+
+  const recalcFromAmount = (amountStr: string, side: 'BUY' | 'SELL') => {
+    const holding = tradeHolding
+    const price = getSizingPrice(holding)
+    const positionValue = getPositionValue(holding, price)
+
+    const rawAmount = Number(amountStr)
+    if (
+      !Number.isFinite(rawAmount)
+      || rawAmount <= 0
+      || price == null
+      || !Number.isFinite(price)
+      || price <= 0
+    ) {
+      setTradeQty('')
+      setTradePctEquity('')
+      if (amountStr === '') {
+        setTradeAmount('')
+      }
+      return
+    }
+
+    let qty = Math.floor(rawAmount / price)
+    if (side === 'SELL' && holding?.quantity != null) {
+      const maxQty = Math.floor(Number(holding.quantity))
+      if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
+        qty = maxQty
+      }
+    }
+
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setTradeQty('')
+      setTradeAmount(amountStr)
+      setTradePctEquity('')
+      return
+    }
+
+    setTradeQty(String(qty))
+
+    const normalisedAmount = qty * price
+    setTradeAmount(normalisedAmount.toFixed(2))
+    if (positionValue != null && positionValue > 0) {
+      const pct = (normalisedAmount / positionValue) * 100
+      setTradePctEquity(pct.toFixed(2))
+    } else {
+      setTradePctEquity('')
+    }
+  }
+
+  const recalcFromPctEquity = (
+    pctStr: string,
+    side: 'BUY' | 'SELL',
+  ) => {
+    const holding = tradeHolding
+    const price = getSizingPrice(holding)
+    const positionValue = getPositionValue(holding, price)
+
+    const rawPct = Number(pctStr)
+    if (
+      !Number.isFinite(rawPct)
+      || rawPct <= 0
+      || price == null
+      || !Number.isFinite(price)
+      || price <= 0
+      || positionValue == null
+      || positionValue <= 0
+    ) {
+      setTradeQty('')
+      return
+    }
+
+    const amountTarget = (rawPct / 100) * positionValue
+    let qty = Math.floor(amountTarget / price)
+    if (side === 'SELL' && holding?.quantity != null) {
+      const maxQty = Math.floor(Number(holding.quantity))
+      if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
+        qty = maxQty
+      }
+    }
+
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setTradeQty('')
+      setTradeAmount('')
+      return
+    }
+
+    setTradeQty(String(qty))
+    const normalisedAmount = qty * price
+    setTradeAmount(normalisedAmount.toFixed(2))
+
+    const pct = (normalisedAmount / positionValue) * 100
+    setTradePctEquity(pct.toFixed(2))
+  }
+
   const openTradeDialog = (holding: HoldingRow, side: 'BUY' | 'SELL') => {
+    setTradeHolding(holding)
     setTradeSide(side)
     setTradeSymbol(holding.symbol)
-    setTradeQty(
-      side === 'SELL' && holding.quantity != null
-        ? String(holding.quantity)
-        : '',
-    )
+    let defaultQty = 1
+    if (side === 'SELL' && holding.quantity != null) {
+      const maxQty = Math.floor(Number(holding.quantity))
+      if (Number.isFinite(maxQty) && maxQty > 0 && defaultQty > maxQty) {
+        defaultQty = maxQty
+      }
+    }
+    setTradeQty(defaultQty > 0 ? String(defaultQty) : '')
     setTradePrice(
       holding.last_price != null ? String(holding.last_price.toFixed(2)) : '',
     )
+    setTradeSizeMode('QTY')
+    // Seed derived fields based on a single-share (or capped) quantity.
+    if (defaultQty > 0) {
+      recalcFromQty(String(defaultQty), side)
+    } else {
+      setTradeAmount('')
+      setTradePctEquity('')
+    }
     setTradeProduct('CNC')
     setTradeOrderType('MARKET')
     setTradeError(null)
@@ -558,6 +735,18 @@ export function HoldingsPage() {
     const qtyNum = Number(tradeQty)
     if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
       setTradeError('Quantity must be a positive number.')
+      return
+    }
+    const holding =
+      tradeHolding ?? holdings.find((h) => h.symbol === tradeSymbol) ?? null
+    if (
+      tradeSide === 'SELL'
+      && holding?.quantity != null
+      && qtyNum > Number(holding.quantity)
+    ) {
+      setTradeError(
+        `Quantity exceeds holding quantity (${holding.quantity}).`,
+      )
       return
     }
     const priceNum =
@@ -592,6 +781,12 @@ export function HoldingsPage() {
       setTradeSubmitting(false)
     }
   }
+
+  const sizingPrice = getSizingPrice(tradeHolding)
+  const amountStep =
+    sizingPrice != null && Number.isFinite(sizingPrice) && sizingPrice > 0
+      ? sizingPrice
+      : 1
 
   const columns: GridColDef[] = [
     {
@@ -1317,13 +1512,97 @@ export function HoldingsPage() {
             </Box>
           </Box>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Box>
+              <Typography variant="caption" color="text.secondary">
+                Position sizing
+              </Typography>
+              <RadioGroup
+                row
+                value={tradeSizeMode}
+                onChange={(e) => {
+                  const mode =
+                    e.target.value === 'AMOUNT'
+                      ? 'AMOUNT'
+                      : e.target.value === 'PCT_EQUITY'
+                        ? 'PCT_EQUITY'
+                        : 'QTY'
+                  setTradeSizeMode(mode)
+                  if (mode === 'QTY') {
+                    recalcFromQty(tradeQty, tradeSide)
+                  } else if (mode === 'AMOUNT') {
+                    recalcFromAmount(tradeAmount, tradeSide)
+                  } else {
+                    recalcFromPctEquity(tradePctEquity, tradeSide)
+                  }
+                }}
+              >
+                <FormControlLabel
+                  value="QTY"
+                  control={<Radio size="small" />}
+                  label="Qty"
+                />
+                <FormControlLabel
+                  value="AMOUNT"
+                  control={<Radio size="small" />}
+                  label="Amount"
+                />
+                <FormControlLabel
+                  value="PCT_EQUITY"
+                  control={<Radio size="small" />}
+                  label="% of equity"
+                />
+              </RadioGroup>
+            </Box>
             <TextField
               label="Quantity"
               type="number"
               value={tradeQty}
-              onChange={(e) => setTradeQty(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value
+                setTradeSizeMode('QTY')
+                setTradeQty(value)
+                recalcFromQty(value, tradeSide)
+              }}
               fullWidth
               size="small"
+              disabled={tradeSizeMode !== 'QTY'}
+            />
+            <TextField
+              label="Amount"
+              type="number"
+              value={tradeAmount}
+              onChange={(e) => {
+                const value = e.target.value
+                setTradeSizeMode('AMOUNT')
+                setTradeAmount(value)
+              }}
+              onBlur={() => {
+                if (tradeSizeMode === 'AMOUNT') {
+                  recalcFromAmount(tradeAmount, tradeSide)
+                }
+              }}
+              fullWidth
+              size="small"
+              disabled={tradeSizeMode !== 'AMOUNT'}
+              inputProps={{ step: amountStep }}
+            />
+            <TextField
+              label="% of equity"
+              type="number"
+              value={tradePctEquity}
+              onChange={(e) => {
+                const value = e.target.value
+                setTradeSizeMode('PCT_EQUITY')
+                setTradePctEquity(value)
+              }}
+              onBlur={() => {
+                if (tradeSizeMode === 'PCT_EQUITY') {
+                  recalcFromPctEquity(tradePctEquity, tradeSide)
+                }
+              }}
+              fullWidth
+              size="small"
+              disabled={tradeSizeMode !== 'PCT_EQUITY'}
             />
             <TextField
               label="Order type"
