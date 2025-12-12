@@ -591,62 +591,28 @@ export function HoldingsPage() {
   }, 0)
 
   const enrichHoldingsWithHistory = async (rows: HoldingRow[]) => {
-    if (!rows.length) return
-
-    // Limit the number of concurrent history fetches so that we do not
-    // overwhelm the backend or broker APIs.
-    const concurrency = 6
-    const queue = [...rows]
-    const results: Record<
-      string,
-      { history: CandlePoint[]; indicators: HoldingIndicators }
-    > = {}
-
-    const worker = async () => {
-      while (true) {
-        const row = queue.shift()
-        if (!row) break
-        try {
-          const history = await fetchMarketHistory({
-            symbol: row.symbol,
-            exchange: row.exchange ?? 'NSE',
-            timeframe: '1d',
-            periodDays: ANALYTICS_LOOKBACK_DAYS,
-          })
-          const indicators = computeHoldingIndicators(
-            history,
-            row.average_price != null ? Number(row.average_price) : undefined,
-          )
-          results[row.symbol] = { history, indicators }
-        } catch {
-          // Ignore per-symbol failures so that one bad instrument does not
-          // prevent the rest of the grid from being enriched.
-        }
+    for (const row of rows) {
+      try {
+        const history = await fetchMarketHistory({
+          symbol: row.symbol,
+          exchange: row.exchange ?? 'NSE',
+          timeframe: '1d',
+          periodDays: ANALYTICS_LOOKBACK_DAYS,
+        })
+        const indicators = computeHoldingIndicators(
+          history,
+          row.average_price != null ? Number(row.average_price) : undefined,
+        )
+        setHoldings((current) =>
+          current.map((h) =>
+            h.symbol === row.symbol ? { ...h, history, indicators } : h,
+          ),
+        )
+      } catch {
+        // Ignore per-symbol failures so that one bad instrument does not
+        // prevent the rest of the grid from being enriched.
       }
     }
-
-    const workers: Promise<void>[] = []
-    const workerCount = Math.min(concurrency, rows.length)
-    for (let i = 0; i < workerCount; i += 1) {
-      workers.push(worker())
-    }
-    await Promise.all(workers)
-
-    if (!Object.keys(results).length) return
-
-    // Apply all computed histories/indicators in a single state update
-    // to minimise re-renders and row-by-row flicker.
-    setHoldings((current) =>
-      current.map((h) => {
-        const res = results[h.symbol]
-        if (!res) return h
-        return {
-          ...h,
-          history: res.history,
-          indicators: res.indicators,
-        }
-      }),
-    )
   }
 
   const openAlertDialogForHolding = (holding: HoldingRow) => {
@@ -925,7 +891,8 @@ export function HoldingsPage() {
     try {
       await createManualOrder({
         symbol: tradeSymbol,
-        exchange: holdings.find((h) => h.symbol === tradeSymbol)?.exchange ?? 'NSE',
+        exchange:
+          holdings.find((h) => h.symbol === tradeSymbol)?.exchange ?? 'NSE',
         side: tradeSide,
         qty: qtyNum,
         price: priceNum,
@@ -933,13 +900,15 @@ export function HoldingsPage() {
         product: tradeProduct,
         gtt: false,
       })
+      // Close the dialog as soon as the order is accepted so the UI
+      // feels snappy; refresh holdings in the background.
       setTradeOpen(false)
-      await load()
+      setTradeSubmitting(false)
+      void load()
     } catch (err) {
       setTradeError(
         err instanceof Error ? err.message : 'Failed to create order',
       )
-    } finally {
       setTradeSubmitting(false)
     }
   }
