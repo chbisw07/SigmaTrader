@@ -72,6 +72,8 @@ type HoldingIndicators = {
   perf3mPct?: number
   perf1yPct?: number
   volumeVsAvg20d?: number
+  maxPnlPct?: number
+  drawdownFromPeakPct?: number
 }
 
 type HoldingRow = Holding & {
@@ -80,6 +82,8 @@ type HoldingRow = Holding & {
   correlationCluster?: string
   correlationWeight?: number
 }
+
+type HoldingsViewMode = 'default' | 'risk'
 
 type HoldingsFilterField =
   | 'symbol'
@@ -311,8 +315,12 @@ export function HoldingsPage() {
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
   const [advancedFilters, setAdvancedFilters] = useState<HoldingsFilter[]>([])
 
+  const [viewMode, setViewMode] = useState<HoldingsViewMode>('default')
   const [columnVisibilityModel, setColumnVisibilityModel] =
-    useState<GridColumnVisibilityModel>({})
+    useState<GridColumnVisibilityModel>({
+      maxPnlPct: false,
+      drawdownFromPeakPct: false,
+    })
 
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false)
   const [refreshDays, setRefreshDays] = useState('0')
@@ -431,17 +439,52 @@ export function HoldingsPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
-      const raw = window.localStorage.getItem(
-        'st_holdings_column_visibility_v1',
-      )
+      const raw = window.localStorage.getItem('st_holdings_view_v1')
+      if (raw === 'risk' || raw === 'default') {
+        setViewMode(raw)
+      }
+    } catch {
+      // Ignore storage errors and fall back to default view.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const key =
+        viewMode === 'risk'
+          ? 'st_holdings_column_visibility_risk_v1'
+          : 'st_holdings_column_visibility_default_v1'
+      const raw = window.localStorage.getItem(key)
       if (raw) {
         const parsed = JSON.parse(raw) as GridColumnVisibilityModel
         setColumnVisibilityModel(parsed)
+      } else if (viewMode === 'risk') {
+        // Default risk preset: focus on risk metrics, hide some
+        // structural columns; user can override and it will persist.
+        setColumnVisibilityModel({
+          chart: false,
+          average_price: false,
+          invested: false,
+          indicator_rsi14: false,
+          perf_1m_pct: false,
+          perf_1y_pct: false,
+          volume_vs_20d_avg: false,
+          maxPnlPct: true,
+          drawdownFromPeakPct: true,
+        })
+      } else {
+        // Default view: show everything except the advanced drawdown
+        // metrics unless the user has chosen otherwise.
+        setColumnVisibilityModel({
+          maxPnlPct: false,
+          drawdownFromPeakPct: false,
+        })
       }
     } catch {
       // Ignore JSON/Storage errors and fall back to defaults.
     }
-  }, [])
+  }, [viewMode])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -556,7 +599,10 @@ export function HoldingsPage() {
           timeframe: '1d',
           periodDays: ANALYTICS_LOOKBACK_DAYS,
         })
-        const indicators = computeHoldingIndicators(history)
+        const indicators = computeHoldingIndicators(
+          history,
+          row.average_price != null ? Number(row.average_price) : undefined,
+        )
         setHoldings((current) =>
           current.map((h) =>
             h.symbol === row.symbol ? { ...h, history, indicators } : h,
@@ -982,7 +1028,6 @@ export function HoldingsPage() {
       field: 'correlation_cluster',
       headerName: 'Cluster',
       sortable: false,
-      filterable: false,
       width: 100,
       renderCell: (params) => {
         const row = params.row as HoldingRow
@@ -1145,6 +1190,34 @@ export function HoldingsPage() {
       headerName: 'P&L %',
       type: 'number',
       width: 110,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0
+          ? 'pnl-negative'
+          : '',
+    },
+    {
+      field: 'maxPnlPct',
+      headerName: 'Max P&L % (since entry)',
+      type: 'number',
+      width: 160,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.maxPnlPct ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0
+          ? 'pnl-negative'
+          : '',
+    },
+    {
+      field: 'drawdownFromPeakPct',
+      headerName: 'Drawdown from peak %',
+      type: 'number',
+      width: 180,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.drawdownFromPeakPct ?? null,
       valueFormatter: (value) =>
         value != null ? `${Number(value).toFixed(2)}%` : '-',
       cellClassName: (params: GridCellParams) =>
@@ -1413,6 +1486,34 @@ export function HoldingsPage() {
             gap: 1,
           }}
         >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="caption" color="text.secondary">
+              View:
+            </Typography>
+            <Select
+              size="small"
+              value={viewMode}
+              onChange={(e) => {
+                const mode =
+                  e.target.value === 'risk' ? 'risk' : 'default'
+                setViewMode(mode)
+                if (typeof window !== 'undefined') {
+                  try {
+                    window.localStorage.setItem(
+                      'st_holdings_view_v1',
+                      mode,
+                    )
+                  } catch {
+                    // Ignore persistence errors.
+                  }
+                }
+              }}
+              sx={{ minWidth: 120 }}
+            >
+              <MenuItem value="default">Default</MenuItem>
+              <MenuItem value="risk">Risk view</MenuItem>
+            </Select>
+          </Box>
           <Button
             size="small"
             variant="outlined"
@@ -1624,8 +1725,12 @@ export function HoldingsPage() {
             onColumnVisibilityModelChange={(model) => {
               setColumnVisibilityModel(model)
               try {
+                const key =
+                  viewMode === 'risk'
+                    ? 'st_holdings_column_visibility_risk_v1'
+                    : 'st_holdings_column_visibility_default_v1'
                 window.localStorage.setItem(
-                  'st_holdings_column_visibility_v1',
+                  key,
                   JSON.stringify(model),
                 )
               } catch {
@@ -3013,7 +3118,10 @@ function computeVolumeRatio(
   return today / avg
 }
 
-function computeHoldingIndicators(points: CandlePoint[]): HoldingIndicators {
+function computeHoldingIndicators(
+  points: CandlePoint[],
+  avgPrice?: number | null,
+): HoldingIndicators {
   if (points.length < 2) return {}
 
   const closes = points.map((p) => p.close)
@@ -3045,6 +3153,20 @@ function computeHoldingIndicators(points: CandlePoint[]): HoldingIndicators {
   indicators.perf1yPct = computePerfPct(closes, 252)
 
   indicators.volumeVsAvg20d = computeVolumeRatio(volumes, 20)
+
+  // Max P&L % and drawdown from peak based on average entry price.
+  if (avgPrice != null && avgPrice > 0) {
+    const pnlSeries = closes.map(
+      (close) => ((close - avgPrice) / avgPrice) * 100,
+    )
+    const currentPnl = pnlSeries[pnlSeries.length - 1]
+    const maxPnl = pnlSeries.reduce(
+      (acc, v) => (v > acc ? v : acc),
+      pnlSeries[0],
+    )
+    indicators.maxPnlPct = maxPnl
+    indicators.drawdownFromPeakPct = currentPnl - maxPnl
+  }
 
   return indicators
 }
