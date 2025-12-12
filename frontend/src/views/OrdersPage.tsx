@@ -2,16 +2,16 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import Paper from '@mui/material/Paper'
-import Table from '@mui/material/Table'
-import TableBody from '@mui/material/TableBody'
-import TableCell from '@mui/material/TableCell'
-import TableHead from '@mui/material/TableHead'
-import TableRow from '@mui/material/TableRow'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
 
 import { fetchOrdersHistory, type Order } from '../services/orders'
 import { syncZerodhaOrders } from '../services/zerodha'
+import {
+  DataGrid,
+  type GridColDef,
+  type GridRenderCellParams,
+} from '@mui/x-data-grid'
 
 export function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([])
@@ -59,6 +59,102 @@ export function OrdersPage() {
       await loadOrders()
     }
   }
+
+  const columns: GridColDef[] = [
+    {
+      field: 'created_at',
+      headerName: 'Created At',
+      width: 190,
+      valueFormatter: (value) =>
+        typeof value === 'string' ? formatIst(value) : '',
+    },
+    {
+      field: 'symbol',
+      headerName: 'Symbol',
+      flex: 1,
+      minWidth: 140,
+    },
+    {
+      field: 'side',
+      headerName: 'Side',
+      width: 80,
+    },
+    {
+      field: 'qty',
+      headerName: 'Qty',
+      type: 'number',
+      width: 90,
+    },
+    {
+      field: 'price',
+      headerName: 'Price',
+      type: 'number',
+      width: 110,
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'trigger_price',
+      headerName: 'Trigger',
+      type: 'number',
+      width: 110,
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'order_type',
+      headerName: 'Type',
+      width: 110,
+    },
+    {
+      field: 'product',
+      headerName: 'Product',
+      width: 110,
+    },
+    {
+      field: 'status',
+      headerName: 'Status',
+      width: 130,
+      renderCell: (params: GridRenderCellParams) => {
+        const order = params.row as Order
+        const base = String(order.status ?? '')
+        const label = order.simulated ? `${base} (PAPER)` : base
+        return <Typography variant="body2">{label}</Typography>
+      },
+    },
+    {
+      field: 'mode',
+      headerName: 'Mode',
+      width: 110,
+    },
+    {
+      field: 'broker',
+      headerName: 'Broker ID',
+      flex: 1,
+      minWidth: 180,
+      valueGetter: (_value, row) => {
+        const order = row as Order
+        if (order.simulated) {
+          return 'PAPER'
+        }
+        if (order.broker_account_id) {
+          return `${order.broker_account_id} / ${order.zerodha_order_id ?? '-'}`
+        }
+        return order.zerodha_order_id ?? '-'
+      },
+    },
+    {
+      field: 'error_message',
+      headerName: 'Error',
+      flex: 2,
+      minWidth: 200,
+      renderCell: (params: GridRenderCellParams) => (
+        <Typography variant="body2" color="error">
+          {params.value ?? '-'}
+        </Typography>
+      ),
+    },
+  ]
 
   return (
     <Box>
@@ -113,74 +209,15 @@ export function OrdersPage() {
           {error}
         </Typography>
       ) : (
-        <Paper>
-          <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Created At</TableCell>
-                  <TableCell>Symbol</TableCell>
-                  <TableCell>Side</TableCell>
-                  <TableCell align="right">Qty</TableCell>
-                  <TableCell align="right">Price</TableCell>
-                  <TableCell>Product</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell>Mode</TableCell>
-                  <TableCell>Broker ID</TableCell>
-                  <TableCell>Error</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-              {orders
-                .filter((order) => showSimulated || !order.simulated)
-                .map((order) => (
-                <TableRow
-                  key={order.id}
-                  sx={{
-                    '& td': {
-                      opacity: order.simulated ? 0.9 : 1,
-                    },
-                    backgroundColor: order.simulated ? 'action.hover' : undefined,
-                  }}
-                >
-                  <TableCell>
-                    {formatIst(order.created_at)}
-                  </TableCell>
-                  <TableCell>{order.symbol}</TableCell>
-                  <TableCell>{order.side}</TableCell>
-                  <TableCell align="right">{order.qty}</TableCell>
-                  <TableCell align="right">
-                    {order.price ?? '-'}
-                  </TableCell>
-                  <TableCell>{order.product}</TableCell>
-                  <TableCell>
-                    {order.status}
-                    {order.simulated ? ' (PAPER)' : ''}
-                  </TableCell>
-                  <TableCell>{order.mode}</TableCell>
-                  <TableCell>
-                    {order.simulated
-                      ? 'PAPER'
-                      : order.broker_account_id
-                        ? `${order.broker_account_id} / ${order.zerodha_order_id ?? '-'}`
-                        : order.zerodha_order_id ?? '-'}
-                  </TableCell>
-                  <TableCell>{order.error_message ?? '-'}</TableCell>
-                </TableRow>
-              ))}
-              {orders.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={10}>
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                    >
-                      No orders yet.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <Paper sx={{ width: '100%' }}>
+          <DataGrid
+            rows={orders.filter((order) => showSimulated || !order.simulated)}
+            columns={columns}
+            getRowId={(row) => row.id}
+            autoHeight
+            disableRowSelectionOnClick
+            density="compact"
+          />
         </Paper>
       )}
     </Box>

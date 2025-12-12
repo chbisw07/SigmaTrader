@@ -2,11 +2,6 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import Paper from '@mui/material/Paper'
-import Table from '@mui/material/Table'
-import TableBody from '@mui/material/TableBody'
-import TableCell from '@mui/material/TableCell'
-import TableHead from '@mui/material/TableHead'
-import TableRow from '@mui/material/TableRow'
 import Typography from '@mui/material/Typography'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
@@ -17,6 +12,11 @@ import MenuItem from '@mui/material/MenuItem'
 import Checkbox from '@mui/material/Checkbox'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import { useEffect, useState } from 'react'
+import {
+  DataGrid,
+  type GridColDef,
+  type GridRenderCellParams,
+} from '@mui/x-data-grid'
 
 import {
   cancelOrder,
@@ -339,6 +339,113 @@ export function QueuePage() {
     }
   }
 
+  const columns: GridColDef[] = [
+    {
+      field: 'created_at',
+      headerName: 'Created At',
+      width: 190,
+      valueFormatter: (value) =>
+        typeof value === 'string' ? formatIst(value) : '',
+    },
+    {
+      field: 'symbol',
+      headerName: 'Symbol',
+      flex: 1,
+      minWidth: 140,
+    },
+    {
+      field: 'side',
+      headerName: 'Side',
+      width: 80,
+    },
+    {
+      field: 'qty',
+      headerName: 'Qty',
+      width: 90,
+      type: 'number',
+    },
+    {
+      field: 'price',
+      headerName: 'Price',
+      width: 110,
+      type: 'number',
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'trigger_price',
+      headerName: 'Trigger',
+      width: 110,
+      type: 'number',
+      valueFormatter: (value) =>
+        value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'order_type',
+      headerName: 'Type',
+      width: 110,
+    },
+    {
+      field: 'product',
+      headerName: 'Product',
+      width: 110,
+    },
+    {
+      field: 'status',
+      headerName: 'Status',
+      width: 110,
+    },
+    {
+      field: 'gtt',
+      headerName: 'GTT',
+      width: 80,
+      valueFormatter: (value) => (value ? 'Yes' : 'No'),
+    },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 220,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams) => {
+        const order = params.row as Order
+        return (
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => openEditDialog(order)}
+            >
+              Edit
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="primary"
+              disabled={busyExecuteId === order.id}
+              onClick={() => {
+                void handleExecute(order.id)
+              }}
+            >
+              {busyExecuteId === order.id ? 'Executing…' : 'Execute'}
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              disabled={busyCancelId === order.id}
+              onClick={() => {
+                void handleCancel(order.id)
+              }}
+            >
+              {busyCancelId === order.id ? 'Cancelling…' : 'Cancel'}
+            </Button>
+          </Box>
+        )
+      },
+    },
+  ]
+
   return (
     <Box>
       <Box
@@ -389,84 +496,15 @@ export function QueuePage() {
           {error}
         </Typography>
       ) : (
-        <Paper>
-          <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Created At</TableCell>
-                  <TableCell>Symbol</TableCell>
-                  <TableCell>Side</TableCell>
-                  <TableCell align="right">Qty</TableCell>
-                  <TableCell align="right">Price</TableCell>
-                  <TableCell>Product</TableCell>
-                  <TableCell>Status</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-              {orders.map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell>
-                    {formatIst(order.created_at)}
-                  </TableCell>
-                  <TableCell>{order.symbol}</TableCell>
-                  <TableCell>{order.side}</TableCell>
-                  <TableCell align="right">{order.qty}</TableCell>
-                  <TableCell align="right">
-                    {order.price ?? '-'}
-                  </TableCell>
-                  <TableCell>{order.product}</TableCell>
-                  <TableCell>{order.status}</TableCell>
-                  <TableCell align="right">
-                    <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        disabled={
-                          busyExecuteId === order.id || busyCancelId === order.id
-                        }
-                        onClick={() => openEditDialog(order)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        size="small"
-                        variant="contained"
-                        disabled={
-                          busyExecuteId === order.id || busyCancelId === order.id
-                        }
-                        onClick={() => handleExecute(order.id)}
-                      >
-                        {busyExecuteId === order.id ? 'Executing…' : 'Execute'}
-                      </Button>
-                      <Button
-                        size="small"
-                        color="error"
-                        disabled={
-                          busyCancelId === order.id || busyExecuteId === order.id
-                        }
-                        onClick={() => handleCancel(order.id)}
-                      >
-                        {busyCancelId === order.id ? 'Cancelling…' : 'Cancel'}
-                      </Button>
-                    </Box>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {orders.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={8}>
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                    >
-                      No orders in the manual queue.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <Paper sx={{ width: '100%', mt: 2 }}>
+          <DataGrid
+            rows={orders}
+            columns={columns}
+            getRowId={(row) => row.id}
+            autoHeight
+            disableRowSelectionOnClick
+            density="compact"
+          />
         </Paper>
       )}
 
