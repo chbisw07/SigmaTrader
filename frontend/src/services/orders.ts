@@ -39,6 +39,7 @@ export async function createManualOrder(payload: {
   side: 'BUY' | 'SELL'
   qty: number
   price?: number | null
+  trigger_price?: number | null
   order_type: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: string
   gtt?: boolean

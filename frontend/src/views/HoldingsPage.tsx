@@ -18,6 +18,7 @@ import Typography from '@mui/material/Typography'
 import Radio from '@mui/material/Radio'
 import RadioGroup from '@mui/material/RadioGroup'
 import FormControlLabel from '@mui/material/FormControlLabel'
+import Checkbox from '@mui/material/Checkbox'
 import {
   DataGrid,
   GridToolbar,
@@ -297,6 +298,8 @@ export function HoldingsPage() {
   const [tradeOrderType, setTradeOrderType] = useState<
     'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   >('MARKET')
+  const [tradeTriggerPrice, setTradeTriggerPrice] = useState<string>('')
+  const [tradeGtt, setTradeGtt] = useState<boolean>(false)
   const [tradeSubmitting, setTradeSubmitting] = useState(false)
   const [tradeError, setTradeError] = useState<string | null>(null)
   const [tradeRiskBudget, setTradeRiskBudget] = useState<string>('')
@@ -840,6 +843,7 @@ export function HoldingsPage() {
     setTradePrice(
       holding.last_price != null ? String(holding.last_price.toFixed(2)) : '',
     )
+    setTradeTriggerPrice('')
     setTradeSizeMode('QTY')
     // Seed derived fields based on a single-share (or capped) quantity.
     if (defaultQty > 0) {
@@ -850,6 +854,7 @@ export function HoldingsPage() {
     }
     setTradeProduct('CNC')
     setTradeOrderType('MARKET')
+    setTradeGtt(false)
     setTradeError(null)
     setTradeOpen(true)
   }
@@ -877,12 +882,42 @@ export function HoldingsPage() {
       )
       return
     }
-    const priceNum =
+    const priceNumRaw =
       tradeOrderType === 'MARKET' || tradePrice.trim() === ''
         ? null
         : Number(tradePrice)
+    const priceNum =
+      priceNumRaw != null && Number.isFinite(priceNumRaw)
+        ? priceNumRaw
+        : priceNumRaw
     if (priceNum != null && (!Number.isFinite(priceNum) || priceNum < 0)) {
       setTradeError('Price must be a non-negative number.')
+      return
+    }
+
+    // Validate trigger/stop-loss configuration.
+    let triggerPriceNum: number | null = null
+    if (tradeOrderType === 'SL' || tradeOrderType === 'SL-M') {
+      const raw = Number(tradeTriggerPrice)
+      if (!Number.isFinite(raw) || raw <= 0) {
+        setTradeError(
+          'Trigger price must be a positive number for SL / SL-M orders.',
+        )
+        return
+      }
+      triggerPriceNum = raw
+      if (tradeOrderType === 'SL') {
+        if (priceNum == null || !Number.isFinite(priceNum) || priceNum <= 0) {
+          setTradeError('Limit price must be a positive number for SL orders.')
+          return
+        }
+      }
+    }
+
+    if (tradeGtt && tradeOrderType !== 'LIMIT') {
+      setTradeError(
+        'GTT is currently supported only for LIMIT order type. Please switch order type to LIMIT or turn off GTT.',
+      )
       return
     }
 
@@ -896,9 +931,10 @@ export function HoldingsPage() {
         side: tradeSide,
         qty: qtyNum,
         price: priceNum,
+        trigger_price: triggerPriceNum,
         order_type: tradeOrderType,
         product: tradeProduct,
-        gtt: false,
+        gtt: tradeGtt,
       })
       // Close the dialog as soon as the order is accepted so the UI
       // feels snappy; refresh holdings in the background.
@@ -1994,6 +2030,8 @@ export function HoldingsPage() {
             >
               <MenuItem value="MARKET">MARKET</MenuItem>
               <MenuItem value="LIMIT">LIMIT</MenuItem>
+              <MenuItem value="SL">SL (Stop-loss limit)</MenuItem>
+              <MenuItem value="SL-M">SL-M (Stop-loss market)</MenuItem>
             </TextField>
             <TextField
               label="Price"
@@ -2002,8 +2040,25 @@ export function HoldingsPage() {
               onChange={(e) => setTradePrice(e.target.value)}
               fullWidth
               size="small"
-              disabled={tradeOrderType === 'MARKET'}
+              disabled={tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'}
             />
+            {(tradeOrderType === 'SL'
+              || tradeOrderType === 'SL-M'
+              || tradeGtt) && (
+              <TextField
+                label="Trigger price"
+                type="number"
+                value={tradeTriggerPrice}
+                onChange={(e) => setTradeTriggerPrice(e.target.value)}
+                fullWidth
+                size="small"
+                helperText={
+                  tradeOrderType === 'SL' || tradeOrderType === 'SL-M'
+                    ? 'Required for SL / SL-M orders.'
+                    : 'Optional trigger for GTT orders; defaults to limit price when left blank.'
+                }
+              />
+            )}
             <TextField
               label="Product"
               select
@@ -2018,6 +2073,16 @@ export function HoldingsPage() {
               <MenuItem value="CNC">CNC (Delivery)</MenuItem>
               <MenuItem value="MIS">MIS (Intraday)</MenuItem>
             </TextField>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  size="small"
+                  checked={tradeGtt}
+                  onChange={(e) => setTradeGtt(e.target.checked)}
+                />
+              }
+              label="GTT (good-till-triggered) order"
+            />
             {tradeError && (
               <Typography variant="body2" color="error">
                 {tradeError}

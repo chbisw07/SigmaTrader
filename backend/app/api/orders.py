@@ -121,6 +121,30 @@ def create_manual_order(
             detail="Price must be non-negative.",
         )
 
+    # Basic validation for stop-loss semantics so that obviously
+    # inconsistent orders are rejected at creation time instead of
+    # failing only when execution is attempted.
+    trigger_price = payload.trigger_price
+    if payload.order_type in {"SL", "SL-M"}:
+        # For SL/SL-M orders, trigger price is mandatory and must be
+        # strictly positive.
+        if trigger_price is None or trigger_price <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Trigger price must be positive for SL/SL-M orders.",
+            )
+        if payload.order_type == "SL":
+            if payload.price is None or payload.price <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Price must be positive for SL orders.",
+                )
+    elif trigger_price is not None and trigger_price <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger price must be positive when provided.",
+        )
+
     order = Order(
         user_id=user.id,
         alert_id=None,
@@ -130,7 +154,7 @@ def create_manual_order(
         side=payload.side,
         qty=payload.qty,
         price=payload.price,
-        trigger_price=None,
+        trigger_price=payload.trigger_price,
         trigger_percent=None,
         order_type=payload.order_type,
         product=payload.product,

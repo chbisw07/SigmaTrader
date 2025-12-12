@@ -81,6 +81,7 @@ class ManualOrderCreate(BaseModel):
     side: Literal["BUY", "SELL"]
     qty: float
     price: Optional[float] = None
+    trigger_price: Optional[float] = None
     order_type: Literal["MARKET", "LIMIT", "SL", "SL-M"] = "MARKET"
     product: str = "CNC"
     gtt: bool = False
