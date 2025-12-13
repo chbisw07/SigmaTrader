@@ -1,8 +1,13 @@
 import Box from '@mui/material/Box'
 import CircularProgress from '@mui/material/CircularProgress'
 import Paper from '@mui/material/Paper'
+import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
+import {
+  DataGrid,
+  type GridColDef,
+} from '@mui/x-data-grid'
 
 import { getAppLogs } from '../services/logs'
 import { fetchSystemEvents, type SystemEvent } from '../services/systemEvents'
@@ -11,6 +16,7 @@ export function SystemEventsPage() {
   const [events, setEvents] = useState<SystemEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [messageFilter, setMessageFilter] = useState<string>('')
 
   useEffect(() => {
     const load = async () => {
@@ -41,6 +47,48 @@ export function SystemEventsPage() {
     return ist.toLocaleString('en-IN')
   }
 
+  const filteredEvents =
+    messageFilter.trim() === ''
+      ? events
+      : events.filter((e) =>
+          e.message
+            ?.toLowerCase()
+            .includes(messageFilter.trim().toLowerCase()),
+        )
+
+  const columns: GridColDef[] = [
+    {
+      field: 'created_at',
+      headerName: 'Time',
+      width: 190,
+      valueFormatter: (value) =>
+        typeof value === 'string' ? formatIst(value) : '',
+    },
+    {
+      field: 'level',
+      headerName: 'Level',
+      width: 90,
+    },
+    {
+      field: 'category',
+      headerName: 'Category',
+      width: 120,
+    },
+    {
+      field: 'message',
+      headerName: 'Message',
+      flex: 1,
+      minWidth: 240,
+    },
+    {
+      field: 'correlation_id',
+      headerName: 'Correlation ID',
+      flex: 1,
+      minWidth: 220,
+      valueFormatter: (value) => value ?? '-',
+    },
+  ]
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -52,9 +100,25 @@ export function SystemEventsPage() {
       </Typography>
 
       <Paper sx={{ p: 2, mb: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          Backend events
-        </Typography>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            mb: 1.5,
+            gap: 2,
+          }}
+        >
+          <Typography variant="h6">Backend events</Typography>
+          <TextField
+            label="Search message"
+            size="small"
+            variant="outlined"
+            value={messageFilter}
+            onChange={(e) => setMessageFilter(e.target.value)}
+            sx={{ width: 280 }}
+          />
+        </Box>
         {loading ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <CircularProgress size={20} />
@@ -64,48 +128,19 @@ export function SystemEventsPage() {
           <Typography variant="body2" color="error">
             {error}
           </Typography>
-        ) : events.length === 0 ? (
+        ) : filteredEvents.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
             No backend events recorded yet.
           </Typography>
         ) : (
-          <Box sx={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>
-                    Time
-                  </th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>
-                    Level
-                  </th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>
-                    Category
-                  </th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>
-                    Message
-                  </th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>
-                    Correlation ID
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((e) => (
-                  <tr key={e.id}>
-                    <td style={{ padding: '4px 8px' }}>
-                      {formatIst(e.created_at)}
-                    </td>
-                    <td style={{ padding: '4px 8px' }}>{e.level}</td>
-                    <td style={{ padding: '4px 8px' }}>{e.category}</td>
-                    <td style={{ padding: '4px 8px' }}>{e.message}</td>
-                    <td style={{ padding: '4px 8px' }}>
-                      {e.correlation_id ?? '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <Box sx={{ width: '100%', height: 320 }}>
+            <DataGrid
+              rows={filteredEvents}
+              columns={columns}
+              getRowId={(row) => row.id}
+              disableRowSelectionOnClick
+              density="compact"
+            />
           </Box>
         )}
       </Paper>

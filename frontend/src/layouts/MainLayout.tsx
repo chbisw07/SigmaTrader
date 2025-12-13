@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react'
+import { ReactNode, useEffect, useState } from 'react'
 import AppBar from '@mui/material/AppBar'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -34,6 +34,7 @@ import { useHealth } from '../services/health'
 import { logout, type CurrentUser } from '../services/auth'
 
 const drawerWidth = 220
+const collapsedDrawerWidth = 64
 
 type MainLayoutProps = {
   children: ReactNode
@@ -62,6 +63,14 @@ const navItems: NavItem[] = [
 
 export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return window.localStorage.getItem('st_sidebar_collapsed_v1') === '1'
+    } catch {
+      return false
+    }
+  })
   const { status, isLoading } = useHealth()
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const open = Boolean(anchorEl)
@@ -86,19 +95,45 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
     }
   }
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(
+        'st_sidebar_collapsed_v1',
+        sidebarCollapsed ? '1' : '0',
+      )
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [sidebarCollapsed])
+
+  const effectiveDrawerWidth = sidebarCollapsed
+    ? collapsedDrawerWidth
+    : drawerWidth
+
   const drawer = (
     <div>
       <Toolbar>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+            width: '100%',
+          }}
+        >
           <Box
             component="img"
             src="/sigma_trader_logo.png"
             alt="SigmaTrader logo"
             sx={{ height: 32, width: 32, borderRadius: 1 }}
           />
-          <Typography variant="h6" noWrap component="div">
-            SigmaTrader
-          </Typography>
+          {!sidebarCollapsed && (
+            <Typography variant="h6" noWrap component="div">
+              SigmaTrader
+            </Typography>
+          )}
         </Box>
       </Toolbar>
       <Divider />
@@ -112,10 +147,19 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
                 '&.active': {
                   bgcolor: 'action.selected',
                 },
+                justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                px: sidebarCollapsed ? 1 : 2,
               }}
             >
-              <ListItemIcon>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.label} />
+              <ListItemIcon
+                sx={{
+                  minWidth: sidebarCollapsed ? 0 : 40,
+                  justifyContent: 'center',
+                }}
+              >
+                {item.icon}
+              </ListItemIcon>
+              {!sidebarCollapsed && <ListItemText primary={item.label} />}
             </ListItemButton>
           </ListItem>
         ))}
@@ -139,8 +183,8 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
       <AppBar
         position="fixed"
         sx={{
-          width: { sm: `calc(100% - ${drawerWidth}px)` },
-          ml: { sm: `${drawerWidth}px` },
+          width: { sm: `calc(100% - ${effectiveDrawerWidth}px)` },
+          ml: { sm: `${effectiveDrawerWidth}px` },
         }}
       >
         <Toolbar sx={{ justifyContent: 'space-between' }}>
@@ -151,6 +195,15 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
               edge="start"
               onClick={handleDrawerToggle}
               sx={{ mr: 2, display: { sm: 'none' } }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <IconButton
+              color="inherit"
+              aria-label="toggle sidebar"
+              edge="start"
+              onClick={() => setSidebarCollapsed((prev) => !prev)}
+              sx={{ mr: 1, display: { xs: 'none', sm: 'inline-flex' } }}
             >
               <MenuIcon />
             </IconButton>
@@ -211,7 +264,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
       </AppBar>
       <Box
         component="nav"
-        sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}
+        sx={{ width: { sm: effectiveDrawerWidth }, flexShrink: { sm: 0 } }}
         aria-label="main navigation"
       >
         <Drawer
@@ -230,7 +283,10 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
           variant="permanent"
           sx={{
             display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: effectiveDrawerWidth,
+            },
           }}
           open
         >
@@ -242,7 +298,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
         sx={{
           flexGrow: 1,
           p: 3,
-          width: { sm: `calc(100% - ${drawerWidth}px)` },
+          width: { sm: `calc(100% - ${effectiveDrawerWidth}px)` },
           mt: 8,
         }}
       >
