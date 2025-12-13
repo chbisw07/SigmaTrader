@@ -300,6 +300,8 @@ export function HoldingsPage() {
   >('MARKET')
   const [tradeTriggerPrice, setTradeTriggerPrice] = useState<string>('')
   const [tradeGtt, setTradeGtt] = useState<boolean>(false)
+  const [tradeBracketEnabled, setTradeBracketEnabled] = useState<boolean>(false)
+  const [tradeMtpPct, setTradeMtpPct] = useState<string>('')
   const [tradeSubmitting, setTradeSubmitting] = useState(false)
   const [tradeError, setTradeError] = useState<string | null>(null)
   const [tradeRiskBudget, setTradeRiskBudget] = useState<string>('')
@@ -854,6 +856,9 @@ export function HoldingsPage() {
     }
     setTradeProduct('CNC')
     setTradeOrderType('MARKET')
+    setTradeTriggerPrice('')
+    setTradeBracketEnabled(false)
+    setTradeMtpPct('')
     setTradeGtt(false)
     setTradeError(null)
     setTradeOpen(true)
@@ -921,9 +926,44 @@ export function HoldingsPage() {
       return
     }
 
+    const effectivePriceForBracket = getEffectivePrimaryPrice()
+
+    // If bracket is enabled, validate MTP and compute the bracket price
+    // up front so we can surface any issues before creating orders.
+    let bracketPrice: number | null = null
+    if (tradeBracketEnabled) {
+      const mtp = Number(tradeMtpPct)
+      if (!Number.isFinite(mtp) || mtp <= 0) {
+        setTradeError('Min target profit (MTP) must be a positive number.')
+        return
+      }
+      if (effectivePriceForBracket == null || effectivePriceForBracket <= 0) {
+        setTradeError(
+          'Cannot compute bracket price: primary price is not available.',
+        )
+        return
+      }
+      const m = mtp / 100
+      if (!Number.isFinite(m) || m <= 0) {
+        setTradeError('Invalid MTP value.')
+        return
+      }
+      if (tradeSide === 'BUY') {
+        bracketPrice = effectivePriceForBracket * (1 + m)
+      } else {
+        bracketPrice = effectivePriceForBracket / (1 + m)
+      }
+      if (!Number.isFinite(bracketPrice) || bracketPrice <= 0) {
+        setTradeError('Computed bracket price is invalid.')
+        return
+      }
+      bracketPrice = Number(bracketPrice.toFixed(2))
+    }
+
     setTradeSubmitting(true)
     setTradeError(null)
     try {
+      let primaryCreated = false
       await createManualOrder({
         symbol: tradeSymbol,
         exchange:
@@ -936,15 +976,32 @@ export function HoldingsPage() {
         product: tradeProduct,
         gtt: tradeGtt,
       })
-      // Close the dialog as soon as the order is accepted so the UI
+      primaryCreated = true
+
+      if (tradeBracketEnabled && bracketPrice != null) {
+        const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
+        await createManualOrder({
+          symbol: tradeSymbol,
+          exchange:
+            holdings.find((h) => h.symbol === tradeSymbol)?.exchange ?? 'NSE',
+          side: bracketSide,
+          qty: qtyNum,
+          price: bracketPrice,
+          order_type: 'LIMIT',
+          product: tradeProduct,
+          gtt: true,
+        })
+      }
+
+      // Close the dialog as soon as the orders are accepted so the UI
       // feels snappy; refresh holdings in the background.
       setTradeOpen(false)
       setTradeSubmitting(false)
       void load()
     } catch (err) {
-      setTradeError(
-        err instanceof Error ? err.message : 'Failed to create order',
-      )
+      const message =
+        err instanceof Error ? err.message : 'Failed to create order'
+      setTradeError(message)
       setTradeSubmitting(false)
     }
   }
@@ -971,6 +1028,39 @@ export function HoldingsPage() {
     && portfolioValue > 0
       ? (sizingPrice / portfolioValue) * 100
       : 1
+
+  const getEffectivePrimaryPrice = (): number | null => {
+    // Prefer explicit price when provided for LIMIT/SL types; otherwise
+    // fall back to the sizing price (typically last_price).
+    if (
+      tradeOrderType !== 'MARKET'
+      && tradePrice.trim() !== ''
+    ) {
+      const p = Number(tradePrice)
+      if (Number.isFinite(p) && p > 0) return p
+    }
+    return sizingPrice != null && Number.isFinite(sizingPrice) && sizingPrice > 0
+      ? sizingPrice
+      : null
+  }
+
+  const getBracketPreviewPrice = (): number | null => {
+    if (!tradeBracketEnabled) return null
+    const mtp = Number(tradeMtpPct)
+    const base = getEffectivePrimaryPrice()
+    if (!Number.isFinite(mtp) || mtp <= 0 || base == null || base <= 0) {
+      return null
+    }
+    const m = mtp / 100
+    let target: number
+    if (tradeSide === 'BUY') {
+      target = base * (1 + m)
+    } else {
+      target = base / (1 + m)
+    }
+    if (!Number.isFinite(target) || target <= 0) return null
+    return Number(target.toFixed(2))
+  }
 
   const recalcFromRisk = async () => {
     const holding = tradeHolding
@@ -2073,6 +2163,91 @@ export function HoldingsPage() {
               <MenuItem value="CNC">CNC (Delivery)</MenuItem>
               <MenuItem value="MIS">MIS (Intraday)</MenuItem>
             </TextField>
+            <Box
+              sx={{
+                mt: 1,
+                p: 1,
+                borderRadius: 1,
+                border: '1px solid',
+                borderColor: 'divider',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+              }}
+            >
+              <Typography variant="caption" color="text.secondary">
+                Bracket / follow-up GTT
+              </Typography>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={tradeBracketEnabled}
+                    onChange={(e) => {
+                      const checked = e.target.checked
+                      setTradeBracketEnabled(checked)
+                      if (checked) {
+                        // When enabling for the first time, pre-fill MTP.
+                        if (!tradeMtpPct) {
+                          let defaultMtp = 5
+                          if (
+                            tradeSide === 'SELL'
+                            && tradeHolding?.average_price != null
+                          ) {
+                            const base = getEffectivePrimaryPrice()
+                            const cost = Number(tradeHolding.average_price)
+                            if (
+                              base != null
+                              && Number.isFinite(cost)
+                              && cost > 0
+                            ) {
+                              const x = ((base / cost) - 1) * 100
+                              if (Number.isFinite(x) && x > 0) {
+                                defaultMtp = Number(x.toFixed(2))
+                              }
+                            }
+                          }
+                          setTradeMtpPct(String(defaultMtp))
+                        }
+                      }
+                    }}
+                  />
+                }
+                label={
+                  tradeSide === 'BUY'
+                    ? 'Add profit-target SELL GTT'
+                    : 'Add re-entry BUY GTT'
+                }
+              />
+              {tradeBracketEnabled && (
+                <>
+                  <TextField
+                    label="Min target profit (MTP) %"
+                    type="number"
+                    value={tradeMtpPct}
+                    onChange={(e) => setTradeMtpPct(e.target.value)}
+                    size="small"
+                    fullWidth
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    {(() => {
+                      const p = getBracketPreviewPrice()
+                      if (p == null) {
+                        return 'Bracket GTT price will be shown here when price and MTP are valid.'
+                      }
+                      const base = getEffectivePrimaryPrice()
+                      const sideLabel =
+                        tradeSide === 'BUY' ? 'SELL GTT target' : 'BUY GTT re-entry'
+                      if (base != null && base > 0) {
+                        const eff = ((p / base) - 1) * 100
+                        return `${sideLabel}: ₹${p.toFixed(2)} (≈ ${eff.toFixed(2)}% from primary price).`
+                      }
+                      return `${sideLabel}: ₹${p.toFixed(2)}.`
+                    })()}
+                  </Typography>
+                </>
+              )}
+            </Box>
             <FormControlLabel
               control={
                 <Checkbox

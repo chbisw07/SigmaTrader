@@ -199,6 +199,7 @@ The backend builds on your existing alerts, orders, and strategies infrastructur
 
 ### 2.6 High‑level wire diagram
 
+
 ```text
 Holdings Grid (UI)
     └─ "Alert" button per row

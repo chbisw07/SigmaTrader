@@ -105,6 +105,11 @@ export function OrdersPage() {
       field: 'order_type',
       headerName: 'Type',
       width: 110,
+      valueFormatter: (value, row) => {
+        const order = row as Order
+        const base = String(value ?? order.order_type ?? '')
+        return order.gtt ? `${base} (GTT)` : base
+      },
     },
     {
       field: 'product',
