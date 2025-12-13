@@ -277,6 +277,10 @@ function getOperatorOptions(
 }
 
 const ANALYTICS_LOOKBACK_DAYS = 730
+const BRACKET_BASE_MTP_DEFAULT = 5
+const BRACKET_APPRECIATION_THRESHOLD = 3
+const BRACKET_MTP_MIN = 3
+const BRACKET_MTP_MAX = 20
 
 export function HoldingsPage() {
   const [holdings, setHoldings] = useState<HoldingRow[]>([])
@@ -2189,21 +2193,25 @@ export function HoldingsPage() {
                       if (checked) {
                         // When enabling for the first time, pre-fill MTP.
                         if (!tradeMtpPct) {
-                          let defaultMtp = 5
+                          let defaultMtp = BRACKET_BASE_MTP_DEFAULT
                           if (
                             tradeSide === 'SELL'
-                            && tradeHolding?.average_price != null
+                            && tradeHolding?.today_pnl_percent != null
                           ) {
-                            const base = getEffectivePrimaryPrice()
-                            const cost = Number(tradeHolding.average_price)
-                            if (
-                              base != null
-                              && Number.isFinite(cost)
-                              && cost > 0
-                            ) {
-                              const x = ((base / cost) - 1) * 100
-                              if (Number.isFinite(x) && x > 0) {
-                                defaultMtp = Number(x.toFixed(2))
+                            const today = Number(
+                              tradeHolding.today_pnl_percent,
+                            )
+                            if (Number.isFinite(today) && today > 0) {
+                              // Only mirror today's appreciation when it is
+                              // meaningfully above noise; clamp to a
+                              // reasonable swing range so re-entry levels
+                              // stay realistic.
+                              if (today >= BRACKET_APPRECIATION_THRESHOLD) {
+                                const clamped = Math.max(
+                                  BRACKET_MTP_MIN,
+                                  Math.min(today, BRACKET_MTP_MAX),
+                                )
+                                defaultMtp = Number(clamped.toFixed(2))
                               }
                             }
                           }
