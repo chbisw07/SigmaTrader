@@ -19,6 +19,7 @@ import Radio from '@mui/material/Radio'
 import RadioGroup from '@mui/material/RadioGroup'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import Checkbox from '@mui/material/Checkbox'
+import Chip from '@mui/material/Chip'
 import {
   DataGrid,
   GridToolbar,
@@ -1898,7 +1899,7 @@ export function HoldingsPage() {
             gap: 1,
           }}
         >
-          {advancedFilters.map((filter) => {
+          {advancedFilters.map((filter, idx) => {
             const operatorOptions = getOperatorOptions(filter.field)
             return (
               <Box
@@ -1910,84 +1911,125 @@ export function HoldingsPage() {
                   flexWrap: 'wrap',
                 }}
               >
-                <TextField
-                  label="Column"
-                  select
-                  size="small"
-                  value={filter.field}
-                  onChange={(e) => {
-                    const nextField =
-                      e.target.value as HoldingsFilterField
-                    const nextOperatorOptions =
-                      getOperatorOptions(nextField)
-                    setAdvancedFilters((current) =>
-                      current.map((f) =>
-                        f.id === filter.id
-                          ? {
-                              ...f,
-                              field: nextField,
-                              operator:
-                                nextOperatorOptions[0]?.value ??
-                                f.operator,
-                            }
-                          : f,
-                      ),
-                    )
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    flexWrap: 'wrap',
+                    flex: 1,
+                    minWidth: 0,
                   }}
-                  sx={{ minWidth: 180 }}
                 >
-                  {HOLDINGS_FILTER_FIELDS.map((f) => (
-                    <MenuItem key={f.field} value={f.field}>
-                      {f.label}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  label="Operator"
-                  select
-                  size="small"
-                  value={filter.operator}
-                  onChange={(e) => {
-                    const nextOp =
-                      e.target.value as HoldingsFilterOperator
-                    setAdvancedFilters((current) =>
-                      current.map((f) =>
-                        f.id === filter.id ? { ...f, operator: nextOp } : f,
-                      ),
-                    )
-                  }}
-                  sx={{ minWidth: 140 }}
-                >
-                  {operatorOptions.map((opt) => (
-                    <MenuItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  label="Value"
-                  size="small"
-                  value={filter.value}
-                  onChange={(e) => {
-                    const nextValue = e.target.value
-                    setAdvancedFilters((current) =>
-                      current.map((f) =>
-                        f.id === filter.id ? { ...f, value: nextValue } : f,
-                      ),
-                    )
-                  }}
-                  sx={{ minWidth: 140 }}
-                />
-                <Button
-                  size="small"
-                  onClick={() =>
-                    setAdvancedFilters((current) =>
-                      current.filter((f) => f.id !== filter.id),
-                    )
-                  }
-                >
-                  Remove
-                </Button>
+                  <TextField
+                    label="Column"
+                    select
+                    size="small"
+                    value={filter.field}
+                    onChange={(e) => {
+                      const nextField =
+                        e.target.value as HoldingsFilterField
+                      const nextOperatorOptions =
+                        getOperatorOptions(nextField)
+                      setAdvancedFilters((current) =>
+                        current.map((f) =>
+                          f.id === filter.id
+                            ? {
+                                ...f,
+                                field: nextField,
+                                operator:
+                                  nextOperatorOptions[0]?.value ??
+                                  f.operator,
+                              }
+                            : f,
+                        ),
+                      )
+                    }}
+                    sx={{ minWidth: 180 }}
+                  >
+                    {HOLDINGS_FILTER_FIELDS.map((f) => (
+                      <MenuItem key={f.field} value={f.field}>
+                        {f.label}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Operator"
+                    select
+                    size="small"
+                    value={filter.operator}
+                    onChange={(e) => {
+                      const nextOp =
+                        e.target.value as HoldingsFilterOperator
+                      setAdvancedFilters((current) =>
+                        current.map((f) =>
+                          f.id === filter.id ? { ...f, operator: nextOp } : f,
+                        ),
+                      )
+                    }}
+                    sx={{ minWidth: 140 }}
+                  >
+                    {operatorOptions.map((opt) => (
+                      <MenuItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Value"
+                    size="small"
+                    value={filter.value}
+                    onChange={(e) => {
+                      const nextValue = e.target.value
+                      setAdvancedFilters((current) =>
+                        current.map((f) =>
+                          f.id === filter.id ? { ...f, value: nextValue } : f,
+                        ),
+                      )
+                    }}
+                    sx={{ minWidth: 140 }}
+                  />
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      setAdvancedFilters((current) =>
+                        current.filter((f) => f.id !== filter.id),
+                      )
+                    }
+                  >
+                    Remove
+                  </Button>
+                </Box>
+                {idx < advancedFilters.length - 1 && (
+                  <Box
+                    sx={{
+                      width: 72,
+                      display: 'flex',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={
+                        screenerLogicOperator === GridLogicOperator.Or
+                          ? 'OR'
+                          : 'AND'
+                      }
+                      aria-label={
+                        screenerLogicOperator === GridLogicOperator.Or
+                          ? 'Rows combined with OR'
+                          : 'Rows combined with AND'
+                      }
+                      sx={{
+                        fontWeight: 600,
+                        letterSpacing: 0.5,
+                      }}
+                    />
+                  </Box>
+                )}
               </Box>
             )
           })}
