@@ -1834,53 +1834,63 @@ export function HoldingsPage() {
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'flex-end',
-            gap: 1,
+            gap: 0.5,
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="caption" color="text.secondary">
-              View:
-            </Typography>
-            <Select
-              size="small"
-              value={viewMode}
-              onChange={(e) => {
-                const mode =
-                  e.target.value === 'risk' ? 'risk' : 'default'
-                setViewMode(mode)
-                if (typeof window !== 'undefined') {
-                  try {
-                    window.localStorage.setItem(
-                      'st_holdings_view_v1',
-                      mode,
-                    )
-                  } catch {
-                    // Ignore persistence errors.
-                  }
-                }
-              }}
-              sx={{ minWidth: 120 }}
-            >
-              <MenuItem value="default">Default</MenuItem>
-              <MenuItem value="risk">Risk view</MenuItem>
-            </Select>
-          </Box>
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={() => setSettingsOpen(true)}
-          >
-            View settings
-          </Button>
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={() => {
-              void load()
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
             }}
           >
-            Refresh now
-          </Button>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                View:
+              </Typography>
+              <Select
+                size="small"
+                value={viewMode}
+                onChange={(e) => {
+                  const mode =
+                    e.target.value === 'risk' ? 'risk' : 'default'
+                  setViewMode(mode)
+                  if (typeof window !== 'undefined') {
+                    try {
+                      window.localStorage.setItem(
+                        'st_holdings_view_v1',
+                        mode,
+                      )
+                    } catch {
+                      // Ignore persistence errors.
+                    }
+                  }
+                }}
+                sx={{ minWidth: 120 }}
+              >
+                <MenuItem value="default">Default</MenuItem>
+                <MenuItem value="risk">Risk view</MenuItem>
+              </Select>
+            </Box>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setSettingsOpen(true)}
+            >
+              View settings
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                void load()
+              }}
+            >
+              Refresh now
+            </Button>
+          </Box>
           {totalActiveAlerts > 0 && (
             <Typography variant="caption" color="text.secondary">
               Active alerts (approx.): {totalActiveAlerts}
