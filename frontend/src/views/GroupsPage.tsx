@@ -26,7 +26,7 @@ import {
   type GridColDef,
   type GridRenderCellParams,
 } from '@mui/x-data-grid'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 
 import { createManualOrder } from '../services/orders'
@@ -167,6 +167,49 @@ export function GroupsPage() {
   const [allocationError, setAllocationError] = useState<string | null>(null)
   const [allocationBusy, setAllocationBusy] = useState(false)
 
+  // Resizable panel state
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(800)
+  const [isResizing, setIsResizing] = useState(false)
+
+  const startResizing = useCallback(() => {
+    setIsResizing(true)
+  }, [])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing || !containerRef.current) return
+      const containerRect = containerRef.current.getBoundingClientRect()
+      // Calculate width relative to container left edge
+      const newWidth = e.clientX - containerRect.left
+      // Constraints: min 300px, max container width - 300px
+      if (newWidth > 300 && newWidth < containerRect.width - 300) {
+        setLeftPanelWidth(newWidth)
+      }
+    }
+
+    const handleMouseUp = () => {
+      setIsResizing(false)
+    }
+
+    if (isResizing) {
+      window.addEventListener('mousemove', handleMouseMove)
+      window.addEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+    } else {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [isResizing])
+
   const reloadGroups = async (
     selectId?: number | null,
     selectName?: string | null,
@@ -179,8 +222,8 @@ export function GroupsPage() {
 
       const nameMatch = selectName
         ? data.find(
-            (g) => g.name.toLowerCase() === selectName.toLowerCase(),
-          )?.id ?? null
+          (g) => g.name.toLowerCase() === selectName.toLowerCase(),
+        )?.id ?? null
         : null
 
       const nextSelection =
@@ -188,9 +231,9 @@ export function GroupsPage() {
           ? selectId
           : nameMatch != null
             ? nameMatch
-          : selectedGroupId != null
-            ? selectedGroupId
-            : data[0]?.id ?? null
+            : selectedGroupId != null
+              ? selectedGroupId
+              : data[0]?.id ?? null
 
       setSelectedGroupId(nextSelection)
     } catch (err) {
@@ -551,13 +594,12 @@ export function GroupsPage() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 150,
+      width: 240,
       sortable: false,
       filterable: false,
       renderCell: (params: GridRenderCellParams<Group>) => (
         <Stack direction="row" spacing={1}>
           <Button
-            size="small"
             variant="outlined"
             startIcon={<EditIcon />}
             onClick={(e) => {
@@ -568,7 +610,6 @@ export function GroupsPage() {
             Edit
           </Button>
           <Button
-            size="small"
             color="error"
             variant="outlined"
             startIcon={<DeleteIcon />}
@@ -599,13 +640,12 @@ export function GroupsPage() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 160,
+      width: 240,
       sortable: false,
       filterable: false,
       renderCell: (params: GridRenderCellParams<GroupMember>) => (
         <Stack direction="row" spacing={1}>
           <Button
-            size="small"
             variant="outlined"
             startIcon={<EditIcon />}
             onClick={() => openMemberEditor(params.row)}
@@ -613,7 +653,6 @@ export function GroupsPage() {
             Edit
           </Button>
           <Button
-            size="small"
             variant="outlined"
             color="error"
             startIcon={<DeleteIcon />}
@@ -669,145 +708,177 @@ export function GroupsPage() {
       )}
 
       <Box
+        ref={containerRef}
         sx={{
           mt: 2,
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr', md: '420px 1fr' },
-          gap: 2,
-          alignItems: 'start',
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          gap: 0,
         }}
       >
-        <Paper sx={{ p: 2 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Typography variant="h6">Groups</Typography>
-            <Box sx={{ flexGrow: 1 }} />
-            <Button
-              startIcon={<AddIcon />}
-              size="small"
-              variant="contained"
-              onClick={openCreateGroup}
-            >
-              New
-            </Button>
-          </Stack>
-          <Box sx={{ mt: 1, height: 520 }}>
-            <DataGrid
-              rows={groups}
-              columns={groupsColumns}
-              loading={loading}
-              getRowId={(row) => row.id}
-              disableRowSelectionOnClick
-              onRowClick={(params) => setSelectedGroupId(params.row.id)}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 10, page: 0 } },
-              }}
-              pageSizeOptions={[10, 25, 50]}
-              sx={{
-                '& .MuiDataGrid-row.Mui-selected': {
-                  bgcolor: 'action.selected',
-                },
-              }}
-            />
-          </Box>
-        </Paper>
-
-        <Paper sx={{ p: 2 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Typography variant="h6">
-              {selectedGroup ? selectedGroup.name : 'Select a group'}
-            </Typography>
-            {selectedGroup && (
-              <Chip
+        <Box sx={{ width: { xs: '100%', md: leftPanelWidth }, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
+          <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="h6">Groups</Typography>
+              <Box sx={{ flexGrow: 1 }} />
+              <Button
+                startIcon={<AddIcon />}
                 size="small"
-                label={
-                  GROUP_KINDS.find((k) => k.value === selectedGroup.kind)?.label
-                    ?? selectedGroup.kind
-                }
-                variant="outlined"
+                variant="contained"
+                onClick={openCreateGroup}
+              >
+                New
+              </Button>
+            </Stack>
+            <Box sx={{ mt: 1, flexGrow: 1 }}>
+              <DataGrid
+                rows={groups}
+                columns={groupsColumns}
+                loading={loading}
+                getRowId={(row) => row.id}
+                disableRowSelectionOnClick
+                onRowClick={(params) => setSelectedGroupId(params.row.id)}
+                initialState={{
+                  pagination: { paginationModel: { pageSize: 10, page: 0 } },
+                }}
+                pageSizeOptions={[10, 25, 50]}
+                sx={{
+                  '& .MuiDataGrid-row.Mui-selected': {
+                    bgcolor: 'action.selected',
+                  },
+                }}
               />
+            </Box>
+          </Paper>
+        </Box>
+
+        {/* Draggable Divider */}
+        <Box
+          onMouseDown={startResizing}
+          sx={{
+            width: 16,
+            cursor: 'col-resize',
+            display: { xs: 'none', md: 'flex' },
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            '&:hover .divider-line': {
+              bgcolor: 'primary.main',
+              height: '40px',
+            }
+          }}
+        >
+          <Box
+            className="divider-line"
+            sx={{
+              width: 4,
+              height: '24px',
+              bgcolor: 'divider',
+              borderRadius: 1,
+              transition: 'all 0.2s',
+            }}
+          />
+        </Box>
+
+        <Box sx={{ flex: 1, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
+          <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="h6">
+                {selectedGroup ? selectedGroup.name : 'Select a group'}
+              </Typography>
+              {selectedGroup && (
+                <Chip
+                  size="small"
+                  label={
+                    GROUP_KINDS.find((k) => k.value === selectedGroup.kind)?.label
+                    ?? selectedGroup.kind
+                  }
+                  variant="outlined"
+                />
+              )}
+              <Box sx={{ flexGrow: 1 }} />
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<PlayListAddIcon />}
+                disabled={!selectedGroup?.members?.length}
+                onClick={openAllocation}
+              >
+                Allocate
+              </Button>
+            </Stack>
+
+            {selectedGroup?.description && (
+              <Typography sx={{ mt: 0.5 }} variant="body2" color="text.secondary">
+                {selectedGroup.description}
+              </Typography>
             )}
-            <Box sx={{ flexGrow: 1 }} />
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<PlayListAddIcon />}
-              disabled={!selectedGroup?.members?.length}
-              onClick={openAllocation}
-            >
-              Allocate
-            </Button>
-          </Stack>
 
-          {selectedGroup?.description && (
-            <Typography sx={{ mt: 0.5 }} variant="body2" color="text.secondary">
-              {selectedGroup.description}
-            </Typography>
-          )}
+            <Divider sx={{ my: 2 }} />
 
-          <Divider sx={{ my: 2 }} />
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
+              <TextField
+                label="Symbol"
+                size="small"
+                value={newMemberSymbol}
+                onChange={(e) => setNewMemberSymbol(e.target.value)}
+                sx={{ width: { xs: '100%', md: 180 } }}
+              />
+              <TextField
+                label="Exchange"
+                size="small"
+                value={newMemberExchange}
+                onChange={(e) => setNewMemberExchange(e.target.value)}
+                sx={{ width: { xs: '100%', md: 120 } }}
+              />
+              <TextField
+                label="Notes (optional)"
+                size="small"
+                value={newMemberNotes}
+                onChange={(e) => setNewMemberNotes(e.target.value)}
+                sx={{ flexGrow: 1, width: { xs: '100%', md: 'auto' } }}
+              />
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<AddIcon />}
+                disabled={!selectedGroupId || !newMemberSymbol.trim()}
+                onClick={() => void handleAddMember()}
+              >
+                Add
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={!selectedGroupId}
+                onClick={openBulkAdd}
+              >
+                Bulk add
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={!selectedGroupId || !selectedGroup?.members?.length}
+                onClick={() => void handleEqualizeWeights()}
+              >
+                Equal weights
+              </Button>
+            </Stack>
 
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
-            <TextField
-              label="Symbol"
-              size="small"
-              value={newMemberSymbol}
-              onChange={(e) => setNewMemberSymbol(e.target.value)}
-              sx={{ width: { xs: '100%', md: 180 } }}
-            />
-            <TextField
-              label="Exchange"
-              size="small"
-              value={newMemberExchange}
-              onChange={(e) => setNewMemberExchange(e.target.value)}
-              sx={{ width: { xs: '100%', md: 120 } }}
-            />
-            <TextField
-              label="Notes (optional)"
-              size="small"
-              value={newMemberNotes}
-              onChange={(e) => setNewMemberNotes(e.target.value)}
-              sx={{ flexGrow: 1, width: { xs: '100%', md: 'auto' } }}
-            />
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<AddIcon />}
-              disabled={!selectedGroupId || !newMemberSymbol.trim()}
-              onClick={() => void handleAddMember()}
-            >
-              Add
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={!selectedGroupId}
-              onClick={openBulkAdd}
-            >
-              Bulk add
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              disabled={!selectedGroupId || !selectedGroup?.members?.length}
-              onClick={() => void handleEqualizeWeights()}
-            >
-              Equal weights
-            </Button>
-          </Stack>
-
-          <Box sx={{ mt: 1.5, height: 420 }}>
-            <DataGrid
-              rows={selectedGroup?.members ?? []}
-              columns={membersColumns}
-              getRowId={(row) => row.id}
-              disableRowSelectionOnClick
-              initialState={{
-                pagination: { paginationModel: { pageSize: 10, page: 0 } },
-              }}
-              pageSizeOptions={[10, 25, 50]}
-            />
-          </Box>
-        </Paper>
+            <Box sx={{ mt: 1.5, flexGrow: 1 }}>
+              <DataGrid
+                rows={selectedGroup?.members ?? []}
+                columns={membersColumns}
+                getRowId={(row) => row.id}
+                disableRowSelectionOnClick
+                initialState={{
+                  pagination: { paginationModel: { pageSize: 10, page: 0 } },
+                }}
+                pageSizeOptions={[10, 25, 50]}
+              />
+            </Box>
+          </Paper>
+        </Box>
       </Box>
 
       <Dialog open={groupDialogOpen} onClose={() => setGroupDialogOpen(false)} maxWidth="sm" fullWidth>
