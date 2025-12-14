@@ -63,7 +63,12 @@ import {
   deleteStrategy,
   type Strategy,
 } from '../services/strategies'
-import { fetchGroupMemberships } from '../services/groups'
+import {
+  bulkAddGroupMembers,
+  createGroup,
+  fetchGroupMemberships,
+  type GroupKind,
+} from '../services/groups'
 
 type HoldingIndicators = {
   rsi14?: number
@@ -489,6 +494,11 @@ export function HoldingsPage() {
     useState(true)
   const [bulkAmountManual, setBulkAmountManual] = useState(false)
   const [bulkAmountBudget, setBulkAmountBudget] = useState<string>('')
+  const [groupCreateOpen, setGroupCreateOpen] = useState(false)
+  const [groupCreateName, setGroupCreateName] = useState('')
+  const [groupCreateKind, setGroupCreateKind] = useState<GroupKind>('WATCHLIST')
+  const [groupCreateSubmitting, setGroupCreateSubmitting] = useState(false)
+  const [groupCreateError, setGroupCreateError] = useState<string | null>(null)
 
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
@@ -1335,6 +1345,48 @@ export function HoldingsPage() {
     setBulkAmountManual(false)
     setBulkAmountBudget('')
     setTradeOpen(false)
+  }
+
+  const createGroupFromSelection = async () => {
+    if (groupCreateSubmitting) return
+    const name = groupCreateName.trim()
+    if (!name) {
+      setGroupCreateError('Group name is required.')
+      return
+    }
+    const selected = holdings.filter((h) => rowSelectionModel.includes(h.symbol))
+    if (!selected.length) {
+      setGroupCreateError('Select at least one row to create a group.')
+      return
+    }
+
+    setGroupCreateSubmitting(true)
+    setGroupCreateError(null)
+    try {
+      const group = await createGroup({
+        name,
+        kind: groupCreateKind,
+        description: `Created from Holdings (${selected.length} symbols).`,
+      })
+      await bulkAddGroupMembers(
+        group.id,
+        selected.map((h) => ({
+          symbol: h.symbol,
+          exchange: h.exchange ?? 'NSE',
+        })),
+      )
+      setGroupCreateOpen(false)
+      setGroupCreateName('')
+      setGroupCreateKind('WATCHLIST')
+      void refreshGroupMemberships(selected.map((h) => h.symbol))
+      navigate(`/groups?${new URLSearchParams({ group: group.name }).toString()}`)
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to create group.'
+      setGroupCreateError(message)
+    } finally {
+      setGroupCreateSubmitting(false)
+    }
   }
 
   const handleSubmitTrade = async () => {
@@ -2356,10 +2408,10 @@ export function HoldingsPage() {
 	              <MenuItem value="risk">Risk view</MenuItem>
 	            </Select>
 	          </Box>
-	          <Button
-	            size="small"
-	            variant="contained"
-	            onClick={() => {
+		          <Button
+		            size="small"
+		            variant="contained"
+		            onClick={() => {
 	              const selected = holdings.filter((h) =>
 	                rowSelectionModel.includes(h.symbol),
 	              )
@@ -2371,11 +2423,11 @@ export function HoldingsPage() {
 		              setBulkAmountBudget('')
 		              openTradeDialog(selected[0], 'BUY')
 		            }}
-	            disabled={rowSelectionModel.length === 0}
-	          >
-	            Bulk buy
-	          </Button>
-	          <Button
+		            disabled={rowSelectionModel.length === 0}
+		          >
+		            Bulk buy
+		          </Button>
+		          <Button
 	            size="small"
 	            variant="contained"
 	            color="error"
@@ -2391,14 +2443,25 @@ export function HoldingsPage() {
 		              setBulkAmountBudget('')
 		              openTradeDialog(selected[0], 'SELL')
 		            }}
-	            disabled={rowSelectionModel.length === 0}
-	          >
-	            Bulk sell
-	          </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => setSettingsOpen(true)}
+		            disabled={rowSelectionModel.length === 0}
+		          >
+		            Bulk sell
+		          </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  setGroupCreateError(null)
+                  setGroupCreateOpen(true)
+                }}
+                disabled={rowSelectionModel.length === 0}
+              >
+                Create group
+              </Button>
+	            <Button
+	              size="small"
+	              variant="outlined"
+	              onClick={() => setSettingsOpen(true)}
             >
               View settings
             </Button>
@@ -3486,7 +3549,68 @@ export function HoldingsPage() {
                 : 'Create order'}
           </Button>
         </DialogActions>
-      </Dialog>
+	      </Dialog>
+        <Dialog
+          open={groupCreateOpen}
+          onClose={() => {
+            if (groupCreateSubmitting) return
+            setGroupCreateOpen(false)
+          }}
+          fullWidth
+          maxWidth="sm"
+        >
+          <DialogTitle>Create group from selected rows</DialogTitle>
+          <DialogContent sx={{ pt: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Creates a new group using the currently selected holdings (works
+              with filters/screener).
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <TextField
+                label="Group name"
+                value={groupCreateName}
+                onChange={(e) => setGroupCreateName(e.target.value)}
+                size="small"
+                autoFocus
+                fullWidth
+              />
+              <TextField
+                label="Kind"
+                select
+                value={groupCreateKind}
+                onChange={(e) =>
+                  setGroupCreateKind(e.target.value as GroupKind)
+                }
+                size="small"
+                fullWidth
+              >
+                <MenuItem value="WATCHLIST">Watchlist</MenuItem>
+                <MenuItem value="MODEL_PORTFOLIO">Basket</MenuItem>
+                <MenuItem value="HOLDINGS_VIEW">Holdings view</MenuItem>
+              </TextField>
+              {groupCreateError && (
+                <Typography variant="body2" color="error">
+                  {groupCreateError}
+                </Typography>
+              )}
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              onClick={() => setGroupCreateOpen(false)}
+              disabled={groupCreateSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void createGroupFromSelection()}
+              disabled={groupCreateSubmitting}
+              variant="contained"
+            >
+              {groupCreateSubmitting ? 'Creating…' : 'Create group'}
+            </Button>
+          </DialogActions>
+        </Dialog>
       <Dialog
         open={bulkPriceDialogOpen}
         onClose={() => setBulkPriceDialogOpen(false)}
