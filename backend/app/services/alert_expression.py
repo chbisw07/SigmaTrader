@@ -7,6 +7,7 @@ from app.core.config import Settings
 from app.db.session import Session
 from app.models import Position
 from app.schemas.indicator_rules import IndicatorType
+from app.schemas.positions import HoldingRead
 from app.services.indicator_alerts import (
     IndicatorAlertError,
     IndicatorCondition,
@@ -317,6 +318,19 @@ def _compute_field_samples_for_expr(
     if invested > 0 and current_value is not None:
         pnl_pct = (current_value - invested) / invested * 100.0
 
+    today_pnl_pct: Optional[float] = None
+    if len(closes) >= 2:
+        prev_close = closes[-2]
+        if prev_close > 0:
+            today_pnl_pct = (closes[-1] - prev_close) / prev_close * 100.0
+
+    max_pnl_pct: Optional[float] = None
+    drawdown_pct: Optional[float] = None
+    if avg_price > 0 and closes:
+        pnl_series = [(c / avg_price - 1.0) * 100.0 for c in closes]
+        max_pnl_pct = max(pnl_series)
+        drawdown_pct = pnl_series[-1] - max_pnl_pct
+
     bar_time = candles[-1]["ts"] if candles else None
 
     samples: Dict[str, IndicatorSample] = {}
@@ -330,6 +344,89 @@ def _compute_field_samples_for_expr(
     _put("INVESTED", invested)
     _put("CURRENT_VALUE", current_value)
     _put("PNL_PCT", pnl_pct)
+    _put("TODAY_PNL_PCT", today_pnl_pct)
+    _put("MAX_PNL_PCT", max_pnl_pct)
+    _put("DRAWDOWN_PCT", drawdown_pct)
+    _put("DRAWDOWN_FROM_PEAK_PCT", drawdown_pct)
+
+    return samples
+
+
+def _compute_field_samples_for_holding(
+    db: Session,
+    settings: Settings,
+    *,
+    holding: HoldingRead,
+    expr: ExpressionNode,
+) -> Dict[str, IndicatorSample]:
+    field_names = {name.upper() for name in _iter_field_names(expr)}
+    if not field_names:
+        return {}
+
+    symbol = holding.symbol
+    exchange = (holding.exchange or "NSE").upper()
+
+    qty = float(holding.quantity)
+    avg_price = float(holding.average_price)
+    invested = qty * avg_price
+
+    last_price = float(holding.last_price) if holding.last_price is not None else None
+    if last_price is None:
+        candles = _load_candles_for_rule(db, settings, symbol, exchange, "1d")
+        closes = [float(c["close"]) for c in candles] if candles else []
+        last_price = closes[-1] if closes else None
+
+    current_value = qty * last_price if last_price is not None else None
+
+    pnl_pct: Optional[float] = None
+    if holding.total_pnl_percent is not None:
+        pnl_pct = float(holding.total_pnl_percent)
+    elif invested > 0 and current_value is not None:
+        pnl_pct = (current_value - invested) / invested * 100.0
+
+    today_pnl_pct: Optional[float] = None
+    if holding.today_pnl_percent is not None:
+        today_pnl_pct = float(holding.today_pnl_percent)
+    else:
+        candles = _load_candles_for_rule(db, settings, symbol, exchange, "1d")
+        closes = [float(c["close"]) for c in candles] if candles else []
+        if len(closes) >= 2:
+            prev_close = closes[-2]
+            if prev_close > 0:
+                today_pnl_pct = (closes[-1] - prev_close) / prev_close * 100.0
+
+    max_pnl_pct: Optional[float] = None
+    drawdown_pct: Optional[float] = None
+    if (
+        "MAX_PNL_PCT" in field_names
+        or "DRAWDOWN_PCT" in field_names
+        or "DRAWDOWN_FROM_PEAK_PCT" in field_names
+    ):
+        candles = _load_candles_for_rule(db, settings, symbol, exchange, "1d")
+        closes = [float(c["close"]) for c in candles] if candles else []
+        if avg_price > 0 and closes:
+            pnl_series = [(c / avg_price - 1.0) * 100.0 for c in closes]
+            max_pnl_pct = max(pnl_series)
+            drawdown_pct = pnl_series[-1] - max_pnl_pct
+
+    candles_for_time = _load_candles_for_rule(db, settings, symbol, exchange, "1d")
+    bar_time = candles_for_time[-1]["ts"] if candles_for_time else None
+
+    samples: Dict[str, IndicatorSample] = {}
+
+    def _put(name: str, value: Optional[float]) -> None:
+        if name in field_names:
+            samples[name] = IndicatorSample(value, None, bar_time)
+
+    _put("QTY", qty)
+    _put("AVG_PRICE", avg_price)
+    _put("INVESTED", invested)
+    _put("CURRENT_VALUE", current_value)
+    _put("PNL_PCT", pnl_pct)
+    _put("TODAY_PNL_PCT", today_pnl_pct)
+    _put("MAX_PNL_PCT", max_pnl_pct)
+    _put("DRAWDOWN_PCT", drawdown_pct)
+    _put("DRAWDOWN_FROM_PEAK_PCT", drawdown_pct)
 
     return samples
 
@@ -479,14 +576,47 @@ def evaluate_expression_for_symbol(
     return matched, indicator_samples
 
 
+def evaluate_expression_for_holding(
+    db: Session,
+    settings: Settings,
+    *,
+    holding: HoldingRead,
+    expr: ExpressionNode,
+) -> Tuple[bool, Dict[Tuple[str, str, Tuple[Tuple[str, Any], ...]], IndicatorSample]]:
+    """Evaluate an expression for a live holding snapshot."""
+
+    symbol = holding.symbol
+    exchange = (holding.exchange or "NSE").upper()
+
+    indicator_samples = _compute_indicator_samples_for_expr(
+        db,
+        settings,
+        symbol=symbol,
+        exchange=exchange,
+        expr=expr,
+    )
+    field_samples = _compute_field_samples_for_holding(
+        db,
+        settings,
+        holding=holding,
+        expr=expr,
+    )
+    if not indicator_samples and not field_samples:
+        return False, indicator_samples
+    matched = evaluate_expression(expr, indicator_samples, field_samples)
+    return matched, indicator_samples
+
+
 __all__ = [
     "IndicatorSpec",
     "IndicatorOperand",
     "NumberOperand",
+    "FieldOperand",
     "ComparisonNode",
     "LogicalNode",
     "NotNode",
     "expression_to_dict",
     "expression_from_dict",
     "evaluate_expression_for_symbol",
+    "evaluate_expression_for_holding",
 ]

@@ -23,7 +23,12 @@ from app.schemas.analytics import (
     RiskSizingResponse,
     SymbolCorrelationStats,
 )
+from app.services.alert_expression import (
+    evaluate_expression_for_holding,
+)
+from app.services.alert_expression_dsl import parse_expression
 from app.services.analytics import compute_strategy_analytics, rebuild_trades
+from app.services.indicator_alerts import IndicatorAlertError
 from app.services.market_data import Timeframe, load_series
 from app.services.risk_sizing import compute_risk_position_size
 
@@ -37,6 +42,14 @@ class AnalyticsSummaryParams(BaseModel):
     date_from: Optional[datetime] = None
     date_to: Optional[datetime] = None
     include_simulated: bool = False
+
+
+class HoldingsScreenerRequest(BaseModel):
+    dsl_expression: str
+
+
+class HoldingsScreenerResult(BaseModel):
+    matches: List[str]
 
 
 @router.post("/risk-sizing", response_model=RiskSizingResponse)
@@ -67,6 +80,97 @@ def risk_sizing_endpoint(payload: RiskSizingRequest) -> RiskSizingResponse:
         risk_per_share=result.risk_per_share,
         max_loss=result.max_loss,
     )
+
+
+@router.post(
+    "/holdings-screener-eval",
+    response_model=HoldingsScreenerResult,
+    status_code=status.HTTP_200_OK,
+)
+def holdings_screener_eval(
+    payload: HoldingsScreenerRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> HoldingsScreenerResult:
+    """Evaluate a DSL-based screener expression against the user's holdings.
+
+    This endpoint reuses the alert expression DSL and evaluation engine
+    to decide which holdings currently satisfy a given expression. It is
+    intentionally stateless and returns only the matching symbols; the
+    frontend can then filter its local holdings grid accordingly.
+    """
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    text = (payload.dsl_expression or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="DSL expression cannot be empty.",
+        )
+
+    try:
+        # parse_expression already validates syntax and semantics for the
+        # alert DSL and returns an ExpressionNode that can be evaluated.
+        expr = parse_expression(text)
+    except IndicatorAlertError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid DSL expression: {exc}",
+        ) from exc
+
+    # Lazy import to avoid circular imports at startup.
+    from app.api.positions import list_holdings
+
+    try:
+        holdings = list_holdings(db=db, settings=settings, user=user)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load holdings for screener evaluation: {exc}",
+        ) from exc
+
+    matches: List[str] = []
+    evaluated = 0
+    failures = 0
+    last_error: str | None = None
+    for h in holdings:
+        symbol = h.symbol
+        if not symbol:
+            continue
+        evaluated += 1
+        try:
+            matched, _samples = evaluate_expression_for_holding(
+                db,
+                settings,
+                holding=h,
+                expr=expr,
+            )
+        except (IndicatorAlertError, Exception) as exc:
+            failures += 1
+            last_error = str(exc)
+            matched = False
+        if matched:
+            matches.append(symbol)
+
+    if evaluated > 0 and failures == evaluated and last_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Unable to evaluate the screener against holdings. "
+                "Ensure market data is available for your holdings "
+                f"(last error: {last_error})."
+            ),
+        )
+
+    return HoldingsScreenerResult(matches=matches)
 
 
 @router.post("/rebuild-trades", response_model=AnalyticsRebuildResponse)

@@ -72,6 +72,10 @@ export type RiskSizingResponse = {
   max_loss: number
 }
 
+export type HoldingsScreenerResult = {
+  matches: string[]
+}
+
 export async function rebuildAnalyticsTrades(): Promise<{ created: number }> {
   const res = await fetch('/api/analytics/rebuild-trades', {
     method: 'POST',
@@ -208,4 +212,27 @@ export async function computeRiskSizing(
     throw new Error(message)
   }
   return (await res.json()) as RiskSizingResponse
+}
+
+export async function evaluateHoldingsScreenerDsl(
+  dslExpression: string,
+): Promise<HoldingsScreenerResult> {
+  const res = await fetch('/api/analytics/holdings-screener-eval', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dsl_expression: dslExpression }),
+  })
+  if (!res.ok) {
+    let message = `Failed to evaluate holdings screener (${res.status})`
+    try {
+      const data = (await res.json()) as { detail?: string }
+      if (data.detail) {
+        message = data.detail
+      }
+    } catch {
+      // Ignore parse errors.
+    }
+    throw new Error(message)
+  }
+  return (await res.json()) as HoldingsScreenerResult
 }

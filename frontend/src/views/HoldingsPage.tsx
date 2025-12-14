@@ -37,10 +37,9 @@ import { fetchHoldings, type Holding } from '../services/positions'
 import {
   fetchHoldingsCorrelation,
   type HoldingsCorrelationResult,
-} from '../services/analytics'
-import {
   computeRiskSizing,
   type RiskSizingResponse,
+  evaluateHoldingsScreenerDsl,
 } from '../services/analytics'
 import {
   createIndicatorRule,
@@ -99,6 +98,8 @@ type HoldingsFilterField =
   | 'volatility20d'
   | 'atr14'
   | 'volumeVsAvg20d'
+  | 'max_pnl_pct'
+  | 'drawdown_from_peak_pct'
   | 'unrealized_pnl'
   | 'pnl_percent'
   | 'today_pnl_percent'
@@ -126,6 +127,138 @@ type HoldingsFilterFieldConfig = {
   label: string
   type: 'string' | 'number'
   getValue: (row: HoldingRow) => string | number | null
+}
+
+const SIGMA_DSL_LANGUAGE_ID = 'sigma-dsl'
+const SIGMA_DSL_INDICATOR_SUGGESTIONS = [
+  'PRICE',
+  'RSI',
+  'SMA',
+  'MA',
+  'MA_CROSS',
+  'VOLATILITY',
+  'ATR',
+  'PERF_PCT',
+  'MOMENTUM',
+  'VOLUME_RATIO',
+  'VWAP',
+  'PVT',
+  'PVT_SLOPE',
+]
+const SIGMA_DSL_FIELD_SUGGESTIONS = [
+  'QTY',
+  'AVG_PRICE',
+  'INVESTED',
+  'CURRENT_VALUE',
+  'PNL_PCT',
+  'TODAY_PNL_PCT',
+  'MAX_PNL_PCT',
+  'DRAWDOWN_PCT',
+  'DRAWDOWN_FROM_PEAK_PCT',
+]
+const SIGMA_DSL_KEYWORD_SUGGESTIONS = [
+  'AND',
+  'OR',
+  'NOT',
+  'CROSS_ABOVE',
+  'CROSS_BELOW',
+]
+const SIGMA_DSL_TIMEFRAME_SUGGESTIONS = [
+  '1m',
+  '5m',
+  '15m',
+  '1h',
+  '1d',
+  '1mo',
+  '1y',
+]
+
+let sigmaDslCompletionsRegistered = false
+
+function ensureSigmaDsl(monaco: any) {
+  const alreadyRegistered = monaco.languages
+    .getLanguages()
+    .some((lang: { id?: string }) => lang.id === SIGMA_DSL_LANGUAGE_ID)
+  if (!alreadyRegistered) {
+    monaco.languages.register({ id: SIGMA_DSL_LANGUAGE_ID })
+  }
+
+  if (sigmaDslCompletionsRegistered) return
+  sigmaDslCompletionsRegistered = true
+
+  monaco.languages.registerCompletionItemProvider(SIGMA_DSL_LANGUAGE_ID, {
+    triggerCharacters: ['(', ',', ' '],
+    provideCompletionItems(model: any, position: any) {
+      const word = model.getWordUntilPosition(position)
+      const range = new monaco.Range(
+        position.lineNumber,
+        word.startColumn,
+        position.lineNumber,
+        word.endColumn,
+      )
+
+      const makeItems = (
+        labels: string[],
+        kind: any,
+      ) =>
+        labels.map((label) => ({
+          label,
+          kind,
+          insertText: label,
+          range,
+        }))
+
+      const suggestions = [
+        ...makeItems(
+          SIGMA_DSL_INDICATOR_SUGGESTIONS,
+          monaco.languages.CompletionItemKind.Function,
+        ),
+        ...makeItems(
+          SIGMA_DSL_FIELD_SUGGESTIONS,
+          monaco.languages.CompletionItemKind.Variable,
+        ),
+        ...makeItems(
+          SIGMA_DSL_KEYWORD_SUGGESTIONS,
+          monaco.languages.CompletionItemKind.Keyword,
+        ),
+        ...makeItems(
+          SIGMA_DSL_TIMEFRAME_SUGGESTIONS,
+          monaco.languages.CompletionItemKind.Constant,
+        ),
+      ]
+      return { suggestions }
+    },
+  })
+}
+
+function configureSigmaDslEditor(editor: any) {
+  editor.updateOptions({
+    quickSuggestions: { other: true, comments: false, strings: true },
+    suggestOnTriggerCharacters: true,
+    wordBasedSuggestions: 'off',
+    suggestSelection: 'first',
+    parameterHints: { enabled: true },
+  })
+
+  let suggestTimer: number | null = null
+  editor.onDidChangeModelContent((ev: any) => {
+    if (!editor.hasTextFocus()) return
+    const hasNonWhitespaceChange = (ev?.changes || []).some((c: any) =>
+      String(c?.text || '').trim().length > 0,
+    )
+    if (!hasNonWhitespaceChange) return
+
+    if (suggestTimer) {
+      window.clearTimeout(suggestTimer)
+    }
+    suggestTimer = window.setTimeout(() => {
+      try {
+        editor.trigger('sigma-dsl', 'editor.action.triggerSuggest', {})
+      } catch {
+        // Ignore suggestion errors.
+      }
+    }, 200)
+  })
 }
 
 const HOLDINGS_FILTER_FIELDS: HoldingsFilterFieldConfig[] = [
@@ -209,6 +342,18 @@ const HOLDINGS_FILTER_FIELDS: HoldingsFilterFieldConfig[] = [
     label: 'Vol / 20D Avg',
     type: 'number',
     getValue: (row) => row.indicators?.volumeVsAvg20d ?? null,
+  },
+  {
+    field: 'max_pnl_pct',
+    label: 'Max P&L % (since entry)',
+    type: 'number',
+    getValue: (row) => row.indicators?.maxPnlPct ?? null,
+  },
+  {
+    field: 'drawdown_from_peak_pct',
+    label: 'Drawdown from peak %',
+    type: 'number',
+    getValue: (row) => row.indicators?.drawdownFromPeakPct ?? null,
   },
   {
     field: 'unrealized_pnl',
@@ -323,6 +468,30 @@ export function HoldingsPage() {
 
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
   const [advancedFilters, setAdvancedFilters] = useState<HoldingsFilter[]>([])
+  const [screenerMode, setScreenerMode] = useState<'builder' | 'dsl'>(
+    'builder',
+  )
+  const [screenerLogicOperator, setScreenerLogicOperator] = useState<
+    GridLogicOperator
+  >(GridLogicOperator.And)
+  const [screenerDsl, setScreenerDsl] = useState<string>('')
+  const [screenerDslMatches, setScreenerDslMatches] = useState<string[] | null>(
+    null,
+  )
+  const [screenerDslError, setScreenerDslError] = useState<string | null>(null)
+  const [screenerDslLoading, setScreenerDslLoading] = useState(false)
+  const [screenerDslHelpOpen, setScreenerDslHelpOpen] = useState(false)
+
+  const handleScreenerDslMount: OnMount = (editor, monaco) => {
+    ensureSigmaDsl(monaco)
+
+    const model = editor.getModel()
+    if (model) {
+      monaco.editor.setModelLanguage(model, SIGMA_DSL_LANGUAGE_ID)
+    }
+
+    configureSigmaDslEditor(editor)
+  }
 
   const [viewMode, setViewMode] = useState<HoldingsViewMode>('default')
   const [columnVisibilityModel, setColumnVisibilityModel] =
@@ -589,10 +758,30 @@ export function HoldingsPage() {
     refreshSeconds,
   ])
 
-  const filteredRows =
-    advancedFilters.length === 0
-      ? holdings
-      : applyAdvancedFilters(holdings, advancedFilters)
+  let filteredRows: HoldingRow[] = holdings
+
+  // Builder-mode screener (advanced filters).
+  if (
+    screenerMode === 'builder'
+    && advancedFiltersOpen
+    && advancedFilters.length > 0
+  ) {
+    filteredRows = applyAdvancedFilters(
+      holdings,
+      advancedFilters,
+      screenerLogicOperator,
+    )
+  }
+
+  // DSL-mode screener: narrow to symbols returned by the backend.
+  if (
+    screenerMode === 'dsl'
+    && screenerDslMatches
+    && screenerDslMatches.length > 0
+  ) {
+    const matchSet = new Set<string>(screenerDslMatches)
+    filteredRows = holdings.filter((row) => matchSet.has(row.symbol))
+  }
 
   const totalActiveAlerts = holdings.reduce((acc, h) => {
     const found = h as HoldingRow & { _activeAlertCount?: number }
@@ -967,7 +1156,6 @@ export function HoldingsPage() {
     setTradeSubmitting(true)
     setTradeError(null)
     try {
-      let primaryCreated = false
       await createManualOrder({
         symbol: tradeSymbol,
         exchange:
@@ -980,7 +1168,6 @@ export function HoldingsPage() {
         product: tradeProduct,
         gtt: tradeGtt,
       })
-      primaryCreated = true
 
       if (tradeBracketEnabled && bracketPrice != null) {
         const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
@@ -1599,16 +1786,46 @@ export function HoldingsPage() {
             }}
             sx={{ mr: 1 }}
           >
-            {advancedFiltersOpen ? 'Hide filters' : 'Advanced filters'}
+            {advancedFiltersOpen ? 'Hide screener' : 'Screener'}
           </Button>
           {advancedFiltersOpen && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ verticalAlign: 'middle' }}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                flexWrap: 'wrap',
+              }}
             >
-              All conditions are combined with AND.
-            </Typography>
+              <Tabs
+                value={screenerMode}
+                onChange={(_event, value) =>
+                  setScreenerMode(value === 'dsl' ? 'dsl' : 'builder')
+                }
+                textColor="primary"
+                indicatorColor="primary"
+                sx={{
+                  minHeight: 32,
+                  '& .MuiTab-root': { minHeight: 32, paddingX: 1.5 },
+                }}
+              >
+                <Tab label="Builder" value="builder" />
+                <Tab label="DSL expression" value="dsl" />
+              </Tabs>
+              {screenerMode === 'builder' && (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ verticalAlign: 'middle' }}
+                >
+                  Conditions are combined with{' '}
+                  {screenerLogicOperator === GridLogicOperator.Or
+                    ? 'OR'
+                    : 'AND'}
+                  .
+                </Typography>
+              )}
+            </Box>
           )}
         </Box>
         <Box
@@ -1671,7 +1888,7 @@ export function HoldingsPage() {
         </Box>
       </Box>
 
-      {advancedFiltersOpen && (
+      {advancedFiltersOpen && screenerMode === 'builder' && (
         <Paper
           sx={{
             mb: 1,
@@ -1807,9 +2024,229 @@ export function HoldingsPage() {
                 Clear all
               </Button>
             )}
+            <TextField
+              label="Match mode"
+              select
+              size="small"
+              value={
+                screenerLogicOperator === GridLogicOperator.Or
+                  ? 'OR'
+                  : 'AND'
+              }
+              onChange={(e) =>
+                setScreenerLogicOperator(
+                  e.target.value === 'OR'
+                    ? GridLogicOperator.Or
+                    : GridLogicOperator.And,
+                )
+              }
+              sx={{ minWidth: 160 }}
+            >
+              <MenuItem value="AND">All conditions (AND)</MenuItem>
+              <MenuItem value="OR">Any condition (OR)</MenuItem>
+            </TextField>
           </Box>
         </Paper>
       )}
+
+      {advancedFiltersOpen && screenerMode === 'dsl' && (
+        <Paper
+          sx={{
+            mb: 1,
+            p: 1.5,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1,
+          }}
+        >
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+            }}
+          >
+            <Typography variant="subtitle2">DSL screener</Typography>
+            <Tooltip title="DSL help">
+              <IconButton
+                size="small"
+                onClick={() => setScreenerDslHelpOpen(true)}
+              >
+                <HelpOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            Use the same DSL as indicator alerts, e.g.
+            {' '}
+            <code>RSI(14, 1d) {'<'} 30 AND PERF_PCT(20, 1d) {'<'} -10</code>.
+          </Typography>
+          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+            <Editor
+              height="120px"
+              defaultLanguage="sigma-dsl"
+              value={screenerDsl}
+              onChange={(value) => {
+                setScreenerDsl(value ?? '')
+                setScreenerDslError(null)
+                setScreenerDslMatches(null)
+              }}
+              onMount={handleScreenerDslMount}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 12,
+                lineNumbers: 'off',
+                scrollBeyondLastLine: false,
+              }}
+            />
+          </Box>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+              flexWrap: 'wrap',
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={screenerDslLoading}
+                onClick={async () => {
+                  const expr = screenerDsl.trim()
+                  if (!expr) {
+                    setScreenerDslError('DSL expression cannot be empty.')
+                    setScreenerDslMatches(null)
+                    return
+                  }
+                  try {
+                    setScreenerDslLoading(true)
+                    setScreenerDslError(null)
+                    const res = await evaluateHoldingsScreenerDsl(expr)
+                    setScreenerDslMatches(res.matches)
+                    if (res.matches.length === 0) {
+                      setScreenerDslError(
+                        'No holdings currently match this expression.',
+                      )
+                    }
+                  } catch (err) {
+                    setScreenerDslMatches(null)
+                    setScreenerDslError(
+                      err instanceof Error
+                        ? err.message
+                        : 'Failed to evaluate screener.',
+                    )
+                  } finally {
+                    setScreenerDslLoading(false)
+                  }
+                }}
+              >
+                {screenerDslLoading ? 'Evaluating…' : 'Apply screener'}
+              </Button>
+              {screenerDslMatches && !screenerDslLoading && (
+                <Typography variant="caption" color="text.secondary">
+                  Matches:
+                  {' '}
+                  {screenerDslMatches.length}
+                </Typography>
+              )}
+            </Box>
+            {screenerDslError && (
+              <Typography variant="caption" color="error">
+                {screenerDslError}
+              </Typography>
+            )}
+          </Box>
+        </Paper>
+      )}
+
+      <Dialog
+        open={screenerDslHelpOpen}
+        onClose={() => setScreenerDslHelpOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>DSL screener help</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="subtitle2" gutterBottom>
+            Fields
+          </Typography>
+          <Typography variant="body2" paragraph>
+            You can reference holdings fields directly:
+            {' '}
+            <code>PNL_PCT</code>, <code>TODAY_PNL_PCT</code>,{' '}
+            <code>MAX_PNL_PCT</code>, <code>DRAWDOWN_PCT</code>,{' '}
+            <code>INVESTED</code>, <code>CURRENT_VALUE</code>,{' '}
+            <code>QTY</code>, <code>AVG_PRICE</code>.
+            {' '}
+            (<code>DRAWDOWN_FROM_PEAK_PCT</code> is accepted as an alias.)
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Indicators
+          </Typography>
+          <Typography variant="body2" paragraph>
+            Supported indicator functions:
+            {' '}
+            <code>PRICE(tf?)</code>, <code>RSI(period, tf?)</code>,{' '}
+            <code>MA(period, tf?)</code> / <code>SMA(period, tf?)</code>,{' '}
+            <code>VOLATILITY(period, tf?)</code>, <code>ATR(period, tf?)</code>,{' '}
+            <code>PERF_PCT(period, tf?)</code> / <code>MOMENTUM(period, tf?)</code>,{' '}
+            <code>VOLUME_RATIO(period, tf?)</code>, <code>VWAP(period, tf?)</code>,{' '}
+            <code>PVT(tf?)</code>, <code>PVT_SLOPE(period, tf?)</code>.
+          </Typography>
+          <Typography variant="body2" paragraph>
+            <strong>Notes:</strong>
+            {' '}
+            <code>tf</code> is optional and defaults to <code>1d</code>. Negative numbers are supported (e.g. <code>PNL_PCT {'<'} -10</code>).
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Operators
+          </Typography>
+          <Typography variant="body2" paragraph>
+            Comparisons:
+            {' '}
+            {'>'}, {'>='}, {'<'}, {'<='}, {'=='}, {'!='};
+            {' '}
+            cross:
+            {' '}
+            <code>CROSS_ABOVE</code>, <code>CROSS_BELOW</code>;
+            {' '}
+            boolean:
+            {' '}
+            <code>AND</code>, <code>OR</code>, <code>NOT</code>; use parentheses for grouping.
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Timeframes
+          </Typography>
+          <Typography variant="body2" paragraph>
+            <code>1m</code>, <code>5m</code>, <code>15m</code>, <code>1h</code>, <code>1d</code>, <code>1mo</code>, <code>1y</code>
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Examples
+          </Typography>
+          <Typography variant="body2">
+            Oversold:
+            {' '}
+            <code>RSI(14, 1d) {'<'} 30</code>
+          </Typography>
+          <Typography variant="body2">
+            Profit + pullback:
+            {' '}
+            <code>PNL_PCT {'>'} 10 AND DRAWDOWN_PCT {'<'} -5</code>
+          </Typography>
+          <Typography variant="body2">
+            Momentum / volatility filter:
+            {' '}
+            <code>MOMENTUM(20, 1d) {'>'} 5 AND VOLATILITY(20, 1d) {'<'} 3</code>
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setScreenerDslHelpOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Old chart-period-only box removed; merged into combined toolbar above */}
       {/* <Box
@@ -1853,7 +2290,6 @@ export function HoldingsPage() {
             columns={columns}
             getRowId={(row) => row.symbol}
             density="compact"
-            disableMultipleColumnsFiltering={false}
             columnVisibilityModel={columnVisibilityModel}
             onColumnVisibilityModelChange={(model) => {
               setColumnVisibilityModel(model)
@@ -2363,86 +2799,14 @@ function IndicatorAlertDialog({
   }
 
   const handleDslEditorMount: OnMount = (editor, monaco) => {
-    const languageId = 'sigma-dsl'
-    const alreadyRegistered = monaco.languages
-      .getLanguages()
-      .some((lang) => lang.id === languageId)
-    if (!alreadyRegistered) {
-      monaco.languages.register({ id: languageId })
-
-      const indicatorSuggestions = [
-        'PRICE',
-        'RSI',
-        'MA',
-        'VOLATILITY',
-        'ATR',
-        'PERF_PCT',
-        'VOLUME_RATIO',
-        'VWAP',
-        'PVT',
-        'PVT_SLOPE',
-      ]
-      const keywordSuggestions = [
-        'AND',
-        'OR',
-        'NOT',
-        'CROSS_ABOVE',
-        'CROSS_BELOW',
-      ]
-      const timeframeSuggestions = [
-        '1m',
-        '5m',
-        '15m',
-        '1h',
-        '1d',
-        '1mo',
-        '1y',
-      ]
-
-      monaco.languages.registerCompletionItemProvider(languageId, {
-        provideCompletionItems(model, position) {
-          const word = model.getWordUntilPosition(position)
-          const range = new monaco.Range(
-            position.lineNumber,
-            word.startColumn,
-            position.lineNumber,
-            word.endColumn,
-          )
-
-          const makeItems = (
-            labels: string[],
-            kind: monaco.languages.CompletionItemKind,
-          ) =>
-            labels.map((label) => ({
-              label,
-              kind,
-              insertText: label,
-              range,
-            }))
-
-          const suggestions = [
-            ...makeItems(
-              indicatorSuggestions,
-              monaco.languages.CompletionItemKind.Function,
-            ),
-            ...makeItems(
-              keywordSuggestions,
-              monaco.languages.CompletionItemKind.Keyword,
-            ),
-            ...makeItems(
-              timeframeSuggestions,
-              monaco.languages.CompletionItemKind.Constant,
-            ),
-          ]
-          return { suggestions }
-        },
-      })
-    }
+    ensureSigmaDsl(monaco)
 
     const model = editor.getModel()
     if (model) {
-      monaco.editor.setModelLanguage(model, languageId)
+      monaco.editor.setModelLanguage(model, SIGMA_DSL_LANGUAGE_ID)
     }
+
+    configureSigmaDslEditor(editor)
   }
 
   const buildSimpleDsl = (): string => {
@@ -2713,10 +3077,13 @@ function IndicatorAlertDialog({
       conditions = [cond]
     }
 
+    const universe =
+      applyScope === 'holdings' ? ('HOLDINGS' as const) : undefined
+
     const payload = {
       strategy_id: selectedStrategyId ?? undefined,
       symbol: applyScope === 'symbol' ? symbol : undefined,
-      universe: applyScope === 'holdings' ? 'HOLDINGS' : undefined,
+      universe,
       exchange: applyScope === 'symbol' ? exchange ?? 'NSE' : undefined,
       timeframe,
       logic: 'AND' as const,
@@ -3155,8 +3522,17 @@ function IndicatorAlertDialog({
           <Typography variant="body2" paragraph>
             Supported indicator functions:
             {' '}
-            PRICE, RSI, MA, VOLATILITY, ATR, PERF_PCT, VOLUME_RATIO, VWAP,
-            PVT, PVT_SLOPE.
+            PRICE, RSI, MA / SMA, VOLATILITY, ATR, PERF_PCT / MOMENTUM,
+            VOLUME_RATIO, VWAP, PVT, PVT_SLOPE.
+          </Typography>
+          <Typography variant="subtitle2" gutterBottom>
+            Fields
+          </Typography>
+          <Typography variant="body2" paragraph>
+            You can reference holding fields in DSL:
+            {' '}
+            PNL_PCT, TODAY_PNL_PCT, MAX_PNL_PCT, DRAWDOWN_PCT, INVESTED,
+            CURRENT_VALUE, QTY, AVG_PRICE.
           </Typography>
           <Typography variant="subtitle2" gutterBottom>
             Operators
@@ -3425,6 +3801,7 @@ function computeHoldingIndicators(
 function applyAdvancedFilters(
   rows: HoldingRow[],
   filters: HoldingsFilter[],
+  logicOperator: GridLogicOperator,
 ): HoldingRow[] {
   if (!filters.length) return rows
 
@@ -3433,8 +3810,9 @@ function applyAdvancedFilters(
   )
   if (!activeFilters.length) return rows
 
-  return rows.filter((row) =>
-    activeFilters.every((filter) => {
+  const useAnd = logicOperator !== GridLogicOperator.Or
+
+  const matches = (row: HoldingRow, filter: HoldingsFilter): boolean => {
       const fieldConfig = getFieldConfig(filter.field)
       const rawVal = fieldConfig.getValue(row)
 
@@ -3483,6 +3861,11 @@ function applyAdvancedFilters(
         default:
           return true
       }
-    }),
+    }
+
+  return rows.filter((row) =>
+    useAnd
+      ? activeFilters.every((filter) => matches(row, filter))
+      : activeFilters.some((filter) => matches(row, filter)),
   )
 }

@@ -180,6 +180,45 @@ def _compute_volume_ratio(volumes: Sequence[float], window: int) -> Optional[flo
     return today / avg
 
 
+def _compute_vwap(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[float],
+    window: int,
+) -> Optional[float]:
+    """Compute a simple rolling VWAP over the last `window` bars.
+
+    Uses typical price (H+L+C)/3 as the price proxy and weights by volume.
+    """
+
+    if window <= 0:
+        return None
+    if (
+        len(highs) < window
+        or len(lows) < window
+        or len(closes) < window
+        or len(volumes) < window
+    ):
+        return None
+
+    num = 0.0
+    den = 0.0
+    for high, low, close, vol in zip(
+        highs[-window:],
+        lows[-window:],
+        closes[-window:],
+        volumes[-window:],
+        strict=False,
+    ):
+        typical = (high + low + close) / 3.0
+        num += typical * vol
+        den += vol
+    if den == 0:
+        return None
+    return num / den
+
+
 def _compute_pvt_series(
     closes: Sequence[float],
     volumes: Sequence[float],
@@ -272,6 +311,18 @@ def _compute_indicator_sample(
         window = int(params.get("window", params.get("period", 20)))
         value = _compute_volume_ratio(volumes, window)
         prev = None
+    elif indicator == "VWAP":
+        window = int(params.get("window", params.get("period", 14)))
+        value = _compute_vwap(highs, lows, closes, volumes, window)
+        prev = None
+        if len(closes) >= window + 1:
+            prev = _compute_vwap(
+                highs[:-1],
+                lows[:-1],
+                closes[:-1],
+                volumes[:-1],
+                window,
+            )
     elif indicator == "PVT":
         pvt = _compute_pvt_series(closes, volumes)
         if not pvt:
