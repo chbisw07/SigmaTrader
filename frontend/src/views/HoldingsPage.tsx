@@ -28,6 +28,7 @@ import {
   type GridCellParams,
   type GridColumnVisibilityModel,
   GridLogicOperator,
+  type GridRowSelectionModel,
 } from '@mui/x-data-grid'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -472,6 +473,22 @@ export function HoldingsPage() {
   >('ABSOLUTE')
   const [tradeStopPrice, setTradeStopPrice] = useState<string>('')
   const [tradeMaxLoss, setTradeMaxLoss] = useState<number | null>(null)
+  const [bulkTradeHoldings, setBulkTradeHoldings] = useState<HoldingRow[]>([])
+  const [rowSelectionModel, setRowSelectionModel] =
+    useState<GridRowSelectionModel>([])
+  const [bulkPriceOverrides, setBulkPriceOverrides] = useState<
+    Record<string, string>
+  >({})
+  const [bulkAmountOverrides, setBulkAmountOverrides] = useState<
+    Record<string, string>
+  >({})
+  const [bulkPriceDialogOpen, setBulkPriceDialogOpen] = useState(false)
+  const [bulkAmountDialogOpen, setBulkAmountDialogOpen] = useState(false)
+  const [bulkPctDialogOpen, setBulkPctDialogOpen] = useState(false)
+  const [bulkRedistributeRemainder, setBulkRedistributeRemainder] =
+    useState(true)
+  const [bulkAmountManual, setBulkAmountManual] = useState(false)
+  const [bulkAmountBudget, setBulkAmountBudget] = useState<string>('')
 
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
@@ -578,6 +595,13 @@ export function HoldingsPage() {
       }
       setPortfolioValue(total > 0 ? total : null)
       setHoldings(baseRows)
+      setRowSelectionModel((prev) =>
+        prev.filter((id) => baseRows.some((row) => row.symbol === id)),
+      )
+      if (!isBulkTrade) {
+        setBulkPriceOverrides({})
+        setBulkAmountOverrides({})
+      }
       setError(null)
 
       // Kick off background enrichment with OHLCV history and indicators.
@@ -824,6 +848,145 @@ export function HoldingsPage() {
     return acc + (found._activeAlertCount ?? 0)
   }, 0)
 
+  const isBulkTrade = bulkTradeHoldings.length > 0
+
+  const getDisplayPrice = (holding: HoldingRow): number | null => {
+    if (holding.last_price != null && Number.isFinite(Number(holding.last_price))) {
+      const v = Number(holding.last_price)
+      return v > 0 ? v : null
+    }
+    if (
+      holding.average_price != null
+      && Number.isFinite(Number(holding.average_price))
+    ) {
+      const v = Number(holding.average_price)
+      return v > 0 ? v : null
+    }
+    return null
+  }
+
+  const getPerHoldingPriceForSizing = (holding: HoldingRow): number | null => {
+    const override = bulkPriceOverrides[holding.symbol]
+    if (isBulkTrade && override != null && override.trim() !== '') {
+      const v = Number(override)
+      if (Number.isFinite(v) && v > 0) return v
+    }
+    return getDisplayPrice(holding)
+  }
+
+  const computeUsedTotalFromAmountOverrides = (
+    overrides: Record<string, string>,
+  ): number => {
+    let total = 0
+    for (const h of bulkTradeHoldings) {
+      const raw = overrides[h.symbol]
+      const amount = raw != null && String(raw).trim() !== '' ? Number(raw) : 0
+      if (Number.isFinite(amount) && amount > 0) {
+        total += amount
+      }
+    }
+    return total
+  }
+
+  const computeAutoBulkAmountOverrides = (
+    totalBudget: number,
+  ): { overrides: Record<string, string>; usedTotal: number } => {
+    const count = bulkTradeHoldings.length
+    if (!Number.isFinite(totalBudget) || totalBudget <= 0 || count === 0) {
+      return { overrides: {}, usedTotal: 0 }
+    }
+
+    const baseShare = totalBudget / count
+    const prices: Record<string, number> = {}
+    const firstPass: Record<string, number> = {}
+    const eligible: HoldingRow[] = []
+    let usedTotal = 0
+
+    for (const h of bulkTradeHoldings) {
+      const price = getPerHoldingPriceForSizing(h)
+      prices[h.symbol] = price ?? 0
+      if (!price || !Number.isFinite(price) || price <= 0) {
+        firstPass[h.symbol] = 0
+        continue
+      }
+      let qty = Math.floor(baseShare / price)
+      if (tradeSide === 'SELL' && h.quantity != null) {
+        const maxQty = Math.floor(Number(h.quantity))
+        if (Number.isFinite(maxQty) && maxQty >= 0 && qty > maxQty) {
+          qty = maxQty
+        }
+      }
+      if (qty <= 0) {
+        firstPass[h.symbol] = 0
+        continue
+      }
+      const amt = qty * price
+      firstPass[h.symbol] = amt
+      usedTotal += amt
+      eligible.push(h)
+    }
+
+    const leftover = totalBudget - usedTotal
+    const finalAmounts: Record<string, number> = { ...firstPass }
+    if (bulkRedistributeRemainder && leftover > 0 && eligible.length > 0) {
+      const extraShare = leftover / eligible.length
+      for (const h of eligible) {
+        const price = prices[h.symbol]
+        if (!price || !Number.isFinite(price) || price <= 0) continue
+        let extraQty = Math.floor(extraShare / price)
+        if (tradeSide === 'SELL' && h.quantity != null) {
+          const maxQty = Math.floor(Number(h.quantity))
+          if (Number.isFinite(maxQty) && maxQty >= 0) {
+            const already = finalAmounts[h.symbol] ?? 0
+            const alreadyQty = Math.floor(already / price)
+            const remaining = maxQty - alreadyQty
+            extraQty = remaining > 0 ? Math.min(extraQty, remaining) : 0
+          }
+        }
+        if (extraQty <= 0) continue
+        finalAmounts[h.symbol] += extraQty * price
+      }
+    }
+
+    const overrides: Record<string, string> = {}
+    usedTotal = 0
+    for (const h of bulkTradeHoldings) {
+      const amt = finalAmounts[h.symbol] ?? 0
+      const normalized = Number.isFinite(amt) && amt > 0 ? amt : 0
+      overrides[h.symbol] = normalized.toFixed(2)
+      usedTotal += normalized
+    }
+
+    return { overrides, usedTotal }
+  }
+
+  useEffect(() => {
+    if (!isBulkTrade) return
+    if (tradeSizeMode !== 'AMOUNT') return
+    if (bulkAmountManual) return
+    const budgetRaw = Number(bulkAmountBudget)
+    if (!Number.isFinite(budgetRaw) || budgetRaw <= 0) return
+    const { overrides, usedTotal } = computeAutoBulkAmountOverrides(budgetRaw)
+    setBulkAmountOverrides(overrides)
+    setTradeAmount(
+      usedTotal > 0 && Number.isFinite(usedTotal) ? usedTotal.toFixed(2) : '',
+    )
+  }, [bulkRedistributeRemainder, tradeSide])
+
+  const formatPriceForHolding = (holding: HoldingRow): string => {
+    const override = bulkPriceOverrides[holding.symbol]
+    if (isBulkTrade && override != null && override.trim() !== '') {
+      return override.trim()
+    }
+    const base = getDisplayPrice(holding)
+    if (base == null || !Number.isFinite(base) || base <= 0) return '-'
+    return base.toFixed(2)
+  }
+
+  const bulkPriceSummary = isBulkTrade
+    ? bulkTradeHoldings.map((h) => formatPriceForHolding(h)).join(', ')
+    : ''
+
   const enrichHoldingsWithHistory = async (rows: HoldingRow[]) => {
     for (const row of rows) {
       try {
@@ -855,7 +1018,10 @@ export function HoldingsPage() {
     setAlertOpen(true)
   }
 
-  const getSizingPrice = (holding: HoldingRow | null): number | null => {
+  function getSizingPrice(holding: HoldingRow | null): number | null {
+    if (isBulkTrade && holding) {
+      return getPerHoldingPriceForSizing(holding)
+    }
     const fromField =
       tradePrice.trim() !== '' ? Number(tradePrice.trim()) : null
     if (fromField != null && Number.isFinite(fromField) && fromField > 0) {
@@ -881,6 +1047,80 @@ export function HoldingsPage() {
     const qty = holding.quantity != null ? Number(holding.quantity) : 0
     if (!Number.isFinite(qty) || qty <= 0) return null
     return qty * price
+  }
+
+  const computeQtyForHolding = (holding: HoldingRow): number | null => {
+    const price = getSizingPrice(holding)
+    const positionValue = getPositionValue(holding, price)
+
+    if (
+      price == null
+      || !Number.isFinite(price)
+      || price <= 0
+    ) {
+      return null
+    }
+
+    const clampSellQty = (qty: number): number => {
+      if (tradeSide !== 'SELL' || holding.quantity == null) return qty
+      const maxQty = Math.floor(Number(holding.quantity))
+      if (!Number.isFinite(maxQty) || maxQty <= 0) return 0
+      return qty > maxQty ? maxQty : qty
+    }
+
+    if (tradeSizeMode === 'AMOUNT') {
+      if (isBulkTrade && bulkAmountOverrides[holding.symbol] == null) {
+        return null
+      }
+      const rawAmountStr = isBulkTrade
+        ? bulkAmountOverrides[holding.symbol] ?? tradeAmount
+        : tradeAmount
+      const rawAmount = Number(rawAmountStr)
+      if (!Number.isFinite(rawAmount) || rawAmount <= 0) return null
+      let qty = Math.floor(rawAmount / price)
+      qty = clampSellQty(qty)
+      return Number.isFinite(qty) && qty > 0 ? qty : null
+    }
+
+    if (tradeSizeMode === 'PCT_POSITION') {
+      const rawPct = Number(tradePctEquity)
+      if (
+        !Number.isFinite(rawPct)
+        || rawPct <= 0
+        || positionValue == null
+        || positionValue <= 0
+      ) {
+        return null
+      }
+      const amountTarget = (rawPct / 100) * positionValue
+      let qty = Math.floor(amountTarget / price)
+      qty = clampSellQty(qty)
+      return Number.isFinite(qty) && qty > 0 ? qty : null
+    }
+
+    if (tradeSizeMode === 'PCT_PORTFOLIO') {
+      const rawPct = Number(tradePctEquity)
+      const total = portfolioValue
+      if (
+        !Number.isFinite(rawPct)
+        || rawPct <= 0
+        || total == null
+        || total <= 0
+      ) {
+        return null
+      }
+      const targetNotional = (rawPct / 100) * total
+      let qty = Math.floor(targetNotional / price)
+      qty = clampSellQty(qty)
+      return Number.isFinite(qty) && qty > 0 ? qty : null
+    }
+
+    // Default to quantity-based sizing (including RISK mode, which uses the
+    // quantity computed by the risk helper).
+    const rawQty = Math.floor(Number(tradeQty))
+    if (!Number.isFinite(rawQty) || rawQty <= 0) return null
+    const qty = clampSellQty(rawQty)
+    return qty > 0 ? qty : null
   }
 
   const recalcFromQty = (qtyStr: string, side: 'BUY' | 'SELL') => {
@@ -988,6 +1228,7 @@ export function HoldingsPage() {
       || positionValue <= 0
     ) {
       setTradeQty('')
+      setTradeAmount('')
       return
     }
 
@@ -1001,19 +1242,14 @@ export function HoldingsPage() {
     }
 
     if (!Number.isFinite(qty) || qty <= 0) {
-      // Below the minimum needed for one share: treat as 0% of position.
       setTradeQty('')
       setTradeAmount('')
-      setTradePctEquity('0')
       return
     }
 
     setTradeQty(String(qty))
     const normalisedAmount = qty * price
     setTradeAmount(normalisedAmount.toFixed(2))
-
-    const pct = (normalisedAmount / positionValue) * 100
-    setTradePctEquity(pct.toFixed(2))
   }
 
   const recalcFromPctPortfolio = (pctStr: string) => {
@@ -1047,10 +1283,8 @@ export function HoldingsPage() {
     }
 
     if (!Number.isFinite(qty) || qty <= 0) {
-      // Below the minimum needed for one share: treat as 0% of portfolio.
       setTradeQty('')
       setTradeAmount('')
-      setTradePctEquity('0')
       return
     }
 
@@ -1095,35 +1329,34 @@ export function HoldingsPage() {
 
   const closeTradeDialog = () => {
     if (tradeSubmitting) return
+    setBulkTradeHoldings([])
+    setBulkPriceOverrides({})
+    setBulkAmountOverrides({})
+    setBulkAmountManual(false)
+    setBulkAmountBudget('')
     setTradeOpen(false)
   }
 
   const handleSubmitTrade = async () => {
-    const qtyNum = Number(tradeQty)
-    if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
-      setTradeError('Quantity must be a positive number.')
-      return
-    }
-    const holding =
+    const primaryHolding =
       tradeHolding ?? holdings.find((h) => h.symbol === tradeSymbol) ?? null
-    if (
-      tradeSide === 'SELL'
-      && holding?.quantity != null
-      && qtyNum > Number(holding.quantity)
-    ) {
-      setTradeError(
-        `Quantity exceeds holding quantity (${holding.quantity}).`,
-      )
+    const targets = isBulkTrade
+      ? bulkTradeHoldings
+      : primaryHolding
+        ? [primaryHolding]
+        : []
+    if (!targets.length) {
+      setTradeError('No holdings selected for trade.')
       return
     }
     const priceNumRaw =
-      tradeOrderType === 'MARKET' || tradePrice.trim() === ''
+      tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M' || tradePrice.trim() === ''
         ? null
         : Number(tradePrice)
     const priceNum =
-      priceNumRaw != null && Number.isFinite(priceNumRaw)
+      priceNumRaw != null && Number.isFinite(priceNumRaw) && priceNumRaw > 0
         ? priceNumRaw
-        : priceNumRaw
+        : null
     if (priceNum != null && (!Number.isFinite(priceNum) || priceNum < 0)) {
       setTradeError('Price must be a non-negative number.')
       return
@@ -1155,73 +1388,159 @@ export function HoldingsPage() {
       return
     }
 
-    const effectivePriceForBracket = getEffectivePrimaryPrice()
-
-    // If bracket is enabled, validate MTP and compute the bracket price
-    // up front so we can surface any issues before creating orders.
-    let bracketPrice: number | null = null
+    // If bracket is enabled, validate MTP up front so that any issues
+    // are surfaced before placing orders. Per-holding bracket prices are
+    // computed below.
+    let mtpValue: number | null = null
     if (tradeBracketEnabled) {
       const mtp = Number(tradeMtpPct)
       if (!Number.isFinite(mtp) || mtp <= 0) {
         setTradeError('Min target profit (MTP) must be a positive number.')
         return
       }
-      if (effectivePriceForBracket == null || effectivePriceForBracket <= 0) {
+      mtpValue = mtp
+    }
+
+    // Pre-compute per-holding quantities and optional bracket prices so
+    // that validation errors are reported before any orders are placed.
+    const plans: {
+      holding: HoldingRow
+      qty: number
+      price: number | null
+      bracketPrice: number | null
+    }[] = []
+    const skippedHoldings: string[] = []
+
+    for (const h of targets) {
+      const qty = computeQtyForHolding(h)
+      if (qty == null || qty <= 0) {
+        if (isBulkTrade) {
+          skippedHoldings.push(h.symbol)
+          continue
+        }
         setTradeError(
-          'Cannot compute bracket price: primary price is not available.',
+          `Could not compute a valid quantity for ${h.symbol}. Check sizing inputs.`,
         )
         return
       }
-      const m = mtp / 100
-      if (!Number.isFinite(m) || m <= 0) {
-        setTradeError('Invalid MTP value.')
+
+      const perHoldingPrice =
+        tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'
+          ? null
+          : isBulkTrade
+            ? getEffectivePrimaryPriceForHolding(h)
+            : priceNum
+
+      if (
+        (tradeOrderType === 'LIMIT' || tradeOrderType === 'SL')
+        && (perHoldingPrice == null || !Number.isFinite(perHoldingPrice) || perHoldingPrice <= 0)
+      ) {
+        if (isBulkTrade) {
+          skippedHoldings.push(h.symbol)
+          continue
+        }
+        setTradeError(`Price is required for ${tradeOrderType} orders.`)
         return
       }
-      if (tradeSide === 'BUY') {
-        bracketPrice = effectivePriceForBracket * (1 + m)
-      } else {
-        bracketPrice = effectivePriceForBracket / (1 + m)
+
+      let bracketPrice: number | null = null
+      if (tradeBracketEnabled && mtpValue != null) {
+        const base = getEffectivePrimaryPriceForHolding(h)
+        if (base == null || base <= 0) {
+          if (isBulkTrade) {
+            skippedHoldings.push(h.symbol)
+            continue
+          }
+          setTradeError(
+            `Cannot compute bracket price for ${h.symbol}: price is not available.`,
+          )
+          return
+        }
+        const m = mtpValue / 100
+        if (!Number.isFinite(m) || m <= 0) {
+          setTradeError('Invalid MTP value.')
+          return
+        }
+        if (tradeSide === 'BUY') {
+          bracketPrice = base * (1 + m)
+        } else {
+          bracketPrice = base / (1 + m)
+        }
+        if (!Number.isFinite(bracketPrice) || bracketPrice <= 0) {
+          setTradeError(
+            `Computed bracket price is invalid for ${h.symbol}.`,
+          )
+          return
+        }
+        bracketPrice = Number(bracketPrice.toFixed(2))
       }
-      if (!Number.isFinite(bracketPrice) || bracketPrice <= 0) {
-        setTradeError('Computed bracket price is invalid.')
-        return
-      }
-      bracketPrice = Number(bracketPrice.toFixed(2))
+
+      plans.push({ holding: h, qty, price: perHoldingPrice, bracketPrice })
+    }
+
+    if (plans.length === 0) {
+      setTradeError(
+        skippedHoldings.length > 0
+          ? 'No eligible holdings to place orders (all computed quantities are 0).'
+          : 'No eligible holdings to place orders.',
+      )
+      return
     }
 
     setTradeSubmitting(true)
     setTradeError(null)
     try {
-      await createManualOrder({
-        symbol: tradeSymbol,
-        exchange:
-          holdings.find((h) => h.symbol === tradeSymbol)?.exchange ?? 'NSE',
-        side: tradeSide,
-        qty: qtyNum,
-        price: priceNum,
-        trigger_price: triggerPriceNum,
-        order_type: tradeOrderType,
-        product: tradeProduct,
-        gtt: tradeGtt,
-      })
+      const results = await Promise.allSettled(
+        plans.map(async ({ holding, qty, price, bracketPrice }) => {
+          await createManualOrder({
+            symbol: holding.symbol,
+            exchange: holding.exchange ?? 'NSE',
+            side: tradeSide,
+            qty,
+            price,
+            trigger_price: triggerPriceNum,
+            order_type: tradeOrderType,
+            product: tradeProduct,
+            gtt: tradeGtt,
+          })
 
-      if (tradeBracketEnabled && bracketPrice != null) {
-        const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
-        await createManualOrder({
-          symbol: tradeSymbol,
-          exchange:
-            holdings.find((h) => h.symbol === tradeSymbol)?.exchange ?? 'NSE',
-          side: bracketSide,
-          qty: qtyNum,
-          price: bracketPrice,
-          order_type: 'LIMIT',
-          product: tradeProduct,
-          gtt: true,
-        })
+          if (tradeBracketEnabled && bracketPrice != null) {
+            const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
+            await createManualOrder({
+              symbol: holding.symbol,
+              exchange: holding.exchange ?? 'NSE',
+              side: bracketSide,
+              qty,
+              price: bracketPrice,
+              order_type: 'LIMIT',
+              product: tradeProduct,
+              gtt: true,
+            })
+          }
+        }),
+      )
+
+      const failed = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      )
+      if (failed.length > 0) {
+        const first = failed[0]
+        const message =
+          first.reason instanceof Error
+            ? first.reason.message
+            : String(first.reason ?? 'Unknown error')
+        setTradeError(
+          failed.length === plans.length
+            ? `Failed to create orders: ${message}`
+            : `Some orders failed (${failed.length}/${plans.length}): ${message}`,
+        )
+        setTradeSubmitting(false)
+        return
       }
 
       // Close the dialog as soon as the orders are accepted so the UI
       // feels snappy; refresh holdings in the background.
+      setBulkTradeHoldings([])
       setTradeOpen(false)
       setTradeSubmitting(false)
       void load()
@@ -1256,8 +1575,19 @@ export function HoldingsPage() {
       ? (sizingPrice / portfolioValue) * 100
       : 1
 
-  const getEffectivePrimaryPrice = (): number | null => {
-    // Prefer explicit price when provided for LIMIT/SL types; otherwise
+  const getEffectivePrimaryPriceForHolding = (
+    holding: HoldingRow | null,
+  ): number | null => {
+    // In bulk mode, prefer per-holding overrides when provided.
+    if (isBulkTrade && holding) {
+      const override = bulkPriceOverrides[holding.symbol]
+      if (override != null && override.trim() !== '') {
+        const p = Number(override)
+        if (Number.isFinite(p) && p > 0) return p
+      }
+    }
+
+    // Otherwise prefer explicit price when provided for LIMIT/SL types;
     // fall back to the sizing price (typically last_price).
     if (
       tradeOrderType !== 'MARKET'
@@ -1266,9 +1596,36 @@ export function HoldingsPage() {
       const p = Number(tradePrice)
       if (Number.isFinite(p) && p > 0) return p
     }
-    return sizingPrice != null && Number.isFinite(sizingPrice) && sizingPrice > 0
-      ? sizingPrice
+    const localSizingPrice = getSizingPrice(holding)
+    return localSizingPrice != null
+      && Number.isFinite(localSizingPrice)
+      && localSizingPrice > 0
+      ? localSizingPrice
       : null
+  }
+
+  const getEffectivePrimaryPrice = (): number | null =>
+    getEffectivePrimaryPriceForHolding(tradeHolding)
+
+  const getEffectivePctOfPositionForHolding = (
+    holding: HoldingRow,
+  ): number | null => {
+    const qty = computeQtyForHolding(holding)
+    if (qty == null || qty <= 0) return null
+    const price = getSizingPrice(holding)
+    const positionValue = getPositionValue(holding, price)
+    if (
+      price == null
+      || !Number.isFinite(price)
+      || price <= 0
+      || positionValue == null
+      || positionValue <= 0
+    ) {
+      return null
+    }
+    const notional = qty * price
+    const pct = (notional / positionValue) * 100
+    return Number.isFinite(pct) ? Number(pct.toFixed(2)) : null
   }
 
   const getBracketPreviewPrice = (): number | null => {
@@ -1363,6 +1720,54 @@ export function HoldingsPage() {
       )
     }
   }
+
+  const bulkTotalAmountLabel =
+    isBulkTrade
+      ? (() => {
+          let total = 0
+          for (const h of bulkTradeHoldings) {
+            const qty = computeQtyForHolding(h)
+            const price = getPerHoldingPriceForSizing(h)
+            if (
+              qty != null
+              && qty > 0
+              && price != null
+              && Number.isFinite(price)
+              && price > 0
+            ) {
+              total += qty * price
+            }
+          }
+          return total > 0 && Number.isFinite(total)
+            ? total.toFixed(2)
+            : ''
+        })()
+      : tradeAmount
+
+  const bulkQtySummary =
+    isBulkTrade && tradeSizeMode === 'AMOUNT'
+      ? bulkTradeHoldings
+          .map((h) => {
+            const qty = computeQtyForHolding(h)
+            return qty != null && Number.isFinite(qty) && qty > 0
+              ? String(qty)
+              : '0'
+          })
+          .join(', ')
+      : tradeQty
+
+  const bulkPctSummary =
+    isBulkTrade && (tradeSizeMode === 'QTY' || tradeSizeMode === 'AMOUNT')
+      ? bulkTradeHoldings
+          .map((h) => {
+            const qty = computeQtyForHolding(h) ?? 0
+            if (!Number.isFinite(qty) || qty <= 0) return '0.00'
+            const pct = getEffectivePctOfPositionForHolding(h)
+            if (pct == null || !Number.isFinite(pct)) return '0.00'
+            return pct.toFixed(2)
+          })
+          .join(', ')
+      : tradePctEquity
 
   const columns: GridColDef[] = [
     {
@@ -1922,35 +2327,74 @@ export function HoldingsPage() {
               flexWrap: 'wrap',
               justifyContent: 'flex-end',
             }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="caption" color="text.secondary">
-                View:
-              </Typography>
-              <Select
-                size="small"
-                value={viewMode}
-                onChange={(e) => {
-                  const mode =
-                    e.target.value === 'risk' ? 'risk' : 'default'
-                  setViewMode(mode)
-                  if (typeof window !== 'undefined') {
-                    try {
-                      window.localStorage.setItem(
-                        'st_holdings_view_v1',
-                        mode,
-                      )
-                    } catch {
-                      // Ignore persistence errors.
-                    }
-                  }
-                }}
-                sx={{ minWidth: 120 }}
-              >
-                <MenuItem value="default">Default</MenuItem>
-                <MenuItem value="risk">Risk view</MenuItem>
-              </Select>
-            </Box>
+	          >
+	          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+	            <Typography variant="caption" color="text.secondary">
+	              View:
+	            </Typography>
+	            <Select
+	              size="small"
+	              value={viewMode}
+	              onChange={(e) => {
+	                const mode =
+	                  e.target.value === 'risk' ? 'risk' : 'default'
+	                setViewMode(mode)
+	                if (typeof window !== 'undefined') {
+	                  try {
+	                    window.localStorage.setItem(
+	                      'st_holdings_view_v1',
+	                      mode,
+	                    )
+	                  } catch {
+	                    // Ignore persistence errors.
+	                  }
+	                }
+	              }}
+	              sx={{ minWidth: 120 }}
+	            >
+	              <MenuItem value="default">Default</MenuItem>
+	              <MenuItem value="risk">Risk view</MenuItem>
+	            </Select>
+	          </Box>
+	          <Button
+	            size="small"
+	            variant="contained"
+	            onClick={() => {
+	              const selected = holdings.filter((h) =>
+	                rowSelectionModel.includes(h.symbol),
+	              )
+		              if (!selected.length) return
+		              setBulkTradeHoldings(selected)
+		              setBulkPriceOverrides({})
+		              setBulkAmountOverrides({})
+		              setBulkAmountManual(false)
+		              setBulkAmountBudget('')
+		              openTradeDialog(selected[0], 'BUY')
+		            }}
+	            disabled={rowSelectionModel.length === 0}
+	          >
+	            Bulk buy
+	          </Button>
+	          <Button
+	            size="small"
+	            variant="contained"
+	            color="error"
+	            onClick={() => {
+	              const selected = holdings.filter((h) =>
+	                rowSelectionModel.includes(h.symbol),
+	              )
+		              if (!selected.length) return
+		              setBulkTradeHoldings(selected)
+		              setBulkPriceOverrides({})
+		              setBulkAmountOverrides({})
+		              setBulkAmountManual(false)
+		              setBulkAmountBudget('')
+		              openTradeDialog(selected[0], 'SELL')
+		            }}
+	            disabled={rowSelectionModel.length === 0}
+	          >
+	            Bulk sell
+	          </Button>
             <Button
               size="small"
               variant="outlined"
@@ -2413,11 +2857,16 @@ export function HoldingsPage() {
           {error}
         </Typography>
       ) : (
-        <Paper sx={{ mt: 1, height: 600, width: '100%' }}>
+        <Paper sx={{ mt: 1, height: '70vh', width: '100%' }}>
           <DataGrid
             rows={filteredRows}
             columns={columns}
             getRowId={(row) => row.symbol}
+            checkboxSelection
+            rowSelectionModel={rowSelectionModel}
+            onRowSelectionModelChange={(newSelection) => {
+              setRowSelectionModel(newSelection)
+            }}
             density="compact"
             columnVisibilityModel={columnVisibilityModel}
             onColumnVisibilityModelChange={(model) => {
@@ -2437,6 +2886,7 @@ export function HoldingsPage() {
             }}
             disableRowSelectionOnClick
             sx={{
+              height: '100%',
               '& .pnl-negative': {
                 color: 'error.main',
               },
@@ -2465,12 +2915,22 @@ export function HoldingsPage() {
 
       <Dialog open={tradeOpen} onClose={closeTradeDialog} fullWidth maxWidth="sm">
         <DialogTitle>
-          {tradeSide === 'BUY' ? 'Buy from holdings' : 'Sell from holdings'}
-        </DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-            <Typography variant="subtitle1">{tradeSymbol}</Typography>
-            <Box sx={{ display: 'flex', gap: 1 }}>
+          {isBulkTrade
+            ? tradeSide === 'BUY'
+              ? 'Bulk buy from holdings'
+              : 'Bulk sell from holdings'
+	            : tradeSide === 'BUY'
+	              ? 'Buy from holdings'
+	              : 'Sell from holdings'}
+	        </DialogTitle>
+	        <DialogContent sx={{ pt: 2 }}>
+	          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+	            <Typography variant="subtitle1">
+	              {isBulkTrade
+	                ? `${bulkTradeHoldings.length} selected holdings`
+	                : tradeSymbol}
+	            </Typography>
+	            <Box sx={{ display: 'flex', gap: 1 }}>
               <Button
                 size="small"
                 variant={tradeSide === 'BUY' ? 'contained' : 'outlined'}
@@ -2543,8 +3003,14 @@ export function HoldingsPage() {
             </Box>
             <TextField
               label="Quantity"
-              type="number"
-              value={tradeQty}
+              type={
+                isBulkTrade && tradeSizeMode === 'AMOUNT' ? 'text' : 'number'
+              }
+              value={
+                isBulkTrade && tradeSizeMode === 'AMOUNT'
+                  ? bulkQtySummary
+                  : tradeQty
+              }
               onChange={(e) => {
                 const value = e.target.value
                 setTradeSizeMode('QTY')
@@ -2558,32 +3024,133 @@ export function HoldingsPage() {
             <TextField
               label="Amount"
               type="number"
-              value={tradeAmount}
+              value={
+                isBulkTrade && tradeSizeMode !== 'AMOUNT'
+                  ? bulkTotalAmountLabel
+                  : tradeAmount
+              }
               onChange={(e) => {
                 const value = e.target.value
                 setTradeSizeMode('AMOUNT')
                 setTradeAmount(value)
+                if (isBulkTrade) {
+                  setBulkAmountBudget(value)
+                  setBulkAmountOverrides({})
+                  setBulkAmountManual(false)
+                }
               }}
               onBlur={() => {
                 if (tradeSizeMode === 'AMOUNT') {
-                  recalcFromAmount(tradeAmount, tradeSide)
+                  if (isBulkTrade) {
+                    const budgetRaw = bulkAmountBudget.trim() !== ''
+                      ? Number(bulkAmountBudget)
+                      : Number(tradeAmount)
+                    if (!Number.isFinite(budgetRaw) || budgetRaw <= 0) {
+                      setBulkAmountOverrides({})
+                      return
+                    }
+                    const { overrides, usedTotal } =
+                      computeAutoBulkAmountOverrides(budgetRaw)
+                    setBulkAmountOverrides(overrides)
+                    setBulkAmountManual(false)
+                    setTradeAmount(
+                      usedTotal > 0 && Number.isFinite(usedTotal)
+                        ? usedTotal.toFixed(2)
+                        : '',
+                    )
+                  } else {
+                    recalcFromAmount(tradeAmount, tradeSide)
+                  }
                 }
               }}
               fullWidth
               size="small"
               disabled={tradeSizeMode !== 'AMOUNT'}
               inputProps={{ step: amountStep }}
-            />
-            <TextField
-              label={
-                tradeSizeMode === 'PCT_PORTFOLIO'
-                  ? '% of portfolio'
-                  : '% of position'
+              helperText={
+                isBulkTrade ? (
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 1,
+                    }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      {tradeSizeMode === 'QTY'
+                        ? 'Total notional across selected holdings.'
+                        : 'Total notional based on per-holding amounts.'}
+                    </Typography>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        if (isBulkTrade && tradeSizeMode === 'AMOUNT') {
+                          const hasAny = bulkTradeHoldings.some((h) => {
+                            const v = bulkAmountOverrides[h.symbol]
+                            return v != null && String(v).trim() !== ''
+                          })
+                          if (!hasAny) {
+                            const budgetRaw =
+                              bulkAmountBudget.trim() !== ''
+                                ? Number(bulkAmountBudget)
+                                : Number(tradeAmount)
+                            if (
+                              Number.isFinite(budgetRaw)
+                              && budgetRaw > 0
+                              && bulkTradeHoldings.length > 0
+                            ) {
+                              const { overrides, usedTotal } =
+                                computeAutoBulkAmountOverrides(budgetRaw)
+                              setBulkAmountOverrides(overrides)
+                              setBulkAmountManual(false)
+                              setTradeAmount(
+                                usedTotal > 0 && Number.isFinite(usedTotal)
+                                  ? usedTotal.toFixed(2)
+                                  : '',
+                              )
+                            }
+                          }
+                        }
+                        setBulkAmountDialogOpen(true)
+                      }}
+                      disabled={tradeSizeMode !== 'AMOUNT'}
+                    >
+                      Manage
+                    </Button>
+                  </Box>
+                ) : undefined
               }
-              type="number"
-              value={tradePctEquity}
-              onChange={(e) => {
-                const value = e.target.value
+            />
+            {isBulkTrade && tradeSizeMode === 'AMOUNT' && (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={bulkRedistributeRemainder}
+                    onChange={(e) =>
+                      setBulkRedistributeRemainder(e.target.checked)
+                    }
+                  />
+                }
+                label="Redistribute unused budget across eligible holdings"
+              />
+            )}
+	            <TextField
+	              label={
+	                tradeSizeMode === 'PCT_PORTFOLIO'
+	                  ? '% of portfolio'
+	                  : '% of position'
+	              }
+              type={
+                isBulkTrade
+                && (tradeSizeMode === 'QTY' || tradeSizeMode === 'AMOUNT')
+                  ? 'text'
+                  : 'number'
+              }
+	              value={bulkPctSummary}
+	              onChange={(e) => {
+	                const value = e.target.value
                 // If we are already in a percent-based mode, keep it;
                 // otherwise default to % of position.
                 const nextMode =
@@ -2592,14 +3159,14 @@ export function HoldingsPage() {
                     : 'PCT_POSITION'
                 setTradeSizeMode(nextMode)
                 setTradePctEquity(value)
-              }}
-              onBlur={() => {
-                if (tradeSizeMode === 'PCT_POSITION') {
-                  recalcFromPctEquity(tradePctEquity, tradeSide)
-                } else if (tradeSizeMode === 'PCT_PORTFOLIO') {
-                  recalcFromPctPortfolio(tradePctEquity)
-                }
-              }}
+	              }}
+	              onBlur={() => {
+	                if (tradeSizeMode === 'PCT_POSITION') {
+	                  recalcFromPctEquity(tradePctEquity, tradeSide)
+	                } else if (tradeSizeMode === 'PCT_PORTFOLIO') {
+	                  recalcFromPctPortfolio(tradePctEquity)
+	                }
+	              }}
               fullWidth
               size="small"
               disabled={
@@ -2612,6 +3179,28 @@ export function HoldingsPage() {
                     ? pctStepPortfolio
                     : pctStepPosition,
               }}
+              helperText={
+                isBulkTrade && tradeSizeMode === 'PCT_POSITION' ? (
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 1,
+                    }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      Requested % of each position. Actual values may differ.
+                    </Typography>
+                    <Button
+                      size="small"
+                      onClick={() => setBulkPctDialogOpen(true)}
+                    >
+                      Manage
+                    </Button>
+                  </Box>
+                ) : undefined
+              }
             />
             {tradeSizeMode === 'RISK' && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -2694,12 +3283,55 @@ export function HoldingsPage() {
             </TextField>
             <TextField
               label="Price"
-              type="number"
-              value={tradePrice}
-              onChange={(e) => setTradePrice(e.target.value)}
+              type={isBulkTrade ? 'text' : 'number'}
+              value={isBulkTrade ? bulkPriceSummary : tradePrice}
+              onChange={
+                isBulkTrade
+                  ? undefined
+                  : (e) => setTradePrice(e.target.value)
+              }
               fullWidth
               size="small"
               disabled={tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'}
+              InputProps={{
+                readOnly: isBulkTrade,
+              }}
+              helperText={
+                isBulkTrade
+                  ? (
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 1,
+                      }}
+                    >
+                      <Typography variant="caption" color="text.secondary">
+                        Per-holding prices. Use Set prices to adjust.
+                      </Typography>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          if (
+                            tradeOrderType === 'MARKET'
+                            || tradeOrderType === 'SL-M'
+                          ) {
+                            return
+                          }
+                          setBulkPriceDialogOpen(true)
+                        }}
+                        disabled={
+                          tradeOrderType === 'MARKET'
+                          || tradeOrderType === 'SL-M'
+                        }
+                      >
+                        Set prices
+                      </Button>
+                    </Box>
+                  )
+                  : undefined
+              }
             />
             {(tradeOrderType === 'SL'
               || tradeOrderType === 'SL-M'
@@ -2838,17 +3470,215 @@ export function HoldingsPage() {
             )}
           </Box>
         </DialogContent>
-      <DialogActions>
+        <DialogActions>
           <Button onClick={closeTradeDialog} disabled={tradeSubmitting}>
             Cancel
-          </Button>
-          <Button
-            onClick={handleSubmitTrade}
+	          </Button>
+	          <Button
+	            onClick={handleSubmitTrade}
             disabled={tradeSubmitting}
             variant="contained"
           >
-            {tradeSubmitting ? 'Submitting…' : 'Create order'}
+            {tradeSubmitting
+              ? 'Submitting…'
+              : isBulkTrade
+                ? 'Create orders'
+                : 'Create order'}
           </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={bulkPriceDialogOpen}
+        onClose={() => setBulkPriceDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Set prices for selected holdings</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            {bulkTradeHoldings.map((h) => {
+              const ltp = getDisplayPrice(h)
+              const baseLabel =
+                ltp != null && Number.isFinite(ltp) && ltp > 0
+                  ? ltp.toFixed(2)
+                  : '-'
+              const overrideRaw = bulkPriceOverrides[h.symbol]
+              const override =
+                overrideRaw != null && overrideRaw !== ''
+                  ? overrideRaw
+                  : baseLabel !== '-'
+                    ? baseLabel
+                    : ''
+              return (
+                <Box
+                  key={h.symbol}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <Typography sx={{ minWidth: 100 }}>{h.symbol}</Typography>
+                  <TextField
+                    label="Current"
+                    value={baseLabel}
+                    size="small"
+                    sx={{ width: 120 }}
+                    InputProps={{ readOnly: true }}
+                  />
+                  <TextField
+                    label="Price"
+                    type="number"
+                    size="small"
+                    value={override}
+                    onChange={(e) =>
+                      setBulkPriceOverrides((prev) => ({
+                        ...prev,
+                        [h.symbol]: e.target.value,
+                      }))
+                    }
+                    sx={{ width: 140 }}
+                  />
+                </Box>
+              )
+            })}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkPriceDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={bulkAmountDialogOpen}
+        onClose={() => setBulkAmountDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Manage per-holding amounts</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+	            {bulkTradeHoldings.map((h) => {
+	              const stored = bulkAmountOverrides[h.symbol]
+	              const effectiveAmount = stored == null ? '0.00' : stored
+	              return (
+                <Box
+                  key={h.symbol}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <Typography sx={{ minWidth: 100 }}>{h.symbol}</Typography>
+	                  <TextField
+	                    label="Amount"
+	                    type="number"
+	                    size="small"
+	                    value={effectiveAmount}
+	                    onChange={(e) => {
+	                      const value = e.target.value
+	                      setBulkAmountManual(true)
+	                      setBulkAmountOverrides((prev) => ({
+	                        ...prev,
+	                        [h.symbol]: value,
+	                      }))
+	                    }}
+	                    onBlur={(e) => {
+	                      const raw = Number(e.target.value)
+	                      const price = getPerHoldingPriceForSizing(h)
+	                      if (
+	                        !price
+	                        || !Number.isFinite(price)
+	                        || price <= 0
+	                        || !Number.isFinite(raw)
+	                        || raw <= 0
+	                      ) {
+	                        setBulkAmountOverrides((prev) => {
+	                          const next = { ...prev, [h.symbol]: '0.00' }
+	                          const used =
+	                            computeUsedTotalFromAmountOverrides(next)
+	                          setTradeAmount(
+	                            used > 0 && Number.isFinite(used)
+	                              ? used.toFixed(2)
+	                              : '',
+	                          )
+	                          return next
+	                        })
+	                        return
+	                      }
+	                      const qty = Math.floor(raw / price)
+	                      const normalised = qty > 0 ? qty * price : 0
+	                      setBulkAmountOverrides((prev) => {
+	                        const nextValue =
+	                          normalised > 0 && Number.isFinite(normalised)
+	                            ? normalised.toFixed(2)
+	                            : '0.00'
+	                        const next = { ...prev, [h.symbol]: nextValue }
+	                        const used =
+	                          computeUsedTotalFromAmountOverrides(next)
+	                        setTradeAmount(
+	                          used > 0 && Number.isFinite(used)
+	                            ? used.toFixed(2)
+	                            : '',
+	                        )
+	                        return next
+	                      })
+	                    }}
+	                    sx={{ width: 160 }}
+	                  />
+                </Box>
+              )
+            })}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkAmountDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={bulkPctDialogOpen}
+        onClose={() => setBulkPctDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>% of position per holding</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            These values show the approximate % of each position that will be
+            traded based on your current sizing inputs.
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {bulkTradeHoldings.map((h) => {
+              const pct = getEffectivePctOfPositionForHolding(h)
+              return (
+                <Box
+                  key={h.symbol}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <Typography sx={{ minWidth: 120 }}>{h.symbol}</Typography>
+                  <TextField
+                    label="% of position"
+                    size="small"
+                    value={
+                      pct != null && Number.isFinite(pct) ? pct.toFixed(2) : '-'
+                    }
+                    InputProps={{ readOnly: true }}
+                    sx={{ width: 140 }}
+                  />
+                </Box>
+              )
+            })}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkPctDialogOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
       <IndicatorAlertDialog
