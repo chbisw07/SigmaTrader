@@ -61,7 +61,7 @@ function App() {
   }
 
   return (
-    <MainLayout currentUser={currentUser} onAuthChange={setCurrentUser}>
+    <MainLayout currentUser={currentUser!} onAuthChange={setCurrentUser}>
       <AppRoutes />
     </MainLayout>
   )

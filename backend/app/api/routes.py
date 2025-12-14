@@ -6,6 +6,7 @@ from . import (
     analytics,
     auth,
     brokers,
+    groups,
     indicator_alerts,
     market_data,
     orders,
@@ -92,6 +93,13 @@ router.include_router(
     prefix="/api/indicator-alerts",
     dependencies=[Depends(require_admin)],
     tags=["indicator-alerts"],
+)
+
+router.include_router(
+    groups.router,
+    prefix="/api/groups",
+    dependencies=[Depends(require_admin)],
+    tags=["groups"],
 )
 
 router.include_router(

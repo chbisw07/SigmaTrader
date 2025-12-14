@@ -27,6 +27,7 @@ export type CorrelationPair = {
 
 export type SymbolCorrelationStats = {
   symbol: string
+  role?: string | null
   average_correlation: number | null
   most_correlated_symbol: string | null
   most_correlated_value: number | null

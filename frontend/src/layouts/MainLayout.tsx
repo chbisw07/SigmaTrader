@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import AppBar from '@mui/material/AppBar'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -28,6 +28,7 @@ import ShowChartIcon from '@mui/icons-material/ShowChart'
 import WarningIcon from '@mui/icons-material/Warning'
 import PaletteIcon from '@mui/icons-material/Palette'
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
+import ViewListIcon from '@mui/icons-material/ViewList'
 import { NavLink } from 'react-router-dom'
 
 import { useHealth } from '../services/health'
@@ -54,7 +55,8 @@ const navItems: NavItem[] = [
   { label: 'Orders', to: '/orders', icon: <ReceiptLongIcon /> },
   { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
   { label: 'Holdings', to: '/holdings', icon: <AccountBalanceWalletIcon /> },
-   { label: 'Alerts', to: '/alerts', icon: <NotificationsActiveIcon /> },
+  { label: 'Groups', to: '/groups', icon: <ViewListIcon /> },
+  { label: 'Alerts', to: '/alerts', icon: <NotificationsActiveIcon /> },
   { label: 'Analytics', to: '/analytics', icon: <AnalyticsIcon /> },
   { label: 'System Events', to: '/system-events', icon: <WarningIcon /> },
   { label: 'Appearance', to: '/appearance', icon: <PaletteIcon /> },

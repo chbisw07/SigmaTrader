@@ -225,7 +225,7 @@ export function AlertsPage() {
       field: 'enabled',
       headerName: 'Status',
       width: 120,
-      renderCell: (params: GridRenderCellParams<boolean>) => (
+      renderCell: (params: GridRenderCellParams<RuleRow, boolean>) => (
         <Chip
           size="small"
           label={params.value ? 'Enabled' : 'Paused'}

@@ -30,6 +30,7 @@ import {
   GridLogicOperator,
 } from '@mui/x-data-grid'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Editor, { type OnMount } from '@monaco-editor/react'
 
 import { createManualOrder } from '../services/orders'
@@ -61,6 +62,7 @@ import {
   deleteStrategy,
   type Strategy,
 } from '../services/strategies'
+import { fetchGroupMemberships } from '../services/groups'
 
 type HoldingIndicators = {
   rsi14?: number
@@ -82,12 +84,15 @@ type HoldingRow = Holding & {
   indicators?: HoldingIndicators
   correlationCluster?: string
   correlationWeight?: number
+  groupNames?: string[]
+  groupsLabel?: string
 }
 
 type HoldingsViewMode = 'default' | 'risk'
 
 type HoldingsFilterField =
   | 'symbol'
+  | 'groups'
   | 'quantity'
   | 'average_price'
   | 'invested'
@@ -270,6 +275,12 @@ const HOLDINGS_FILTER_FIELDS: HoldingsFilterFieldConfig[] = [
     getValue: (row) => row.symbol,
   },
   {
+    field: 'groups',
+    label: 'Groups',
+    type: 'string',
+    getValue: (row) => row.groupsLabel ?? null,
+  },
+  {
     field: 'quantity',
     label: 'Qty',
     type: 'number',
@@ -429,6 +440,7 @@ const BRACKET_MTP_MIN = 3
 const BRACKET_MTP_MAX = 20
 
 export function HoldingsPage() {
+  const navigate = useNavigate()
   const [holdings, setHoldings] = useState<HoldingRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -516,6 +528,25 @@ export function HoldingsPage() {
   const [, setCorrLoading] = useState(false)
   const [corrError, setCorrError] = useState<string | null>(null)
 
+  const refreshGroupMemberships = async (symbols: string[]) => {
+    if (!symbols.length) return
+    try {
+      const memberships = await fetchGroupMemberships(symbols)
+      setHoldings((current) =>
+        current.map((row) => {
+          const names = memberships[row.symbol] ?? []
+          return {
+            ...row,
+            groupNames: names,
+            groupsLabel: names.length ? names.join(', ') : '',
+          }
+        }),
+      )
+    } catch {
+      // Best-effort only: holdings should still render even if groups fail to load.
+    }
+  }
+
   const load = async () => {
     try {
       setLoading(true)
@@ -551,6 +582,10 @@ export function HoldingsPage() {
 
       // Kick off background enrichment with OHLCV history and indicators.
       void enrichHoldingsWithHistory(baseRows)
+
+      void refreshGroupMemberships(
+        baseRows.map((row) => row.symbol).filter(Boolean),
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load holdings')
     } finally {
@@ -1350,6 +1385,7 @@ export function HoldingsPage() {
       headerName: 'Cluster',
       sortable: false,
       width: 100,
+      valueGetter: (_value, row) => (row as HoldingRow).correlationCluster ?? null,
       renderCell: (params) => {
         const row = params.row as HoldingRow
         const label = row.correlationCluster ?? '—'
@@ -1362,6 +1398,47 @@ export function HoldingsPage() {
           <Tooltip title={tooltip ?? ''}>
             <span>{label}</span>
           </Tooltip>
+        )
+      },
+    },
+    {
+      field: 'groupsLabel',
+      headerName: 'Groups',
+      flex: 1,
+      minWidth: 180,
+      valueGetter: (_value, row) => (row as HoldingRow).groupsLabel ?? '',
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const names = row.groupNames ?? []
+        if (!names.length) return <span>—</span>
+        const visible = names.slice(0, 2)
+        const remaining = names.length - visible.length
+
+        const openGroup = (name: string) => {
+          const query = new URLSearchParams({ group: name }).toString()
+          navigate(`/groups?${query}`)
+        }
+
+        return (
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+            {visible.map((name) => (
+              <Chip
+                key={name}
+                size="small"
+                label={name}
+                clickable
+                onClick={() => openGroup(name)}
+              />
+            ))}
+            {remaining > 0 && (
+              <Chip
+                size="small"
+                label={`+${remaining}`}
+                clickable
+                onClick={() => openGroup(visible[0] ?? names[0])}
+              />
+            )}
+          </Box>
         )
       },
     },

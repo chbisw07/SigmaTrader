@@ -1,4 +1,5 @@
 from .broker import BrokerConnection, BrokerSecret
+from .groups import Group, GroupMember
 from .market_data import Candle, MarketInstrument
 from .system_event import SystemEvent
 from .trading import (
@@ -26,4 +27,6 @@ __all__ = [
     "MarketInstrument",
     "Candle",
     "IndicatorRule",
+    "Group",
+    "GroupMember",
 ]
