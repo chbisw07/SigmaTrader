@@ -116,6 +116,16 @@ function formatPercent(value: number | null | undefined): string {
   return `${(Number(value) * 100).toFixed(1)}%`
 }
 
+function formatIstDateTime(value: unknown): string {
+  if (!value) return '—'
+  const raw = new Date(value as string)
+  if (Number.isNaN(raw.getTime())) return '—'
+  // Stored timestamps are UTC-naive, so add the +5:30 offset before display.
+  const istOffsetMs = 5.5 * 60 * 60 * 1000
+  const ist = new Date(raw.getTime() + istOffsetMs)
+  return ist.toLocaleString()
+}
+
 export function GroupsPage() {
   const location = useLocation()
   const preferredGroupName = useMemo(() => {
@@ -589,7 +599,7 @@ export function GroupsPage() {
       field: 'updated_at',
       headerName: 'Updated',
       width: 170,
-      valueFormatter: (v) => (v ? new Date(String(v)).toLocaleString() : '—'),
+      valueFormatter: (v) => formatIstDateTime(v),
     },
     {
       field: 'actions',

@@ -16,6 +16,7 @@ import {
   DataGrid,
   type GridColDef,
   type GridRenderCellParams,
+  type GridRowSelectionModel,
 } from '@mui/x-data-grid'
 
 import {
@@ -57,6 +58,8 @@ export function QueuePage() {
   const [triggerMode, setTriggerMode] = useState<'PRICE' | 'PERCENT'>('PRICE')
   const [ltp, setLtp] = useState<number | null>(null)
   const [ltpError, setLtpError] = useState<string | null>(null)
+  const [selectionModel, setSelectionModel] = useState<GridRowSelectionModel>([])
+  const [bulkCancelling, setBulkCancelling] = useState(false)
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -73,6 +76,9 @@ export function QueuePage() {
       }
       const data = await fetchQueueOrders()
       setOrders(data)
+      setSelectionModel((prev) =>
+        prev.filter((id) => data.some((o) => o.id === id)),
+      )
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load queue')
@@ -339,6 +345,36 @@ export function QueuePage() {
     }
   }
 
+  const handleSelectAll = () => {
+    setSelectionModel(orders.map((o) => o.id))
+  }
+
+  const handleBulkCancel = async () => {
+    const ids = selectionModel.map((id) => Number(id)).filter((id) =>
+      Number.isFinite(id),
+    )
+    if (!ids.length) return
+    const ok = window.confirm(
+      `Cancel ${ids.length} selected order${ids.length > 1 ? 's' : ''}?`,
+    )
+    if (!ok) return
+    setBulkCancelling(true)
+    try {
+      await Promise.all(ids.map((id) => cancelOrder(id)))
+      setOrders((prev) => prev.filter((o) => !ids.includes(o.id)))
+      setSelectionModel([])
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to cancel selected orders',
+      )
+    } finally {
+      setBulkCancelling(false)
+    }
+  }
+
   const columns: GridColDef[] = [
     {
       field: 'created_at',
@@ -477,16 +513,37 @@ export function QueuePage() {
             execution target is set to PAPER.
           </Typography>
         </Box>
-        <Button
-          variant="outlined"
-          size="small"
-          onClick={() => {
-            void loadQueue()
-          }}
-          disabled={loading}
-        >
-          Refresh
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              void loadQueue()
+            }}
+            disabled={loading}
+          >
+            Refresh
+          </Button>
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={handleSelectAll}
+            disabled={orders.length === 0}
+          >
+            Select all
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            color="error"
+            onClick={() => {
+              void handleBulkCancel()
+            }}
+            disabled={selectionModel.length === 0 || bulkCancelling}
+          >
+            {bulkCancelling ? 'Cancelling…' : 'Cancel selected'}
+          </Button>
+        </Box>
       </Box>
 
       {loading ? (
@@ -507,6 +564,11 @@ export function QueuePage() {
             columns={columns}
             getRowId={(row) => row.id}
             autoHeight
+            checkboxSelection
+            rowSelectionModel={selectionModel}
+            onRowSelectionModelChange={(newSelection) => {
+              setSelectionModel(newSelection)
+            }}
             disableRowSelectionOnClick
             density="compact"
           />

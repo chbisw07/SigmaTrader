@@ -214,14 +214,14 @@ export function OrdersPage() {
           {error}
         </Typography>
       ) : (
-        <Paper sx={{ width: '100%' }}>
+        <Paper sx={{ width: '100%', height: '65vh' }}>
           <DataGrid
             rows={orders.filter((order) => showSimulated || !order.simulated)}
             columns={columns}
             getRowId={(row) => row.id}
-            autoHeight
             disableRowSelectionOnClick
             density="compact"
+            sx={{ height: '100%' }}
           />
         </Paper>
       )}
