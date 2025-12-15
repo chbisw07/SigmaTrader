@@ -487,8 +487,12 @@ export function HoldingsPage() {
   const [bulkAmountOverrides, setBulkAmountOverrides] = useState<
     Record<string, string>
   >({})
+  const [bulkQtyOverrides, setBulkQtyOverrides] = useState<Record<string, string>>(
+    {},
+  )
   const [bulkPriceDialogOpen, setBulkPriceDialogOpen] = useState(false)
   const [bulkAmountDialogOpen, setBulkAmountDialogOpen] = useState(false)
+  const [bulkQtyDialogOpen, setBulkQtyDialogOpen] = useState(false)
   const [bulkPctDialogOpen, setBulkPctDialogOpen] = useState(false)
   const [bulkRedistributeRemainder, setBulkRedistributeRemainder] =
     useState(true)
@@ -611,6 +615,7 @@ export function HoldingsPage() {
       if (!isBulkTrade) {
         setBulkPriceOverrides({})
         setBulkAmountOverrides({})
+        setBulkQtyOverrides({})
       }
       setError(null)
 
@@ -860,6 +865,12 @@ export function HoldingsPage() {
 
   const isBulkTrade = bulkTradeHoldings.length > 0
 
+  useEffect(() => {
+    if (!isBulkTrade) return
+    if (tradeSizeMode !== 'PCT_PORTFOLIO') return
+    setTradeSizeMode('PCT_POSITION')
+  }, [isBulkTrade, tradeSizeMode])
+
   const getDisplayPrice = (holding: HoldingRow): number | null => {
     if (holding.last_price != null && Number.isFinite(Number(holding.last_price))) {
       const v = Number(holding.last_price)
@@ -1059,6 +1070,15 @@ export function HoldingsPage() {
     return qty * price
   }
 
+  const getDefaultBulkQtyForHolding = (holding: HoldingRow): number => {
+    let qty = Math.floor(Number(tradeQty))
+    if (!Number.isFinite(qty) || qty <= 0) qty = 1
+    if (tradeSide !== 'SELL' || holding.quantity == null) return qty
+    const maxQty = Math.floor(Number(holding.quantity))
+    if (!Number.isFinite(maxQty) || maxQty <= 0) return 0
+    return qty > maxQty ? maxQty : qty
+  }
+
   const computeQtyForHolding = (holding: HoldingRow): number | null => {
     const price = getSizingPrice(holding)
     const positionValue = getPositionValue(holding, price)
@@ -1127,7 +1147,17 @@ export function HoldingsPage() {
 
     // Default to quantity-based sizing (including RISK mode, which uses the
     // quantity computed by the risk helper).
-    const rawQty = Math.floor(Number(tradeQty))
+    const rawQty =
+      isBulkTrade && tradeSizeMode === 'QTY'
+        ? Math.floor(
+            Number(
+              bulkQtyOverrides[holding.symbol] != null
+                && String(bulkQtyOverrides[holding.symbol]).trim() !== ''
+                ? bulkQtyOverrides[holding.symbol]
+                : tradeQty,
+            ),
+          )
+        : Math.floor(Number(tradeQty))
     if (!Number.isFinite(rawQty) || rawQty <= 0) return null
     const qty = clampSellQty(rawQty)
     return qty > 0 ? qty : null
@@ -1342,6 +1372,7 @@ export function HoldingsPage() {
     setBulkTradeHoldings([])
     setBulkPriceOverrides({})
     setBulkAmountOverrides({})
+    setBulkQtyOverrides({})
     setBulkAmountManual(false)
     setBulkAmountBudget('')
     setTradeOpen(false)
@@ -1797,7 +1828,7 @@ export function HoldingsPage() {
       : tradeAmount
 
   const bulkQtySummary =
-    isBulkTrade && tradeSizeMode === 'AMOUNT'
+    isBulkTrade && (tradeSizeMode === 'QTY' || tradeSizeMode === 'AMOUNT')
       ? bulkTradeHoldings
           .map((h) => {
             const qty = computeQtyForHolding(h)
@@ -2419,6 +2450,7 @@ export function HoldingsPage() {
 		              setBulkTradeHoldings(selected)
 		              setBulkPriceOverrides({})
 		              setBulkAmountOverrides({})
+		              setBulkQtyOverrides({})
 		              setBulkAmountManual(false)
 		              setBulkAmountBudget('')
 		              openTradeDialog(selected[0], 'BUY')
@@ -2439,6 +2471,7 @@ export function HoldingsPage() {
 		              setBulkTradeHoldings(selected)
 		              setBulkPriceOverrides({})
 		              setBulkAmountOverrides({})
+		              setBulkQtyOverrides({})
 		              setBulkAmountManual(false)
 		              setBulkAmountBudget('')
 		              openTradeDialog(selected[0], 'SELL')
@@ -3057,25 +3090,26 @@ export function HoldingsPage() {
                   control={<Radio size="small" />}
                   label="% of position"
                 />
-                <FormControlLabel
-                  value="PCT_PORTFOLIO"
-                  control={<Radio size="small" />}
-                  label="% of portfolio"
-                />
+                {!isBulkTrade && (
+                  <FormControlLabel
+                    value="PCT_PORTFOLIO"
+                    control={<Radio size="small" />}
+                    label="% of portfolio"
+                  />
+                )}
               </RadioGroup>
             </Box>
             <TextField
-              label="Quantity"
+              label={isBulkTrade ? 'Quantity (each)' : 'Quantity'}
               type={
-                isBulkTrade && tradeSizeMode === 'AMOUNT' ? 'text' : 'number'
+                isBulkTrade ? 'text' : 'number'
               }
               value={
-                isBulkTrade && tradeSizeMode === 'AMOUNT'
-                  ? bulkQtySummary
-                  : tradeQty
+                isBulkTrade ? bulkQtySummary : tradeQty
               }
               onChange={(e) => {
                 const value = e.target.value
+                if (isBulkTrade) return
                 setTradeSizeMode('QTY')
                 setTradeQty(value)
                 recalcFromQty(value, tradeSide)
@@ -3083,7 +3117,37 @@ export function HoldingsPage() {
               fullWidth
               size="small"
               disabled={tradeSizeMode !== 'QTY'}
+              helperText={
+                isBulkTrade && tradeSizeMode === 'QTY' ? (
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 1,
+                    }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      Per-holding quantities. Use Manage to adjust.
+                    </Typography>
+                    <Button size="small" onClick={() => setBulkQtyDialogOpen(true)}>
+                      Manage
+                    </Button>
+                  </Box>
+                ) : (
+                  undefined
+                )
+              }
+              InputProps={{
+                readOnly: isBulkTrade,
+              }}
             />
+            {isBulkTrade && tradeSizeMode === 'QTY' && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+                Default qty for new selections is {tradeQty || '—'}; update per
+                symbol via Manage.
+              </Typography>
+            )}
             <TextField
               label="Amount"
               type="number"
@@ -3671,6 +3735,130 @@ export function HoldingsPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setBulkPriceDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={bulkQtyDialogOpen}
+        onClose={() => setBulkQtyDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Manage per-holding quantities</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                flexWrap: 'wrap',
+                justifyContent: 'space-between',
+              }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                Set quantities per symbol. Use 0 to skip a symbol.
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <TextField
+                  label="Default qty"
+                  type="number"
+                  size="small"
+                  value={tradeQty}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setTradeQty(v)
+                  }}
+                  sx={{ width: 140 }}
+                  inputProps={{ min: 0, step: 1 }}
+                />
+                <Button
+                  size="small"
+                  onClick={() => {
+                    const defaultQty = Math.floor(Number(tradeQty))
+                    const base =
+                      Number.isFinite(defaultQty) && defaultQty > 0
+                        ? defaultQty
+                        : 1
+                    const next: Record<string, string> = {}
+                    for (const h of bulkTradeHoldings) {
+                      let qty = base
+                      if (tradeSide === 'SELL' && h.quantity != null) {
+                        const maxQty = Math.floor(Number(h.quantity))
+                        if (Number.isFinite(maxQty)) {
+                          qty = maxQty <= 0 ? 0 : Math.min(qty, maxQty)
+                        }
+                      }
+                      next[h.symbol] = String(qty)
+                    }
+                    setBulkQtyOverrides(next)
+                  }}
+                >
+                  Apply to all
+                </Button>
+              </Box>
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              {bulkTradeHoldings.map((h) => {
+                const stored = bulkQtyOverrides[h.symbol]
+                const fallback = String(getDefaultBulkQtyForHolding(h))
+                const displayValue = stored != null ? stored : fallback
+                return (
+                  <Box
+                    key={h.symbol}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Typography sx={{ minWidth: 100 }}>{h.symbol}</Typography>
+                    <TextField
+                      label="Qty"
+                      type="number"
+                      size="small"
+                      value={displayValue}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        setBulkQtyOverrides((prev) => ({
+                          ...prev,
+                          [h.symbol]: value,
+                        }))
+                      }}
+                      onBlur={(e) => {
+                        const rawText = e.target.value
+                        const raw = Number(rawText)
+                        let nextQty: number
+                        if (rawText.trim() === '') {
+                          nextQty = getDefaultBulkQtyForHolding(h)
+                        } else if (!Number.isFinite(raw)) {
+                          nextQty = getDefaultBulkQtyForHolding(h)
+                        } else {
+                          nextQty = Math.floor(raw)
+                          if (!Number.isFinite(nextQty) || nextQty < 0) nextQty = 0
+                          if (tradeSide === 'SELL' && h.quantity != null) {
+                            const maxQty = Math.floor(Number(h.quantity))
+                            if (Number.isFinite(maxQty)) {
+                              nextQty = maxQty <= 0 ? 0 : Math.min(nextQty, maxQty)
+                            }
+                          }
+                        }
+                        setBulkQtyOverrides((prev) => ({
+                          ...prev,
+                          [h.symbol]: String(nextQty),
+                        }))
+                      }}
+                      sx={{ width: 140 }}
+                      inputProps={{ min: 0, step: 1 }}
+                    />
+                  </Box>
+                )
+              })}
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkQtyDialogOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
       <Dialog
