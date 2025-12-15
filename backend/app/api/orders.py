@@ -121,6 +121,12 @@ def create_manual_order(
             detail="Price must be non-negative.",
         )
 
+    if payload.gtt and payload.order_type != "LIMIT":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GTT is supported only for LIMIT orders.",
+        )
+
     # Basic validation for stop-loss semantics so that obviously
     # inconsistent orders are rejected at creation time instead of
     # failing only when execution is attempted.
@@ -139,6 +145,12 @@ def create_manual_order(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Price must be positive for SL orders.",
                 )
+    elif payload.order_type == "LIMIT":
+        if payload.price is None or payload.price <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Price must be positive for LIMIT orders.",
+            )
     elif trigger_price is not None and trigger_price <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
