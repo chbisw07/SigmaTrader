@@ -145,6 +145,8 @@ type HoldingsFilter = {
   field: HoldingsFilterField
   operator: HoldingsFilterOperator
   value: string
+  compareTo?: 'value' | 'field'
+  compareField?: HoldingsFilterField
 }
 
 type HoldingsFilterFieldConfig = {
@@ -2908,6 +2910,11 @@ export function HoldingsPage() {
         >
           {advancedFilters.map((filter, idx) => {
             const operatorOptions = getOperatorOptions(filter.field)
+            const fieldCfg = getFieldConfig(filter.field)
+            const rhsMode = filter.compareTo ?? 'value'
+            const comparableFields = HOLDINGS_FILTER_FIELDS.filter(
+              (f) => f.type === fieldCfg.type && f.field !== filter.field,
+            )
             return (
               <Box
                 key={filter.id}
@@ -2947,6 +2954,14 @@ export function HoldingsPage() {
                                 operator:
                                   nextOperatorOptions[0]?.value ??
                                   f.operator,
+                                compareField:
+                                  (f.compareTo ?? 'value') === 'field'
+                                    ? (HOLDINGS_FILTER_FIELDS.filter(
+                                        (cfg) =>
+                                          cfg.type === getFieldConfig(nextField).type
+                                          && cfg.field !== nextField,
+                                      )[0]?.field ?? f.compareField)
+                                    : f.compareField,
                               }
                             : f,
                         ),
@@ -2982,20 +2997,79 @@ export function HoldingsPage() {
                       </MenuItem>
                     ))}
                   </TextField>
-                  <TextField
-                    label="Value"
-                    size="small"
-                    value={filter.value}
-                    onChange={(e) => {
-                      const nextValue = e.target.value
-                      setAdvancedFilters((current) =>
-                        current.map((f) =>
-                          f.id === filter.id ? { ...f, value: nextValue } : f,
-                        ),
-                      )
-                    }}
-                    sx={{ minWidth: 140 }}
+                  <FormControlLabel
+                    sx={{ ml: 0 }}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={rhsMode === 'field'}
+                        disabled={comparableFields.length === 0}
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setAdvancedFilters((current) =>
+                            current.map((f) => {
+                              if (f.id !== filter.id) return f
+                              if (!checked) {
+                                return { ...f, compareTo: 'value' }
+                              }
+                              const cfg = getFieldConfig(f.field)
+                              const defaultField =
+                                HOLDINGS_FILTER_FIELDS.filter(
+                                  (x) => x.type === cfg.type && x.field !== f.field,
+                                )[0]?.field
+                              return {
+                                ...f,
+                                compareTo: 'field',
+                                compareField: defaultField ?? f.compareField,
+                              }
+                            }),
+                          )
+                        }}
+                      />
+                    }
+                    label="Compare to column"
                   />
+                  {rhsMode === 'field' ? (
+                    <TextField
+                      label="RHS column"
+                      select
+                      size="small"
+                      value={filter.compareField ?? comparableFields[0]?.field ?? ''}
+                      disabled={comparableFields.length === 0}
+                      onChange={(e) => {
+                        const nextField = e.target.value as HoldingsFilterField
+                        setAdvancedFilters((current) =>
+                          current.map((f) =>
+                            f.id === filter.id
+                              ? { ...f, compareField: nextField, compareTo: 'field' }
+                              : f,
+                          ),
+                        )
+                      }}
+                      sx={{ minWidth: 180 }}
+                    >
+                      {comparableFields.map((f) => (
+                        <MenuItem key={f.field} value={f.field}>
+                          {f.label}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  ) : (
+                    <TextField
+                      label="Value"
+                      size="small"
+                      value={filter.value}
+                      onChange={(e) => {
+                        const nextValue = e.target.value
+                        setAdvancedFilters((current) =>
+                          current.map((f) =>
+                            f.id === filter.id ? { ...f, value: nextValue } : f,
+                          ),
+                        )
+                      }}
+                      sx={{ minWidth: 140 }}
+                    />
+                  )}
                   <Button
                     size="small"
                     onClick={() =>
@@ -3059,6 +3133,7 @@ export function HoldingsPage() {
                     field: 'symbol',
                     operator: 'contains',
                     value: '',
+                    compareTo: 'value',
                   },
                 ])
               }
@@ -5505,63 +5580,81 @@ function applyAdvancedFilters(
 ): HoldingRow[] {
   if (!filters.length) return rows
 
-  const activeFilters = filters.filter(
-    (f) => String(f.value).trim().length > 0,
-  )
+  const activeFilters = filters.filter((f) => {
+    const mode = f.compareTo ?? 'value'
+    if (mode === 'field') {
+      return f.compareField != null && String(f.compareField).trim().length > 0
+    }
+    return String(f.value).trim().length > 0
+  })
   if (!activeFilters.length) return rows
 
   const useAnd = logicOperator !== GridLogicOperator.Or
 
   const matches = (row: HoldingRow, filter: HoldingsFilter): boolean => {
-      const fieldConfig = getFieldConfig(filter.field)
-      const rawVal = fieldConfig.getValue(row)
+    const fieldConfig = getFieldConfig(filter.field)
+    const rawVal = fieldConfig.getValue(row)
 
-      if (rawVal == null) {
-        return false
+    if (rawVal == null) {
+      return false
+    }
+
+    const rhsMode = filter.compareTo ?? 'value'
+    const rhsRaw = (() => {
+      if (rhsMode === 'field') {
+        if (!filter.compareField) return null
+        const rhsCfg = getFieldConfig(filter.compareField)
+        return rhsCfg.getValue(row)
       }
+      return filter.value
+    })()
 
-      if (fieldConfig.type === 'string') {
-        const value = String(rawVal).toLowerCase()
-        const needle = String(filter.value).toLowerCase()
-        switch (filter.operator) {
-          case 'contains':
-            return value.includes(needle)
-          case 'startsWith':
-            return value.startsWith(needle)
-          case 'endsWith':
-            return value.endsWith(needle)
-          case 'eq':
-            return value === needle
-          case 'neq':
-            return value !== needle
-          default:
-            return true
-        }
-      }
+    if (rhsRaw == null) {
+      return false
+    }
 
-      const numericVal = Number(rawVal)
-      const threshold = Number(filter.value)
-      if (!Number.isFinite(numericVal) || !Number.isFinite(threshold)) {
-        return true
-      }
-
+    if (fieldConfig.type === 'string') {
+      const value = String(rawVal).toLowerCase()
+      const needle = String(rhsRaw).toLowerCase()
       switch (filter.operator) {
-        case 'gt':
-          return numericVal > threshold
-        case 'gte':
-          return numericVal >= threshold
-        case 'lt':
-          return numericVal < threshold
-        case 'lte':
-          return numericVal <= threshold
+        case 'contains':
+          return value.includes(needle)
+        case 'startsWith':
+          return value.startsWith(needle)
+        case 'endsWith':
+          return value.endsWith(needle)
         case 'eq':
-          return numericVal === threshold
+          return value === needle
         case 'neq':
-          return numericVal !== threshold
+          return value !== needle
         default:
           return true
       }
     }
+
+    const numericVal = Number(rawVal)
+    const threshold = Number(rhsRaw)
+    if (!Number.isFinite(numericVal) || !Number.isFinite(threshold)) {
+      return true
+    }
+
+    switch (filter.operator) {
+      case 'gt':
+        return numericVal > threshold
+      case 'gte':
+        return numericVal >= threshold
+      case 'lt':
+        return numericVal < threshold
+      case 'lte':
+        return numericVal <= threshold
+      case 'eq':
+        return numericVal === threshold
+      case 'neq':
+        return numericVal !== threshold
+      default:
+        return true
+    }
+  }
 
   return rows.filter((row) =>
     useAnd
