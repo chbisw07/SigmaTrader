@@ -234,7 +234,7 @@ def list_manual_queue(
         )
     if strategy_id is not None:
         query = query.filter(Order.strategy_id == strategy_id)
-    return query.order_by(Order.created_at).all()
+    return query.order_by(Order.created_at.desc()).all()
 
 
 @router.get("/{order_id}", response_model=OrderRead)

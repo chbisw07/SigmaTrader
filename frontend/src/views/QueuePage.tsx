@@ -437,8 +437,7 @@ export function QueuePage() {
     {
       field: 'symbol',
       headerName: 'Symbol',
-      flex: 1,
-      minWidth: 140,
+      width: 200,
     },
     {
       field: 'side',
@@ -485,7 +484,7 @@ export function QueuePage() {
     {
       field: 'status',
       headerName: 'Status',
-      width: 110,
+      width: 170,
       valueFormatter: (value, row) => {
         const order = row as Order
         const base = String(value ?? order.status ?? '')
@@ -658,6 +657,11 @@ export function QueuePage() {
             }}
             disableRowSelectionOnClick
             density="compact"
+            initialState={{
+              sorting: {
+                sortModel: [{ field: 'created_at', sort: 'desc' }],
+              },
+            }}
           />
         </Paper>
       )}
