@@ -36,6 +36,7 @@ export function QueuePage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [busyCancelId, setBusyCancelId] = useState<number | null>(null)
   const [busyExecuteId, setBusyExecuteId] = useState<number | null>(null)
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
@@ -60,6 +61,7 @@ export function QueuePage() {
   const [ltpError, setLtpError] = useState<string | null>(null)
   const [selectionModel, setSelectionModel] = useState<GridRowSelectionModel>([])
   const [bulkCancelling, setBulkCancelling] = useState(false)
+  const [bulkExecuting, setBulkExecuting] = useState(false)
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -320,6 +322,7 @@ export function QueuePage() {
   const handleCancel = async (orderId: number) => {
     setBusyCancelId(orderId)
     try {
+      setSuccessMessage(null)
       const updated = await cancelOrder(orderId)
       setOrders((prev) =>
         prev.filter((o) => o.id !== updated.id),
@@ -334,6 +337,7 @@ export function QueuePage() {
   const handleExecute = async (orderId: number) => {
     setBusyExecuteId(orderId)
     try {
+      setSuccessMessage(null)
       const updated = await executeOrder(orderId)
       setOrders((prev) =>
         prev.filter((o) => o.id !== updated.id),
@@ -360,6 +364,7 @@ export function QueuePage() {
     if (!ok) return
     setBulkCancelling(true)
     try {
+      setSuccessMessage(null)
       await Promise.all(ids.map((id) => cancelOrder(id)))
       setOrders((prev) => prev.filter((o) => !ids.includes(o.id)))
       setSelectionModel([])
@@ -372,6 +377,52 @@ export function QueuePage() {
       )
     } finally {
       setBulkCancelling(false)
+    }
+  }
+
+  const handleBulkExecute = async () => {
+    const ids = selectionModel.map((id) => Number(id)).filter((id) =>
+      Number.isFinite(id),
+    )
+    if (!ids.length) return
+    const ok = window.confirm(
+      `Execute ${ids.length} selected order${ids.length > 1 ? 's' : ''}? This will send them to Zerodha.`,
+    )
+    if (!ok) return
+
+    setBulkExecuting(true)
+    setSuccessMessage(null)
+    setError(null)
+    const failures: Array<{ id: number; message: string }> = []
+    try {
+      // Execute sequentially to avoid broker/API rate limits.
+      for (const id of ids) {
+        try {
+          await executeOrder(id)
+        } catch (err) {
+          const message =
+            err instanceof Error ? err.message : 'Failed to execute order'
+          failures.push({ id, message })
+        }
+      }
+
+      // Refresh queue to reflect status changes even when the endpoint
+      // returns an error after persisting a new status.
+      await loadQueue({ silent: true })
+      setSelectionModel([])
+
+      if (failures.length > 0) {
+        const first = failures[0]
+        setError(
+          `Failed to execute ${failures.length}/${ids.length} orders. First failure (order ${first.id}): ${first.message}`,
+        )
+      } else {
+        setSuccessMessage(
+          `Executed ${ids.length} order${ids.length > 1 ? 's' : ''}.`,
+        )
+      }
+    } finally {
+      setBulkExecuting(false)
     }
   }
 
@@ -524,33 +575,55 @@ export function QueuePage() {
           >
             Refresh
           </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={handleSelectAll}
-            disabled={orders.length === 0}
-          >
-            Select all
-          </Button>
-          <Button
-            variant="contained"
-            size="small"
-            color="error"
-            onClick={() => {
-              void handleBulkCancel()
-            }}
-            disabled={selectionModel.length === 0 || bulkCancelling}
-          >
-            {bulkCancelling ? 'Cancelling…' : 'Cancel selected'}
-          </Button>
-        </Box>
-      </Box>
+	          <Button
+	            variant="outlined"
+	            size="small"
+	            onClick={handleSelectAll}
+	            disabled={orders.length === 0}
+	          >
+	            Select all
+	          </Button>
+	          <Button
+	            variant="contained"
+	            size="small"
+	            onClick={() => {
+	              void handleBulkExecute()
+	            }}
+	            disabled={
+	              selectionModel.length === 0
+	              || bulkExecuting
+	              || bulkCancelling
+	              || busyExecuteId != null
+	              || busyCancelId != null
+	            }
+	          >
+	            {bulkExecuting ? 'Executing…' : 'Execute selected'}
+	          </Button>
+	          <Button
+	            variant="contained"
+	            size="small"
+	            color="error"
+	            onClick={() => {
+	              void handleBulkCancel()
+	            }}
+	            disabled={selectionModel.length === 0 || bulkCancelling || bulkExecuting}
+	          >
+	            {bulkCancelling ? 'Cancelling…' : 'Cancel selected'}
+	          </Button>
+	        </Box>
+	      </Box>
 
-      {loading ? (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CircularProgress size={20} />
-          <Typography variant="body2">
-            Loading queue...
+      {successMessage && !error && (
+        <Typography sx={{ mt: 1 }} color="success.main">
+          {successMessage}
+        </Typography>
+      )}
+
+	      {loading ? (
+	        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+	          <CircularProgress size={20} />
+	          <Typography variant="body2">
+	            Loading queue...
           </Typography>
         </Box>
       ) : error ? (
