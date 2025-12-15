@@ -30,7 +30,7 @@ import {
   type GridRowSelectionModel,
 } from '@mui/x-data-grid'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import Editor, { type OnMount } from '@monaco-editor/react'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
@@ -67,7 +67,11 @@ import {
 import {
   bulkAddGroupMembers,
   createGroup,
+  fetchGroup,
   fetchGroupMemberships,
+  listGroups,
+  type Group,
+  type GroupDetail,
   type GroupKind,
 } from '../services/groups'
 
@@ -448,9 +452,14 @@ const BRACKET_MTP_MAX = 20
 
 export function HoldingsPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [holdings, setHoldings] = useState<HoldingRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const [universeId, setUniverseId] = useState<string>('holdings')
+  const [availableGroups, setAvailableGroups] = useState<Group[]>([])
+  const [activeGroup, setActiveGroup] = useState<GroupDetail | null>(null)
 
   const [tradeOpen, setTradeOpen] = useState(false)
   const [tradeHolding, setTradeHolding] = useState<HoldingRow | null>(null)
@@ -579,16 +588,33 @@ export function HoldingsPage() {
     }
   }
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const rawUniverse = params.get('universe')?.trim()
+    if (rawUniverse && rawUniverse !== universeId) {
+      setUniverseId(rawUniverse)
+      return
+    }
+    if (!rawUniverse && universeId !== 'holdings') {
+      setUniverseId('holdings')
+    }
+  }, [location.search, universeId])
+
   const load = async () => {
     try {
       setLoading(true)
-      const raw = await fetchHoldings()
-      const baseRows: HoldingRow[] = raw.map((h) => ({ ...h }))
+      const [rawHoldings, groups] = await Promise.all([
+        fetchHoldings(),
+        listGroups().catch(() => [] as Group[]),
+      ])
+      setAvailableGroups(groups)
+
+      const holdingsRows: HoldingRow[] = rawHoldings.map((h) => ({ ...h }))
 
       // Compute a simple live portfolio value estimate so that sizing
       // modes such as % of portfolio and risk-based sizing can use it.
       let total = 0
-      for (const h of baseRows) {
+      for (const h of holdingsRows) {
         const qty =
           h.quantity != null && Number.isFinite(Number(h.quantity))
             ? Number(h.quantity)
@@ -609,6 +635,48 @@ export function HoldingsPage() {
         }
       }
       setPortfolioValue(total > 0 ? total : null)
+
+      let baseRows: HoldingRow[] = holdingsRows
+      if (universeId !== 'holdings') {
+        setActiveGroup(null)
+        if (universeId.startsWith('group:')) {
+          const groupIdRaw = universeId.slice('group:'.length)
+          const groupId = Number(groupIdRaw)
+          if (Number.isFinite(groupId) && groupId > 0) {
+            const detail = await fetchGroup(groupId)
+            setActiveGroup(detail)
+            const bySymbol = new Map<string, HoldingRow>(
+              holdingsRows.map((h) => [h.symbol, h]),
+            )
+            const seen = new Set<string>()
+            baseRows = detail.members
+              .filter((m) => {
+                if (!m.symbol) return false
+                if (seen.has(m.symbol)) return false
+                seen.add(m.symbol)
+                return true
+              })
+              .map((m) => {
+                const held = bySymbol.get(m.symbol)
+                if (held) return { ...held }
+                return {
+                  symbol: m.symbol,
+                  exchange: m.exchange ?? 'NSE',
+                  quantity: 0,
+                  average_price: 0,
+                  last_price: null,
+                  pnl: null,
+                  last_purchase_date: null,
+                  total_pnl_percent: null,
+                  today_pnl_percent: null,
+                } as HoldingRow
+              })
+          }
+        }
+      } else {
+        setActiveGroup(null)
+      }
+
       setHoldings(baseRows)
       setRowSelectionModel((prev) =>
         prev.filter((id) => baseRows.some((row) => row.symbol === id)),
@@ -635,7 +703,7 @@ export function HoldingsPage() {
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [universeId])
 
   // Load a lightweight correlation summary so that each holding can be
   // tagged with its high-level correlation cluster and approximate
@@ -1024,7 +1092,19 @@ export function HoldingsPage() {
         )
         setHoldings((current) =>
           current.map((h) =>
-            h.symbol === row.symbol ? { ...h, history, indicators } : h,
+            h.symbol === row.symbol
+              ? {
+                  ...h,
+                  history,
+                  indicators,
+                  last_price:
+                    h.last_price != null && Number(h.last_price) > 0
+                      ? h.last_price
+                      : history.length > 0
+                        ? history[history.length - 1].close
+                        : h.last_price,
+                }
+              : h,
           ),
         )
       } catch {
@@ -2177,11 +2257,14 @@ export function HoldingsPage() {
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        Holdings
+        {activeGroup ? activeGroup.name : 'Holdings'}
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 2 }}>
-        Live holdings fetched from Zerodha, including unrealized P&amp;L when last
-        price is available.
+        {activeGroup
+          ? activeGroup.description
+            ? activeGroup.description
+            : 'Symbols loaded from the selected group.'
+          : 'Live holdings fetched from Zerodha, including unrealized P&L when last price is available.'}
       </Typography>
       {refreshError && (
         <Typography variant="caption" color="error" sx={{ mb: 1, display: 'block' }}>
@@ -2403,19 +2486,59 @@ export function HoldingsPage() {
             gap: 0.5,
           }}
         >
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              flexWrap: 'wrap',
-              justifyContent: 'flex-end',
-            }}
-	          >
-	          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-	            <Typography variant="caption" color="text.secondary">
-	              View:
-	            </Typography>
+	          <Box
+	            sx={{
+	              display: 'flex',
+	              alignItems: 'center',
+	              gap: 1,
+	              flexWrap: 'wrap',
+	              justifyContent: 'flex-end',
+	            }}
+		          >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Universe:
+                </Typography>
+                <Select
+                  size="small"
+                  value={universeId}
+                  onChange={(e) => {
+                    const next = String(e.target.value || 'holdings')
+                    setRowSelectionModel([])
+                    setUniverseId(next)
+                    if (next === 'holdings') {
+                      navigate('/holdings', { replace: true })
+                    } else {
+                      navigate(
+                        `/holdings?${new URLSearchParams({ universe: next }).toString()}`,
+                        { replace: true },
+                      )
+                    }
+                  }}
+                  sx={{ minWidth: 240 }}
+                >
+                  <MenuItem value="holdings">Holdings (Zerodha)</MenuItem>
+                  {availableGroups.map((g) => {
+                    const kindLabel =
+                      g.kind === 'WATCHLIST'
+                        ? 'Watchlist'
+                        : g.kind === 'MODEL_PORTFOLIO'
+                          ? 'Basket'
+                          : g.kind === 'HOLDINGS_VIEW'
+                            ? 'Holdings view'
+                            : g.kind
+                    return (
+                      <MenuItem key={g.id} value={`group:${g.id}`}>
+                        {g.name} ({kindLabel})
+                      </MenuItem>
+                    )
+                  })}
+                </Select>
+              </Box>
+		          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+		            <Typography variant="caption" color="text.secondary">
+		              View:
+		            </Typography>
 	            <Select
 	              size="small"
 	              value={viewMode}

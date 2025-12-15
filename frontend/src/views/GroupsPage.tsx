@@ -27,7 +27,7 @@ import {
   type GridRenderCellParams,
 } from '@mui/x-data-grid'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { createManualOrder } from '../services/orders'
 import { fetchHoldings, type Holding } from '../services/positions'
@@ -130,6 +130,7 @@ function formatIstDateTime(value: unknown): string {
 }
 
 export function GroupsPage() {
+  const navigate = useNavigate()
   const location = useLocation()
   const preferredGroupName = useMemo(() => {
     const raw = new URLSearchParams(location.search).get('group')
@@ -755,7 +756,7 @@ export function GroupsPage() {
       >
         <Box sx={{ width: { xs: '100%', md: leftPanelWidth }, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
           <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <Stack direction="row" spacing={1} alignItems="center">
+	            <Stack direction="row" spacing={1} alignItems="center">
               <Typography variant="h6">Groups</Typography>
               <Box sx={{ flexGrow: 1 }} />
               <Button
@@ -833,11 +834,26 @@ export function GroupsPage() {
                   variant="outlined"
                 />
               )}
-              <Box sx={{ flexGrow: 1 }} />
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<PlayListAddIcon />}
+	              <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={!selectedGroupId}
+                  onClick={() => {
+                    if (!selectedGroupId) return
+                    navigate(
+                      `/holdings?${new URLSearchParams({
+                        universe: `group:${selectedGroupId}`,
+                      }).toString()}`,
+                    )
+                  }}
+                >
+                  Open in grid
+                </Button>
+	              <Button
+	                size="small"
+	                variant="outlined"
+	                startIcon={<PlayListAddIcon />}
                 disabled={!selectedGroup?.members?.length}
                 onClick={openAllocation}
               >
