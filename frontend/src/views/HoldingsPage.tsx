@@ -2560,6 +2560,7 @@ export function HoldingsPage() {
                   setChartPeriodDays(Number(e.target.value) || 30)
                 }
               >
+                <MenuItem value="7">1W</MenuItem>
                 <MenuItem value="30">1M</MenuItem>
                 <MenuItem value="90">3M</MenuItem>
                 <MenuItem value="180">6M</MenuItem>
