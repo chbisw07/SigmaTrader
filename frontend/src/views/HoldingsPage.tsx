@@ -34,6 +34,11 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import Editor, { type OnMount } from '@monaco-editor/react'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
+import {
+  clampQtyToMax,
+  shouldClampSellToHoldingsQty,
+} from '../components/Trade/tradeConstraints'
+import { resolvePrimaryPriceForHolding } from '../components/Trade/tradePricing'
 
 import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
@@ -934,10 +939,15 @@ export function HoldingsPage() {
 
   const isBulkTrade = bulkTradeHoldings.length > 0
 
+  const clampSellToHoldingsQty = shouldClampSellToHoldingsQty({
+    side: tradeSide,
+    product: tradeProduct,
+  })
+
   useEffect(() => {
     if (!isBulkTrade) return
     if (tradeSizeMode !== 'PCT_PORTFOLIO') return
-    setTradeSizeMode('PCT_POSITION')
+    setTradeSizeMode('QTY')
   }, [isBulkTrade, tradeSizeMode])
 
   const getDisplayPrice = (holding: HoldingRow): number | null => {
@@ -1000,7 +1010,7 @@ export function HoldingsPage() {
         continue
       }
       let qty = Math.floor(baseShare / price)
-      if (tradeSide === 'SELL' && h.quantity != null) {
+      if (clampSellToHoldingsQty && h.quantity != null) {
         const maxQty = Math.floor(Number(h.quantity))
         if (Number.isFinite(maxQty) && maxQty >= 0 && qty > maxQty) {
           qty = maxQty
@@ -1024,7 +1034,7 @@ export function HoldingsPage() {
         const price = prices[h.symbol]
         if (!price || !Number.isFinite(price) || price <= 0) continue
         let extraQty = Math.floor(extraShare / price)
-        if (tradeSide === 'SELL' && h.quantity != null) {
+        if (clampSellToHoldingsQty && h.quantity != null) {
           const maxQty = Math.floor(Number(h.quantity))
           if (Number.isFinite(maxQty) && maxQty >= 0) {
             const already = finalAmounts[h.symbol] ?? 0
@@ -1151,32 +1161,62 @@ export function HoldingsPage() {
     return qty * price
   }
 
+  const bulkSupportsPctPosition =
+    !isBulkTrade
+    || bulkTradeHoldings.every((h) => {
+      const price = getSizingPrice(h)
+      const positionValue = getPositionValue(h, price)
+      return positionValue != null && Number.isFinite(positionValue) && positionValue > 0
+    })
+
+  useEffect(() => {
+    if (!isBulkTrade) return
+    if (tradeSizeMode !== 'PCT_POSITION') return
+    if (bulkSupportsPctPosition) return
+    setTradeSizeMode('QTY')
+  }, [isBulkTrade, tradeSizeMode, bulkSupportsPctPosition])
+
   const getDefaultBulkQtyForHolding = (holding: HoldingRow): number => {
     let qty = Math.floor(Number(tradeQty))
     if (!Number.isFinite(qty) || qty <= 0) qty = 1
-    if (tradeSide !== 'SELL' || holding.quantity == null) return qty
+    if (!clampSellToHoldingsQty || holding.quantity == null) return qty
     const maxQty = Math.floor(Number(holding.quantity))
     if (!Number.isFinite(maxQty) || maxQty <= 0) return 0
-    return qty > maxQty ? maxQty : qty
+    return clampQtyToMax(qty, maxQty)
   }
 
   const computeQtyForHolding = (holding: HoldingRow): number | null => {
+    const clampSellQty = (qty: number): number => {
+      if (!clampSellToHoldingsQty || holding.quantity == null) return qty
+      const maxQty = Math.floor(Number(holding.quantity))
+      if (!Number.isFinite(maxQty) || maxQty <= 0) return 0
+      return clampQtyToMax(qty, maxQty)
+    }
+
+    // Quantity-based sizing does not require a price to be available.
+    // (Price is only needed for derived fields like notional / % of position.)
+    if (tradeSizeMode === 'QTY' || tradeSizeMode === 'RISK') {
+      const rawQty =
+        isBulkTrade
+          ? Math.floor(
+              Number(
+                bulkQtyOverrides[holding.symbol] != null
+                  && String(bulkQtyOverrides[holding.symbol]).trim() !== ''
+                  ? bulkQtyOverrides[holding.symbol]
+                  : tradeQty,
+              ),
+            )
+          : Math.floor(Number(tradeQty))
+      if (!Number.isFinite(rawQty) || rawQty <= 0) return null
+      const qty = clampSellQty(rawQty)
+      return qty > 0 ? qty : null
+    }
+
     const price = getSizingPrice(holding)
     const positionValue = getPositionValue(holding, price)
 
-    if (
-      price == null
-      || !Number.isFinite(price)
-      || price <= 0
-    ) {
+    if (price == null || !Number.isFinite(price) || price <= 0) {
       return null
-    }
-
-    const clampSellQty = (qty: number): number => {
-      if (tradeSide !== 'SELL' || holding.quantity == null) return qty
-      const maxQty = Math.floor(Number(holding.quantity))
-      if (!Number.isFinite(maxQty) || maxQty <= 0) return 0
-      return qty > maxQty ? maxQty : qty
     }
 
     if (tradeSizeMode === 'AMOUNT') {
@@ -1226,22 +1266,7 @@ export function HoldingsPage() {
       return Number.isFinite(qty) && qty > 0 ? qty : null
     }
 
-    // Default to quantity-based sizing (including RISK mode, which uses the
-    // quantity computed by the risk helper).
-    const rawQty =
-      isBulkTrade && tradeSizeMode === 'QTY'
-        ? Math.floor(
-            Number(
-              bulkQtyOverrides[holding.symbol] != null
-                && String(bulkQtyOverrides[holding.symbol]).trim() !== ''
-                ? bulkQtyOverrides[holding.symbol]
-                : tradeQty,
-            ),
-          )
-        : Math.floor(Number(tradeQty))
-    if (!Number.isFinite(rawQty) || rawQty <= 0) return null
-    const qty = clampSellQty(rawQty)
-    return qty > 0 ? qty : null
+    return null
   }
 
   const recalcFromQty = (qtyStr: string, side: 'BUY' | 'SELL') => {
@@ -1263,10 +1288,10 @@ export function HoldingsPage() {
     }
 
     let qty = rawQty
-    if (side === 'SELL' && holding?.quantity != null) {
+    if (side === 'SELL' && tradeProduct === 'CNC' && holding?.quantity != null) {
       const maxQty = Math.floor(Number(holding.quantity))
       if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
-        qty = maxQty
+        qty = clampQtyToMax(qty, maxQty)
       }
     }
 
@@ -1304,10 +1329,10 @@ export function HoldingsPage() {
     }
 
     let qty = Math.floor(rawAmount / price)
-    if (side === 'SELL' && holding?.quantity != null) {
+    if (side === 'SELL' && tradeProduct === 'CNC' && holding?.quantity != null) {
       const maxQty = Math.floor(Number(holding.quantity))
       if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
-        qty = maxQty
+        qty = clampQtyToMax(qty, maxQty)
       }
     }
 
@@ -1355,10 +1380,10 @@ export function HoldingsPage() {
 
     const amountTarget = (rawPct / 100) * positionValue
     let qty = Math.floor(amountTarget / price)
-    if (side === 'SELL' && holding?.quantity != null) {
+    if (side === 'SELL' && tradeProduct === 'CNC' && holding?.quantity != null) {
       const maxQty = Math.floor(Number(holding.quantity))
       if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
-        qty = maxQty
+        qty = clampQtyToMax(qty, maxQty)
       }
     }
 
@@ -1396,7 +1421,7 @@ export function HoldingsPage() {
     const targetNotional = (rawPct / 100) * total
     let qty = Math.floor(targetNotional / price)
 
-    if (tradeSide === 'SELL' && holding?.quantity != null) {
+    if (clampSellToHoldingsQty && holding?.quantity != null) {
       const maxQty = Math.floor(Number(holding.quantity))
       if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
         qty = maxQty
@@ -1414,12 +1439,44 @@ export function HoldingsPage() {
     setTradeAmount(notional.toFixed(2))
   }
 
+  const openBulkTradeDialog = (
+    selected: HoldingRow[],
+    side: 'BUY' | 'SELL',
+  ) => {
+    const hasHoldingsQty = selected.some(
+      (h) => h.quantity != null && Number(h.quantity) > 0,
+    )
+    const initialProduct: 'CNC' | 'MIS' =
+      side === 'SELL' && !hasHoldingsQty ? 'MIS' : 'CNC'
+
+    setTradeHolding(selected[0] ?? null)
+    setTradeSide(side)
+    setTradeSymbol('')
+    setTradeQty('1')
+    setTradePrice('')
+    setTradeTriggerPrice('')
+    setTradeSizeMode('QTY')
+    setTradeAmount('')
+    setTradePctEquity('')
+    setTradeProduct(initialProduct)
+    setTradeOrderType('MARKET')
+    setTradeBracketEnabled(false)
+    setTradeMtpPct('')
+    setTradeGtt(false)
+    setTradeError(null)
+    setTradeOpen(true)
+  }
+
   const openTradeDialog = (holding: HoldingRow, side: 'BUY' | 'SELL') => {
     setTradeHolding(holding)
     setTradeSide(side)
     setTradeSymbol(holding.symbol)
+    const initialProduct: 'CNC' | 'MIS' =
+      side === 'SELL' && !(holding.quantity != null && holding.quantity > 0)
+        ? 'MIS'
+        : 'CNC'
     let defaultQty = 1
-    if (side === 'SELL' && holding.quantity != null) {
+    if (side === 'SELL' && initialProduct === 'CNC' && holding.quantity != null) {
       const maxQty = Math.floor(Number(holding.quantity))
       if (Number.isFinite(maxQty) && maxQty > 0 && defaultQty > maxQty) {
         defaultQty = maxQty
@@ -1438,7 +1495,7 @@ export function HoldingsPage() {
       setTradeAmount('')
       setTradePctEquity('')
     }
-    setTradeProduct('CNC')
+    setTradeProduct(initialProduct)
     setTradeOrderType('MARKET')
     setTradeTriggerPrice('')
     setTradeBracketEnabled(false)
@@ -1741,32 +1798,14 @@ export function HoldingsPage() {
 
   const getEffectivePrimaryPriceForHolding = (
     holding: HoldingRow | null,
-  ): number | null => {
-    // In bulk mode, prefer per-holding overrides when provided.
-    if (isBulkTrade && holding) {
-      const override = bulkPriceOverrides[holding.symbol]
-      if (override != null && override.trim() !== '') {
-        const p = Number(override)
-        if (Number.isFinite(p) && p > 0) return p
-      }
-    }
-
-    // Otherwise prefer explicit price when provided for LIMIT/SL types;
-    // fall back to the sizing price (typically last_price).
-    if (
-      tradeOrderType !== 'MARKET'
-      && tradePrice.trim() !== ''
-    ) {
-      const p = Number(tradePrice)
-      if (Number.isFinite(p) && p > 0) return p
-    }
-    const localSizingPrice = getSizingPrice(holding)
-    return localSizingPrice != null
-      && Number.isFinite(localSizingPrice)
-      && localSizingPrice > 0
-      ? localSizingPrice
-      : null
-  }
+  ): number | null =>
+    resolvePrimaryPriceForHolding({
+      isBulkTrade,
+      holding,
+      tradeOrderType,
+      tradePrice,
+      bulkPriceOverrides,
+    })
 
   const getEffectivePrimaryPrice = (): number | null =>
     getEffectivePrimaryPriceForHolding(tradeHolding)
@@ -1852,7 +1891,7 @@ export function HoldingsPage() {
     }
 
     const maxQty =
-      tradeSide === 'SELL' && holding?.quantity != null
+      clampSellToHoldingsQty && holding?.quantity != null
         ? Math.floor(Number(holding.quantity))
         : null
 
@@ -2563,47 +2602,47 @@ export function HoldingsPage() {
 	              <MenuItem value="risk">Risk view</MenuItem>
 	            </Select>
 	          </Box>
-		          <Button
-		            size="small"
-		            variant="contained"
-		            onClick={() => {
-	              const selected = holdings.filter((h) =>
-	                rowSelectionModel.includes(h.symbol),
-	              )
-		              if (!selected.length) return
-		              setBulkTradeHoldings(selected)
-		              setBulkPriceOverrides({})
-		              setBulkAmountOverrides({})
-		              setBulkQtyOverrides({})
-		              setBulkAmountManual(false)
-		              setBulkAmountBudget('')
-		              openTradeDialog(selected[0], 'BUY')
-		            }}
-		            disabled={rowSelectionModel.length === 0}
-		          >
-		            Bulk buy
-		          </Button>
+			          <Button
+			            size="small"
+			            variant="contained"
+			            onClick={() => {
+		              const selected = holdings.filter((h) =>
+		                rowSelectionModel.includes(h.symbol),
+		              )
+			              if (!selected.length) return
+			              setBulkTradeHoldings(selected)
+			              setBulkPriceOverrides({})
+			              setBulkAmountOverrides({})
+			              setBulkQtyOverrides({})
+			              setBulkAmountManual(false)
+			              setBulkAmountBudget('')
+			              openBulkTradeDialog(selected, 'BUY')
+			            }}
+			            disabled={rowSelectionModel.length === 0}
+			          >
+			            Bulk buy
+			          </Button>
 		          <Button
 	            size="small"
 	            variant="contained"
 	            color="error"
-	            onClick={() => {
-	              const selected = holdings.filter((h) =>
-	                rowSelectionModel.includes(h.symbol),
-	              )
-		              if (!selected.length) return
-		              setBulkTradeHoldings(selected)
-		              setBulkPriceOverrides({})
-		              setBulkAmountOverrides({})
-		              setBulkQtyOverrides({})
-		              setBulkAmountManual(false)
-		              setBulkAmountBudget('')
-		              openTradeDialog(selected[0], 'SELL')
-		            }}
-		            disabled={rowSelectionModel.length === 0}
-		          >
-		            Bulk sell
-		          </Button>
+		            onClick={() => {
+		              const selected = holdings.filter((h) =>
+		                rowSelectionModel.includes(h.symbol),
+		              )
+			              if (!selected.length) return
+			              setBulkTradeHoldings(selected)
+			              setBulkPriceOverrides({})
+			              setBulkAmountOverrides({})
+			              setBulkQtyOverrides({})
+			              setBulkAmountManual(false)
+			              setBulkAmountBudget('')
+			              openBulkTradeDialog(selected, 'SELL')
+			            }}
+			            disabled={rowSelectionModel.length === 0}
+			          >
+			            Bulk sell
+			          </Button>
               <Button
                 size="small"
                 variant="outlined"
@@ -3174,6 +3213,13 @@ export function HoldingsPage() {
                 row
                 value={tradeSizeMode}
                 onChange={(e) => {
+                  if (
+                    isBulkTrade
+                    && e.target.value === 'PCT_POSITION'
+                    && !bulkSupportsPctPosition
+                  ) {
+                    return
+                  }
                   const mode =
                     e.target.value === 'AMOUNT'
                       ? 'AMOUNT'
@@ -3210,6 +3256,7 @@ export function HoldingsPage() {
                   value="PCT_POSITION"
                   control={<Radio size="small" />}
                   label="% of position"
+                  disabled={isBulkTrade && !bulkSupportsPctPosition}
                 />
                 {!isBulkTrade && (
                   <FormControlLabel
@@ -3903,7 +3950,7 @@ export function HoldingsPage() {
                     const next: Record<string, string> = {}
                     for (const h of bulkTradeHoldings) {
                       let qty = base
-                      if (tradeSide === 'SELL' && h.quantity != null) {
+                      if (clampSellToHoldingsQty && h.quantity != null) {
                         const maxQty = Math.floor(Number(h.quantity))
                         if (Number.isFinite(maxQty)) {
                           qty = maxQty <= 0 ? 0 : Math.min(qty, maxQty)
@@ -3957,7 +4004,7 @@ export function HoldingsPage() {
                         } else {
                           nextQty = Math.floor(raw)
                           if (!Number.isFinite(nextQty) || nextQty < 0) nextQty = 0
-                          if (tradeSide === 'SELL' && h.quantity != null) {
+                          if (clampSellToHoldingsQty && h.quantity != null) {
                             const maxQty = Math.floor(Number(h.quantity))
                             if (Number.isFinite(maxQty)) {
                               nextQty = maxQty <= 0 ? 0 : Math.min(nextQty, maxQty)
