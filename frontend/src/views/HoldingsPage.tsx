@@ -21,7 +21,6 @@ import FormControlLabel from '@mui/material/FormControlLabel'
 import Checkbox from '@mui/material/Checkbox'
 import Chip from '@mui/material/Chip'
 import {
-  DataGrid,
   GridToolbar,
   type GridColDef,
   type GridRenderCellParams,
@@ -33,6 +32,8 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Editor, { type OnMount } from '@monaco-editor/react'
+
+import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
 
 import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
@@ -2953,60 +2954,57 @@ export function HoldingsPage() {
           {error}
         </Typography>
       ) : (
-        <Paper sx={{ mt: 1, height: '70vh', width: '100%' }}>
-          <DataGrid
-            rows={filteredRows}
-            columns={columns}
-            getRowId={(row) => row.symbol}
-            checkboxSelection
-            rowSelectionModel={rowSelectionModel}
-            onRowSelectionModelChange={(newSelection) => {
-              setRowSelectionModel(newSelection)
-            }}
-            density="compact"
-            columnVisibilityModel={columnVisibilityModel}
-            onColumnVisibilityModelChange={(model) => {
-              setColumnVisibilityModel(model)
-              try {
-                const key =
-                  viewMode === 'risk'
-                    ? 'st_holdings_column_visibility_risk_v1'
-                    : 'st_holdings_column_visibility_default_v1'
-                window.localStorage.setItem(
-                  key,
-                  JSON.stringify(model),
-                )
-              } catch {
-                // Ignore persistence errors.
-              }
-            }}
-            disableRowSelectionOnClick
-            sx={{
-              height: '100%',
-              '& .pnl-negative': {
-                color: 'error.main',
-              },
-            }}
-            slots={{ toolbar: GridToolbar }}
-            slotProps={{
-              toolbar: {
-                showQuickFilter: true,
-                quickFilterProps: { debounceMs: 300 },
-              },
-              filterPanel: {
-                // Combine multiple filter rows using AND semantics.
-                logicOperators: [GridLogicOperator.And],
-              },
-            }}
-            initialState={{
-              pagination: { paginationModel: { pageSize: 25 } },
-            }}
-            pageSizeOptions={[25, 50, 100]}
-            localeText={{
-              noRowsLabel: 'No holdings found.',
-            }}
-          />
-        </Paper>
+        <UniverseGrid
+          rows={filteredRows}
+          columns={columns}
+          getRowId={(row) => row.symbol}
+          checkboxSelection
+          rowSelectionModel={rowSelectionModel}
+          onRowSelectionModelChange={(newSelection) => {
+            setRowSelectionModel(newSelection)
+          }}
+          density="compact"
+          columnVisibilityModel={columnVisibilityModel}
+          onColumnVisibilityModelChange={(model) => {
+            setColumnVisibilityModel(model)
+            try {
+              const key =
+                viewMode === 'risk'
+                  ? 'st_holdings_column_visibility_risk_v1'
+                  : 'st_holdings_column_visibility_default_v1'
+              window.localStorage.setItem(
+                key,
+                JSON.stringify(model),
+              )
+            } catch {
+              // Ignore persistence errors.
+            }
+          }}
+          disableRowSelectionOnClick
+          sx={{
+            '& .pnl-negative': {
+              color: 'error.main',
+            },
+          }}
+          slots={{ toolbar: GridToolbar }}
+          slotProps={{
+            toolbar: {
+              showQuickFilter: true,
+              quickFilterProps: { debounceMs: 300 },
+            },
+            filterPanel: {
+              // Combine multiple filter rows using AND semantics.
+              logicOperators: [GridLogicOperator.And],
+            },
+          }}
+          initialState={{
+            pagination: { paginationModel: { pageSize: 25 } },
+          }}
+          pageSizeOptions={[25, 50, 100]}
+          localeText={{
+            noRowsLabel: 'No holdings found.',
+          }}
+        />
       )}
 
       <Dialog open={tradeOpen} onClose={closeTradeDialog} fullWidth maxWidth="sm">
