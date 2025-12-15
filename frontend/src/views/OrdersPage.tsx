@@ -123,7 +123,10 @@ export function OrdersPage() {
       renderCell: (params: GridRenderCellParams) => {
         const order = params.row as Order
         const base = String(order.status ?? '')
-        const label = order.simulated ? `${base} (PAPER)` : base
+        const label =
+          order.simulated || order.execution_target === 'PAPER'
+            ? `${base} (PAPER)`
+            : base
         return <Typography variant="body2">{label}</Typography>
       },
     },
@@ -131,6 +134,15 @@ export function OrdersPage() {
       field: 'mode',
       headerName: 'Mode',
       width: 110,
+    },
+    {
+      field: 'execution_target',
+      headerName: 'Target',
+      width: 110,
+      valueGetter: (_value, row) => {
+        const order = row as Order
+        return order.execution_target ?? (order.simulated ? 'PAPER' : 'LIVE')
+      },
     },
     {
       field: 'broker',

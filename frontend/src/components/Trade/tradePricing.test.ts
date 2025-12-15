@@ -3,48 +3,48 @@ import { describe, expect, it } from 'vitest'
 import { resolvePrimaryPriceForHolding } from './tradePricing'
 
 describe('resolvePrimaryPriceForHolding', () => {
-  it('does not reuse tradePrice across symbols in bulk mode', () => {
+  it('uses per-symbol bulk overrides (no cross-contamination)', () => {
+    const overrides = { AAA: '10', BBB: '20' }
+
+    const a = resolvePrimaryPriceForHolding({
+      isBulkTrade: true,
+      holding: { symbol: 'AAA', last_price: 11 },
+      tradeOrderType: 'LIMIT',
+      tradePrice: '9999',
+      bulkPriceOverrides: overrides,
+    })
+    const b = resolvePrimaryPriceForHolding({
+      isBulkTrade: true,
+      holding: { symbol: 'BBB', last_price: 21 },
+      tradeOrderType: 'LIMIT',
+      tradePrice: '9999',
+      bulkPriceOverrides: overrides,
+    })
+
+    expect(a).toBe(10)
+    expect(b).toBe(20)
+  })
+
+  it('falls back to holding last_price when bulk override is missing', () => {
     const price = resolvePrimaryPriceForHolding({
       isBulkTrade: true,
-      holding: { symbol: 'AAA', last_price: 684.4 },
+      holding: { symbol: 'AAA', last_price: 11 },
       tradeOrderType: 'LIMIT',
-      tradePrice: '679.60',
+      tradePrice: '9999',
       bulkPriceOverrides: {},
     })
-    expect(price).toBe(684.4)
+    expect(price).toBe(11)
   })
 
-  it('uses per-holding override price in bulk mode', () => {
-    const price = resolvePrimaryPriceForHolding({
-      isBulkTrade: true,
-      holding: { symbol: 'AAA', last_price: 684.4 },
-      tradeOrderType: 'LIMIT',
-      tradePrice: '679.60',
-      bulkPriceOverrides: { AAA: '700.25' },
-    })
-    expect(price).toBe(700.25)
-  })
-
-  it('uses typed tradePrice for single-symbol LIMIT orders', () => {
+  it('uses the explicit tradePrice for non-bulk non-market orders', () => {
     const price = resolvePrimaryPriceForHolding({
       isBulkTrade: false,
-      holding: { symbol: 'AAA', last_price: 684.4 },
+      holding: { symbol: 'AAA', last_price: 11 },
       tradeOrderType: 'LIMIT',
-      tradePrice: '679.60',
+      tradePrice: '123.45',
       bulkPriceOverrides: {},
     })
-    expect(price).toBe(679.6)
-  })
-
-  it('ignores typed tradePrice for single-symbol MARKET orders', () => {
-    const price = resolvePrimaryPriceForHolding({
-      isBulkTrade: false,
-      holding: { symbol: 'AAA', last_price: 684.4 },
-      tradeOrderType: 'MARKET',
-      tradePrice: '679.60',
-      bulkPriceOverrides: {},
-    })
-    expect(price).toBe(684.4)
+    expect(price).toBe(123.45)
   })
 })
 

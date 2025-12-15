@@ -227,6 +227,9 @@ class Order(Base):
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="WAITING")
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")
+    execution_target: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="LIVE"
+    )
 
     zerodha_order_id: Mapped[Optional[str]] = mapped_column(String(64))
     broker_account_id: Mapped[Optional[str]] = mapped_column(String(64))

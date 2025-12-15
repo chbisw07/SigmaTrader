@@ -101,8 +101,10 @@ def list_orders(
 @router.post("/", response_model=OrderRead)
 def create_manual_order(
     payload: ManualOrderCreate,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> Order:
     """Create a new manual WAITING order for the current user.
 
@@ -172,13 +174,44 @@ def create_manual_order(
         product=payload.product,
         gtt=payload.gtt,
         status="WAITING",
-        mode="MANUAL",
+        mode=payload.mode,
+        execution_target=payload.execution_target,
         simulated=False,
     )
 
     db.add(order)
     db.commit()
     db.refresh(order)
+
+    if payload.mode == "AUTO":
+        try:
+            execute_order(
+                order_id=order.id,
+                request=request,
+                db=db,
+                settings=settings,
+            )
+            db.refresh(order)
+        except HTTPException as exc:
+            # If execution failed before status transition (e.g. broker not
+            # connected), mark the order as FAILED so it shows up in history.
+            db.refresh(order)
+            if order.status == "WAITING":
+                order.status = "FAILED"
+                order.error_message = (
+                    exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                )
+                db.add(order)
+                db.commit()
+                db.refresh(order)
+        except Exception as exc:  # pragma: no cover - defensive
+            db.refresh(order)
+            if order.status == "WAITING":
+                order.status = "FAILED"
+                order.error_message = str(exc)
+                db.add(order)
+                db.commit()
+                db.refresh(order)
     return order
 
 
@@ -422,9 +455,9 @@ def execute_order(
         db.refresh(order)
 
     # Route PAPER strategies to the paper engine instead of Zerodha.
-    exec_target = "LIVE"
+    exec_target = getattr(order, "execution_target", None) or "LIVE"
     if order.strategy is not None:
-        exec_target = getattr(order.strategy, "execution_target", "LIVE")
+        exec_target = getattr(order.strategy, "execution_target", exec_target)
     else:
         # Fallback: when no strategy is attached, treat a single
         # configured strategy as the default execution_target so that

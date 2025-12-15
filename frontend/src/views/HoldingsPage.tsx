@@ -19,6 +19,7 @@ import Radio from '@mui/material/Radio'
 import RadioGroup from '@mui/material/RadioGroup'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import Checkbox from '@mui/material/Checkbox'
+import Switch from '@mui/material/Switch'
 import Chip from '@mui/material/Chip'
 import {
   GridToolbar,
@@ -485,9 +486,19 @@ export function HoldingsPage() {
   >('MARKET')
   const [tradeTriggerPrice, setTradeTriggerPrice] = useState<string>('')
   const [tradeGtt, setTradeGtt] = useState<boolean>(false)
+  const [tradeExecutionMode, setTradeExecutionMode] = useState<
+    'MANUAL' | 'AUTO'
+  >('MANUAL')
+  const [tradeExecutionTarget, setTradeExecutionTarget] = useState<
+    'LIVE' | 'PAPER'
+  >('LIVE')
   const [tradeBracketEnabled, setTradeBracketEnabled] = useState<boolean>(false)
   const [tradeMtpPct, setTradeMtpPct] = useState<string>('')
   const [tradeSubmitting, setTradeSubmitting] = useState(false)
+  const [tradeSubmitProgress, setTradeSubmitProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
   const [tradeError, setTradeError] = useState<string | null>(null)
   const [tradeRiskBudget, setTradeRiskBudget] = useState<string>('')
   const [tradeRiskBudgetMode, setTradeRiskBudgetMode] = useState<
@@ -1236,17 +1247,15 @@ export function HoldingsPage() {
     // Quantity-based sizing does not require a price to be available.
     // (Price is only needed for derived fields like notional / % of position.)
     if (tradeSizeMode === 'QTY' || tradeSizeMode === 'RISK') {
-      const rawQty =
-        isBulkTrade
-          ? Math.floor(
-              Number(
-                bulkQtyOverrides[holding.symbol] != null
-                  && String(bulkQtyOverrides[holding.symbol]).trim() !== ''
-                  ? bulkQtyOverrides[holding.symbol]
-                  : tradeQty,
-              ),
-            )
-          : Math.floor(Number(tradeQty))
+      const rawQty = (() => {
+        if (!isBulkTrade) return Math.floor(Number(tradeQty))
+
+        const override = bulkQtyOverrides[holding.symbol]
+        if (override != null && String(override).trim() !== '') {
+          return Math.floor(Number(override))
+        }
+        return getDefaultBulkQtyForHolding(holding)
+      })()
       if (!Number.isFinite(rawQty) || rawQty <= 0) return null
       const qty = clampSellQty(rawQty)
       return qty > 0 ? qty : null
@@ -1503,6 +1512,8 @@ export function HoldingsPage() {
     setTradeBracketEnabled(false)
     setTradeMtpPct('')
     setTradeGtt(false)
+    setTradeExecutionMode('MANUAL')
+    setTradeExecutionTarget('LIVE')
     setTradeError(null)
     setTradeOpen(true)
   }
@@ -1541,6 +1552,8 @@ export function HoldingsPage() {
     setTradeBracketEnabled(false)
     setTradeMtpPct('')
     setTradeGtt(false)
+    setTradeExecutionMode('MANUAL')
+    setTradeExecutionTarget('LIVE')
     setTradeError(null)
     setTradeOpen(true)
   }
@@ -1754,12 +1767,27 @@ export function HoldingsPage() {
       return
     }
 
+    if (tradeExecutionMode === 'AUTO' && tradeExecutionTarget === 'LIVE') {
+      const totalOrders = plans.length * (tradeBracketEnabled ? 2 : 1)
+      const confirmed = window.confirm(
+        `AUTO + LIVE will send ${totalOrders} order${
+          totalOrders === 1 ? '' : 's'
+        } to Zerodha now. Continue?`,
+      )
+      if (!confirmed) return
+    }
+
     setTradeSubmitting(true)
+    const totalOrders = plans.length * (tradeBracketEnabled ? 2 : 1)
+    setTradeSubmitProgress({ done: 0, total: totalOrders })
     setTradeError(null)
     try {
-      const results = await Promise.allSettled(
-        plans.map(async ({ holding, qty, price, bracketPrice }) => {
-          await createManualOrder({
+      const failures: string[] = []
+      let progressDone = 0
+
+      for (const { holding, qty, price, bracketPrice } of plans) {
+        try {
+          const primary = await createManualOrder({
             symbol: holding.symbol,
             exchange: holding.exchange ?? 'NSE',
             side: tradeSide,
@@ -1769,11 +1797,29 @@ export function HoldingsPage() {
             order_type: tradeOrderType,
             product: tradeProduct,
             gtt: tradeGtt,
+            mode: tradeExecutionMode,
+            execution_target: tradeExecutionTarget,
           })
+          progressDone += 1
+          setTradeSubmitProgress({ done: progressDone, total: totalOrders })
+          if (tradeExecutionMode === 'AUTO') {
+            if (
+              primary.status === 'WAITING'
+              || primary.status === 'FAILED'
+              || primary.status === 'REJECTED'
+              || primary.status === 'REJECTED_RISK'
+            ) {
+              throw new Error(
+                primary.error_message
+                  ? `${holding.symbol}: ${primary.error_message}`
+                  : `${holding.symbol}: order was not accepted (${primary.status}).`,
+              )
+            }
+          }
 
           if (tradeBracketEnabled && bracketPrice != null) {
             const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
-            await createManualOrder({
+            const bracket = await createManualOrder({
               symbol: holding.symbol,
               exchange: holding.exchange ?? 'NSE',
               side: bracketSide,
@@ -1782,26 +1828,43 @@ export function HoldingsPage() {
               order_type: 'LIMIT',
               product: tradeProduct,
               gtt: true,
+              mode: tradeExecutionMode,
+              execution_target: tradeExecutionTarget,
             })
+            progressDone += 1
+            setTradeSubmitProgress({ done: progressDone, total: totalOrders })
+            if (tradeExecutionMode === 'AUTO') {
+              if (
+                bracket.status === 'WAITING'
+                || bracket.status === 'FAILED'
+                || bracket.status === 'REJECTED'
+                || bracket.status === 'REJECTED_RISK'
+              ) {
+                throw new Error(
+                  bracket.error_message
+                    ? `${holding.symbol}: ${bracket.error_message}`
+                    : `${holding.symbol}: bracket order was not accepted (${bracket.status}).`,
+                )
+              }
+            }
           }
-        }),
-      )
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err ?? '')
+          failures.push(message || `${holding.symbol}: failed to create order.`)
+          if (!isBulkTrade) {
+            break
+          }
+        }
+      }
 
-      const failed = results.filter(
-        (r): r is PromiseRejectedResult => r.status === 'rejected',
-      )
-      if (failed.length > 0) {
-        const first = failed[0]
-        const message =
-          first.reason instanceof Error
-            ? first.reason.message
-            : String(first.reason ?? 'Unknown error')
+      if (failures.length > 0) {
         setTradeError(
-          failed.length === plans.length
-            ? `Failed to create orders: ${message}`
-            : `Some orders failed (${failed.length}/${plans.length}): ${message}`,
+          failures.length === plans.length
+            ? `Failed to create orders: ${failures[0]}`
+            : `Some orders failed (${failures.length}/${plans.length}): ${failures[0]}`,
         )
         setTradeSubmitting(false)
+        setTradeSubmitProgress(null)
         return
       }
 
@@ -1810,12 +1873,14 @@ export function HoldingsPage() {
       setBulkTradeHoldings([])
       setTradeOpen(false)
       setTradeSubmitting(false)
+      setTradeSubmitProgress(null)
       void load()
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Failed to create order'
       setTradeError(message)
       setTradeSubmitting(false)
+      setTradeSubmitProgress(null)
     }
   }
 
@@ -3357,6 +3422,47 @@ export function HoldingsPage() {
             </Box>
           </Box>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Box
+              sx={{
+                display: 'flex',
+                gap: 2,
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <TextField
+                label="Submit mode"
+                select
+                value={tradeExecutionMode}
+                onChange={(e) =>
+                  setTradeExecutionMode(
+                    e.target.value === 'AUTO' ? 'AUTO' : 'MANUAL',
+                  )
+                }
+                size="small"
+                sx={{ minWidth: 220 }}
+                helperText={
+                  tradeExecutionMode === 'AUTO'
+                    ? 'AUTO sends immediately; may skip the waiting queue.'
+                    : 'MANUAL adds orders to the waiting queue.'
+                }
+              >
+                <MenuItem value="MANUAL">Manual (review in queue)</MenuItem>
+                <MenuItem value="AUTO">Auto (send now)</MenuItem>
+              </TextField>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={tradeExecutionTarget === 'PAPER'}
+                    onChange={(e) =>
+                      setTradeExecutionTarget(e.target.checked ? 'PAPER' : 'LIVE')
+                    }
+                  />
+                }
+                label={`Execution target: ${tradeExecutionTarget}`}
+              />
+            </Box>
             <Box>
               <Typography variant="caption" color="text.secondary">
                 Position sizing
@@ -3927,7 +4033,9 @@ export function HoldingsPage() {
             variant="contained"
           >
             {tradeSubmitting
-              ? 'Submitting…'
+              ? tradeSubmitProgress
+                ? `Submitting… (${tradeSubmitProgress.done}/${tradeSubmitProgress.total})`
+                : 'Submitting…'
               : isBulkTrade
                 ? 'Create orders'
                 : 'Create order'}

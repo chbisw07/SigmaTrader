@@ -20,6 +20,9 @@ AllowedOrderStatus = Literal[
     "REJECTED_RISK",
 ]
 
+ExecutionMode = Literal["MANUAL", "AUTO"]
+ExecutionTarget = Literal["LIVE", "PAPER"]
+
 
 class OrderRead(BaseModel):
     id: int
@@ -37,6 +40,7 @@ class OrderRead(BaseModel):
     gtt: bool
     status: AllowedOrderStatus
     mode: str
+    execution_target: ExecutionTarget = "LIVE"
     simulated: bool
     created_at: datetime
     updated_at: datetime
@@ -85,6 +89,8 @@ class ManualOrderCreate(BaseModel):
     order_type: Literal["MARKET", "LIMIT", "SL", "SL-M"] = "MARKET"
     product: str = "CNC"
     gtt: bool = False
+    mode: ExecutionMode = "MANUAL"
+    execution_target: ExecutionTarget = "LIVE"
 
 
 __all__ = [
@@ -93,4 +99,6 @@ __all__ = [
     "OrderUpdate",
     "ManualOrderCreate",
     "AllowedOrderStatus",
+    "ExecutionMode",
+    "ExecutionTarget",
 ]

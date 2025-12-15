@@ -486,6 +486,20 @@ export function QueuePage() {
       field: 'status',
       headerName: 'Status',
       width: 110,
+      valueFormatter: (value, row) => {
+        const order = row as Order
+        const base = String(value ?? order.status ?? '')
+        return order.execution_target === 'PAPER' ? `${base} (PAPER)` : base
+      },
+    },
+    {
+      field: 'execution_target',
+      headerName: 'Target',
+      width: 110,
+      valueGetter: (_value, row) => {
+        const order = row as Order
+        return order.execution_target ?? (order.simulated ? 'PAPER' : 'LIVE')
+      },
     },
     {
       field: 'gtt',

@@ -53,6 +53,8 @@ def test_create_manual_market_order_without_price() -> None:
     assert data["order_type"] == "MARKET"
     assert data["qty"] == 1
     assert data["status"] == "WAITING"
+    assert data["mode"] == "MANUAL"
+    assert data["execution_target"] == "LIVE"
 
 
 def test_create_manual_limit_requires_positive_price() -> None:
@@ -258,3 +260,28 @@ def test_bulk_like_multiple_create_calls_allow_partial_success() -> None:
         },
     )
     assert resp_invalid.status_code == 400
+
+
+def test_create_auto_paper_order_executes_immediately(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Avoid market-hours dependent failures in the paper engine routing.
+    monkeypatch.setattr("app.api.orders.is_market_open_now", lambda: True)
+
+    resp = client.post(
+        "/api/orders/",
+        json={
+            "symbol": "TCS",
+            "exchange": "NSE",
+            "side": "BUY",
+            "qty": 1,
+            "order_type": "MARKET",
+            "product": "CNC",
+            "mode": "AUTO",
+            "execution_target": "PAPER",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] == "AUTO"
+    assert data["execution_target"] == "PAPER"
+    assert data["simulated"] is True
+    assert data["status"] == "SENT"

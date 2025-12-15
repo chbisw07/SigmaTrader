@@ -8,6 +8,10 @@ export type OrderStatus =
   | 'PARTIALLY_EXECUTED'
   | 'CANCELLED'
   | 'REJECTED'
+  | 'REJECTED_RISK'
+
+export type ExecutionMode = 'MANUAL' | 'AUTO'
+export type ExecutionTarget = 'LIVE' | 'PAPER'
 
 export type Order = {
   id: number
@@ -25,6 +29,7 @@ export type Order = {
   gtt: boolean
   status: OrderStatus
   mode: string
+  execution_target?: ExecutionTarget
   simulated: boolean
   created_at: string
   updated_at: string
@@ -43,6 +48,8 @@ export async function createManualOrder(payload: {
   order_type: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: string
   gtt?: boolean
+  mode?: ExecutionMode
+  execution_target?: ExecutionTarget
 }): Promise<Order> {
   const res = await fetch('/api/orders/', {
     method: 'POST',
