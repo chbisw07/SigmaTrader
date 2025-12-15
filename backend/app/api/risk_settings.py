@@ -114,4 +114,20 @@ def update_risk_settings(
     return entity
 
 
+@router.delete(
+    "/{risk_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+def delete_risk_settings(
+    risk_id: int,
+    db: Session = Depends(get_db),
+) -> None:
+    entity = db.get(RiskSettings, risk_id)
+    if entity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    db.delete(entity)
+    db.commit()
+
+
 __all__ = ["router"]

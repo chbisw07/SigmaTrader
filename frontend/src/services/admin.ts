@@ -67,6 +67,18 @@ export async function createRiskSettings(payload: {
   return (await res.json()) as RiskSettings
 }
 
+export async function deleteRiskSettings(riskId: number): Promise<void> {
+  const res = await fetch(`/api/risk-settings/${riskId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to delete risk settings (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+}
+
 export async function updateStrategyExecutionMode(
   strategyId: number,
   executionMode: Strategy['execution_mode'],

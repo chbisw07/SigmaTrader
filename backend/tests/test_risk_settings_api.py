@@ -63,3 +63,13 @@ def test_create_global_and_per_strategy_risk_settings() -> None:
     assert list_response.status_code == 200
     items = list_response.json()
     assert any(item["id"] == per_strategy_payload["id"] for item in items)
+
+    delete_resp = client.delete(f"/api/risk-settings/{per_strategy_payload['id']}")
+    assert delete_resp.status_code == 204
+
+    list_response_after = client.get(
+        "/api/risk-settings/", params={"scope": "STRATEGY", "strategy_id": strategy_id}
+    )
+    assert list_response_after.status_code == 200
+    items_after = list_response_after.json()
+    assert all(item["id"] != per_strategy_payload["id"] for item in items_after)

@@ -22,6 +22,7 @@ import {
   fetchRiskSettings,
   fetchStrategies,
   createRiskSettings,
+  deleteRiskSettings,
   updateStrategyExecutionMode,
   updateStrategyExecutionTarget,
   updateStrategyPaperPollInterval,
@@ -63,6 +64,7 @@ export function SettingsPage() {
   const [isConnecting, setIsConnecting] = useState(false)
   const [updatingStrategyId, setUpdatingStrategyId] = useState<number | null>(null)
   const [savingRisk, setSavingRisk] = useState(false)
+  const [deletingRiskId, setDeletingRiskId] = useState<number | null>(null)
   const [riskScope, setRiskScope] = useState<'GLOBAL' | 'STRATEGY'>('GLOBAL')
   const [riskStrategyId, setRiskStrategyId] = useState<string>('')
   const [riskMaxOrderValue, setRiskMaxOrderValue] = useState<string>('')
@@ -540,6 +542,23 @@ export function SettingsPage() {
       )
     } finally {
       setSavingRisk(false)
+    }
+  }
+
+  const handleDeleteRiskSettings = async (riskId: number) => {
+    const confirmed = window.confirm('Delete this risk row?')
+    if (!confirmed) return
+    setDeletingRiskId(riskId)
+    try {
+      await deleteRiskSettings(riskId)
+      setRiskSettings((prev) => prev.filter((rs) => rs.id !== riskId))
+      setError(null)
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to delete risk settings',
+      )
+    } finally {
+      setDeletingRiskId(null)
     }
   }
 
@@ -1148,6 +1167,7 @@ export function SettingsPage() {
                   <TableCell>Max Qty/Order</TableCell>
                   <TableCell>Max Daily Loss</TableCell>
                   <TableCell>Clamp Mode</TableCell>
+                  <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -1159,11 +1179,22 @@ export function SettingsPage() {
                     <TableCell>{rs.max_quantity_per_order ?? '-'}</TableCell>
                     <TableCell>{rs.max_daily_loss ?? '-'}</TableCell>
                     <TableCell>{rs.clamp_mode}</TableCell>
+                    <TableCell align="right">
+                      <Button
+                        size="small"
+                        color="error"
+                        variant="text"
+                        onClick={() => void handleDeleteRiskSettings(rs.id)}
+                        disabled={deletingRiskId === rs.id}
+                      >
+                        {deletingRiskId === rs.id ? 'Deleting…' : 'Delete'}
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {riskSettings.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6}>
+                    <TableCell colSpan={7}>
                       <Typography variant="body2" color="text.secondary">
                         No risk settings configured yet.
                       </Typography>
