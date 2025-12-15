@@ -29,7 +29,7 @@ import {
   GridLogicOperator,
   type GridRowSelectionModel,
 } from '@mui/x-data-grid'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Editor, { type OnMount } from '@monaco-editor/react'
 
@@ -102,6 +102,8 @@ type HoldingRow = Holding & {
   correlationWeight?: number
   groupNames?: string[]
   groupsLabel?: string
+  reference_qty?: number | null
+  reference_price?: number | null
 }
 
 type HoldingsViewMode = 'default' | 'risk'
@@ -568,6 +570,7 @@ export function HoldingsPage() {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const [portfolioValue, setPortfolioValue] = useState<number | null>(null)
+  const loadRequestId = useRef(0)
 
   const [, setCorrSummary] =
     useState<HoldingsCorrelationResult | null>(null)
@@ -606,12 +609,17 @@ export function HoldingsPage() {
   }, [location.search, universeId])
 
   const load = async () => {
+    const requestId = ++loadRequestId.current
     try {
       setLoading(true)
+      // Clear any stale labels immediately; rows will repopulate once the
+      // latest request completes.
+      setActiveGroup(null)
       const [rawHoldings, groups] = await Promise.all([
         fetchHoldings(),
         listGroups().catch(() => [] as Group[]),
       ])
+      if (requestId !== loadRequestId.current) return
       setAvailableGroups(groups)
 
       const holdingsRows: HoldingRow[] = rawHoldings.map((h) => ({ ...h }))
@@ -643,12 +651,12 @@ export function HoldingsPage() {
 
       let baseRows: HoldingRow[] = holdingsRows
       if (universeId !== 'holdings') {
-        setActiveGroup(null)
         if (universeId.startsWith('group:')) {
           const groupIdRaw = universeId.slice('group:'.length)
           const groupId = Number(groupIdRaw)
           if (Number.isFinite(groupId) && groupId > 0) {
             const detail = await fetchGroup(groupId)
+            if (requestId !== loadRequestId.current) return
             setActiveGroup(detail)
             const bySymbol = new Map<string, HoldingRow>(
               holdingsRows.map((h) => [h.symbol, h]),
@@ -663,7 +671,12 @@ export function HoldingsPage() {
               })
               .map((m) => {
                 const held = bySymbol.get(m.symbol)
-                if (held) return { ...held }
+                if (held)
+                  return {
+                    ...held,
+                    reference_qty: m.reference_qty ?? null,
+                    reference_price: m.reference_price ?? null,
+                  }
                 return {
                   symbol: m.symbol,
                   exchange: m.exchange ?? 'NSE',
@@ -674,6 +687,8 @@ export function HoldingsPage() {
                   last_purchase_date: null,
                   total_pnl_percent: null,
                   today_pnl_percent: null,
+                  reference_qty: m.reference_qty ?? null,
+                  reference_price: m.reference_price ?? null,
                 } as HoldingRow
               })
           }
@@ -682,6 +697,7 @@ export function HoldingsPage() {
         setActiveGroup(null)
       }
 
+      if (requestId !== loadRequestId.current) return
       setHoldings(baseRows)
       setRowSelectionModel((prev) =>
         prev.filter((id) => baseRows.some((row) => row.symbol === id)),
@@ -700,9 +716,10 @@ export function HoldingsPage() {
         baseRows.map((row) => row.symbol).filter(Boolean),
       )
     } catch (err) {
+      if (requestId !== loadRequestId.current) return
       setError(err instanceof Error ? err.message : 'Failed to load holdings')
     } finally {
-      setLoading(false)
+      if (requestId === loadRequestId.current) setLoading(false)
     }
   }
 
@@ -812,6 +829,29 @@ export function HoldingsPage() {
       // Ignore JSON/Storage errors and fall back to defaults.
     }
   }, [viewMode])
+
+  useEffect(() => {
+    const basketLike =
+      activeGroup?.kind === 'MODEL_PORTFOLIO' || activeGroup?.kind === 'PORTFOLIO'
+    const desired = basketLike
+    const keys = [
+      'reference_qty',
+      'reference_price',
+      'amountRequired',
+      'pnlSinceCreation',
+      'pnlSinceCreationPct',
+    ] as const
+    setColumnVisibilityModel((prev) => {
+      let changed = false
+      const next: GridColumnVisibilityModel = { ...prev }
+      for (const key of keys) {
+        if (next[key] === desired) continue
+        next[key] = desired
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [activeGroup?.kind])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1542,6 +1582,12 @@ export function HoldingsPage() {
         selected.map((h) => ({
           symbol: h.symbol,
           exchange: h.exchange ?? 'NSE',
+          ...(groupCreateKind === 'MODEL_PORTFOLIO' || groupCreateKind === 'PORTFOLIO'
+            ? {
+                reference_qty: 1,
+                reference_price: getDisplayPrice(h),
+              }
+            : {}),
         })),
       )
       setGroupCreateOpen(false)
@@ -1831,6 +1877,54 @@ export function HoldingsPage() {
     return Number.isFinite(pct) ? Number(pct.toFixed(2)) : null
   }
 
+  const getUniverseReferencePrice = (row: HoldingRow): number | null => {
+    const v = row.reference_price
+    return v != null && Number.isFinite(Number(v)) && Number(v) > 0
+      ? Number(v)
+      : null
+  }
+
+  const getUniverseReferenceQty = (row: HoldingRow): number | null => {
+    const v = row.reference_qty
+    return v != null && Number.isFinite(Number(v)) && Number(v) >= 0
+      ? Number(v)
+      : null
+  }
+
+  const getSinceCreationPnl = (row: HoldingRow): number | null => {
+    const refPrice = getUniverseReferencePrice(row)
+    const refQty = getUniverseReferenceQty(row)
+    const current = getDisplayPrice(row)
+    if (
+      refPrice == null
+      || refQty == null
+      || refQty <= 0
+      || current == null
+      || !Number.isFinite(current)
+      || current <= 0
+    ) {
+      return null
+    }
+    const pnl = (current - refPrice) * refQty
+    return Number.isFinite(pnl) ? pnl : null
+  }
+
+  const getAmountRequiredForUniverse = (row: HoldingRow): number | null => {
+    const qty = getUniverseReferenceQty(row)
+    const current = getDisplayPrice(row)
+    if (
+      qty == null
+      || qty <= 0
+      || current == null
+      || !Number.isFinite(current)
+      || current <= 0
+    ) {
+      return null
+    }
+    const amount = qty * current
+    return Number.isFinite(amount) ? amount : null
+  }
+
   const getBracketPreviewPrice = (): number | null => {
     if (!tradeBracketEnabled) return null
     const mtp = Number(tradeMtpPct)
@@ -2070,6 +2164,15 @@ export function HoldingsPage() {
       width: 100,
     },
     {
+      field: 'reference_qty',
+      headerName: 'Ref Qty',
+      type: 'number',
+      width: 110,
+      valueGetter: (_value, row) => (row as HoldingRow).reference_qty ?? null,
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value)) ? String(Math.trunc(Number(value))) : '—',
+    },
+    {
       field: 'average_price',
       headerName: 'Avg Price',
       type: 'number',
@@ -2078,12 +2181,59 @@ export function HoldingsPage() {
         value != null ? Number(value).toFixed(2) : '-',
     },
     {
+      field: 'reference_price',
+      headerName: 'Ref Price',
+      type: 'number',
+      width: 130,
+      valueGetter: (_value, row) => (row as HoldingRow).reference_price ?? null,
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—',
+    },
+    {
       field: 'last_price',
       headerName: 'Last Price',
       type: 'number',
       width: 130,
       valueFormatter: (value) =>
         value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'amountRequired',
+      headerName: 'Amount Required',
+      type: 'number',
+      width: 170,
+      valueGetter: (_value, row) => getAmountRequiredForUniverse(row as HoldingRow),
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—',
+    },
+    {
+      field: 'pnlSinceCreation',
+      headerName: 'P&L (Since)',
+      type: 'number',
+      width: 150,
+      valueGetter: (_value, row) => getSinceCreationPnl(row as HoldingRow),
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'pnlSinceCreationPct',
+      headerName: 'P&L% (Since)',
+      type: 'number',
+      width: 150,
+      valueGetter: (_value, row) => {
+        const r = row as HoldingRow
+        const refPrice = getUniverseReferencePrice(r)
+        const current = getDisplayPrice(r)
+        if (refPrice == null || current == null || current <= 0) return null
+        const pct = ((current / refPrice) - 1) * 100
+        return Number.isFinite(pct) ? pct : null
+      },
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}%` : '—',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'invested',
@@ -2557,16 +2707,18 @@ export function HoldingsPage() {
                   sx={{ minWidth: 240 }}
                 >
                   <MenuItem value="holdings">Holdings (Zerodha)</MenuItem>
-                  {availableGroups.map((g) => {
-                    const kindLabel =
-                      g.kind === 'WATCHLIST'
-                        ? 'Watchlist'
-                        : g.kind === 'MODEL_PORTFOLIO'
-                          ? 'Basket'
-                          : g.kind === 'HOLDINGS_VIEW'
-                            ? 'Holdings view'
-                            : g.kind
-                    return (
+	                  {availableGroups.map((g) => {
+	                    const kindLabel =
+	                      g.kind === 'WATCHLIST'
+	                        ? 'Watchlist'
+	                        : g.kind === 'MODEL_PORTFOLIO'
+	                          ? 'Basket'
+	                          : g.kind === 'PORTFOLIO'
+	                            ? 'Portfolio'
+	                          : g.kind === 'HOLDINGS_VIEW'
+	                            ? 'Holdings view'
+	                            : g.kind
+	                    return (
                       <MenuItem key={g.id} value={`group:${g.id}`}>
                         {g.name} ({kindLabel})
                       </MenuItem>
@@ -3818,6 +3970,7 @@ export function HoldingsPage() {
               >
                 <MenuItem value="WATCHLIST">Watchlist</MenuItem>
                 <MenuItem value="MODEL_PORTFOLIO">Basket</MenuItem>
+                <MenuItem value="PORTFOLIO">Portfolio</MenuItem>
                 <MenuItem value="HOLDINGS_VIEW">Holdings view</MenuItem>
               </TextField>
               {groupCreateError && (

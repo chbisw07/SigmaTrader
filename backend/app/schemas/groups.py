@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.pydantic_compat import PYDANTIC_V2, ConfigDict
 
-GroupKind = Literal["WATCHLIST", "MODEL_PORTFOLIO", "HOLDINGS_VIEW"]
+GroupKind = Literal["WATCHLIST", "MODEL_PORTFOLIO", "HOLDINGS_VIEW", "PORTFOLIO"]
 
 
 class GroupBase(BaseModel):
@@ -35,6 +35,16 @@ class GroupMemberBase(BaseModel):
         le=1.0,
         description="Fraction of total (0.0 to 1.0).",
     )
+    reference_qty: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Planned quantity for basket/portfolio membership (optional).",
+    )
+    reference_price: Optional[float] = Field(
+        None,
+        gt=0.0,
+        description="Reference price captured at creation time (optional).",
+    )
     notes: Optional[str] = None
 
 
@@ -44,6 +54,8 @@ class GroupMemberCreate(GroupMemberBase):
 
 class GroupMemberUpdate(BaseModel):
     target_weight: Optional[float] = Field(None, ge=0.0, le=1.0)
+    reference_qty: Optional[int] = Field(None, ge=0)
+    reference_price: Optional[float] = Field(None, gt=0.0)
     notes: Optional[str] = None
 
 

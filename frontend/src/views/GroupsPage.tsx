@@ -82,6 +82,7 @@ type AllocationPreviewRow = {
 const GROUP_KINDS: Array<{ value: GroupKind; label: string }> = [
   { value: 'WATCHLIST', label: 'Watchlist' },
   { value: 'MODEL_PORTFOLIO', label: 'Basket' },
+  { value: 'PORTFOLIO', label: 'Portfolio' },
   { value: 'HOLDINGS_VIEW', label: 'Holdings view' },
 ]
 
@@ -163,12 +164,16 @@ export function GroupsPage() {
     symbol: string
     exchange?: string | null
     weightPct: string
+    refQty: string
+    refPrice: string
     notes: string
   }>({
     memberId: null,
     symbol: '',
     exchange: null,
     weightPct: '',
+    refQty: '',
+    refPrice: '',
     notes: '',
   })
 
@@ -427,6 +432,14 @@ export function GroupsPage() {
         member.target_weight != null
           ? String(Math.round(member.target_weight * 1000) / 10)
           : '',
+      refQty:
+        member.reference_qty != null && Number.isFinite(Number(member.reference_qty))
+          ? String(Math.trunc(Number(member.reference_qty)))
+          : '',
+      refPrice:
+        member.reference_price != null && Number.isFinite(Number(member.reference_price))
+          ? Number(member.reference_price).toFixed(2)
+          : '',
       notes: member.notes ?? '',
     })
     setEditMemberOpen(true)
@@ -444,10 +457,39 @@ export function GroupsPage() {
       }
       targetWeight = pct / 100
     }
+    let referenceQty: number | null | undefined
+    let referencePrice: number | null | undefined
+    if (selectedGroup?.kind === 'MODEL_PORTFOLIO' || selectedGroup?.kind === 'PORTFOLIO') {
+      const qtyRaw = memberDraft.refQty.trim()
+      if (qtyRaw === '') {
+        referenceQty = null
+      } else {
+        const qty = Math.floor(Number(qtyRaw))
+        if (!Number.isFinite(qty) || qty < 0) {
+          setError('Reference qty must be a non-negative integer.')
+          return
+        }
+        referenceQty = qty
+      }
+
+      const priceRaw = memberDraft.refPrice.trim()
+      if (priceRaw === '') {
+        referencePrice = null
+      } else {
+        const price = Number(priceRaw)
+        if (!Number.isFinite(price) || price <= 0) {
+          setError('Reference price must be a positive number.')
+          return
+        }
+        referencePrice = price
+      }
+    }
     try {
       setError(null)
       await updateGroupMember(selectedGroupId, memberDraft.memberId, {
         target_weight: targetWeight,
+        reference_qty: referenceQty,
+        reference_price: referencePrice,
         notes: memberDraft.notes.trim() || null,
       })
       setEditMemberOpen(false)
@@ -663,45 +705,70 @@ export function GroupsPage() {
     },
   ]
 
-  const membersColumns: GridColDef<GroupMember>[] = [
-    { field: 'symbol', headerName: 'Symbol', width: 160 },
-    { field: 'exchange', headerName: 'Exchange', width: 120 },
-    {
-      field: 'target_weight',
-      headerName: 'Target weight',
-      width: 150,
-      valueGetter: (_value, row) =>
-        row.target_weight != null ? row.target_weight : null,
-      valueFormatter: (v) => formatPercent(v as number | null),
-    },
-    { field: 'notes', headerName: 'Notes', flex: 1, minWidth: 160 },
-    {
-      field: 'actions',
-      headerName: 'Actions',
-      width: 240,
-      sortable: false,
-      filterable: false,
-      renderCell: (params: GridRenderCellParams<GroupMember>) => (
-        <Stack direction="row" spacing={1}>
-          <Button
-            variant="outlined"
-            startIcon={<EditIcon />}
-            onClick={() => openMemberEditor(params.row)}
-          >
-            Edit
-          </Button>
-          <Button
-            variant="outlined"
-            color="error"
-            startIcon={<DeleteIcon />}
-            onClick={() => void handleDeleteMember(params.row)}
-          >
-            Remove
-          </Button>
-        </Stack>
-      ),
-    },
-  ]
+  const membersColumns = useMemo((): GridColDef<GroupMember>[] => {
+    const cols: GridColDef<GroupMember>[] = [
+      { field: 'symbol', headerName: 'Symbol', width: 160 },
+      { field: 'exchange', headerName: 'Exchange', width: 120 },
+      {
+        field: 'target_weight',
+        headerName: 'Target weight',
+        width: 150,
+        valueGetter: (_value, row) =>
+          row.target_weight != null ? row.target_weight : null,
+        valueFormatter: (v) => formatPercent(v as number | null),
+      },
+    ]
+
+    if (selectedGroup?.kind === 'MODEL_PORTFOLIO' || selectedGroup?.kind === 'PORTFOLIO') {
+      cols.push(
+        {
+          field: 'reference_qty',
+          headerName: 'Ref qty',
+          width: 110,
+          valueGetter: (_value, row) => row.reference_qty ?? null,
+        },
+        {
+          field: 'reference_price',
+          headerName: 'Ref price',
+          width: 130,
+          valueGetter: (_value, row) => row.reference_price ?? null,
+          valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
+        },
+      )
+    }
+
+    cols.push(
+      { field: 'notes', headerName: 'Notes', flex: 1, minWidth: 160 },
+      {
+        field: 'actions',
+        headerName: 'Actions',
+        width: 240,
+        sortable: false,
+        filterable: false,
+        renderCell: (params: GridRenderCellParams<GroupMember>) => (
+          <Stack direction="row" spacing={1}>
+            <Button
+              variant="outlined"
+              startIcon={<EditIcon />}
+              onClick={() => openMemberEditor(params.row)}
+            >
+              Edit
+            </Button>
+            <Button
+              variant="outlined"
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={() => void handleDeleteMember(params.row)}
+            >
+              Remove
+            </Button>
+          </Stack>
+        ),
+      },
+    )
+
+    return cols
+  }, [selectedGroup?.kind])
 
   const canAllocateWithWeights =
     selectedGroup?.members?.some((m) => (m.target_weight ?? 0) > 0) ?? false
@@ -1036,6 +1103,26 @@ export function GroupsPage() {
               }
               helperText="Optional. Leave blank for equal-weight allocations."
             />
+            {(selectedGroup?.kind === 'MODEL_PORTFOLIO' || selectedGroup?.kind === 'PORTFOLIO') && (
+              <>
+                <TextField
+                  label="Reference qty"
+                  value={memberDraft.refQty}
+                  onChange={(e) =>
+                    setMemberDraft((prev) => ({ ...prev, refQty: e.target.value }))
+                  }
+                  helperText="Optional. Used for basket/portfolio 'amount required' and 'since creation' P&L."
+                />
+                <TextField
+                  label="Reference price"
+                  value={memberDraft.refPrice}
+                  onChange={(e) =>
+                    setMemberDraft((prev) => ({ ...prev, refPrice: e.target.value }))
+                  }
+                  helperText="Optional. Reference buy price at basket/portfolio creation."
+                />
+              </>
+            )}
             <TextField
               label="Notes"
               value={memberDraft.notes}

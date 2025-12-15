@@ -26,6 +26,12 @@ from app.schemas.groups import (
 router = APIRouter()
 
 
+def _field_is_set(payload, field: str) -> bool:
+    if hasattr(payload, "model_fields_set"):
+        return field in payload.model_fields_set  # type: ignore[attr-defined]
+    return field in getattr(payload, "__fields_set__", set())
+
+
 def _model_validate(schema_cls, obj):
     """Compat helper for Pydantic v1/v2."""
 
@@ -190,6 +196,8 @@ def add_group_member(
         symbol=payload.symbol,
         exchange=payload.exchange,
         target_weight=payload.target_weight,
+        reference_qty=payload.reference_qty,
+        reference_price=payload.reference_price,
         notes=payload.notes,
     )
     db.add(member)
@@ -220,6 +228,8 @@ def bulk_add_group_members(
                 symbol=item.symbol,
                 exchange=item.exchange,
                 target_weight=item.target_weight,
+                reference_qty=item.reference_qty,
+                reference_price=item.reference_price,
                 notes=item.notes,
             )
         )
@@ -250,10 +260,16 @@ def update_group_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     updated = False
-    if payload.target_weight is not None:
+    if _field_is_set(payload, "target_weight"):
         member.target_weight = payload.target_weight
         updated = True
-    if payload.notes is not None:
+    if _field_is_set(payload, "reference_qty"):
+        member.reference_qty = payload.reference_qty
+        updated = True
+    if _field_is_set(payload, "reference_price"):
+        member.reference_price = payload.reference_price
+        updated = True
+    if _field_is_set(payload, "notes"):
         member.notes = payload.notes
         updated = True
     if updated:

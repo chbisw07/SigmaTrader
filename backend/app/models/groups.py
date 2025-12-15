@@ -24,7 +24,7 @@ class Group(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('WATCHLIST', 'MODEL_PORTFOLIO', 'HOLDINGS_VIEW')",
+            "kind IN ('WATCHLIST', 'MODEL_PORTFOLIO', 'HOLDINGS_VIEW', 'PORTFOLIO')",
             name="ck_groups_kind",
         ),
         Index("ix_groups_owner_id", "owner_id"),
@@ -89,6 +89,11 @@ class GroupMember(Base):
     # equal-weight.
     target_weight: Mapped[Optional[float]] = mapped_column(Float)
     notes: Mapped[Optional[str]] = mapped_column(Text())
+
+    # Basket/portfolio metadata: the planned quantity and reference price captured
+    # at creation time (used for "since creation" P&L and amount required).
+    reference_qty: Mapped[Optional[int]] = mapped_column(Integer)
+    reference_price: Mapped[Optional[float]] = mapped_column(Float)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)

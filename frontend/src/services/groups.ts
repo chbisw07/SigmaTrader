@@ -1,4 +1,8 @@
-export type GroupKind = 'WATCHLIST' | 'MODEL_PORTFOLIO' | 'HOLDINGS_VIEW'
+export type GroupKind =
+  | 'WATCHLIST'
+  | 'MODEL_PORTFOLIO'
+  | 'HOLDINGS_VIEW'
+  | 'PORTFOLIO'
 
 export type Group = {
   id: number
@@ -17,6 +21,8 @@ export type GroupMember = {
   symbol: string
   exchange?: string | null
   target_weight?: number | null
+  reference_qty?: number | null
+  reference_price?: number | null
   notes?: string | null
   created_at: string
   updated_at: string
@@ -142,6 +148,8 @@ export async function addGroupMember(
     symbol: string
     exchange?: string | null
     target_weight?: number | null
+    reference_qty?: number | null
+    reference_price?: number | null
     notes?: string | null
   },
 ): Promise<GroupMember> {
@@ -165,6 +173,8 @@ export async function bulkAddGroupMembers(
     symbol: string
     exchange?: string | null
     target_weight?: number | null
+    reference_qty?: number | null
+    reference_price?: number | null
     notes?: string | null
   }>,
 ): Promise<GroupMember[]> {
@@ -187,6 +197,8 @@ export async function updateGroupMember(
   memberId: number,
   payload: {
     target_weight?: number | null
+    reference_qty?: number | null
+    reference_price?: number | null
     notes?: string | null
   },
 ): Promise<GroupMember> {
