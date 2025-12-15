@@ -104,6 +104,9 @@ const DEFAULT_ALLOCATION: AllocationDraft = {
   mode: 'equal',
 }
 
+const GROUPS_LEFT_PANEL_WIDTH_STORAGE_KEY = 'st_groups_left_panel_width_v1'
+const DEFAULT_LEFT_PANEL_WIDTH = 800
+
 function normalizeLines(text: string): string[] {
   return text
     .split(/[\n,]+/g)
@@ -179,7 +182,18 @@ export function GroupsPage() {
 
   // Resizable panel state
   const containerRef = useRef<HTMLDivElement>(null)
-  const [leftPanelWidth, setLeftPanelWidth] = useState(800)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_LEFT_PANEL_WIDTH
+    try {
+      const raw = window.localStorage.getItem(GROUPS_LEFT_PANEL_WIDTH_STORAGE_KEY)
+      const parsed = raw != null ? Number(raw) : Number.NaN
+      return Number.isFinite(parsed) && parsed >= 300
+        ? parsed
+        : DEFAULT_LEFT_PANEL_WIDTH
+    } catch {
+      return DEFAULT_LEFT_PANEL_WIDTH
+    }
+  })
   const [isResizing, setIsResizing] = useState(false)
 
   const startResizing = useCallback(() => {
@@ -219,6 +233,19 @@ export function GroupsPage() {
       document.body.style.userSelect = ''
     }
   }, [isResizing])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (isResizing) return
+    try {
+      window.localStorage.setItem(
+        GROUPS_LEFT_PANEL_WIDTH_STORAGE_KEY,
+        String(Math.round(leftPanelWidth)),
+      )
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [isResizing, leftPanelWidth])
 
   const reloadGroups = async (
     selectId?: number | null,
