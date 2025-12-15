@@ -6,6 +6,8 @@ import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
+import Tab from '@mui/material/Tab'
+import Tabs from '@mui/material/Tabs'
 import Table from '@mui/material/Table'
 import TableBody from '@mui/material/TableBody'
 import TableCell from '@mui/material/TableCell'
@@ -14,6 +16,7 @@ import TableRow from '@mui/material/TableRow'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
   fetchRiskSettings,
@@ -43,6 +46,12 @@ import {
 import { recordAppLog } from '../services/logs'
 
 export function SettingsPage() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  type SettingsTab = 'broker' | 'risk' | 'strategy'
+  const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
+
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [riskSettings, setRiskSettings] = useState<RiskSettings[]>([])
   const [loading, setLoading] = useState(true)
@@ -75,6 +84,26 @@ export function SettingsPage() {
   const [editedKeys, setEditedKeys] = useState<Record<string, string>>({})
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
   const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
+
+  useEffect(() => {
+    const tab = new URLSearchParams(location.search).get('tab')
+    if (tab === 'broker' || tab === 'risk' || tab === 'strategy') {
+      if (tab !== activeTab) setActiveTab(tab)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search])
+
+  const handleTabChange = (_event: React.SyntheticEvent, next: string) => {
+    const nextTab: SettingsTab =
+      next === 'risk' ? 'risk' : next === 'strategy' ? 'strategy' : 'broker'
+    setActiveTab(nextTab)
+    const params = new URLSearchParams(location.search)
+    params.set('tab', nextTab)
+    navigate(
+      { pathname: location.pathname, search: params.toString() },
+      { replace: true },
+    )
+  }
 
   useEffect(() => {
     let active = true
@@ -523,6 +552,20 @@ export function SettingsPage() {
         Manage strategies, risk settings, and Zerodha connection details.
       </Typography>
 
+      <Paper sx={{ mb: 2 }}>
+        <Tabs
+          value={activeTab}
+          onChange={handleTabChange}
+          variant="scrollable"
+          scrollButtons="auto"
+        >
+          <Tab value="broker" label="Broker settings" />
+          <Tab value="risk" label="Risk settings" />
+          <Tab value="strategy" label="Strategy settings" />
+        </Tabs>
+      </Paper>
+
+      {activeTab === 'broker' && (
       <Paper sx={{ mb: 3, p: 2 }}>
         <Typography variant="h6" gutterBottom>
           Broker Settings
@@ -852,18 +895,22 @@ export function SettingsPage() {
           </Typography>
         )}
       </Paper>
+      )}
 
-      {loading ? (
+      {activeTab !== 'broker' && loading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
-          <Typography variant="body2">Loading strategies and risk settings...</Typography>
+          <Typography variant="body2">
+            {activeTab === 'risk'
+              ? 'Loading risk settings...'
+              : 'Loading strategy settings...'}
+          </Typography>
         </Box>
-      ) : error ? (
+      ) : activeTab !== 'broker' && error ? (
         <Typography color="error" variant="body2">
           {error}
         </Typography>
-      ) : (
-        <>
+      ) : activeTab === 'strategy' ? (
           <Paper sx={{ mb: 3, p: 2 }}>
             <Typography variant="h6" gutterBottom>
               Strategies
@@ -990,8 +1037,8 @@ export function SettingsPage() {
               </TableBody>
             </Table>
           </Paper>
-
-          <Paper sx={{ p: 2 }}>
+      ) : activeTab === 'risk' ? (
+          <Paper sx={{ mb: 3, p: 2 }}>
             <Typography variant="h6" gutterBottom>
               Risk Settings
             </Typography>
@@ -1126,8 +1173,7 @@ export function SettingsPage() {
               </TableBody>
             </Table>
           </Paper>
-        </>
-      )}
+      ) : null}
     </Box>
   )
 }
