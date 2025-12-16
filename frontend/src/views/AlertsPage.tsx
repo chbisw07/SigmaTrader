@@ -5,19 +5,23 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import Divider from '@mui/material/Divider'
 import FormControlLabel from '@mui/material/FormControlLabel'
+import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import Switch from '@mui/material/Switch'
 import TextField from '@mui/material/TextField'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import {
   DataGrid,
   type GridColDef,
   type GridRenderCellParams,
 } from '@mui/x-data-grid'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import { useEffect, useMemo, useState } from 'react'
 
 import {
@@ -259,6 +263,7 @@ function AlertV3EditorDialog({
   onClose,
   onSaved,
 }: AlertV3EditorDialogProps) {
+  const [helpOpen, setHelpOpen] = useState(false)
   const [name, setName] = useState('')
   const [targetKind, setTargetKind] = useState<'SYMBOL' | 'HOLDINGS' | 'GROUP'>(
     'HOLDINGS',
@@ -360,7 +365,16 @@ function AlertV3EditorDialog({
 
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="md" fullWidth>
-      <DialogTitle>{alert ? 'Edit alert' : 'Create alert'}</DialogTitle>
+      <DialogTitle
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+      >
+        <span>{alert ? 'Edit alert' : 'Create alert'}</span>
+        <Tooltip title="Help: DSL syntax, functions, metrics">
+          <IconButton size="small" onClick={() => setHelpOpen(true)}>
+            <HelpOutlineIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </DialogTitle>
       <DialogContent sx={{ pt: 2 }}>
         <TextField
           label="Name"
@@ -549,6 +563,235 @@ function AlertV3EditorDialog({
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </DialogActions>
+      <AlertDslHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+    </Dialog>
+  )
+}
+
+function AlertDslHelpDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  const [tab, setTab] = useState(0)
+
+  const timeframes = [
+    '1m',
+    '5m',
+    '15m',
+    '1h',
+    '1d',
+    '1w',
+    '2w',
+    '1mo',
+    '3mo',
+    '6mo',
+    '1y',
+    '2y',
+  ]
+
+  const metrics = [
+    'TODAY_PNL_PCT',
+    'PNL_PCT',
+    'MAX_PNL_PCT',
+    'DRAWDOWN_PCT',
+    'INVESTED',
+    'CURRENT_VALUE',
+    'QTY',
+    'AVG_PRICE',
+  ]
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>Alert DSL help</DialogTitle>
+      <DialogContent sx={{ pt: 1 }}>
+        <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ mb: 2 }}>
+          <Tab label="Syntax" />
+          <Tab label="Functions" />
+          <Tab label="Metrics" />
+          <Tab label="Examples" />
+        </Tabs>
+
+        {tab === 0 && (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              Use this DSL in both variable definitions and the condition box. Keywords and
+              function names are case-insensitive.
+            </Typography>
+
+            <Box>
+              <Typography variant="subtitle2">Basics</Typography>
+              <Typography variant="body2" component="div">
+                - Logical: <code>AND</code>, <code>OR</code>, <code>NOT</code>
+                <br />
+                - Comparisons: <code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>,{' '}
+                <code>&lt;=</code>, <code>==</code>, <code>!=</code>
+                <br />
+                - Arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>{' '}
+                (parentheses supported)
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle2">Event operators</Typography>
+              <Typography variant="body2" component="div">
+                - <code>A CROSSES_ABOVE B</code> / <code>A CROSSES_BELOW B</code>
+                <br />
+                - Aliases accepted: <code>CROSSING_ABOVE</code>, <code>CROSSING_BELOW</code>
+                <br />
+                - <code>A MOVING_UP N</code> / <code>A MOVING_DOWN N</code> (N is numeric-only)
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                CROSSES_* uses the previous bar vs current bar. MOVING_* checks percent change
+                from previous bar to current bar against N.
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle2">Variables</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Variable names must be valid identifiers: letters/underscore first, then letters,
+                numbers, underscore (example: <code>RSI_1H_14</code>).
+              </Typography>
+            </Box>
+
+            <Divider />
+
+            <Typography variant="body2" color="text.secondary">
+              Missing data (no candle history / metric not available) evaluates to “no match”
+              (the condition won’t trigger).
+            </Typography>
+          </Box>
+        )}
+
+        {tab === 1 && (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              Sources: use <code>open</code>, <code>high</code>, <code>low</code>,{' '}
+              <code>close</code>, <code>volume</code>. Timeframes can be written as{' '}
+              <code>1d</code> or quoted (<code>&quot;1d&quot;</code>).
+            </Typography>
+
+            <Box>
+              <Typography variant="subtitle2">OHLCV / price</Typography>
+              <Typography variant="body2" component="div">
+                - <code>OPEN(tf)</code>, <code>HIGH(tf)</code>, <code>LOW(tf)</code>,{' '}
+                <code>CLOSE(tf)</code>, <code>VOLUME(tf)</code>
+                <br />
+                - <code>PRICE(tf)</code> (same as <code>CLOSE(tf)</code>)
+                <br />
+                - <code>PRICE(source, tf)</code> where source is open/high/low/close
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle2">Indicators</Typography>
+              <Typography variant="body2" component="div">
+                - <code>SMA(series, len, tf?)</code> (tf defaults to 1d)
+                <br />
+                - <code>EMA(series, len, tf?)</code> (tf defaults to 1d)
+                <br />
+                - <code>RSI(series, len, tf?)</code> (tf defaults to 1d)
+                <br />
+                - <code>STDDEV(series, len, tf?)</code> (tf defaults to 1d)
+                <br />
+                - <code>MAX(series, len, tf?)</code>, <code>MIN(series, len, tf?)</code>,{' '}
+                <code>AVG(series, len, tf?)</code>, <code>SUM(series, len, tf?)</code>
+                <br />
+                - <code>RET(series, tf)</code> (percent return over the latest bar)
+                <br />
+                - <code>ATR(len, tf)</code>
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Limitation: higher-order series (e.g. <code>SMA(RSI(...))</code>) are not supported
+                yet; pass a source series like <code>close</code> / <code>PRICE(tf)</code>.
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle2">Math</Typography>
+              <Typography variant="body2" component="div">
+                - <code>ABS(x)</code>, <code>SQRT(x)</code>, <code>LOG(x)</code>,{' '}
+                <code>EXP(x)</code>, <code>POW(x, y)</code>
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle2">Custom indicators</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Any enabled custom indicator (from the “Indicators” tab) can be called like a
+                function: <code>MY_IND(arg1, arg2)</code>. The argument count must match the
+                indicator’s parameter list.
+              </Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle2">Supported timeframes</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {timeframes.join(', ')} (weekly candles are resampled from daily data).
+              </Typography>
+            </Box>
+          </Box>
+        )}
+
+        {tab === 2 && (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              Metrics are per-symbol values derived from holdings + daily candles. They can be used
+              directly in conditions or assigned to variables.
+            </Typography>
+            <Typography variant="body2">
+              {metrics.map((m) => (
+                <span key={m}>
+                  <code>{m}</code>{' '}
+                </span>
+              ))}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Example: <code>TODAY_PNL_PCT &gt; 5</code>
+            </Typography>
+          </Box>
+        )}
+
+        {tab === 3 && (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Typography variant="subtitle2">Common</Typography>
+            <Typography variant="body2" component="div">
+              <code>TODAY_PNL_PCT &gt; 5</code>
+              <br />
+              <code>RSI(close, 14, 1h) &lt; 30 AND TODAY_PNL_PCT &gt; 5</code>
+            </Typography>
+
+            <Typography variant="subtitle2">Crossing / moving</Typography>
+            <Typography variant="body2" component="div">
+              <code>SMA(close, 20, 1d) CROSSES_ABOVE SMA(close, 50, 1d)</code>
+              <br />
+              <code>PRICE(1d) MOVING_UP 2</code>
+            </Typography>
+
+            <Typography variant="subtitle2">Using variables</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+              Define variables:
+            </Typography>
+            <Typography variant="body2" component="div">
+              <code>RSI_1H_14 = RSI(close, 14, 1h)</code>
+              <br />
+              <code>MA_1D_50 = SMA(close, 50, 1d)</code>
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 0.5 }}>
+              Then use them in the condition:
+            </Typography>
+            <Typography variant="body2" component="div">
+              <code>RSI_1H_14 &lt; 30 AND PRICE(1d) &gt; MA_1D_50</code>
+            </Typography>
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
     </Dialog>
   )
 }
@@ -708,6 +951,7 @@ function CustomIndicatorEditorDialog({
   onClose,
   onSaved,
 }: CustomIndicatorEditorDialogProps) {
+  const [helpOpen, setHelpOpen] = useState(false)
   const [name, setName] = useState('')
   const [params, setParams] = useState('')
   const [bodyDsl, setBodyDsl] = useState('')
@@ -766,7 +1010,16 @@ function CustomIndicatorEditorDialog({
 
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="md" fullWidth>
-      <DialogTitle>{indicator ? 'Edit custom indicator' : 'Create custom indicator'}</DialogTitle>
+      <DialogTitle
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+      >
+        <span>{indicator ? 'Edit custom indicator' : 'Create custom indicator'}</span>
+        <Tooltip title="Help: formula DSL + allowed functions">
+          <IconButton size="small" onClick={() => setHelpOpen(true)}>
+            <HelpOutlineIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </DialogTitle>
       <DialogContent sx={{ pt: 2 }}>
         <TextField
           label="Name"
@@ -813,6 +1066,62 @@ function CustomIndicatorEditorDialog({
         <Button variant="contained" onClick={() => void handleSave()} disabled={saving}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
+      </DialogActions>
+      <CustomIndicatorHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+    </Dialog>
+  )
+}
+
+function CustomIndicatorHelpDialog({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>Custom indicator help</DialogTitle>
+      <DialogContent sx={{ pt: 1 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Custom indicators are reusable numeric formulas. They cannot contain comparisons,
+          logical operators (AND/OR/NOT), or event operators (CROSSES_*/MOVING_*). Use them inside
+          alert variables/conditions.
+        </Typography>
+
+        <Typography variant="subtitle2">Parameters</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Parameters are identifiers you can reference inside the formula. Example params:{' '}
+          <code>src</code>, <code>len</code>.
+        </Typography>
+
+        <Typography variant="subtitle2">Allowed functions</Typography>
+        <Typography variant="body2" component="div" sx={{ mb: 2 }}>
+          - <code>OPEN(tf)</code>, <code>HIGH(tf)</code>, <code>LOW(tf)</code>,{' '}
+          <code>CLOSE(tf)</code>, <code>VOLUME(tf)</code>, <code>PRICE(tf)</code>,{' '}
+          <code>PRICE(source, tf)</code>
+          <br />
+          - <code>SMA(series, len, tf?)</code>, <code>EMA(series, len, tf?)</code>,{' '}
+          <code>RSI(series, len, tf?)</code>, <code>STDDEV(series, len, tf?)</code>
+          <br />
+          - <code>MAX(series, len, tf?)</code>, <code>MIN(series, len, tf?)</code>,{' '}
+          <code>AVG(series, len, tf?)</code>, <code>SUM(series, len, tf?)</code>
+          <br />
+          - <code>RET(series, tf)</code>, <code>ATR(len, tf)</code>
+          <br />
+          - <code>ABS(x)</code>, <code>SQRT(x)</code>, <code>LOG(x)</code>,{' '}
+          <code>EXP(x)</code>, <code>POW(x, y)</code>
+        </Typography>
+
+        <Typography variant="subtitle2">Examples</Typography>
+        <Typography variant="body2" component="div">
+          <code>ATR(14, 1d) / PRICE(1d) * 100</code>
+          <br />
+          <code>SMA(close, 20, 1d) - SMA(close, 50, 1d)</code>
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>
   )

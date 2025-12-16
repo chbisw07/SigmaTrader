@@ -55,6 +55,12 @@ _CUSTOM_INDICATOR_ALLOWED_BUILTINS: Set[str] = {
     "MIN",
     "AVG",
     "SUM",
+    # Math helpers
+    "ABS",
+    "SQRT",
+    "LOG",
+    "EXP",
+    "POW",
 }
 
 
@@ -376,13 +382,7 @@ def compile_alert_definition(
                 continue
             # Built-ins are validated at evaluation time as well; keep a minimal
             # allowlist here.
-            if fn not in _CUSTOM_INDICATOR_ALLOWED_BUILTINS and fn not in {
-                "ABS",
-                "SQRT",
-                "LOG",
-                "EXP",
-                "POW",
-            }:
+            if fn not in _CUSTOM_INDICATOR_ALLOWED_BUILTINS:
                 raise IndicatorAlertError(f"Unknown function '{n.name}'")
 
     # Auto-fill cadence when unset/blank.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from math import sqrt
+from math import exp, log, sqrt
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy.orm import Session
@@ -861,32 +861,18 @@ def _eval_numeric(
             return v
 
         if name == "ATR":
-            if len(node.args) not in {2, 3}:
-                raise IndicatorAlertError(
-                    "ATR expects (length, timeframe) or (source, length, timeframe)"
-                )
-            if len(node.args) == 2:
-                length_val = _eval_numeric(
-                    node.args[0],
-                    db=db,
-                    settings=settings,
-                    cache=cache,
-                    params=params,
-                    custom_indicators=custom_indicators,
-                )
-                length = int(length_val.now) if length_val.now is not None else 0
-                tf = _coerce_tf(node.args[1]).lower()
-            else:
-                length_val = _eval_numeric(
-                    node.args[1],
-                    db=db,
-                    settings=settings,
-                    cache=cache,
-                    params=params,
-                    custom_indicators=custom_indicators,
-                )
-                length = int(length_val.now) if length_val.now is not None else 0
-                tf = _coerce_tf(node.args[2]).lower()
+            if len(node.args) != 2:
+                raise IndicatorAlertError("ATR expects (length, timeframe)")
+            length_val = _eval_numeric(
+                node.args[0],
+                db=db,
+                settings=settings,
+                cache=cache,
+                params=params,
+                custom_indicators=custom_indicators,
+            )
+            length = int(length_val.now) if length_val.now is not None else 0
+            tf = _coerce_tf(node.args[1]).lower()
             highs, bar_time = cache.series(tf, "high")
             lows, _ = cache.series(tf, "low")
             closes, _ = cache.series(tf, "close")
@@ -908,6 +894,79 @@ def _eval_numeric(
             if v.now is None or v.prev is None:
                 return SeriesValue(None, None, v.bar_time)
             return SeriesValue(abs(v.now), abs(v.prev), v.bar_time)
+
+        if name == "SQRT":
+            if len(node.args) != 1:
+                raise IndicatorAlertError("SQRT expects (x)")
+            v = _eval_numeric(
+                node.args[0],
+                db=db,
+                settings=settings,
+                cache=cache,
+                params=params,
+                custom_indicators=custom_indicators,
+            )
+            if v.now is None or v.prev is None or v.now < 0 or v.prev < 0:
+                return SeriesValue(None, None, v.bar_time)
+            return SeriesValue(sqrt(v.now), sqrt(v.prev), v.bar_time)
+
+        if name == "LOG":
+            if len(node.args) != 1:
+                raise IndicatorAlertError("LOG expects (x)")
+            v = _eval_numeric(
+                node.args[0],
+                db=db,
+                settings=settings,
+                cache=cache,
+                params=params,
+                custom_indicators=custom_indicators,
+            )
+            if v.now is None or v.prev is None or v.now <= 0 or v.prev <= 0:
+                return SeriesValue(None, None, v.bar_time)
+            return SeriesValue(log(v.now), log(v.prev), v.bar_time)
+
+        if name == "EXP":
+            if len(node.args) != 1:
+                raise IndicatorAlertError("EXP expects (x)")
+            v = _eval_numeric(
+                node.args[0],
+                db=db,
+                settings=settings,
+                cache=cache,
+                params=params,
+                custom_indicators=custom_indicators,
+            )
+            if v.now is None or v.prev is None:
+                return SeriesValue(None, None, v.bar_time)
+            return SeriesValue(exp(v.now), exp(v.prev), v.bar_time)
+
+        if name == "POW":
+            if len(node.args) != 2:
+                raise IndicatorAlertError("POW expects (x, y)")
+            a = _eval_numeric(
+                node.args[0],
+                db=db,
+                settings=settings,
+                cache=cache,
+                params=params,
+                custom_indicators=custom_indicators,
+            )
+            b = _eval_numeric(
+                node.args[1],
+                db=db,
+                settings=settings,
+                cache=cache,
+                params=params,
+                custom_indicators=custom_indicators,
+            )
+            if a.now is None or a.prev is None or b.now is None or b.prev is None:
+                return SeriesValue(None, None, a.bar_time or b.bar_time)
+            try:
+                return SeriesValue(
+                    a.now**b.now, a.prev**b.prev, a.bar_time or b.bar_time
+                )
+            except (OverflowError, ValueError):
+                return SeriesValue(None, None, a.bar_time or b.bar_time)
 
         raise IndicatorAlertError(f"Unsupported function '{name}'")
 
