@@ -1,6 +1,7 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
+import Autocomplete from '@mui/material/Autocomplete'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -61,6 +62,34 @@ type RuleRow = IndicatorRule & {
   id: number
   strategy_name?: string | null
 }
+
+const ALERT_V3_TIMEFRAMES = [
+  '1m',
+  '5m',
+  '15m',
+  '1h',
+  '1d',
+  '1w',
+  '2w',
+  '1mo',
+  '3mo',
+  '6mo',
+  '1y',
+  '2y',
+] as const
+
+const ALERT_V3_METRICS = [
+  'TODAY_PNL_PCT',
+  'PNL_PCT',
+  'MAX_PNL_PCT',
+  'DRAWDOWN_PCT',
+  'INVESTED',
+  'CURRENT_VALUE',
+  'QTY',
+  'AVG_PRICE',
+] as const
+
+const ALERT_V3_SOURCES = ['open', 'high', 'low', 'close', 'volume'] as const
 
 const formatDateTimeIst = (value: unknown): string => {
   if (!value) return '—'
@@ -326,6 +355,45 @@ function AlertV3EditorDialog({
   onClose,
   onSaved,
 }: AlertV3EditorDialogProps) {
+  type VariableKind =
+    | 'DSL'
+    | 'METRIC'
+    | 'PRICE'
+    | 'OPEN'
+    | 'HIGH'
+    | 'LOW'
+    | 'CLOSE'
+    | 'VOLUME'
+    | 'SMA'
+    | 'EMA'
+    | 'RSI'
+    | 'STDDEV'
+    | 'MAX'
+    | 'MIN'
+    | 'AVG'
+    | 'SUM'
+    | 'RET'
+    | 'ATR'
+    | 'CUSTOM'
+
+  type ConditionOp =
+    | '>'
+    | '>='
+    | '<'
+    | '<='
+    | '=='
+    | '!='
+    | 'CROSSES_ABOVE'
+    | 'CROSSES_BELOW'
+    | 'MOVING_UP'
+    | 'MOVING_DOWN'
+
+  type ConditionRow = {
+    lhs: string
+    op: ConditionOp
+    rhs: string
+  }
+
   const [helpOpen, setHelpOpen] = useState(false)
   const [name, setName] = useState('')
   const [targetKind, setTargetKind] = useState<'SYMBOL' | 'HOLDINGS' | 'GROUP'>(
@@ -345,6 +413,11 @@ function AlertV3EditorDialog({
   const [enabled, setEnabled] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [conditionTab, setConditionTab] = useState<0 | 1>(0)
+  const [conditionJoin, setConditionJoin] = useState<'AND' | 'OR'>('AND')
+  const [conditionRows, setConditionRows] = useState<ConditionRow[]>([
+    { lhs: '', op: '>', rhs: '' },
+  ])
 
   useEffect(() => {
     if (!open) return
@@ -362,6 +435,9 @@ function AlertV3EditorDialog({
       setOnlyMarketHours(false)
       setExpiresAt('')
       setEnabled(true)
+      setConditionTab(0)
+      setConditionJoin('AND')
+      setConditionRows([{ lhs: '', op: '>', rhs: '' }])
       return
     }
     setName(alert.name)
@@ -376,12 +452,98 @@ function AlertV3EditorDialog({
     setOnlyMarketHours(alert.only_market_hours)
     setExpiresAt(alert.expires_at ?? '')
     setEnabled(alert.enabled)
+    setConditionTab(1)
+    setConditionJoin('AND')
+    setConditionRows([{ lhs: '', op: '>', rhs: '' }])
   }, [open, alert])
+
+  const variableKindOf = (v: AlertVariableDef): VariableKind => {
+    if (v.kind) return v.kind as VariableKind
+    return 'DSL'
+  }
+
+  const varParams = (v: AlertVariableDef): Record<string, any> => {
+    return (v.params ?? {}) as Record<string, any>
+  }
+
+  const setVariableKind = (idx: number, kind: VariableKind) => {
+    setVariables((prev) =>
+      prev.map((v, i) => {
+        if (i !== idx) return v
+        const name = v.name
+        if (kind === 'DSL') return { name, dsl: v.dsl ?? '' }
+        if (kind === 'METRIC') return { name, kind: 'METRIC', params: { metric: ALERT_V3_METRICS[0] } }
+        if (
+          kind === 'PRICE' ||
+          kind === 'OPEN' ||
+          kind === 'HIGH' ||
+          kind === 'LOW' ||
+          kind === 'CLOSE' ||
+          kind === 'VOLUME'
+        ) {
+          return { name, kind, params: { timeframe: '1d' } }
+        }
+        if (
+          kind === 'SMA' ||
+          kind === 'EMA' ||
+          kind === 'RSI' ||
+          kind === 'STDDEV' ||
+          kind === 'MAX' ||
+          kind === 'MIN' ||
+          kind === 'AVG' ||
+          kind === 'SUM'
+        ) {
+          return { name, kind, params: { source: 'close', length: 14, timeframe: '1d' } }
+        }
+        if (kind === 'RET') return { name, kind: 'RET', params: { source: 'close', timeframe: '1d' } }
+        if (kind === 'ATR') return { name, kind: 'ATR', params: { length: 14, timeframe: '1d' } }
+        if (kind === 'CUSTOM') return { name, kind: 'CUSTOM', params: { function: '', args: [] } }
+        return v
+      }),
+    )
+  }
+
+  const operandOptions = useMemo(() => {
+    const vars = variables
+      .map((v) => (v.name || '').trim())
+      .filter((x) => x.length > 0)
+    return Array.from(new Set([...vars, ...ALERT_V3_METRICS]))
+  }, [variables])
+
+  const buildConditionDsl = (): { dsl: string; errors: string[] } => {
+    const errors: string[] = []
+    const parts: string[] = []
+
+    for (const [idx, row] of conditionRows.entries()) {
+      const lhs = (row.lhs || '').trim()
+      const rhs = (row.rhs || '').trim()
+      if (!lhs || !rhs) continue
+      if ((row.op === 'MOVING_UP' || row.op === 'MOVING_DOWN') && Number.isNaN(Number(rhs))) {
+        errors.push(`Row ${idx + 1}: MOVING_* RHS must be a number.`)
+      }
+      parts.push(`(${lhs} ${row.op} ${rhs})`)
+    }
+
+    const dsl = parts.join(` ${conditionJoin} `)
+    if (!dsl) errors.push('Add at least one complete condition row.')
+    return { dsl, errors }
+  }
+
+  const conditionPreview = useMemo(
+    () => buildConditionDsl(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [conditionRows, conditionJoin],
+  )
 
   const handleSave = async () => {
     setSaving(true)
     setError(null)
     try {
+      const effectiveConditionDsl =
+        conditionTab === 0 ? conditionPreview.dsl.trim() : conditionDsl.trim()
+      if (conditionTab === 0 && conditionPreview.errors.length > 0) {
+        throw new Error(conditionPreview.errors.join(' '))
+      }
       const payloadBase: AlertDefinitionCreate = {
         name: name.trim() || 'Untitled alert',
         target_kind: targetKind,
@@ -394,7 +556,7 @@ function AlertV3EditorDialog({
         exchange: targetKind === 'SYMBOL' ? exchange : null,
         evaluation_cadence: evaluationCadence.trim() || null,
         variables,
-        condition_dsl: conditionDsl.trim(),
+        condition_dsl: effectiveConditionDsl,
         trigger_mode: triggerMode,
         throttle_seconds: throttleSeconds.trim() ? Number(throttleSeconds) : null,
         only_market_hours: onlyMarketHours,
@@ -512,7 +674,7 @@ function AlertV3EditorDialog({
         </Typography>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
           {variables.map((v, idx) => (
-            <Box key={idx} sx={{ display: 'flex', gap: 1 }}>
+            <Box key={idx} sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <TextField
                 label="Name"
                 size="small"
@@ -523,14 +685,260 @@ function AlertV3EditorDialog({
                 sx={{ width: 200 }}
               />
               <TextField
-                label="DSL"
+                label="Type"
+                select
                 size="small"
-                value={v.dsl ?? ''}
+                value={variableKindOf(v)}
                 onChange={(e) =>
-                  updateVar(idx, { ...v, dsl: e.target.value })
+                  setVariableKind(idx, e.target.value as any)
                 }
-                fullWidth
-              />
+                sx={{ width: 190 }}
+              >
+                <MenuItem value="DSL">DSL (advanced)</MenuItem>
+                <MenuItem value="METRIC">Metric</MenuItem>
+                <MenuItem value="PRICE">Price (close)</MenuItem>
+                <MenuItem value="OPEN">Open</MenuItem>
+                <MenuItem value="HIGH">High</MenuItem>
+                <MenuItem value="LOW">Low</MenuItem>
+                <MenuItem value="CLOSE">Close</MenuItem>
+                <MenuItem value="VOLUME">Volume</MenuItem>
+                <MenuItem value="SMA">SMA</MenuItem>
+                <MenuItem value="EMA">EMA</MenuItem>
+                <MenuItem value="RSI">RSI</MenuItem>
+                <MenuItem value="STDDEV">StdDev</MenuItem>
+                <MenuItem value="MAX">Max</MenuItem>
+                <MenuItem value="MIN">Min</MenuItem>
+                <MenuItem value="AVG">Avg</MenuItem>
+                <MenuItem value="SUM">Sum</MenuItem>
+                <MenuItem value="RET">Return</MenuItem>
+                <MenuItem value="ATR">ATR</MenuItem>
+                <MenuItem value="CUSTOM">Custom indicator</MenuItem>
+              </TextField>
+              {variableKindOf(v) === 'DSL' && (
+                <TextField
+                  label="DSL"
+                  size="small"
+                  value={v.dsl ?? ''}
+                  onChange={(e) => updateVar(idx, { ...v, dsl: e.target.value })}
+                  sx={{ flex: 1, minWidth: 260 }}
+                />
+              )}
+              {variableKindOf(v) === 'METRIC' && (
+                <TextField
+                  label="Metric"
+                  select
+                  size="small"
+                  value={String(varParams(v).metric ?? ALERT_V3_METRICS[0])}
+                  onChange={(e) =>
+                    updateVar(idx, { ...v, kind: 'METRIC', params: { metric: e.target.value } })
+                  }
+                  sx={{ minWidth: 240 }}
+                >
+                  {ALERT_V3_METRICS.map((m) => (
+                    <MenuItem key={m} value={m}>
+                      {m}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+              {['PRICE', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME'].includes(variableKindOf(v)) && (
+                <TextField
+                  label="Timeframe"
+                  select
+                  size="small"
+                  value={String(varParams(v).timeframe ?? '1d')}
+                  onChange={(e) =>
+                    updateVar(idx, {
+                      ...v,
+                      kind: variableKindOf(v) as any,
+                      params: { timeframe: e.target.value },
+                    })
+                  }
+                  sx={{ minWidth: 160 }}
+                >
+                  {ALERT_V3_TIMEFRAMES.map((tf) => (
+                    <MenuItem key={tf} value={tf}>
+                      {tf}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              )}
+              {['SMA', 'EMA', 'RSI', 'STDDEV', 'MAX', 'MIN', 'AVG', 'SUM'].includes(
+                variableKindOf(v),
+              ) && (
+                <>
+                  <TextField
+                    label="Source"
+                    select
+                    size="small"
+                    value={String(varParams(v).source ?? 'close')}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: variableKindOf(v) as any,
+                        params: { ...varParams(v), source: e.target.value },
+                      })
+                    }
+                    sx={{ minWidth: 140 }}
+                  >
+                    {ALERT_V3_SOURCES.map((s) => (
+                      <MenuItem key={s} value={s}>
+                        {s}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Length"
+                    size="small"
+                    type="number"
+                    value={String(varParams(v).length ?? 14)}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: variableKindOf(v) as any,
+                        params: { ...varParams(v), length: Number(e.target.value) || 0 },
+                      })
+                    }
+                    sx={{ width: 120 }}
+                  />
+                  <TextField
+                    label="Timeframe"
+                    select
+                    size="small"
+                    value={String(varParams(v).timeframe ?? '1d')}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: variableKindOf(v) as any,
+                        params: { ...varParams(v), timeframe: e.target.value },
+                      })
+                    }
+                    sx={{ width: 140 }}
+                  >
+                    {ALERT_V3_TIMEFRAMES.map((tf) => (
+                      <MenuItem key={tf} value={tf}>
+                        {tf}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </>
+              )}
+              {variableKindOf(v) === 'RET' && (
+                <>
+                  <TextField
+                    label="Source"
+                    select
+                    size="small"
+                    value={String(varParams(v).source ?? 'close')}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: 'RET',
+                        params: { ...varParams(v), source: e.target.value },
+                      })
+                    }
+                    sx={{ minWidth: 140 }}
+                  >
+                    {ALERT_V3_SOURCES.map((s) => (
+                      <MenuItem key={s} value={s}>
+                        {s}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Timeframe"
+                    select
+                    size="small"
+                    value={String(varParams(v).timeframe ?? '1d')}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: 'RET',
+                        params: { ...varParams(v), timeframe: e.target.value },
+                      })
+                    }
+                    sx={{ width: 140 }}
+                  >
+                    {ALERT_V3_TIMEFRAMES.map((tf) => (
+                      <MenuItem key={tf} value={tf}>
+                        {tf}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </>
+              )}
+              {variableKindOf(v) === 'ATR' && (
+                <>
+                  <TextField
+                    label="Length"
+                    size="small"
+                    type="number"
+                    value={String(varParams(v).length ?? 14)}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: 'ATR',
+                        params: { ...varParams(v), length: Number(e.target.value) || 0 },
+                      })
+                    }
+                    sx={{ width: 120 }}
+                  />
+                  <TextField
+                    label="Timeframe"
+                    select
+                    size="small"
+                    value={String(varParams(v).timeframe ?? '1d')}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: 'ATR',
+                        params: { ...varParams(v), timeframe: e.target.value },
+                      })
+                    }
+                    sx={{ width: 140 }}
+                  >
+                    {ALERT_V3_TIMEFRAMES.map((tf) => (
+                      <MenuItem key={tf} value={tf}>
+                        {tf}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </>
+              )}
+              {variableKindOf(v) === 'CUSTOM' && (
+                <>
+                  <TextField
+                    label="Function"
+                    size="small"
+                    value={String(varParams(v).function ?? '')}
+                    onChange={(e) =>
+                      updateVar(idx, {
+                        ...v,
+                        kind: 'CUSTOM',
+                        params: { ...varParams(v), function: e.target.value },
+                      })
+                    }
+                    sx={{ minWidth: 200 }}
+                  />
+                  <TextField
+                    label="Args (comma-separated DSL)"
+                    size="small"
+                    value={(Array.isArray(varParams(v).args) ? varParams(v).args : []).join(', ')}
+                    onChange={(e) => {
+                      const args = e.target.value
+                        .split(',')
+                        .map((s) => s.trim())
+                        .filter(Boolean)
+                      updateVar(idx, {
+                        ...v,
+                        kind: 'CUSTOM',
+                        params: { ...varParams(v), args },
+                      })
+                    }}
+                    sx={{ minWidth: 280, flex: 1 }}
+                  />
+                </>
+              )}
               <Button
                 color="error"
                 onClick={() =>
@@ -551,17 +959,165 @@ function AlertV3EditorDialog({
           </Button>
         </Box>
 
-        <TextField
-          label="Condition DSL"
-          size="small"
-          value={conditionDsl}
-          onChange={(e) => setConditionDsl(e.target.value)}
-          multiline
-          minRows={4}
-          fullWidth
-          sx={{ mb: 2 }}
-          helperText='Example: RSI_1H_14 < 30 AND TODAY_PNL_PCT > 5'
-        />
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+          Condition
+        </Typography>
+        <Tabs
+          value={conditionTab}
+          onChange={(_e, v) => setConditionTab(v as 0 | 1)}
+          sx={{ mb: 1 }}
+        >
+          <Tab label="Builder" />
+          <Tab label="Advanced (DSL)" />
+        </Tabs>
+
+        {conditionTab === 0 && (
+          <Box sx={{ mb: 2 }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mb: 1 }}>
+              <TextField
+                label="Match mode"
+                select
+                size="small"
+                value={conditionJoin}
+                onChange={(e) => setConditionJoin(e.target.value as any)}
+                sx={{ minWidth: 220 }}
+              >
+                <MenuItem value="AND">All conditions (AND)</MenuItem>
+                <MenuItem value="OR">Any condition (OR)</MenuItem>
+              </TextField>
+              <Button
+                variant="outlined"
+                onClick={() =>
+                  setConditionRows((prev) => [...prev, { lhs: '', op: '>', rhs: '' }])
+                }
+              >
+                + Add condition
+              </Button>
+            </Box>
+
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {conditionRows.map((row, idx) => (
+                <Box
+                  key={idx}
+                  sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}
+                >
+                  <Autocomplete
+                    freeSolo
+                    options={operandOptions}
+                    value={row.lhs}
+                    onChange={(_e, v) =>
+                      setConditionRows((prev) =>
+                        prev.map((r, i) => (i === idx ? { ...r, lhs: String(v ?? '') } : r)),
+                      )
+                    }
+                    onInputChange={(_e, v) =>
+                      setConditionRows((prev) =>
+                        prev.map((r, i) => (i === idx ? { ...r, lhs: v } : r)),
+                      )
+                    }
+                    renderInput={(params) => (
+                      <TextField {...params} label="LHS" size="small" sx={{ width: 240 }} />
+                    )}
+                  />
+                  <TextField
+                    label="Operator"
+                    select
+                    size="small"
+                    value={row.op}
+                    onChange={(e) =>
+                      setConditionRows((prev) =>
+                        prev.map((r, i) =>
+                          i === idx ? { ...r, op: e.target.value as any } : r,
+                        ),
+                      )
+                    }
+                    sx={{ width: 170 }}
+                  >
+                    <MenuItem value=">">&gt;</MenuItem>
+                    <MenuItem value=">=">&gt;=</MenuItem>
+                    <MenuItem value="<">&lt;</MenuItem>
+                    <MenuItem value="<=">&lt;=</MenuItem>
+                    <MenuItem value="==">==</MenuItem>
+                    <MenuItem value="!=">!=</MenuItem>
+                    <MenuItem value="CROSSES_ABOVE">CROSSES_ABOVE</MenuItem>
+                    <MenuItem value="CROSSES_BELOW">CROSSES_BELOW</MenuItem>
+                    <MenuItem value="MOVING_UP">MOVING_UP (%)</MenuItem>
+                    <MenuItem value="MOVING_DOWN">MOVING_DOWN (%)</MenuItem>
+                  </TextField>
+                  <Autocomplete
+                    freeSolo
+                    options={operandOptions}
+                    value={row.rhs}
+                    onChange={(_e, v) =>
+                      setConditionRows((prev) =>
+                        prev.map((r, i) => (i === idx ? { ...r, rhs: String(v ?? '') } : r)),
+                      )
+                    }
+                    onInputChange={(_e, v) =>
+                      setConditionRows((prev) =>
+                        prev.map((r, i) => (i === idx ? { ...r, rhs: v } : r)),
+                      )
+                    }
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="RHS"
+                        size="small"
+                        sx={{ width: 240 }}
+                        helperText={
+                          row.op === 'MOVING_UP' || row.op === 'MOVING_DOWN'
+                            ? 'RHS must be numeric'
+                            : undefined
+                        }
+                      />
+                    )}
+                  />
+                  <Button
+                    color="error"
+                    onClick={() =>
+                      setConditionRows((prev) => prev.filter((_x, i) => i !== idx))
+                    }
+                    disabled={conditionRows.length <= 1}
+                  >
+                    Remove
+                  </Button>
+                </Box>
+              ))}
+            </Box>
+
+            <Typography variant="subtitle2" sx={{ mt: 2, mb: 0.5 }}>
+              Expression preview (read-only)
+            </Typography>
+            <Paper variant="outlined" sx={{ p: 1, bgcolor: 'background.default' }}>
+              <Typography
+                component="pre"
+                variant="body2"
+                sx={{ m: 0, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}
+              >
+                {conditionPreview.dsl || '—'}
+              </Typography>
+            </Paper>
+            {conditionPreview.errors.length > 0 && (
+              <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                {conditionPreview.errors.join(' ')}
+              </Typography>
+            )}
+          </Box>
+        )}
+
+        {conditionTab === 1 && (
+          <TextField
+            label="Condition DSL"
+            size="small"
+            value={conditionDsl}
+            onChange={(e) => setConditionDsl(e.target.value)}
+            multiline
+            minRows={4}
+            fullWidth
+            sx={{ mb: 2 }}
+            helperText='Example: RSI_1H_14 < 30 AND TODAY_PNL_PCT > 5'
+          />
+        )}
 
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 1 }}>
           <TextField
@@ -639,32 +1195,6 @@ function AlertDslHelpDialog({
   onClose: () => void
 }) {
   const [tab, setTab] = useState(0)
-
-  const timeframes = [
-    '1m',
-    '5m',
-    '15m',
-    '1h',
-    '1d',
-    '1w',
-    '2w',
-    '1mo',
-    '3mo',
-    '6mo',
-    '1y',
-    '2y',
-  ]
-
-  const metrics = [
-    'TODAY_PNL_PCT',
-    'PNL_PCT',
-    'MAX_PNL_PCT',
-    'DRAWDOWN_PCT',
-    'INVESTED',
-    'CURRENT_VALUE',
-    'QTY',
-    'AVG_PRICE',
-  ]
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
@@ -793,7 +1323,7 @@ function AlertDslHelpDialog({
             <Box>
               <Typography variant="subtitle2">Supported timeframes</Typography>
               <Typography variant="body2" color="text.secondary">
-                {timeframes.join(', ')} (weekly candles are resampled from daily data).
+                {ALERT_V3_TIMEFRAMES.join(', ')} (weekly candles are resampled from daily data).
               </Typography>
             </Box>
           </Box>
@@ -806,7 +1336,7 @@ function AlertDslHelpDialog({
               directly in conditions or assigned to variables.
             </Typography>
             <Typography variant="body2">
-              {metrics.map((m) => (
+              {ALERT_V3_METRICS.map((m) => (
                 <span key={m}>
                   <code>{m}</code>{' '}
                 </span>
