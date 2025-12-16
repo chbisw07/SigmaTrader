@@ -14,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET
 from app.db.session import SessionLocal
 from app.models import Alert, IndicatorRule, Order, Position, User
+from app.models.groups import Group, GroupMember
 from app.schemas.indicator_rules import (
     IndicatorCondition,
     IndicatorType,
@@ -411,6 +412,29 @@ def _iter_rule_symbols(
 ) -> Iterable[Tuple[str, str]]:
     if rule.symbol:
         yield rule.symbol, (rule.exchange or "NSE")
+        return
+
+    if rule.target_type == "GROUP" and rule.target_id:
+        try:
+            group_id = int(rule.target_id)
+        except (TypeError, ValueError):
+            return
+
+        group = db.get(Group, group_id)
+        if group is None:
+            return
+        if group.owner_id is not None and group.owner_id != rule.user_id:
+            return
+
+        members = (
+            db.query(GroupMember)
+            .filter(GroupMember.group_id == group_id)
+            .order_by(GroupMember.created_at)
+            .all()
+        )
+        for member in members:
+            exch = (member.exchange or "NSE").upper()
+            yield member.symbol, exch
         return
 
     if rule.universe == "HOLDINGS":

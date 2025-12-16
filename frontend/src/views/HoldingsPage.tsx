@@ -4503,6 +4503,21 @@ export function HoldingsPage() {
         onClose={() => setAlertOpen(false)}
         symbol={alertSymbol}
         exchange={alertExchange}
+        universeId={universeId}
+        universeLabel={
+          universeId === 'holdings'
+            ? 'Holdings (Zerodha)'
+            : activeGroup?.name ?? 'Selected group'
+        }
+        selectedSymbols={rowSelectionModel.map((id) => String(id))}
+        symbolExchanges={Object.fromEntries(
+          holdings
+            .filter((row) => Boolean(row.symbol))
+            .map((row) => [
+              row.symbol,
+              (row.exchange ?? 'NSE').toUpperCase(),
+            ]),
+        )}
       />
     </Box>
   )
@@ -4513,6 +4528,10 @@ type IndicatorAlertDialogProps = {
   onClose: () => void
   symbol: string | null
   exchange: string | null
+  universeId: string
+  universeLabel: string
+  selectedSymbols: string[]
+  symbolExchanges: Record<string, string>
 }
 
 function IndicatorAlertDialog({
@@ -4520,6 +4539,10 @@ function IndicatorAlertDialog({
   onClose,
   symbol,
   exchange,
+  universeId,
+  universeLabel,
+  selectedSymbols,
+  symbolExchanges,
 }: IndicatorAlertDialogProps) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -4548,10 +4571,69 @@ function IndicatorAlertDialog({
   )
   const [savingTemplate, setSavingTemplate] = useState(false)
 
-  const [mode, setMode] = useState<'simple' | 'dsl'>('simple')
+  type AlertRuleMode = 'metric' | 'simple' | 'dsl'
+  type MetricField =
+    | 'TODAY_PNL_PCT'
+    | 'PNL_PCT'
+    | 'MAX_PNL_PCT'
+    | 'DRAWDOWN_PCT'
+    | 'INVESTED'
+    | 'CURRENT_VALUE'
+    | 'QTY'
+    | 'AVG_PRICE'
+
+  type MetricOperator = 'GT' | 'GTE' | 'LT' | 'LTE' | 'EQ' | 'NEQ'
+
+  const METRIC_FIELD_OPTIONS: { value: MetricField; label: string }[] = [
+    { value: 'TODAY_PNL_PCT', label: 'Today PnL %' },
+    { value: 'PNL_PCT', label: 'PnL % (total)' },
+    { value: 'MAX_PNL_PCT', label: 'Max PnL % (since buy)' },
+    { value: 'DRAWDOWN_PCT', label: 'Drawdown from peak %' },
+    { value: 'INVESTED', label: 'Invested (₹)' },
+    { value: 'CURRENT_VALUE', label: 'Current value (₹)' },
+    { value: 'QTY', label: 'Quantity' },
+    { value: 'AVG_PRICE', label: 'Avg price' },
+  ]
+
+  const METRIC_OPERATOR_OPTIONS: { value: MetricOperator; label: string }[] = [
+    { value: 'GT', label: '>' },
+    { value: 'GTE', label: '>=' },
+    { value: 'LT', label: '<' },
+    { value: 'LTE', label: '<=' },
+    { value: 'EQ', label: '==' },
+    { value: 'NEQ', label: '!=' },
+  ]
+
+  const [mode, setMode] = useState<AlertRuleMode>('metric')
   const [dslExpression, setDslExpression] = useState<string>('')
   const [dslHelpOpen, setDslHelpOpen] = useState(false)
-  const [applyScope, setApplyScope] = useState<'symbol' | 'holdings'>('symbol')
+  const [applyScope, setApplyScope] = useState<
+    'symbol' | 'selected' | 'universe' | 'holdings'
+  >('symbol')
+
+  const [metricField, setMetricField] =
+    useState<MetricField>('TODAY_PNL_PCT')
+  const [metricOperator, setMetricOperator] =
+    useState<MetricOperator>('GT')
+  const [metricValue, setMetricValue] = useState<string>('5')
+
+  const metricDsl = (): string => {
+    const op =
+      metricOperator === 'GT'
+        ? '>'
+        : metricOperator === 'GTE'
+          ? '>='
+          : metricOperator === 'LT'
+            ? '<'
+            : metricOperator === 'LTE'
+              ? '<='
+              : metricOperator === 'EQ'
+                ? '=='
+                : '!='
+    const valueNum = Number(metricValue || '0')
+    const safeValue = Number.isFinite(valueNum) ? valueNum : 0
+    return `${metricField} ${op} ${safeValue}`
+  }
 
   const selectedTemplate = selectedStrategyId
     ? templates.find((t) => t.id === selectedStrategyId) ?? null
@@ -4649,7 +4731,7 @@ function IndicatorAlertDialog({
   }, [open, symbol])
 
   useEffect(() => {
-    if (!open || !symbol || mode !== 'simple') {
+    if (!open || !symbol) {
       return
     }
     let active = true
@@ -4668,7 +4750,7 @@ function IndicatorAlertDialog({
     return () => {
       active = false
     }
-  }, [open, symbol, mode])
+  }, [open, symbol])
 
   useEffect(() => {
     if (!selectedStrategyId) return
@@ -4750,9 +4832,12 @@ function IndicatorAlertDialog({
     setActionValue('10')
     setError(null)
     setSelectedStrategyId(null)
-    setMode('simple')
+    setMode('metric')
     setDslExpression('')
     setApplyScope('symbol')
+    setMetricField('TODAY_PNL_PCT')
+    setMetricOperator('GT')
+    setMetricValue('5')
   }
 
   const handleClose = () => {
@@ -4762,7 +4847,7 @@ function IndicatorAlertDialog({
   }
 
   const handleCreate = async () => {
-    if (!symbol) return
+    if (applyScope === 'symbol' && !symbol) return
 
     const buildActionParams = (): Record<string, unknown> => {
       const actionParams: Record<string, unknown> = {}
@@ -4793,12 +4878,14 @@ function IndicatorAlertDialog({
     let conditions: IndicatorCondition[] = []
     let dslExprToSend: string | undefined
 
-    if (mode === 'dsl') {
-      if (!dslExpression.trim()) {
-        setError('DSL expression cannot be empty.')
+    if (mode !== 'simple') {
+      const expr =
+        mode === 'metric' ? metricDsl().trim() : dslExpression.trim()
+      if (!expr) {
+        setError('Expression cannot be empty.')
         return
       }
-      dslExprToSend = dslExpression.trim()
+      dslExprToSend = expr
       // Provide a minimal placeholder condition; evaluation for DSL-backed
       // rules uses expression_json instead of conditions_json.
       conditions = [
@@ -4853,14 +4940,8 @@ function IndicatorAlertDialog({
       conditions = [cond]
     }
 
-    const universe =
-      applyScope === 'holdings' ? ('HOLDINGS' as const) : undefined
-
-    const payload = {
+    const payloadBase = {
       strategy_id: selectedStrategyId ?? undefined,
-      symbol: applyScope === 'symbol' ? symbol : undefined,
-      universe,
-      exchange: applyScope === 'symbol' ? exchange ?? 'NSE' : undefined,
       timeframe,
       logic: 'AND' as const,
       conditions,
@@ -4873,8 +4954,48 @@ function IndicatorAlertDialog({
 
     setSaving(true)
     try {
-      const created = await createIndicatorRule(payload)
-      setRules((prev) => [created, ...prev])
+      if (applyScope === 'selected') {
+        const targets = selectedSymbols
+          .map((s) => s.trim())
+          .filter(Boolean)
+        if (targets.length === 0) {
+          setError('No rows are selected.')
+          return
+        }
+        for (const sym of targets) {
+          await createIndicatorRule({
+            ...payloadBase,
+            symbol: sym,
+            exchange: symbolExchanges[sym] ?? 'NSE',
+          })
+        }
+      } else if (applyScope === 'holdings') {
+        await createIndicatorRule({
+          ...payloadBase,
+          universe: 'HOLDINGS',
+        })
+      } else if (applyScope === 'universe') {
+        if (universeId.startsWith('group:')) {
+          const groupIdRaw = universeId.slice('group:'.length)
+          await createIndicatorRule({
+            ...payloadBase,
+            target_type: 'GROUP',
+            target_id: groupIdRaw,
+          })
+        } else {
+          await createIndicatorRule({
+            ...payloadBase,
+            universe: 'HOLDINGS',
+          })
+        }
+      } else {
+        const created = await createIndicatorRule({
+          ...payloadBase,
+          symbol: symbol ?? undefined,
+          exchange: exchange ?? 'NSE',
+        })
+        setRules((prev) => [created, ...prev])
+      }
       resetForm()
       onClose()
     } catch (err) {
@@ -4897,8 +5018,12 @@ function IndicatorAlertDialog({
     )
     if (!name) return
 
-    // Build a simple DSL representation of the current single-condition rule.
-    const dsl = buildSimpleDsl()
+    const dsl =
+      mode === 'metric'
+        ? metricDsl()
+        : mode === 'dsl'
+          ? dslExpression.trim() || buildSimpleDsl()
+          : buildSimpleDsl()
 
     setSavingTemplate(true)
     try {
@@ -4966,10 +5091,13 @@ function IndicatorAlertDialog({
 
   return (
     <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
-      <DialogTitle>Create indicator alert</DialogTitle>
+      <DialogTitle>Create alert rule</DialogTitle>
       <DialogContent sx={{ pt: 2 }}>
         <Typography variant="subtitle1" sx={{ mb: 1 }}>
           {symbol ?? '--'} {exchange ? ` / ${exchange}` : ''}
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Apply rules to a single symbol, selected rows, or an entire universe (group).
         </Typography>
         <Box
           sx={{
@@ -4982,16 +5110,21 @@ function IndicatorAlertDialog({
           <Tabs
             value={mode}
             onChange={(_event, value) => {
-              setMode(value)
               if (value === 'dsl') {
                 setDslExpression((prev) =>
-                  prev.trim() ? prev : buildSimpleDsl(),
+                  prev.trim()
+                    ? prev
+                    : mode === 'metric'
+                      ? metricDsl()
+                      : buildSimpleDsl(),
                 )
               }
+              setMode(value)
             }}
           >
-            <Tab value="simple" label="Simple builder" />
-            <Tab value="dsl" label="DSL expression" />
+            <Tab value="metric" label="Quick rule" />
+            <Tab value="simple" label="Indicator" />
+            <Tab value="dsl" label="Advanced (DSL)" />
           </Tabs>
           <Tooltip title="View DSL syntax and examples">
             <IconButton
@@ -5046,27 +5179,125 @@ function IndicatorAlertDialog({
               </Button>
             )}
           </Box>
-          <RadioGroup
-            row
-            value={applyScope}
-            onChange={(e) =>
-              setApplyScope(
-                e.target.value === 'holdings' ? 'holdings' : 'symbol',
-              )
-            }
-          >
-            <FormControlLabel
-              value="symbol"
-              control={<Radio size="small" />}
-              label="Apply to this stock only"
-            />
-            <FormControlLabel
-              value="holdings"
-              control={<Radio size="small" />}
-              label="Apply to all holdings"
-            />
-          </RadioGroup>
-          {mode === 'simple' ? (
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            <TextField
+              label="Apply to"
+              select
+              size="small"
+              value={applyScope}
+              onChange={(e) =>
+                setApplyScope(
+                  e.target.value as
+                    | 'symbol'
+                    | 'selected'
+                    | 'universe'
+                    | 'holdings',
+                )
+              }
+              sx={{ minWidth: 260 }}
+            >
+              <MenuItem value="symbol">This symbol</MenuItem>
+              <MenuItem value="selected" disabled={selectedSymbols.length === 0}>
+                Selected rows ({selectedSymbols.length})
+              </MenuItem>
+              {universeId !== 'holdings' && (
+                <MenuItem value="universe">
+                  Current universe ({universeLabel})
+                </MenuItem>
+              )}
+              <MenuItem value="holdings">All holdings (Zerodha)</MenuItem>
+            </TextField>
+            {applyScope === 'universe' && universeId.startsWith('group:') && (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ alignSelf: 'center' }}
+              >
+                Targets the group dynamically (members can change).
+              </Typography>
+            )}
+          </Box>
+          {mode === 'metric' ? (
+            <>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <TextField
+                  label="Metric"
+                  select
+                  size="small"
+                  value={metricField}
+                  onChange={(e) =>
+                    setMetricField(e.target.value as MetricField)
+                  }
+                  sx={{ minWidth: 220 }}
+                >
+                  {METRIC_FIELD_OPTIONS.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Operator"
+                  select
+                  size="small"
+                  value={metricOperator}
+                  onChange={(e) =>
+                    setMetricOperator(e.target.value as MetricOperator)
+                  }
+                  sx={{ minWidth: 140 }}
+                >
+                  {METRIC_OPERATOR_OPTIONS.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Value"
+                  size="small"
+                  value={metricValue}
+                  onChange={(e) => setMetricValue(e.target.value)}
+                  sx={{ minWidth: 160 }}
+                  helperText="Numeric threshold (e.g., 5 for 5%)."
+                />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Chip
+                  label="Today PnL% > 5"
+                  size="small"
+                  onClick={() => {
+                    setMetricField('TODAY_PNL_PCT')
+                    setMetricOperator('GT')
+                    setMetricValue('5')
+                  }}
+                />
+                <Chip
+                  label="Today PnL% < -5"
+                  size="small"
+                  onClick={() => {
+                    setMetricField('TODAY_PNL_PCT')
+                    setMetricOperator('LT')
+                    setMetricValue('-5')
+                  }}
+                />
+                <Chip
+                  label="PnL% > 10"
+                  size="small"
+                  onClick={() => {
+                    setMetricField('PNL_PCT')
+                    setMetricOperator('GT')
+                    setMetricValue('10')
+                  }}
+                />
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                DSL preview: <code>{metricDsl()}</code>
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Need indicators (RSI/MA) or multiple conditions? Use the Indicator or DSL tabs.
+              </Typography>
+            </>
+          ) : mode === 'simple' ? (
             <>
               <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
                 <TextField
@@ -5223,9 +5454,9 @@ function IndicatorAlertDialog({
               {error}
             </Typography>
           )}
-          {applyScope === 'holdings' ? (
+          {applyScope !== 'symbol' ? (
             <Typography variant="body2" color="text.secondary">
-              Alerts that apply to all holdings are managed from the Alerts page.
+              Universe-wide alerts are managed from the Alerts page.
             </Typography>
           ) : loading ? (
             <Typography variant="body2" color="text.secondary">

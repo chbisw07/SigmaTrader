@@ -52,6 +52,8 @@ class IndicatorRuleBase(BaseModel):
     symbol: Optional[str] = None
     universe: Optional[UniverseType] = None
     exchange: Optional[str] = None
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
     timeframe: str = "1d"
 
     logic: LogicType = "AND"
@@ -75,12 +77,15 @@ class IndicatorRuleUpdate(BaseModel):
     symbol: Optional[str] = None
     universe: Optional[UniverseType] = None
     exchange: Optional[str] = None
+    target_type: Optional[str] = None
+    target_id: Optional[str] = None
     timeframe: Optional[str] = None
     logic: Optional[LogicType] = None
     conditions: Optional[List[IndicatorCondition]] = None
     trigger_mode: Optional[TriggerMode] = None
     action_type: Optional[ActionType] = None
     action_params: Optional[Dict[str, Any]] = None
+    dsl_expression: Optional[str] = None
     expires_at: Optional[datetime] = None
     enabled: Optional[bool] = None
 

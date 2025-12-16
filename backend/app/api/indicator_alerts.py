@@ -69,6 +69,8 @@ def _indicator_rule_to_read(rule: IndicatorRule) -> IndicatorRuleRead:
         symbol=rule.symbol,
         universe=rule.universe,
         exchange=rule.exchange,
+        target_type=rule.target_type,
+        target_id=rule.target_id,
         timeframe=rule.timeframe,
         logic=rule.logic,  # type: ignore[arg-type]
         conditions=conditions,
@@ -177,11 +179,21 @@ def create_indicator_rule(
             detail="At least one condition is required.",
         )
 
-    # Validate that at least one of symbol or universe is provided.
-    if payload.symbol is None and payload.universe is None:
+    if payload.target_type is not None and not payload.target_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either symbol or universe must be specified.",
+            detail="target_id is required when target_type is provided.",
+        )
+
+    # Validate that at least one targeting mechanism is provided.
+    if (
+        payload.symbol is None
+        and payload.universe is None
+        and payload.target_type is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either symbol, universe, or target_type must be specified.",
         )
 
     conditions_json = json.dumps(
@@ -210,6 +222,8 @@ def create_indicator_rule(
         symbol=payload.symbol,
         universe=payload.universe,
         exchange=payload.exchange,
+        target_type=payload.target_type,
+        target_id=payload.target_id,
         timeframe=payload.timeframe,
         logic=payload.logic,
         conditions_json=conditions_json,
@@ -245,6 +259,16 @@ def update_indicator_rule(
     _ensure_owner(entity, user)
 
     data = payload.dict(exclude_unset=True)
+
+    if (
+        "target_type" in data
+        and data.get("target_type")
+        and not (data.get("target_id") or entity.target_id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target_id is required when target_type is provided.",
+        )
 
     if "conditions" in data:
         from app.schemas.indicator_rules import IndicatorCondition

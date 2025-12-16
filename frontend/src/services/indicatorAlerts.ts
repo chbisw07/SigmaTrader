@@ -28,6 +28,7 @@ export type ActionType = 'ALERT_ONLY' | 'SELL_PERCENT' | 'BUY_QUANTITY'
 export type LogicType = 'AND' | 'OR'
 
 export type UniverseType = 'HOLDINGS'
+export type TargetType = 'GROUP'
 
 export type IndicatorCondition = {
   indicator: IndicatorType
@@ -45,6 +46,8 @@ export type IndicatorRule = {
   symbol?: string | null
   universe?: UniverseType | null
   exchange?: string | null
+  target_type?: TargetType | string | null
+  target_id?: string | null
   timeframe: string
   logic: LogicType
   conditions: IndicatorCondition[]
@@ -54,6 +57,7 @@ export type IndicatorRule = {
   expires_at?: string | null
   enabled: boolean
   last_triggered_at?: string | null
+  last_evaluated_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -65,6 +69,8 @@ export type IndicatorRuleCreate = {
   symbol?: string | null
   universe?: UniverseType | null
   exchange?: string | null
+  target_type?: TargetType | string | null
+  target_id?: string | null
   timeframe: string
   logic: LogicType
   conditions: IndicatorCondition[]
@@ -76,10 +82,12 @@ export type IndicatorRuleCreate = {
 }
 
 export type IndicatorRuleUpdate = Partial<
-  Omit<IndicatorRuleCreate, 'symbol' | 'universe'>
+  Omit<IndicatorRuleCreate, 'symbol' | 'universe' | 'target_type' | 'target_id'>
 > & {
   symbol?: string | null
   universe?: UniverseType | null
+  target_type?: TargetType | string | null
+  target_id?: string | null
 }
 
 export type IndicatorPreview = {
