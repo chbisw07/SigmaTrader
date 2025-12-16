@@ -134,6 +134,30 @@ class AlertEventRead(BaseModel):
             orm_mode = True
 
 
+class AlertV3TestRequest(BaseModel):
+    target_kind: str = Field(..., min_length=1)
+    target_ref: str = Field(..., min_length=1)
+    exchange: Optional[str] = None
+
+    evaluation_cadence: Optional[str] = None
+    variables: List[AlertVariableDef] = Field(default_factory=list)
+    condition_dsl: str = Field(..., min_length=1)
+
+
+class AlertV3TestResult(BaseModel):
+    symbol: str
+    exchange: str
+    matched: bool
+    bar_time: Optional[datetime] = None
+    snapshot: Dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+
+
+class AlertV3TestResponse(BaseModel):
+    evaluation_cadence: str
+    results: List[AlertV3TestResult] = Field(default_factory=list)
+
+
 __all__ = [
     "AlertVariableDef",
     "AlertDefinitionCreate",
@@ -143,4 +167,7 @@ __all__ = [
     "CustomIndicatorUpdate",
     "CustomIndicatorRead",
     "AlertEventRead",
+    "AlertV3TestRequest",
+    "AlertV3TestResult",
+    "AlertV3TestResponse",
 ]

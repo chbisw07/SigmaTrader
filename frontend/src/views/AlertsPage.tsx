@@ -88,6 +88,13 @@ const formatDateTimeIst = (value: unknown): string => {
 
 export function AlertsPage() {
   const [tab, setTab] = useState(0)
+  const [openAlertId, setOpenAlertId] = useState<number | null>(null)
+
+  const handleOpenAlert = (alertId: number) => {
+    setOpenAlertId(alertId)
+    setTab(0)
+  }
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -103,15 +110,26 @@ export function AlertsPage() {
         <Tab label="Events" />
         <Tab label="Legacy" />
       </Tabs>
-      {tab === 0 && <AlertsV3Tab />}
+      {tab === 0 && (
+        <AlertsV3Tab
+          openAlertId={openAlertId}
+          onAlertOpened={() => setOpenAlertId(null)}
+        />
+      )}
       {tab === 1 && <IndicatorsV3Tab />}
-      {tab === 2 && <EventsV3Tab />}
+      {tab === 2 && <EventsV3Tab onOpenAlert={handleOpenAlert} />}
       {tab === 3 && <LegacyIndicatorAlertsTab />}
     </Box>
   )
 }
 
-function AlertsV3Tab() {
+function AlertsV3Tab({
+  openAlertId,
+  onAlertOpened,
+}: {
+  openAlertId: number | null
+  onAlertOpened: () => void
+}) {
   const [rows, setRows] = useState<AlertDefinition[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -134,6 +152,32 @@ function AlertsV3Tab() {
   useEffect(() => {
     void refresh()
   }, [])
+
+  useEffect(() => {
+    if (openAlertId == null) return
+    const open = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+        const res = await listAlertDefinitions()
+        setRows(res)
+        const found = res.find((a) => a.id === openAlertId) ?? null
+        if (!found) {
+          setError(`Alert ${openAlertId} not found.`)
+          return
+        }
+        setEditing(found)
+        setEditorOpen(true)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to open alert')
+      } finally {
+        setLoading(false)
+        onAlertOpened()
+      }
+    }
+    void open()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openAlertId])
 
   const formatIstDateTime = (value: unknown): string => {
     return formatDateTimeIst(value)
@@ -1146,10 +1190,12 @@ function CustomIndicatorHelpDialog({
   )
 }
 
-function EventsV3Tab() {
+function EventsV3Tab({ onOpenAlert }: { onOpenAlert: (alertId: number) => void }) {
   const [rows, setRows] = useState<AlertEvent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [selected, setSelected] = useState<AlertEvent | null>(null)
 
   const refresh = async () => {
     setLoading(true)
@@ -1177,6 +1223,25 @@ function EventsV3Tab() {
     { field: 'exchange', headerName: 'Exch', width: 90, valueFormatter: (v) => (v ? String(v) : '—') },
     { field: 'alert_definition_id', headerName: 'Alert ID', width: 100 },
     { field: 'reason', headerName: 'Reason', flex: 1, minWidth: 320, valueFormatter: (v) => v ?? '—' },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 110,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => {
+            setSelected(params.row as AlertEvent)
+            setDetailsOpen(true)
+          }}
+        >
+          Details
+        </Button>
+      ),
+    },
   ]
 
   return (
@@ -1211,6 +1276,51 @@ function EventsV3Tab() {
           }}
         />
       </Paper>
+      <Dialog
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Event snapshot</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {selected ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              <Typography variant="body2" color="text.secondary">
+                {selected.symbol} · {formatIstDateTime(selected.triggered_at)} · Alert{' '}
+                {selected.alert_definition_id}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <Button
+                  variant="outlined"
+                  onClick={() => {
+                    onOpenAlert(selected.alert_definition_id)
+                    setDetailsOpen(false)
+                  }}
+                >
+                  Open alert
+                </Button>
+              </Box>
+              <Paper variant="outlined" sx={{ p: 1, bgcolor: 'background.default' }}>
+                <Typography
+                  component="pre"
+                  variant="body2"
+                  sx={{ m: 0, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}
+                >
+                  {JSON.stringify(selected.snapshot ?? {}, null, 2)}
+                </Typography>
+              </Paper>
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              No event selected.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDetailsOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

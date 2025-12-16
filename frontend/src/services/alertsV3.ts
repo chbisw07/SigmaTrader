@@ -65,6 +65,29 @@ export type AlertEvent = {
   bar_time?: string | null
 }
 
+export type AlertV3TestRequest = {
+  target_kind: string
+  target_ref: string
+  exchange?: string | null
+  evaluation_cadence?: string | null
+  variables: AlertVariableDef[]
+  condition_dsl: string
+}
+
+export type AlertV3TestResult = {
+  symbol: string
+  exchange: string
+  matched: boolean
+  bar_time?: string | null
+  snapshot: Record<string, unknown>
+  error?: string | null
+}
+
+export type AlertV3TestResponse = {
+  evaluation_cadence: string
+  results: AlertV3TestResult[]
+}
+
 async function _parseError(res: Response): Promise<string> {
   const text = await res.text()
   try {
@@ -198,3 +221,21 @@ export async function listAlertEvents(params?: {
   return (await res.json()) as AlertEvent[]
 }
 
+export async function testAlertExpression(
+  payload: AlertV3TestRequest,
+  options?: { limit?: number },
+): Promise<AlertV3TestResponse> {
+  const url = new URL('/api/alerts-v3/test', window.location.origin)
+  if (options?.limit != null) url.searchParams.set('limit', String(options.limit))
+
+  const res = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const detail = await _parseError(res)
+    throw new Error(`Failed to test expression (${res.status})${detail ? `: ${detail}` : ''}`)
+  }
+  return (await res.json()) as AlertV3TestResponse
+}

@@ -179,3 +179,30 @@ def test_alerts_v3_api_create_and_list() -> None:
     assert resp.status_code == 200
     items = resp.json()
     assert any(a["id"] == created["id"] for a in items)
+
+
+def test_alerts_v3_api_test_endpoint() -> None:
+    _register_and_login("alerts-v3-test-user")
+
+    resp = client.post(
+        "/api/alerts-v3/test?limit=10",
+        json={
+            "target_kind": "SYMBOL",
+            "target_ref": "TEST",
+            "exchange": "NSE",
+            "evaluation_cadence": "",
+            "variables": [],
+            "condition_dsl": 'PRICE("1d") > 100',
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["evaluation_cadence"] == "1d"
+    assert len(data["results"]) == 1
+    row = data["results"][0]
+    assert row["symbol"] == "TEST"
+    assert row["exchange"] == "NSE"
+    assert row["matched"] is True
+    assert row["bar_time"] is not None
+    assert row["snapshot"]["LHS"] == 106.0
+    assert row["snapshot"]["RHS"] == 100.0

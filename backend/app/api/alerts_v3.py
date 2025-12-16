@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import json
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.models import AlertDefinition, AlertEvent, CustomIndicator, User
+from app.models import (
+    AlertDefinition,
+    AlertEvent,
+    CustomIndicator,
+    Group,
+    GroupMember,
+    User,
+)
 from app.schemas.alerts_v3 import (
     AlertDefinitionCreate,
     AlertDefinitionRead,
     AlertDefinitionUpdate,
     AlertEventRead,
+    AlertV3TestRequest,
+    AlertV3TestResponse,
+    AlertV3TestResult,
     AlertVariableDef,
     CustomIndicatorCreate,
     CustomIndicatorRead,
@@ -21,8 +32,10 @@ from app.schemas.alerts_v3 import (
 )
 from app.services.alerts_v3_compiler import (
     compile_alert_definition,
+    compile_alert_expression,
     compile_custom_indicators_for_user,
 )
+from app.services.alerts_v3_expression import eval_condition
 from app.services.indicator_alerts import IndicatorAlertError
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -112,6 +125,69 @@ def _custom_to_read(ind: CustomIndicator) -> CustomIndicatorRead:
     data = _model_validate(CustomIndicatorRead, ind)
     data.params = _custom_params_from_json(ind.params_json)  # type: ignore[assignment]
     return data
+
+
+def _variables_to_dicts(variables: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for v in variables:
+        if hasattr(v, "model_dump"):
+            dumped = v.model_dump()  # type: ignore[attr-defined]
+        else:
+            dumped = v.dict()  # type: ignore[attr-defined]
+        if isinstance(dumped, dict):
+            out.append(dumped)
+    return out
+
+
+def _iter_target_symbols(
+    db: Session,
+    settings: Settings,
+    *,
+    user: User,
+    target_kind: str,
+    target_ref: str,
+    exchange: str,
+) -> Iterable[Tuple[str, str]]:
+    kind = (target_kind or "").upper()
+    ref = (target_ref or "").strip()
+    exch = (exchange or "NSE").upper()
+
+    if kind == "SYMBOL":
+        if not ref:
+            return
+        yield ref.upper(), exch
+        return
+
+    if kind == "GROUP":
+        try:
+            group_id = int(ref)
+        except ValueError:
+            return
+        group = db.get(Group, group_id)
+        if group is None:
+            return
+        if group.owner_id is not None and group.owner_id != user.id:
+            return
+        members = (
+            db.query(GroupMember)
+            .filter(GroupMember.group_id == group_id)
+            .order_by(GroupMember.created_at)
+            .all()
+        )
+        for m in members:
+            yield m.symbol.upper(), (m.exchange or "NSE").upper()
+        return
+
+    if kind == "HOLDINGS":
+        # Resolve live holdings for the user.
+        try:
+            from app.api.positions import list_holdings
+
+            holdings = list_holdings(db=db, settings=settings, user=user)
+        except Exception:
+            return
+        for h in holdings:
+            yield h.symbol.upper(), ((getattr(h, "exchange", None) or "NSE").upper())
 
 
 @router.get("/", response_model=List[AlertDefinitionRead])
@@ -355,6 +431,90 @@ def list_alert_events(
             data.snapshot = {}  # type: ignore[assignment]
         out.append(data)
     return out
+
+
+@router.post("/test", response_model=AlertV3TestResponse)
+def test_alert_expression_api(
+    payload: AlertV3TestRequest,
+    limit: int = Query(20, ge=1, le=200),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
+) -> AlertV3TestResponse:
+    """Preview a v3 alert condition on the latest bar for each target symbol.
+
+    This endpoint is intended for UI tooling ("Run condition on last bar")
+    and returns per-symbol match status along with a debug snapshot.
+    """
+
+    try:
+        custom = compile_custom_indicators_for_user(db, user_id=user.id)
+        vars_dicts = _variables_to_dicts(payload.variables)
+        expr_ast, cadence = compile_alert_expression(
+            db,
+            user_id=user.id,
+            variables=vars_dicts,
+            condition_dsl=payload.condition_dsl,
+            evaluation_cadence=payload.evaluation_cadence,
+            custom_indicators=custom,
+        )
+    except IndicatorAlertError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    exch = (payload.exchange or "NSE").upper()
+    results: list[AlertV3TestResult] = []
+    for symbol, exchange in _iter_target_symbols(
+        db,
+        settings,
+        user=user,
+        target_kind=payload.target_kind,
+        target_ref=payload.target_ref,
+        exchange=exch,
+    ):
+        if len(results) >= limit:
+            break
+        try:
+            matched, snapshot, bar_time = eval_condition(
+                expr_ast,
+                db=db,
+                settings=settings,
+                symbol=symbol,
+                exchange=exchange,
+                custom_indicators=custom,
+            )
+            results.append(
+                AlertV3TestResult(
+                    symbol=symbol,
+                    exchange=exchange,
+                    matched=matched,
+                    bar_time=bar_time,
+                    snapshot=snapshot,
+                )
+            )
+        except IndicatorAlertError as exc:
+            results.append(
+                AlertV3TestResult(
+                    symbol=symbol,
+                    exchange=exchange,
+                    matched=False,
+                    snapshot={},
+                    error=str(exc),
+                )
+            )
+        except Exception:
+            results.append(
+                AlertV3TestResult(
+                    symbol=symbol,
+                    exchange=exchange,
+                    matched=False,
+                    snapshot={},
+                    error="Evaluation failed.",
+                )
+            )
+
+    return AlertV3TestResponse(evaluation_cadence=cadence, results=results)
 
 
 __all__ = ["router"]
