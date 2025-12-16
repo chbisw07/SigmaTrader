@@ -62,6 +62,30 @@ type RuleRow = IndicatorRule & {
   strategy_name?: string | null
 }
 
+const formatDateTimeIst = (value: unknown): string => {
+  if (!value) return '—'
+  const raw = String(value)
+  const normalized =
+    raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw
+  const hasTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(normalized)
+
+  let dt = new Date(normalized)
+  if (!hasTz) {
+    const m = normalized.match(
+      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/,
+    )
+    if (m) {
+      const [, y, mo, d, h, mi, s] = m
+      const istOffsetMs = 5.5 * 60 * 60 * 1000
+      const utcMs = Date.UTC(+y, +mo - 1, +d, +h, +mi, +s) - istOffsetMs
+      dt = new Date(utcMs)
+    }
+  }
+
+  if (Number.isNaN(dt.getTime())) return '—'
+  return dt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+}
+
 export function AlertsPage() {
   const [tab, setTab] = useState(0)
   return (
@@ -112,12 +136,7 @@ function AlertsV3Tab() {
   }, [])
 
   const formatIstDateTime = (value: unknown): string => {
-    if (!value) return '—'
-    const raw = new Date(value as string)
-    if (Number.isNaN(raw.getTime())) return '—'
-    const istOffsetMs = 5.5 * 60 * 60 * 1000
-    const ist = new Date(raw.getTime() + istOffsetMs)
-    return ist.toLocaleString()
+    return formatDateTimeIst(value)
   }
 
   const columns: GridColDef[] = [
@@ -1149,12 +1168,7 @@ function EventsV3Tab() {
   }, [])
 
   const formatIstDateTime = (value: unknown): string => {
-    if (!value) return '—'
-    const raw = new Date(value as string)
-    if (Number.isNaN(raw.getTime())) return '—'
-    const istOffsetMs = 5.5 * 60 * 60 * 1000
-    const ist = new Date(raw.getTime() + istOffsetMs)
-    return ist.toLocaleString()
+    return formatDateTimeIst(value)
   }
 
   const columns: GridColDef[] = [
@@ -1334,14 +1348,7 @@ function LegacyIndicatorAlertsTab() {
   }
 
   const formatIstDateTime = (value: unknown): string => {
-    if (!value) return '—'
-    const raw = new Date(value as string)
-    if (Number.isNaN(raw.getTime())) return '—'
-    // Treat stored timestamps as UTC and convert to IST (UTC+5:30) so that
-    // display matches the user's local trading timezone.
-    const istOffsetMs = 5.5 * 60 * 60 * 1000
-    const ist = new Date(raw.getTime() + istOffsetMs)
-    return ist.toLocaleString()
+    return formatDateTimeIst(value)
   }
 
   const columns: GridColDef[] = [
