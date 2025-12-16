@@ -12,6 +12,7 @@ from .api.routes import router as api_router
 from .core.config import get_settings
 from .core.logging import RequestContextMiddleware, configure_logging
 from .db.session import SessionLocal
+from .services.alerts_v3 import schedule_alerts_v3
 from .services.indicator_alerts import schedule_indicator_alerts
 from .services.market_data import schedule_market_data_sync
 from .services.users import ensure_default_admin
@@ -88,6 +89,7 @@ async def _lifespan(_app: FastAPI):
     if "pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"):
         schedule_market_data_sync()
         schedule_indicator_alerts()
+        schedule_alerts_v3()
     yield
     # Shutdown: nothing special yet (thread is daemonised).
 

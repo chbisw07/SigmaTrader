@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from ..core.config import Settings, get_settings
 from ..core.security import require_admin
 from . import (
+    alerts_v3,
     analytics,
     auth,
     brokers,
@@ -93,6 +94,13 @@ router.include_router(
     prefix="/api/indicator-alerts",
     dependencies=[Depends(require_admin)],
     tags=["indicator-alerts"],
+)
+
+router.include_router(
+    alerts_v3.router,
+    prefix="/api/alerts-v3",
+    dependencies=[Depends(require_admin)],
+    tags=["alerts-v3"],
 )
 
 router.include_router(
