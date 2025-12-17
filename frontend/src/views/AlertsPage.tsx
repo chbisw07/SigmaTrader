@@ -27,6 +27,7 @@ import {
 } from '@mui/x-data-grid'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
   createAlertDefinition,
@@ -47,24 +48,6 @@ import {
   type CustomIndicatorCreate,
   type CustomIndicatorUpdate,
 } from '../services/alertsV3'
-import {
-  listIndicatorRules,
-  updateIndicatorRule,
-  deleteIndicatorRule,
-  type IndicatorRule,
-  type IndicatorRuleUpdate,
-  type TriggerMode,
-} from '../services/indicatorAlerts'
-import { listStrategyTemplates, type Strategy } from '../services/strategies'
-import {
-  fetchHoldingsCorrelation,
-  type HoldingsCorrelationResult,
-} from '../services/analytics'
-
-type RuleRow = IndicatorRule & {
-  id: number
-  strategy_name?: string | null
-}
 
 const ALERT_V3_TIMEFRAMES = [
   '1m',
@@ -121,11 +104,32 @@ const formatDateTimeIst = (value: unknown): string => {
 export function AlertsPage() {
   const [tab, setTab] = useState(0)
   const [openAlertId, setOpenAlertId] = useState<number | null>(null)
+  const [createDefaults, setCreateDefaults] = useState<{
+    targetKind: 'SYMBOL'
+    targetRef: string
+    exchange: string
+  } | null>(null)
+
+  const location = useLocation()
+  const navigate = useNavigate()
 
   const handleOpenAlert = (alertId: number) => {
     setOpenAlertId(alertId)
     setTab(0)
   }
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.get('create_v3') !== '1') return
+    const kind = (params.get('target_kind') || '').toUpperCase()
+    if (kind !== 'SYMBOL') return
+    const targetRef = (params.get('target_ref') || '').trim()
+    if (!targetRef) return
+    const exchange = (params.get('exchange') || 'NSE').trim().toUpperCase() || 'NSE'
+    setTab(0)
+    setCreateDefaults({ targetKind: 'SYMBOL', targetRef: targetRef.toUpperCase(), exchange })
+    navigate('/alerts', { replace: true })
+  }, [location.search, navigate])
 
   return (
     <Box>
@@ -140,33 +144,42 @@ export function AlertsPage() {
         <Tab label="Alerts" />
         <Tab label="Indicators" />
         <Tab label="Events" />
-        <Tab label="Legacy" />
       </Tabs>
       {tab === 0 && (
         <AlertsV3Tab
           openAlertId={openAlertId}
           onAlertOpened={() => setOpenAlertId(null)}
+          createDefaults={createDefaults}
+          onCreateHandled={() => setCreateDefaults(null)}
         />
       )}
       {tab === 1 && <IndicatorsV3Tab />}
       {tab === 2 && <EventsV3Tab onOpenAlert={handleOpenAlert} />}
-      {tab === 3 && <LegacyIndicatorAlertsTab />}
     </Box>
-  )
-}
+	  )
+	}
 
-function AlertsV3Tab({
-  openAlertId,
-  onAlertOpened,
+	function AlertsV3Tab({
+	  openAlertId,
+	  onAlertOpened,
+	  createDefaults,
+  onCreateHandled,
 }: {
   openAlertId: number | null
   onAlertOpened: () => void
+  createDefaults: { targetKind: 'SYMBOL'; targetRef: string; exchange: string } | null
+  onCreateHandled: () => void
 }) {
   const [rows, setRows] = useState<AlertDefinition[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<AlertDefinition | null>(null)
+  const [activeCreateDefaults, setActiveCreateDefaults] = useState<{
+    targetKind: 'SYMBOL'
+    targetRef: string
+    exchange: string
+  } | null>(null)
 
   const refresh = async () => {
     setLoading(true)
@@ -210,6 +223,14 @@ function AlertsV3Tab({
     void open()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openAlertId])
+
+  useEffect(() => {
+    if (!createDefaults) return
+    setActiveCreateDefaults(createDefaults)
+    setEditing(null)
+    setEditorOpen(true)
+    onCreateHandled()
+  }, [createDefaults, onCreateHandled])
 
   const formatIstDateTime = (value: unknown): string => {
     return formatDateTimeIst(value)
@@ -338,8 +359,12 @@ function AlertsV3Tab({
       <AlertV3EditorDialog
         open={editorOpen}
         alert={editing}
-        onClose={() => setEditorOpen(false)}
+        onClose={() => {
+          setEditorOpen(false)
+          setActiveCreateDefaults(null)
+        }}
         onSaved={() => void refresh()}
+        createDefaults={activeCreateDefaults}
       />
     </Box>
   )
@@ -350,6 +375,7 @@ type AlertV3EditorDialogProps = {
   alert: AlertDefinition | null
   onClose: () => void
   onSaved: () => void
+  createDefaults?: { targetKind: 'SYMBOL'; targetRef: string; exchange: string } | null
 }
 
 function AlertV3EditorDialog({
@@ -357,6 +383,7 @@ function AlertV3EditorDialog({
   alert,
   onClose,
   onSaved,
+  createDefaults,
 }: AlertV3EditorDialogProps) {
   type VariableKind =
     | 'DSL'
@@ -452,9 +479,15 @@ function AlertV3EditorDialog({
     setError(null)
     if (!alert) {
       setName('')
-      setTargetKind('HOLDINGS')
-      setTargetRef('ZERODHA')
-      setExchange('NSE')
+      if (createDefaults?.targetKind === 'SYMBOL' && createDefaults.targetRef) {
+        setTargetKind('SYMBOL')
+        setTargetRef(createDefaults.targetRef)
+        setExchange(createDefaults.exchange || 'NSE')
+      } else {
+        setTargetKind('HOLDINGS')
+        setTargetRef('ZERODHA')
+        setExchange('NSE')
+      }
       setActionType('ALERT_ONLY')
       setActionTab(0)
       setTradeExecutionMode('MANUAL')
@@ -2299,6 +2332,10 @@ function EventsV3Tab({ onOpenAlert }: { onOpenAlert: (alertId: number) => void }
   )
 }
 
+/*
+Legacy indicator-rule alerts (pre v3) removed in Phase 1 cutover.
+Kept temporarily for reference; guarded from compilation.
+
 function LegacyIndicatorAlertsTab() {
   const [rows, setRows] = useState<RuleRow[]>([])
   const [templates, setTemplates] = useState<Strategy[]>([])
@@ -2582,12 +2619,12 @@ type EditAlertDialogProps = {
   onUpdated: (rule: IndicatorRule) => void
 }
 
-function EditAlertDialog({
-  open,
-  rule,
-  onClose,
-  onUpdated,
-}: EditAlertDialogProps) {
+	function EditAlertDialog({
+	  open,
+	  rule,
+	  onClose,
+	  onUpdated,
+	}: EditAlertDialogProps) {
   const [enabled, setEnabled] = useState<boolean>(true)
   const [triggerMode, setTriggerMode] = useState<TriggerMode>('ONCE_PER_BAR')
   const [dslExpression, setDslExpression] = useState<string>('')
@@ -2608,7 +2645,7 @@ function EditAlertDialog({
     const payload: IndicatorRuleUpdate = {
       enabled,
       trigger_mode: triggerMode,
-    }
+	}
 
     if (rule.dsl_expression != null) {
       const trimmed = dslExpression.trim()
@@ -2715,3 +2752,5 @@ function EditAlertDialog({
     </Dialog>
   )
 }
+
+*/

@@ -8,7 +8,6 @@ from . import (
     auth,
     brokers,
     groups,
-    indicator_alerts,
     market_data,
     orders,
     paper,
@@ -89,12 +88,15 @@ router.include_router(
     tags=["market"],
 )
 
-router.include_router(
-    indicator_alerts.router,
-    prefix="/api/indicator-alerts",
-    dependencies=[Depends(require_admin)],
-    tags=["indicator-alerts"],
-)
+if get_settings().enable_legacy_alerts:
+    from . import indicator_alerts
+
+    router.include_router(
+        indicator_alerts.router,
+        prefix="/api/indicator-alerts",
+        dependencies=[Depends(require_admin)],
+        tags=["indicator-alerts"],
+    )
 
 router.include_router(
     alerts_v3.router,

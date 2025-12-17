@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     tradingview_webhook_secret: str | None = None
     admin_username: str | None = None
     admin_password: str | None = None
+    enable_legacy_alerts: bool = False
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.
@@ -77,6 +78,9 @@ def get_settings() -> Settings:
     if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
         settings.admin_username = None
         settings.admin_password = None
+        # Keep legacy indicator-alert APIs available under pytest so existing
+        # tests can exercise that code path while the product migrates to v3.
+        settings.enable_legacy_alerts = True
         # Use an isolated SQLite DB for tests so running pytest does not
         # wipe the primary sigma_trader.db that is used for real data.
         settings.database_url = "sqlite:///./sigma_trader_test.db"

@@ -52,25 +52,6 @@ import {
   evaluateHoldingsScreenerDsl,
 } from '../services/analytics'
 import {
-  createIndicatorRule,
-  deleteIndicatorRule,
-  listIndicatorRules,
-  type ActionType,
-  type IndicatorCondition,
-  type IndicatorRule,
-  type IndicatorType,
-  type OperatorType,
-  type TriggerMode,
-  fetchIndicatorPreview,
-  type IndicatorPreview,
-} from '../services/indicatorAlerts'
-import {
-  createStrategyTemplate,
-  listStrategyTemplates,
-  deleteStrategy,
-  type Strategy,
-} from '../services/strategies'
-import {
   bulkAddGroupMembers,
   createGroup,
   fetchGroup,
@@ -535,10 +516,6 @@ export function HoldingsPage() {
   const [groupCreateError, setGroupCreateError] = useState<string | null>(null)
 
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
-
-  const [alertOpen, setAlertOpen] = useState(false)
-  const [alertSymbol, setAlertSymbol] = useState<string | null>(null)
-  const [alertExchange, setAlertExchange] = useState<string | null>(null)
 
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
   const [advancedFilters, setAdvancedFilters] = useState<HoldingsFilter[]>([])
@@ -1185,9 +1162,17 @@ export function HoldingsPage() {
   }
 
   const openAlertDialogForHolding = (holding: HoldingRow) => {
-    setAlertSymbol(holding.symbol)
-    setAlertExchange(holding.exchange ?? 'NSE')
-    setAlertOpen(true)
+    const symbol = (holding.symbol || '').trim()
+    if (!symbol) return
+    const exchange =
+      (holding.exchange ?? 'NSE').toString().trim().toUpperCase() || 'NSE'
+    const params = new URLSearchParams({
+      create_v3: '1',
+      target_kind: 'SYMBOL',
+      target_ref: symbol.toUpperCase(),
+      exchange,
+    })
+    navigate(`/alerts?${params.toString()}`)
   }
 
   function getSizingPrice(holding: HoldingRow | null): number | null {
@@ -4505,30 +4490,13 @@ export function HoldingsPage() {
           <Button onClick={() => setBulkPctDialogOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
-      <IndicatorAlertDialog
-        open={alertOpen}
-        onClose={() => setAlertOpen(false)}
-        symbol={alertSymbol}
-        exchange={alertExchange}
-        universeId={universeId}
-        universeLabel={
-          universeId === 'holdings'
-            ? 'Holdings (Zerodha)'
-            : activeGroup?.name ?? 'Selected group'
-        }
-        selectedSymbols={rowSelectionModel.map((id) => String(id))}
-        symbolExchanges={Object.fromEntries(
-          holdings
-            .filter((row) => Boolean(row.symbol))
-            .map((row) => [
-              row.symbol,
-              (row.exchange ?? 'NSE').toUpperCase(),
-            ]),
-        )}
-      />
     </Box>
   )
 }
+
+/*
+Legacy per-symbol indicator-rule alerts (pre v3) removed in Phase 1 cutover.
+Kept temporarily for reference; guarded from compilation.
 
 type IndicatorAlertDialogProps = {
   open: boolean
@@ -5594,17 +5562,19 @@ function IndicatorAlertDialog({
       </Dialog>
     </Dialog>
   )
-}
+	}
 
-type HoldingChartCellProps = {
-  history?: CandlePoint[]
-  periodDays: number
-}
+*/
 
-function HoldingChartCell({
-  history,
-  periodDays,
-}: HoldingChartCellProps) {
+	type HoldingChartCellProps = {
+	  history?: CandlePoint[]
+	  periodDays: number
+	}
+
+	function HoldingChartCell({
+	  history,
+	  periodDays,
+	}: HoldingChartCellProps) {
   if (!history || history.length < 2) {
     return (
       <Typography variant="caption" color="text.secondary">

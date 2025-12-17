@@ -716,6 +716,31 @@ Refactor direction:
 4) Add Events tab:
    - show trigger history + snapshots for trust/debugging.
 
+### 11.1 Phase 1 cutover: remove legacy indicator-rule alerts
+
+This repo now treats **Alert V3** as the default/primary alerts system.
+
+What changed (Phase 1):
+- **Holdings per‑symbol “ALERT” button** now opens the Alert V3 create dialog pre‑filled as:
+  - `target_kind = SYMBOL`
+  - `target_ref = <clicked symbol>`
+  - `exchange = <symbol exchange>`
+  This is implemented as a simple deep‑link into `/alerts` with query params, so we reuse the same create UI.
+- The **Alerts page no longer shows the Legacy tab** in the UI (V3 only: Alerts / Indicators / Events).
+- Legacy indicator‑rule alert backend plumbing is **guarded** behind `ST_ENABLE_LEGACY_ALERTS` (default `0`):
+  - When disabled: legacy routes aren’t mounted and the legacy scheduler isn’t started.
+  - Under pytest: legacy is force‑enabled so existing tests can still run during the migration window.
+- Legacy definitions are **purged from DB** via Alembic migration `0028_purge_legacy_indicator_rules.py`:
+  - Preserves `alerts` history rows but nulls `alerts.rule_id` before deleting from `indicator_rules`.
+
+Why this is safe:
+- V3 alerts already cover both “single symbol” and “universe” use‑cases, so per‑symbol legacy alerts are redundant.
+- Keeping the legacy code path behind a flag provides a short safety window for rollback of runtime behavior (but legacy rule *definitions* are intentionally deleted).
+
+What remains (Phase 2+):
+- Re‑implement **Screener** on top of Alert V3.
+- Once Screener no longer depends on the legacy DSL/indicator alert machinery, delete the remaining legacy code paths entirely.
+
 ---
 
 ## 12) Open decisions (confirm before implementation)
