@@ -30,12 +30,24 @@ from app.schemas.alerts_v3 import (
     CustomIndicatorRead,
     CustomIndicatorUpdate,
 )
+from app.schemas.positions import HoldingRead
 from app.services.alerts_v3_compiler import (
     compile_alert_definition,
     compile_alert_expression,
     compile_custom_indicators_for_user,
 )
-from app.services.alerts_v3_expression import eval_condition
+from app.services.alerts_v3_expression import (
+    BinaryNode,
+    CallNode,
+    ComparisonNode,
+    EventNode,
+    ExprNode,
+    IdentNode,
+    LogicalNode,
+    NotNode,
+    UnaryNode,
+    eval_condition,
+)
 from app.services.indicator_alerts import IndicatorAlertError
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -188,6 +200,50 @@ def _iter_target_symbols(
             return
         for h in holdings:
             yield h.symbol.upper(), ((getattr(h, "exchange", None) or "NSE").upper())
+
+
+_HOLDINGS_SNAPSHOT_METRICS = {
+    "TODAY_PNL_PCT",
+    "PNL_PCT",
+    "CURRENT_VALUE",
+    "INVESTED",
+    "QTY",
+    "AVG_PRICE",
+}
+
+
+def _iter_expr_nodes(expr: ExprNode) -> Iterable[ExprNode]:
+    yield expr
+    if isinstance(expr, IdentNode):
+        return
+    if isinstance(expr, CallNode):
+        for a in expr.args:
+            yield from _iter_expr_nodes(a)
+        return
+    if isinstance(expr, UnaryNode):
+        yield from _iter_expr_nodes(expr.child)
+        return
+    if isinstance(expr, BinaryNode):
+        yield from _iter_expr_nodes(expr.left)
+        yield from _iter_expr_nodes(expr.right)
+        return
+    if isinstance(expr, (ComparisonNode, EventNode)):
+        yield from _iter_expr_nodes(expr.left)
+        yield from _iter_expr_nodes(expr.right)
+        return
+    if isinstance(expr, LogicalNode):
+        for c in expr.children:
+            yield from _iter_expr_nodes(c)
+        return
+    if isinstance(expr, NotNode):
+        yield from _iter_expr_nodes(expr.child)
+
+
+def _needs_holdings_snapshot(expr: ExprNode) -> bool:
+    for n in _iter_expr_nodes(expr):
+        if isinstance(n, IdentNode) and n.name.upper() in _HOLDINGS_SNAPSHOT_METRICS:
+            return True
+    return False
 
 
 @router.get("/", response_model=List[AlertDefinitionRead])
@@ -463,6 +519,16 @@ def test_alert_expression_api(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
 
+    holdings_map: dict[str, HoldingRead] | None = None
+    if payload.target_kind.upper() == "HOLDINGS" or _needs_holdings_snapshot(expr_ast):
+        try:
+            from app.api.positions import list_holdings
+
+            holdings = list_holdings(db=db, settings=settings, user=user)
+            holdings_map = {h.symbol.upper(): h for h in holdings}
+        except Exception:
+            holdings_map = {}
+
     exch = (payload.exchange or "NSE").upper()
     results: list[AlertV3TestResult] = []
     for symbol, exchange in _iter_target_symbols(
@@ -476,12 +542,16 @@ def test_alert_expression_api(
         if len(results) >= limit:
             break
         try:
+            holding = (
+                holdings_map.get(symbol.upper()) if holdings_map is not None else None
+            )
             matched, snapshot, bar_time = eval_condition(
                 expr_ast,
                 db=db,
                 settings=settings,
                 symbol=symbol,
                 exchange=exchange,
+                holding=holding,
                 custom_indicators=custom,
             )
             results.append(

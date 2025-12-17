@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.market_hours import IST_OFFSET
 from app.models import Position
+from app.schemas.positions import HoldingRead
 from app.services.indicator_alerts import IndicatorAlertError, _load_candles_for_rule
 
 Timeframe = str  # e.g. "1m", "5m", "1h", "1d"
@@ -301,11 +302,43 @@ def compute_metric(
     symbol: str,
     exchange: str,
     metric: str,
+    holding: HoldingRead | None = None,
 ) -> Tuple[Optional[float], Optional[float], Optional[datetime]]:
     # Approximate from positions + daily candles.
     metric = metric.upper()
     if metric not in _ALLOWED_METRICS:
         raise IndicatorAlertError(f"Unknown metric '{metric}'")
+
+    # Prefer live holdings snapshot when available for metrics that should
+    # reflect Zerodha's current view (LTP/day-change). This keeps v3 behaviour
+    # aligned with the Holdings page and avoids requiring the cached `positions`
+    # table to be in sync.
+    if holding is not None:
+        qty_h = float(holding.quantity)
+        avg_h = float(holding.average_price)
+        invested_h = qty_h * avg_h
+        last_h: float | None = None
+        if holding.last_price is not None:
+            try:
+                last_h = float(holding.last_price)
+            except (TypeError, ValueError):
+                last_h = None
+
+        if metric == "QTY":
+            return qty_h, qty_h, None
+        if metric == "AVG_PRICE":
+            return avg_h, avg_h, None
+        if metric == "INVESTED":
+            return invested_h, invested_h, None
+        if metric == "CURRENT_VALUE":
+            v = qty_h * last_h if last_h is not None else None
+            return v, v, None
+        if metric == "PNL_PCT" and holding.total_pnl_percent is not None:
+            v = float(holding.total_pnl_percent)
+            return v, v, None
+        if metric == "TODAY_PNL_PCT" and holding.today_pnl_percent is not None:
+            v = float(holding.today_pnl_percent)
+            return v, v, None
 
     pos = (
         db.query(Position)
@@ -708,6 +741,7 @@ def _eval_numeric(
     db: Session,
     settings: Settings,
     cache: CandleCache,
+    holding: HoldingRead | None,
     params: Dict[str, SeriesValue],
     custom_indicators: Dict[str, Tuple[List[str], ExprNode]],
 ) -> SeriesValue:
@@ -727,6 +761,7 @@ def _eval_numeric(
                 symbol=cache.symbol,
                 exchange=cache.exchange,
                 metric=name,
+                holding=holding,
             )
             return SeriesValue(now, prev, bar_time)
         raise IndicatorAlertError(f"Unknown identifier '{node.name}'")
@@ -737,6 +772,7 @@ def _eval_numeric(
             db=db,
             settings=settings,
             cache=cache,
+            holding=holding,
             params=params,
             custom_indicators=custom_indicators,
         )
@@ -754,6 +790,7 @@ def _eval_numeric(
             db=db,
             settings=settings,
             cache=cache,
+            holding=holding,
             params=params,
             custom_indicators=custom_indicators,
         )
@@ -762,6 +799,7 @@ def _eval_numeric(
             db=db,
             settings=settings,
             cache=cache,
+            holding=holding,
             params=params,
             custom_indicators=custom_indicators,
         )
@@ -797,6 +835,7 @@ def _eval_numeric(
                     db=db,
                     settings=settings,
                     cache=cache,
+                    holding=holding,
                     params=params,
                     custom_indicators=custom_indicators,
                 )
@@ -805,6 +844,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=inner_params,
                 custom_indicators=custom_indicators,
             )
@@ -841,6 +881,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -868,6 +909,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -888,6 +930,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -903,6 +946,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -918,6 +962,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -933,6 +978,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -948,6 +994,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -956,6 +1003,7 @@ def _eval_numeric(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
             )
@@ -980,6 +1028,7 @@ def eval_condition(
     settings: Settings,
     symbol: str,
     exchange: str,
+    holding: HoldingRead | None = None,
     custom_indicators: Dict[str, Tuple[List[str], ExprNode]],
 ) -> Tuple[bool, Dict[str, float], Optional[datetime]]:
     """Evaluate a compiled v3 alert condition for a symbol.
@@ -1006,6 +1055,7 @@ def eval_condition(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
             )
@@ -1014,6 +1064,7 @@ def eval_condition(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
             )
@@ -1042,6 +1093,7 @@ def eval_condition(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
             )
@@ -1050,6 +1102,7 @@ def eval_condition(
                 db=db,
                 settings=settings,
                 cache=cache,
+                holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
             )
@@ -1089,6 +1142,7 @@ def eval_condition(
             db=db,
             settings=settings,
             cache=cache,
+            holding=holding,
             params={},
             custom_indicators=custom_indicators,
         )

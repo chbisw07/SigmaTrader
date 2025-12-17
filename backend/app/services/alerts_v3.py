@@ -12,12 +12,22 @@ from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET, is_market_open_now
 from app.db.session import SessionLocal
 from app.models import AlertDefinition, AlertEvent, Group, GroupMember, User
+from app.schemas.positions import HoldingRead
 from app.services.alerts_v3_compiler import (
     CustomIndicatorMap,
     compile_alert_definition,
     compile_custom_indicators_for_user,
 )
 from app.services.alerts_v3_expression import (
+    BinaryNode,
+    CallNode,
+    ComparisonNode,
+    EventNode,
+    ExprNode,
+    IdentNode,
+    LogicalNode,
+    NotNode,
+    UnaryNode,
     eval_condition,
     loads_ast,
     timeframe_to_timedelta,
@@ -35,6 +45,53 @@ _scheduler_stop_event = Event()
 
 def _now_ist_naive() -> datetime:
     return (datetime.now(UTC) + IST_OFFSET).replace(tzinfo=None)
+
+
+_HOLDINGS_SNAPSHOT_METRICS = {
+    # These are expected by users to match the live Holdings page
+    # (Zerodha snapshot), not just cached positions + daily candles.
+    "TODAY_PNL_PCT",
+    "PNL_PCT",
+    "CURRENT_VALUE",
+    "INVESTED",
+    "QTY",
+    "AVG_PRICE",
+}
+
+
+def _iter_nodes(expr: ExprNode) -> Iterable[ExprNode]:
+    yield expr
+    if isinstance(expr, (IdentNode,)):
+        return
+    if isinstance(expr, CallNode):
+        for a in expr.args:
+            yield from _iter_nodes(a)
+        return
+    if isinstance(expr, UnaryNode):
+        yield from _iter_nodes(expr.child)
+        return
+    if isinstance(expr, BinaryNode):
+        yield from _iter_nodes(expr.left)
+        yield from _iter_nodes(expr.right)
+        return
+    if isinstance(expr, (ComparisonNode, EventNode)):
+        yield from _iter_nodes(expr.left)
+        yield from _iter_nodes(expr.right)
+        return
+    if isinstance(expr, LogicalNode):
+        for c in expr.children:
+            yield from _iter_nodes(c)
+        return
+    if isinstance(expr, NotNode):
+        yield from _iter_nodes(expr.child)
+        return
+
+
+def _needs_holdings_snapshot(expr: ExprNode) -> bool:
+    for n in _iter_nodes(expr):
+        if isinstance(n, IdentNode) and n.name.upper() in _HOLDINGS_SNAPSHOT_METRICS:
+            return True
+    return False
 
 
 def _iter_alert_symbols(
@@ -162,6 +219,7 @@ def evaluate_alerts_v3_once() -> None:
         # Cache custom indicators per user.
         custom_by_user: Dict[int, CustomIndicatorMap] = {}
         users_by_id: Dict[int, User] = {}
+        holdings_by_user: Dict[int, Dict[str, HoldingRead]] = {}
 
         for alert in alerts:
             try:
@@ -207,17 +265,40 @@ def evaluate_alerts_v3_once() -> None:
                         db, alert=alert, user_id=user.id, custom_indicators=custom
                     )
 
+                holdings_map = None
+                if (
+                    alert.target_kind or ""
+                ).upper() == "HOLDINGS" or _needs_holdings_snapshot(cond_ast):
+                    holdings_map = holdings_by_user.get(user.id)
+                    if holdings_map is None:
+                        try:
+                            from app.api.positions import list_holdings
+
+                            holdings = list_holdings(
+                                db=db, settings=settings, user=user
+                            )
+                            holdings_map = {h.symbol.upper(): h for h in holdings}
+                        except Exception:
+                            holdings_map = {}
+                        holdings_by_user[user.id] = holdings_map
+
                 any_triggered = False
                 for symbol, exchange in _iter_alert_symbols(
                     db, settings, alert=alert, user=user
                 ):
                     try:
+                        holding = (
+                            holdings_map.get(symbol.upper())
+                            if holdings_map is not None
+                            else None
+                        )
                         ok, snapshot, bar_time = eval_condition(
                             cond_ast,
                             db=db,
                             settings=settings,
                             symbol=symbol,
                             exchange=exchange,
+                            holding=holding,
                             custom_indicators=custom,
                         )
                     except IndicatorAlertError:
