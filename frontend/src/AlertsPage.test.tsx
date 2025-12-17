@@ -42,6 +42,8 @@ describe('AlertsPage (v3)', () => {
             target_kind: 'SYMBOL',
             target_ref: 'TEST',
             exchange: 'NSE',
+            action_type: 'ALERT_ONLY',
+            action_params: {},
             evaluation_cadence: '1d',
             variables: [],
             condition_dsl: 'PRICE("1d") > 100',
@@ -102,4 +104,3 @@ describe('AlertsPage (v3)', () => {
     expect(screen.getByLabelText('Name')).toHaveValue('My alert')
   })
 })
-

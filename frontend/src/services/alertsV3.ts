@@ -11,6 +11,8 @@ export type AlertDefinition = {
   target_kind: string
   target_ref: string
   exchange?: string | null
+  action_type: 'ALERT_ONLY' | 'BUY' | 'SELL'
+  action_params: Record<string, unknown>
   evaluation_cadence: string
   variables: AlertVariableDef[]
   condition_dsl: string

@@ -24,8 +24,8 @@ This refactor covers:
 - Required semantics (crossing/moving/missing‑data/multi‑TF).
 
 Out of scope for this document (covered elsewhere):
-- Execution actions (buy/sell automation) — **alerts only have conditionals** here and emit `AlertEvent`s.
-- The runtime scheduler implementation details, queueing, broker routing.
+- Runtime execution plumbing details (workers, queue internals, broker routing).
+- Strategy-level automation beyond per-alert templates (global risk controls, portfolio-level limits).
 
 ---
 
@@ -83,7 +83,9 @@ An **Alert** is a persisted object with:
   - optional market hours gating
   - optional expiry
 
-Alerts contain **only conditionals** and trigger settings. They produce `AlertEvent`s.
+Alerts always produce `AlertEvent`s for audit/debugging. Additionally, alerts may carry an optional **action**:
+- `ALERT_ONLY` (default): current behavior, no orders are created.
+- `BUY` / `SELL`: attach a symbol‑free trade template (see section 10) that turns each per‑symbol trigger into an order intent routed to the manual/auto queue.
 
 ### 3.3 Indicator catalog (decoupled)
 
@@ -178,6 +180,8 @@ Tabs: [ Alerts ] [ Indicators ] [ Events ]
 |     Preview: 23 symbols                                       |
 | ( ) Symbol     Symbol:   [INFY v]  Exchange: [NSE v]           |
 |                                                               |
+| Action: [ Alert only v ]  (Alert only / Buy / Sell)            |
+|                                                               |
 | Options:                                                      |
 | [ ] Only evaluate during market hours                         |
 | [ ] Alert expires on: [ 2025-03-01 15:30 ]                     |
@@ -271,6 +275,28 @@ Condition builder supports:
 |                    [ Back ]   [ Save Alert ]                   |
 +---------------------------------------------------------------+
 ```
+
+#### Optional — Buy/Sell template tab (when Action = BUY/SELL)
+
+When the user chooses `BUY` or `SELL` in Step 1, the editor should expose an additional tab alongside the condition editor:
+
+```
+Tabs: [ Condition ] [ Buy template ]
+```
+
+The template tab should look and behave like the existing Holdings buy/sell dialog, with these deliberate differences:
+- No symbol header (symbol is resolved at trigger time).
+- No BUY/SELL toggle (side is fixed by `Action = BUY/SELL`).
+- No `% of portfolio` sizing option in the template.
+
+Template fields (Phase B):
+- `submit_mode`: `MANUAL` (review in queue) or `AUTO` (send now)
+- `execution_target`: `LIVE` or `PAPER`
+- Position sizing (radio): `QTY` / `AMOUNT` / `% of position`
+  - Non-selected sizing inputs stay blank (switching modes clears the other inputs).
+- Order entry: `order_type`, `price` (disabled for MARKET/SL-M), optional `trigger_price` (for SL*/GTT)
+- `product`: `CNC` / `MIS`
+- Optional follow-ups: bracket/follow-up GTT (MTP%), and `gtt` (LIMIT only)
 
 ### 4.4 Indicators tab (custom indicators)
 
@@ -607,7 +633,71 @@ SMA_1D_20 CROSSES_ABOVE SMA_1D_50 AND VOL_1D > 2 * VOL_1D_AVG
 
 ---
 
-## 10) Migration notes (from current system)
+## 10) Alert actions (Alert only / Buy / Sell) — Phase B
+
+Goal: extend Alert V3 definitions so an alert can be either:
+- **signal only** (`ALERT_ONLY`) — current behavior, no change, and
+- **signal + execution intent** (`BUY` / `SELL`) — store a symbol‑free buy/sell template that can be applied to each per‑symbol trigger.
+
+### 10.1 UX requirement
+
+In the alert editor:
+- Add `Action` selector: `Alert only` / `Buy` / `Sell` (default = `Alert only`).
+- When `Buy` or `Sell` is selected, show an additional tab: `Buy template` / `Sell template`.
+- Template tab: mirror the Holdings buy/sell dialog, except it excludes symbol-specific UI and the `% of portfolio` sizing option.
+
+### 10.2 Data model (backwards compatible)
+
+Add fields to the persisted alert definition:
+- `action_type`: `ALERT_ONLY` | `BUY` | `SELL`
+- `action_params`: JSON (template payload)
+
+Notes:
+- Existing alerts default to `ALERT_ONLY` automatically (no behavior change).
+- `action_params` is ignored when `action_type = ALERT_ONLY`.
+- The server should canonicalize `action_params` so `mode` and `execution_target` are always present for `BUY`/`SELL` (with safe defaults).
+
+Example create payload (MVP):
+
+```json
+{
+  "name": "RSI oversold (buy holdings)",
+  "target_kind": "HOLDINGS",
+  "target_ref": "ZERODHA",
+  "action_type": "BUY",
+  "action_params": { "mode": "MANUAL", "execution_target": "LIVE" },
+  "variables": [{ "name": "RSI_1H_14", "dsl": "RSI(close, 14, \"1h\")" }],
+  "condition_dsl": "RSI_1H_14 < 30",
+  "trigger_mode": "ONCE_PER_BAR",
+  "enabled": true
+}
+```
+
+### 10.3 Runtime semantics (high-level)
+
+Independently of action type:
+- Every trigger still creates an `AlertEvent` record (audit/debugging stays intact).
+
+When `action_type` is `BUY` or `SELL`:
+- Each per‑symbol trigger should produce an **OrderIntent** derived from the template + the triggered symbol.
+- Routing uses the same mental model as the holdings buy/sell dialog:
+  - `MANUAL` → goes to the waiting queue
+  - `AUTO` → goes directly to execution (or into an auto queue) depending on how AUTO is implemented today
+  - `PAPER` → executes against the paper engine (no broker contact)
+
+Important: this section is intentionally **high-level**. Worker orchestration and broker routing remain documented elsewhere; this document focuses on contract + semantics.
+
+### 10.4 Key challenges / guardrails
+
+These must be explicitly handled before enabling AUTO+LIVE in production:
+- **Idempotency / de-duplication**: guard against repeated triggers creating duplicate orders (dedupe key like `(alert_id, symbol, bar_time, action_type)`).
+- **Position awareness** (later): “buy” for already-held symbols, “sell” for non-held symbols — should be a template option (skip vs error vs allow short).
+- **Auditability**: store the resolved template (including defaults) alongside the created intent/order so users can inspect “what got sent”.
+- **Security**: only accept execution parameters from persisted alert definitions (never from external webhook payloads).
+
+---
+
+## 11) Migration notes (from current system)
 
 We already have working building blocks:
 - Universe targeting (holdings + groups)
@@ -628,7 +718,7 @@ Refactor direction:
 
 ---
 
-## 11) Open decisions (confirm before implementation)
+## 12) Open decisions (confirm before implementation)
 
 1) Selected rows:
    - Confirmed: strongly guide “Create group from selection”.
@@ -638,3 +728,6 @@ Refactor direction:
    - Confirmed: per‑alert cadence (default to smallest referenced timeframe, overridable).
 4) Custom indicator function surface:
    - Confirmed: start with MVP surface (A) and expand intentionally through B→E.
+
+5) Action template (Phase B):
+   - Confirm which template fields are required before we allow `AUTO + LIVE` (sizing, order_type/product, bracket/GTT, position guards, risk gating).

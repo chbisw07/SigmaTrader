@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from app.pydantic_compat import PYDANTIC_V2, ConfigDict
+
+AlertActionType = Literal["ALERT_ONLY", "BUY", "SELL"]
+ExecutionMode = Literal["MANUAL", "AUTO"]
+ExecutionTarget = Literal["LIVE", "PAPER"]
+
+
+class AlertTradeTemplate(BaseModel):
+    mode: ExecutionMode = "MANUAL"
+    execution_target: ExecutionTarget = "LIVE"
+
+    if PYDANTIC_V2:
+        model_config = ConfigDict(extra="allow")
+    else:  # pragma: no cover
+
+        class Config:
+            extra = "allow"
 
 
 class AlertVariableDef(BaseModel):
@@ -22,6 +38,9 @@ class AlertDefinitionCreate(BaseModel):
     target_kind: str = Field(..., min_length=1)
     target_ref: str = Field(..., min_length=1)
     exchange: Optional[str] = None
+
+    action_type: AlertActionType = "ALERT_ONLY"
+    action_params: Dict[str, Any] = Field(default_factory=dict)
 
     evaluation_cadence: Optional[str] = None
     variables: List[AlertVariableDef] = Field(default_factory=list)
@@ -40,6 +59,9 @@ class AlertDefinitionUpdate(BaseModel):
     target_ref: Optional[str] = None
     exchange: Optional[str] = None
 
+    action_type: Optional[AlertActionType] = None
+    action_params: Optional[Dict[str, Any]] = None
+
     evaluation_cadence: Optional[str] = None
     variables: Optional[List[AlertVariableDef]] = None
     condition_dsl: Optional[str] = None
@@ -57,6 +79,9 @@ class AlertDefinitionRead(BaseModel):
     target_kind: str
     target_ref: str
     exchange: Optional[str] = None
+
+    action_type: AlertActionType = "ALERT_ONLY"
+    action_params: Dict[str, Any] = Field(default_factory=dict)
 
     evaluation_cadence: str
     variables: List[AlertVariableDef] = Field(default_factory=list)
@@ -159,6 +184,8 @@ class AlertV3TestResponse(BaseModel):
 
 
 __all__ = [
+    "AlertActionType",
+    "AlertTradeTemplate",
     "AlertVariableDef",
     "AlertDefinitionCreate",
     "AlertDefinitionUpdate",

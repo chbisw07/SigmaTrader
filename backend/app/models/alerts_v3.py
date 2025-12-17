@@ -28,6 +28,10 @@ class AlertDefinition(Base):
             name="ck_alert_definitions_target_kind",
         ),
         CheckConstraint(
+            "action_type IN ('ALERT_ONLY', 'BUY', 'SELL')",
+            name="ck_alert_definitions_action_type",
+        ),
+        CheckConstraint(
             "trigger_mode IN ('ONCE', 'ONCE_PER_BAR', 'EVERY_TIME')",
             name="ck_alert_definitions_trigger_mode",
         ),
@@ -65,6 +69,12 @@ class AlertDefinition(Base):
     variables_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     condition_dsl: Mapped[str] = mapped_column(Text, nullable=False)
     condition_ast_json: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Action behavior (Phase B): optional trade template attached to the alert.
+    action_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="ALERT_ONLY"
+    )
+    action_params_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     # Trigger behavior
     trigger_mode: Mapped[str] = mapped_column(

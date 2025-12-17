@@ -7,10 +7,13 @@ import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import Divider from '@mui/material/Divider'
+import Checkbox from '@mui/material/Checkbox'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
+import Radio from '@mui/material/Radio'
+import RadioGroup from '@mui/material/RadioGroup'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import Switch from '@mui/material/Switch'
@@ -401,6 +404,31 @@ function AlertV3EditorDialog({
   )
   const [targetRef, setTargetRef] = useState('ZERODHA')
   const [exchange, setExchange] = useState('NSE')
+  const [actionType, setActionType] = useState<'ALERT_ONLY' | 'BUY' | 'SELL'>(
+    'ALERT_ONLY',
+  )
+  const [actionTab, setActionTab] = useState<0 | 1>(0)
+  const [tradeExecutionMode, setTradeExecutionMode] = useState<'MANUAL' | 'AUTO'>(
+    'MANUAL',
+  )
+  const [tradeExecutionTarget, setTradeExecutionTarget] = useState<
+    'LIVE' | 'PAPER'
+  >('LIVE')
+  const [tradeSizeMode, setTradeSizeMode] = useState<
+    'QTY' | 'AMOUNT' | 'PCT_POSITION'
+  >('QTY')
+  const [tradeQty, setTradeQty] = useState<string>('')
+  const [tradeAmount, setTradeAmount] = useState<string>('')
+  const [tradePctPosition, setTradePctPosition] = useState<string>('')
+  const [tradeOrderType, setTradeOrderType] = useState<
+    'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  >('MARKET')
+  const [tradePrice, setTradePrice] = useState<string>('')
+  const [tradeTriggerPrice, setTradeTriggerPrice] = useState<string>('')
+  const [tradeProduct, setTradeProduct] = useState<'CNC' | 'MIS'>('CNC')
+  const [tradeBracketEnabled, setTradeBracketEnabled] = useState(false)
+  const [tradeMtpPct, setTradeMtpPct] = useState<string>('')
+  const [tradeGtt, setTradeGtt] = useState(false)
   const [evaluationCadence, setEvaluationCadence] = useState<string>('')
   const [variables, setVariables] = useState<AlertVariableDef[]>([])
   const [conditionDsl, setConditionDsl] = useState('')
@@ -427,6 +455,21 @@ function AlertV3EditorDialog({
       setTargetKind('HOLDINGS')
       setTargetRef('ZERODHA')
       setExchange('NSE')
+      setActionType('ALERT_ONLY')
+      setActionTab(0)
+      setTradeExecutionMode('MANUAL')
+      setTradeExecutionTarget('LIVE')
+      setTradeSizeMode('QTY')
+      setTradeQty('')
+      setTradeAmount('')
+      setTradePctPosition('')
+      setTradeOrderType('MARKET')
+      setTradePrice('')
+      setTradeTriggerPrice('')
+      setTradeProduct('CNC')
+      setTradeBracketEnabled(false)
+      setTradeMtpPct('')
+      setTradeGtt(false)
       setEvaluationCadence('')
       setVariables([])
       setConditionDsl('')
@@ -444,6 +487,45 @@ function AlertV3EditorDialog({
     setTargetKind(alert.target_kind as any)
     setTargetRef(alert.target_ref)
     setExchange((alert.exchange ?? 'NSE').toString())
+    setActionType(
+      alert.action_type === 'BUY' || alert.action_type === 'SELL'
+        ? alert.action_type
+        : 'ALERT_ONLY',
+    )
+    setActionTab(0)
+    setTradeExecutionMode(
+      (alert.action_params?.mode ?? 'MANUAL') === 'AUTO' ? 'AUTO' : 'MANUAL',
+    )
+    setTradeExecutionTarget(
+      (alert.action_params?.execution_target ?? 'LIVE') === 'PAPER'
+        ? 'PAPER'
+        : 'LIVE',
+    )
+    setTradeSizeMode(
+      alert.action_params?.size_mode === 'AMOUNT'
+        ? 'AMOUNT'
+        : alert.action_params?.size_mode === 'PCT_POSITION'
+          ? 'PCT_POSITION'
+          : 'QTY',
+    )
+    setTradeQty(String(alert.action_params?.qty ?? ''))
+    setTradeAmount(String(alert.action_params?.amount ?? ''))
+    setTradePctPosition(String(alert.action_params?.pct_position ?? ''))
+    setTradeOrderType(
+      alert.action_params?.order_type === 'LIMIT'
+        ? 'LIMIT'
+        : alert.action_params?.order_type === 'SL'
+          ? 'SL'
+          : alert.action_params?.order_type === 'SL-M'
+            ? 'SL-M'
+            : 'MARKET',
+    )
+    setTradePrice(String(alert.action_params?.price ?? ''))
+    setTradeTriggerPrice(String(alert.action_params?.trigger_price ?? ''))
+    setTradeProduct(alert.action_params?.product === 'MIS' ? 'MIS' : 'CNC')
+    setTradeBracketEnabled(Boolean(alert.action_params?.bracket_enabled))
+    setTradeMtpPct(String(alert.action_params?.mtp_pct ?? ''))
+    setTradeGtt(Boolean(alert.action_params?.gtt))
     setEvaluationCadence(alert.evaluation_cadence ?? '')
     setVariables(alert.variables ?? [])
     setConditionDsl(alert.condition_dsl)
@@ -456,6 +538,35 @@ function AlertV3EditorDialog({
     setConditionJoin('AND')
     setConditionRows([{ lhs: '', op: '>', rhs: '' }])
   }, [open, alert])
+
+  useEffect(() => {
+    if (actionType === 'ALERT_ONLY') setActionTab(0)
+  }, [actionType])
+
+  useEffect(() => {
+    // Mirror holdings dialog behavior: only one sizing field is active.
+    if (tradeSizeMode === 'QTY') {
+      setTradeAmount('')
+      setTradePctPosition('')
+    } else if (tradeSizeMode === 'AMOUNT') {
+      setTradeQty('')
+      setTradePctPosition('')
+    } else if (tradeSizeMode === 'PCT_POSITION') {
+      setTradeQty('')
+      setTradeAmount('')
+    }
+  }, [tradeSizeMode])
+
+  useEffect(() => {
+    // Keep price inputs coherent with order type.
+    if (tradeOrderType === 'MARKET') {
+      setTradePrice('')
+      setTradeTriggerPrice('')
+    }
+    if (tradeOrderType !== 'LIMIT') {
+      setTradeGtt(false)
+    }
+  }, [tradeOrderType])
 
   const variableKindOf = (v: AlertVariableDef): VariableKind => {
     if (v.kind) return v.kind as VariableKind
@@ -544,6 +655,26 @@ function AlertV3EditorDialog({
       if (conditionTab === 0 && conditionPreview.errors.length > 0) {
         throw new Error(conditionPreview.errors.join(' '))
       }
+      const actionParams =
+        actionType === 'ALERT_ONLY'
+          ? {}
+          : {
+              mode: tradeExecutionMode,
+              execution_target: tradeExecutionTarget,
+              size_mode: tradeSizeMode,
+              qty: tradeQty.trim() ? Number(tradeQty) : null,
+              amount: tradeAmount.trim() ? Number(tradeAmount) : null,
+              pct_position: tradePctPosition.trim() ? Number(tradePctPosition) : null,
+              order_type: tradeOrderType,
+              price: tradePrice.trim() ? Number(tradePrice) : null,
+              trigger_price: tradeTriggerPrice.trim()
+                ? Number(tradeTriggerPrice)
+                : null,
+              product: tradeProduct,
+              bracket_enabled: tradeBracketEnabled,
+              mtp_pct: tradeMtpPct.trim() ? Number(tradeMtpPct) : null,
+              gtt: tradeGtt,
+            }
       const payloadBase: AlertDefinitionCreate = {
         name: name.trim() || 'Untitled alert',
         target_kind: targetKind,
@@ -554,6 +685,8 @@ function AlertV3EditorDialog({
               ? targetRef.trim().toUpperCase()
               : targetRef,
         exchange: targetKind === 'SYMBOL' ? exchange : null,
+        action_type: actionType,
+        action_params: actionParams,
         evaluation_cadence: evaluationCadence.trim() || null,
         variables,
         condition_dsl: effectiveConditionDsl,
@@ -664,17 +797,45 @@ function AlertV3EditorDialog({
             placeholder="auto"
             sx={{ minWidth: 160 }}
           />
+          <TextField
+            label="Action"
+            select
+            size="small"
+            value={actionType}
+            onChange={(e) => {
+              const v = e.target.value
+              setActionType(v === 'BUY' ? 'BUY' : v === 'SELL' ? 'SELL' : 'ALERT_ONLY')
+            }}
+            sx={{ minWidth: 180 }}
+          >
+            <MenuItem value="ALERT_ONLY">Alert only</MenuItem>
+            <MenuItem value="BUY">Buy</MenuItem>
+            <MenuItem value="SELL">Sell</MenuItem>
+          </TextField>
         </Box>
 
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          Variables (optional)
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Provide readable aliases like <code>RSI_1H_14</code> = <code>RSI(close, 14, &quot;1h&quot;)</code>.
-        </Typography>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
-          {variables.map((v, idx) => (
-            <Box key={idx} sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {actionType !== 'ALERT_ONLY' && (
+          <Tabs
+            value={actionTab}
+            onChange={(_e, v) => setActionTab(v as 0 | 1)}
+            sx={{ mb: 2 }}
+          >
+            <Tab label="Condition" />
+            <Tab label={actionType === 'BUY' ? 'Buy template' : 'Sell template'} />
+          </Tabs>
+        )}
+
+        {(actionType === 'ALERT_ONLY' || actionTab === 0) && (
+          <>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Variables (optional)
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Provide readable aliases like <code>RSI_1H_14</code> = <code>RSI(close, 14, &quot;1h&quot;)</code>.
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
+              {variables.map((v, idx) => (
+                <Box key={idx} sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <TextField
                 label="Name"
                 size="small"
@@ -959,215 +1120,498 @@ function AlertV3EditorDialog({
           </Button>
         </Box>
 
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          Condition
-        </Typography>
-        <Tabs
-          value={conditionTab}
-          onChange={(_e, v) => setConditionTab(v as 0 | 1)}
-          sx={{ mb: 1 }}
-        >
-          <Tab label="Builder" />
-          <Tab label="Advanced (DSL)" />
-        </Tabs>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Condition
+            </Typography>
+            <Tabs
+              value={conditionTab}
+              onChange={(_e, v) => setConditionTab(v as 0 | 1)}
+              sx={{ mb: 1 }}
+            >
+              <Tab label="Builder" />
+              <Tab label="Advanced (DSL)" />
+            </Tabs>
 
-        {conditionTab === 0 && (
-          <Box sx={{ mb: 2 }}>
-            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mb: 1 }}>
-              <TextField
-                label="Match mode"
-                select
-                size="small"
-                value={conditionJoin}
-                onChange={(e) => setConditionJoin(e.target.value as any)}
-                sx={{ minWidth: 220 }}
-              >
-                <MenuItem value="AND">All conditions (AND)</MenuItem>
-                <MenuItem value="OR">Any condition (OR)</MenuItem>
-              </TextField>
-              <Button
-                variant="outlined"
-                onClick={() =>
-                  setConditionRows((prev) => [...prev, { lhs: '', op: '>', rhs: '' }])
-                }
-              >
-                + Add condition
-              </Button>
-            </Box>
-
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {conditionRows.map((row, idx) => (
+            {conditionTab === 0 && (
+              <Box sx={{ mb: 2 }}>
                 <Box
-                  key={idx}
-                  sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}
+                  sx={{
+                    display: 'flex',
+                    gap: 2,
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    mb: 1,
+                  }}
                 >
-                  <Autocomplete
-                    freeSolo
-                    options={operandOptions}
-                    value={row.lhs}
-                    onChange={(_e, v) =>
-                      setConditionRows((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, lhs: String(v ?? '') } : r)),
-                      )
-                    }
-                    onInputChange={(_e, v) =>
-                      setConditionRows((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, lhs: v } : r)),
-                      )
-                    }
-                    renderInput={(params) => (
-                      <TextField {...params} label="LHS" size="small" sx={{ width: 240 }} />
-                    )}
-                  />
                   <TextField
-                    label="Operator"
+                    label="Match mode"
                     select
                     size="small"
-                    value={row.op}
-                    onChange={(e) =>
-                      setConditionRows((prev) =>
-                        prev.map((r, i) =>
-                          i === idx ? { ...r, op: e.target.value as any } : r,
-                        ),
-                      )
-                    }
-                    sx={{ width: 170 }}
+                    value={conditionJoin}
+                    onChange={(e) => setConditionJoin(e.target.value as any)}
+                    sx={{ minWidth: 220 }}
                   >
-                    <MenuItem value=">">&gt;</MenuItem>
-                    <MenuItem value=">=">&gt;=</MenuItem>
-                    <MenuItem value="<">&lt;</MenuItem>
-                    <MenuItem value="<=">&lt;=</MenuItem>
-                    <MenuItem value="==">==</MenuItem>
-                    <MenuItem value="!=">!=</MenuItem>
-                    <MenuItem value="CROSSES_ABOVE">CROSSES_ABOVE</MenuItem>
-                    <MenuItem value="CROSSES_BELOW">CROSSES_BELOW</MenuItem>
-                    <MenuItem value="MOVING_UP">MOVING_UP (%)</MenuItem>
-                    <MenuItem value="MOVING_DOWN">MOVING_DOWN (%)</MenuItem>
+                    <MenuItem value="AND">All conditions (AND)</MenuItem>
+                    <MenuItem value="OR">Any condition (OR)</MenuItem>
                   </TextField>
-                  <Autocomplete
-                    freeSolo
-                    options={operandOptions}
-                    value={row.rhs}
-                    onChange={(_e, v) =>
-                      setConditionRows((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, rhs: String(v ?? '') } : r)),
-                      )
-                    }
-                    onInputChange={(_e, v) =>
-                      setConditionRows((prev) =>
-                        prev.map((r, i) => (i === idx ? { ...r, rhs: v } : r)),
-                      )
-                    }
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        label="RHS"
-                        size="small"
-                        sx={{ width: 240 }}
-                        helperText={
-                          row.op === 'MOVING_UP' || row.op === 'MOVING_DOWN'
-                            ? 'RHS must be numeric'
-                            : undefined
-                        }
-                      />
-                    )}
-                  />
                   <Button
-                    color="error"
+                    variant="outlined"
                     onClick={() =>
-                      setConditionRows((prev) => prev.filter((_x, i) => i !== idx))
+                      setConditionRows((prev) => [
+                        ...prev,
+                        { lhs: '', op: '>', rhs: '' },
+                      ])
                     }
-                    disabled={conditionRows.length <= 1}
                   >
-                    Remove
+                    + Add condition
                   </Button>
                 </Box>
-              ))}
-            </Box>
 
-            <Typography variant="subtitle2" sx={{ mt: 2, mb: 0.5 }}>
-              Expression preview (read-only)
-            </Typography>
-            <Paper variant="outlined" sx={{ p: 1, bgcolor: 'background.default' }}>
-              <Typography
-                component="pre"
-                variant="body2"
-                sx={{ m: 0, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}
-              >
-                {conditionPreview.dsl || '—'}
-              </Typography>
-            </Paper>
-            {conditionPreview.errors.length > 0 && (
-              <Typography variant="body2" color="error" sx={{ mt: 1 }}>
-                {conditionPreview.errors.join(' ')}
-              </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {conditionRows.map((row, idx) => (
+                    <Box
+                      key={idx}
+                      sx={{
+                        display: 'flex',
+                        gap: 1,
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Autocomplete
+                        freeSolo
+                        options={operandOptions}
+                        value={row.lhs}
+                        onChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((r, i) =>
+                              i === idx ? { ...r, lhs: String(v ?? '') } : r,
+                            ),
+                          )
+                        }
+                        onInputChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((r, i) =>
+                              i === idx ? { ...r, lhs: v } : r,
+                            ),
+                          )
+                        }
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="LHS"
+                            size="small"
+                            sx={{ width: 240 }}
+                          />
+                        )}
+                      />
+                      <TextField
+                        label="Operator"
+                        select
+                        size="small"
+                        value={row.op}
+                        onChange={(e) =>
+                          setConditionRows((prev) =>
+                            prev.map((r, i) =>
+                              i === idx
+                                ? { ...r, op: e.target.value as any }
+                                : r,
+                            ),
+                          )
+                        }
+                        sx={{ width: 170 }}
+                      >
+                        <MenuItem value=">">&gt;</MenuItem>
+                        <MenuItem value=">=">&gt;=</MenuItem>
+                        <MenuItem value="<">&lt;</MenuItem>
+                        <MenuItem value="<=">&lt;=</MenuItem>
+                        <MenuItem value="==">==</MenuItem>
+                        <MenuItem value="!=">!=</MenuItem>
+                        <MenuItem value="CROSSES_ABOVE">CROSSES_ABOVE</MenuItem>
+                        <MenuItem value="CROSSES_BELOW">CROSSES_BELOW</MenuItem>
+                        <MenuItem value="MOVING_UP">MOVING_UP (%)</MenuItem>
+                        <MenuItem value="MOVING_DOWN">MOVING_DOWN (%)</MenuItem>
+                      </TextField>
+                      <Autocomplete
+                        freeSolo
+                        options={operandOptions}
+                        value={row.rhs}
+                        onChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((r, i) =>
+                              i === idx ? { ...r, rhs: String(v ?? '') } : r,
+                            ),
+                          )
+                        }
+                        onInputChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((r, i) =>
+                              i === idx ? { ...r, rhs: v } : r,
+                            ),
+                          )
+                        }
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="RHS"
+                            size="small"
+                            sx={{ width: 240 }}
+                            helperText={
+                              row.op === 'MOVING_UP' || row.op === 'MOVING_DOWN'
+                                ? 'RHS must be numeric'
+                                : undefined
+                            }
+                          />
+                        )}
+                      />
+                      <Button
+                        color="error"
+                        onClick={() =>
+                          setConditionRows((prev) =>
+                            prev.filter((_x, i) => i !== idx),
+                          )
+                        }
+                        disabled={conditionRows.length <= 1}
+                      >
+                        Remove
+                      </Button>
+                    </Box>
+                  ))}
+                </Box>
+
+                <Typography variant="subtitle2" sx={{ mt: 2, mb: 0.5 }}>
+                  Expression preview (read-only)
+                </Typography>
+                <Paper
+                  variant="outlined"
+                  sx={{ p: 1, bgcolor: 'background.default' }}
+                >
+                  <Typography
+                    component="pre"
+                    variant="body2"
+                    sx={{ m: 0, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}
+                  >
+                    {conditionPreview.dsl || '—'}
+                  </Typography>
+                </Paper>
+                {conditionPreview.errors.length > 0 && (
+                  <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                    {conditionPreview.errors.join(' ')}
+                  </Typography>
+                )}
+              </Box>
             )}
-          </Box>
+
+            {conditionTab === 1 && (
+              <TextField
+                label="Condition DSL"
+                size="small"
+                value={conditionDsl}
+                onChange={(e) => setConditionDsl(e.target.value)}
+                multiline
+                minRows={4}
+                fullWidth
+                sx={{ mb: 2 }}
+                helperText='Example: RSI_1H_14 < 30 AND TODAY_PNL_PCT > 5'
+              />
+            )}
+
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 1 }}>
+              <TextField
+                label="Trigger mode"
+                select
+                size="small"
+                value={triggerMode}
+                onChange={(e) => setTriggerMode(e.target.value as any)}
+                sx={{ minWidth: 220 }}
+              >
+                <MenuItem value="ONCE">Only once</MenuItem>
+                <MenuItem value="ONCE_PER_BAR">Once per bar</MenuItem>
+                <MenuItem value="EVERY_TIME">Every time</MenuItem>
+              </TextField>
+              <TextField
+                label="Throttle seconds (optional)"
+                size="small"
+                value={throttleSeconds}
+                onChange={(e) => setThrottleSeconds(e.target.value)}
+                sx={{ minWidth: 220 }}
+              />
+              <TextField
+                label="Expires at (optional)"
+                size="small"
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+                placeholder="YYYY-MM-DDTHH:MM:SS"
+                sx={{ minWidth: 260 }}
+              />
+            </Box>
+            <Box sx={{ display: 'flex', gap: 3 }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={onlyMarketHours}
+                    onChange={(e) => setOnlyMarketHours(e.target.checked)}
+                  />
+                }
+                label="Only market hours"
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={enabled}
+                    onChange={(e) => setEnabled(e.target.checked)}
+                  />
+                }
+                label={enabled ? 'Enabled' : 'Paused'}
+              />
+            </Box>
+          </>
         )}
 
-        {conditionTab === 1 && (
-          <TextField
-            label="Condition DSL"
-            size="small"
-            value={conditionDsl}
-            onChange={(e) => setConditionDsl(e.target.value)}
-            multiline
-            minRows={4}
-            fullWidth
-            sx={{ mb: 2 }}
-            helperText='Example: RSI_1H_14 < 30 AND TODAY_PNL_PCT > 5'
-          />
-        )}
+        {actionType !== 'ALERT_ONLY' && actionTab === 1 && (
+          <>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              {actionType === 'BUY' ? 'Buy' : 'Sell'} template
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Symbol is resolved at trigger time. This template intentionally excludes symbol-specific fields.
+            </Typography>
 
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 1 }}>
-          <TextField
-            label="Trigger mode"
-            select
-            size="small"
-            value={triggerMode}
-            onChange={(e) => setTriggerMode(e.target.value as any)}
-            sx={{ minWidth: 220 }}
-          >
-            <MenuItem value="ONCE">Only once</MenuItem>
-            <MenuItem value="ONCE_PER_BAR">Once per bar</MenuItem>
-            <MenuItem value="EVERY_TIME">Every time</MenuItem>
-          </TextField>
-          <TextField
-            label="Throttle seconds (optional)"
-            size="small"
-            value={throttleSeconds}
-            onChange={(e) => setThrottleSeconds(e.target.value)}
-            sx={{ minWidth: 220 }}
-          />
-          <TextField
-            label="Expires at (optional)"
-            size="small"
-            value={expiresAt}
-            onChange={(e) => setExpiresAt(e.target.value)}
-            placeholder="YYYY-MM-DDTHH:MM:SS"
-            sx={{ minWidth: 260 }}
-          />
-        </Box>
-        <Box sx={{ display: 'flex', gap: 3 }}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={onlyMarketHours}
-                onChange={(e) => setOnlyMarketHours(e.target.checked)}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  gap: 2,
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <TextField
+                  label="Submit mode"
+                  select
+                  value={tradeExecutionMode}
+                  onChange={(e) =>
+                    setTradeExecutionMode(
+                      e.target.value === 'AUTO' ? 'AUTO' : 'MANUAL',
+                    )
+                  }
+                  size="small"
+                  sx={{ minWidth: 240 }}
+                  helperText={
+                    tradeExecutionMode === 'AUTO'
+                      ? 'AUTO sends immediately; may skip the waiting queue.'
+                      : 'MANUAL adds orders to the waiting queue.'
+                  }
+                >
+                  <MenuItem value="MANUAL">Manual (review in queue)</MenuItem>
+                  <MenuItem value="AUTO">Auto (send now)</MenuItem>
+                </TextField>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={tradeExecutionTarget === 'PAPER'}
+                      onChange={(e) =>
+                        setTradeExecutionTarget(e.target.checked ? 'PAPER' : 'LIVE')
+                      }
+                    />
+                  }
+                  label={`Execution target: ${tradeExecutionTarget}`}
+                />
+              </Box>
+
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Position sizing
+                </Typography>
+                <RadioGroup
+                  row
+                  value={tradeSizeMode}
+                  onChange={(e) => {
+                    const mode =
+                      e.target.value === 'AMOUNT'
+                        ? 'AMOUNT'
+                        : e.target.value === 'PCT_POSITION'
+                          ? 'PCT_POSITION'
+                          : 'QTY'
+                    setTradeSizeMode(mode)
+                  }}
+                >
+                  <FormControlLabel
+                    value="QTY"
+                    control={<Radio size="small" />}
+                    label="Qty"
+                  />
+                  <FormControlLabel
+                    value="AMOUNT"
+                    control={<Radio size="small" />}
+                    label="Amount"
+                  />
+                  <FormControlLabel
+                    value="PCT_POSITION"
+                    control={<Radio size="small" />}
+                    label="% of position"
+                  />
+                </RadioGroup>
+              </Box>
+
+              <TextField
+                label="Quantity"
+                type="number"
+                value={tradeQty}
+                onChange={(e) => {
+                  setTradeSizeMode('QTY')
+                  setTradeQty(e.target.value)
+                }}
+                fullWidth
+                size="small"
+                disabled={tradeSizeMode !== 'QTY'}
               />
-            }
-            label="Only market hours"
-          />
-          <FormControlLabel
-            control={
-              <Switch
-                checked={enabled}
-                onChange={(e) => setEnabled(e.target.checked)}
+              <TextField
+                label="Amount"
+                type="number"
+                value={tradeAmount}
+                onChange={(e) => {
+                  setTradeSizeMode('AMOUNT')
+                  setTradeAmount(e.target.value)
+                }}
+                fullWidth
+                size="small"
+                disabled={tradeSizeMode !== 'AMOUNT'}
               />
-            }
-            label={enabled ? 'Enabled' : 'Paused'}
-          />
-        </Box>
+              <TextField
+                label="% of position"
+                type="number"
+                value={tradePctPosition}
+                onChange={(e) => {
+                  setTradeSizeMode('PCT_POSITION')
+                  setTradePctPosition(e.target.value)
+                }}
+                fullWidth
+                size="small"
+                disabled={tradeSizeMode !== 'PCT_POSITION'}
+              />
+
+              <TextField
+                label="Order type"
+                select
+                value={tradeOrderType}
+                onChange={(e) =>
+                  setTradeOrderType(
+                    e.target.value as 'MARKET' | 'LIMIT' | 'SL' | 'SL-M',
+                  )
+                }
+                fullWidth
+                size="small"
+              >
+                <MenuItem value="MARKET">MARKET</MenuItem>
+                <MenuItem value="LIMIT">LIMIT</MenuItem>
+                <MenuItem value="SL">SL (Stop-loss limit)</MenuItem>
+                <MenuItem value="SL-M">SL-M (Stop-loss market)</MenuItem>
+              </TextField>
+
+              <TextField
+                label="Price"
+                type="number"
+                value={tradePrice}
+                onChange={(e) => setTradePrice(e.target.value)}
+                fullWidth
+                size="small"
+                disabled={tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'}
+              />
+
+              {(tradeOrderType === 'SL' || tradeOrderType === 'SL-M' || tradeGtt) && (
+                <TextField
+                  label="Trigger price"
+                  type="number"
+                  value={tradeTriggerPrice}
+                  onChange={(e) => setTradeTriggerPrice(e.target.value)}
+                  fullWidth
+                  size="small"
+                  helperText={
+                    tradeOrderType === 'SL' || tradeOrderType === 'SL-M'
+                      ? 'Required for SL / SL-M orders.'
+                      : 'Optional trigger for GTT orders; defaults to limit price when left blank.'
+                  }
+                />
+              )}
+
+              <TextField
+                label="Product"
+                select
+                value={tradeProduct}
+                onChange={(e) =>
+                  setTradeProduct(e.target.value === 'MIS' ? 'MIS' : 'CNC')
+                }
+                fullWidth
+                size="small"
+                helperText="Select MIS for intraday or CNC for delivery."
+              >
+                <MenuItem value="CNC">CNC (Delivery)</MenuItem>
+                <MenuItem value="MIS">MIS (Intraday)</MenuItem>
+              </TextField>
+
+              <Box
+                sx={{
+                  mt: 1,
+                  p: 1,
+                  borderRadius: 1,
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  Bracket / follow-up GTT
+                </Typography>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={tradeBracketEnabled}
+                      onChange={(e) => setTradeBracketEnabled(e.target.checked)}
+                    />
+                  }
+                  label={
+                    actionType === 'BUY'
+                      ? 'Add profit-target SELL GTT'
+                      : 'Add re-entry BUY GTT'
+                  }
+                />
+                {tradeBracketEnabled && (
+                  <TextField
+                    label="Min target profit (MTP) %"
+                    type="number"
+                    value={tradeMtpPct}
+                    onChange={(e) => setTradeMtpPct(e.target.value)}
+                    size="small"
+                    fullWidth
+                    helperText="This is evaluated at trigger time using the resolved primary price."
+                  />
+                )}
+              </Box>
+
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={tradeGtt}
+                    onChange={(e) => setTradeGtt(e.target.checked)}
+                    disabled={tradeOrderType !== 'LIMIT'}
+                  />
+                }
+                label="GTT (good-till-triggered) order"
+              />
+              {tradeOrderType !== 'LIMIT' && (
+                <Typography variant="caption" color="text.secondary">
+                  GTT is available only for LIMIT orders.
+                </Typography>
+              )}
+            </Box>
+          </>
+        )}
         {error && (
           <Typography variant="body2" color="error" sx={{ mt: 1 }}>
             {error}

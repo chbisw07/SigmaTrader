@@ -22,6 +22,7 @@ from app.schemas.alerts_v3 import (
     AlertDefinitionRead,
     AlertDefinitionUpdate,
     AlertEventRead,
+    AlertTradeTemplate,
     AlertV3TestRequest,
     AlertV3TestResponse,
     AlertV3TestResult,
@@ -63,6 +64,14 @@ def _model_validate(schema_cls, obj):
     return schema_cls.from_orm(obj)  # type: ignore[call-arg]
 
 
+def _schema_validate(schema_cls, obj):
+    """Compat helper for validating dict payloads with Pydantic v1/v2."""
+
+    if hasattr(schema_cls, "model_validate"):
+        return schema_cls.model_validate(obj)  # type: ignore[attr-defined]
+    return schema_cls.parse_obj(obj)  # type: ignore[call-arg]
+
+
 def _variables_to_json(variables: list[Any]) -> str:
     payload = []
     for v in variables:
@@ -91,15 +100,50 @@ def _variables_from_json(raw: str) -> list[dict[str, Any]]:
     return out
 
 
+def _action_params_from_json(raw: str) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _action_params_to_json(
+    action_type: str | None,
+    params: dict[str, Any] | None,
+) -> tuple[str, str]:
+    action = (action_type or "ALERT_ONLY").strip().upper()
+    if action not in {"ALERT_ONLY", "BUY", "SELL"}:
+        action = "ALERT_ONLY"
+
+    if action == "ALERT_ONLY":
+        return action, "{}"
+
+    template = _schema_validate(AlertTradeTemplate, params or {})
+    dumped = (
+        template.model_dump() if hasattr(template, "model_dump") else template.dict()
+    )
+    return action, json.dumps(dumped, default=str)
+
+
 def _alert_to_read(alert: AlertDefinition) -> AlertDefinitionRead:
     vars_raw = _variables_from_json(alert.variables_json or "[]")
     variables = [AlertVariableDef(**v) for v in vars_raw if isinstance(v, dict)]
+    action_type, action_params_json = _action_params_to_json(
+        getattr(alert, "action_type", None),
+        _action_params_from_json(getattr(alert, "action_params_json", "") or "{}"),
+    )
+    action_params = _action_params_from_json(action_params_json)
     return AlertDefinitionRead(
         id=alert.id,
         name=alert.name,
         target_kind=alert.target_kind,
         target_ref=alert.target_ref,
         exchange=alert.exchange,
+        action_type=action_type,
+        action_params=action_params,
         evaluation_cadence=alert.evaluation_cadence,
         variables=variables,
         condition_dsl=alert.condition_dsl,
@@ -266,12 +310,18 @@ def create_alert_definition(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> AlertDefinitionRead:
+    action_type, action_params_json = _action_params_to_json(
+        payload.action_type,
+        payload.action_params,
+    )
     alert = AlertDefinition(
         user_id=user.id,
         name=payload.name,
         target_kind=payload.target_kind,
         target_ref=payload.target_ref,
         exchange=(payload.exchange or None),
+        action_type=action_type,
+        action_params_json=action_params_json,
         evaluation_cadence=(payload.evaluation_cadence or "").strip(),
         variables_json=_variables_to_json(payload.variables),
         condition_dsl=payload.condition_dsl,
@@ -318,6 +368,7 @@ def update_alert_definition(
         "target_kind",
         "target_ref",
         "exchange",
+        "action_type",
         "evaluation_cadence",
         "condition_dsl",
         "trigger_mode",
@@ -332,6 +383,18 @@ def update_alert_definition(
 
     if payload.variables is not None:
         alert.variables_json = _variables_to_json(payload.variables)
+
+    if payload.action_params is not None:
+        alert.action_params_json = json.dumps(payload.action_params or {}, default=str)
+
+    # Canonicalize action fields so older payloads and partial updates keep
+    # consistent defaults.
+    normalized_action, normalized_params_json = _action_params_to_json(
+        alert.action_type,
+        _action_params_from_json(alert.action_params_json or "{}"),
+    )
+    alert.action_type = normalized_action
+    alert.action_params_json = normalized_params_json
 
     try:
         compile_alert_definition(db, alert=alert, user_id=user.id)
