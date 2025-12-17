@@ -4,7 +4,6 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import CssBaseline from '@mui/material/CssBaseline'
-import Divider from '@mui/material/Divider'
 import Drawer from '@mui/material/Drawer'
 import IconButton from '@mui/material/IconButton'
 import List from '@mui/material/List'
@@ -36,6 +35,8 @@ import { logout, type CurrentUser } from '../services/auth'
 
 const drawerWidth = 220
 const collapsedDrawerWidth = 64
+const appBarHeightSm = 64
+const appBarHeightXs = 56
 
 type MainLayoutProps = {
   children: ReactNode
@@ -115,30 +116,6 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
 
   const drawer = (
     <div>
-      <Toolbar>
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
-            width: '100%',
-          }}
-        >
-          <Box
-            component="img"
-            src="/sigma_trader_logo.png"
-            alt="SigmaTrader logo"
-            sx={{ height: 32, width: 32, borderRadius: 1 }}
-          />
-          {!sidebarCollapsed && (
-            <Typography variant="h6" noWrap component="div">
-              SigmaTrader
-            </Typography>
-          )}
-        </Box>
-      </Toolbar>
-      <Divider />
       <List>
         {navItems.map((item) => (
           <ListItem key={item.to} disablePadding>
@@ -185,8 +162,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
       <AppBar
         position="fixed"
         sx={{
-          width: { sm: `calc(100% - ${effectiveDrawerWidth}px)` },
-          ml: { sm: `${effectiveDrawerWidth}px` },
+          zIndex: (theme) => theme.zIndex.drawer + 1,
         }}
       >
         <Toolbar sx={{ justifyContent: 'space-between' }}>
@@ -276,7 +252,12 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
           ModalProps={{ keepMounted: true }}
           sx={{
             display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+            '& .MuiDrawer-paper': {
+              boxSizing: 'border-box',
+              width: drawerWidth,
+              mt: `${appBarHeightXs}px`,
+              height: `calc(100% - ${appBarHeightXs}px)`,
+            },
           }}
         >
           {drawer}
@@ -288,6 +269,8 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
             '& .MuiDrawer-paper': {
               boxSizing: 'border-box',
               width: effectiveDrawerWidth,
+              mt: `${appBarHeightSm}px`,
+              height: `calc(100% - ${appBarHeightSm}px)`,
             },
           }}
           open
