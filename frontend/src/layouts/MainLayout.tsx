@@ -212,6 +212,17 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
                 color="inherit"
                 size="small"
                 onClick={handleUserMenuOpen}
+                variant="contained"
+                disableElevation
+                sx={{
+                  bgcolor: 'error.main',
+                  color: 'common.white',
+                  textTransform: 'none',
+                  borderRadius: 999,
+                  px: 1.5,
+                  minWidth: 'auto',
+                  '&:hover': { bgcolor: 'error.dark' },
+                }}
               >
                 {currentUser.display_name || currentUser.username}
               </Button>
