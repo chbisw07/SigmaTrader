@@ -581,6 +581,7 @@ export function HoldingsPage() {
   const [refreshSeconds, setRefreshSeconds] = useState('0')
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [refreshConfigHydrated, setRefreshConfigHydrated] = useState(false)
 
   const [portfolioValue, setPortfolioValue] = useState<number | null>(null)
   const loadRequestId = useRef(0)
@@ -889,10 +890,15 @@ export function HoldingsPage() {
       if (parsed.seconds != null) setRefreshSeconds(parsed.seconds)
     } catch {
       // Ignore malformed config.
+    } finally {
+      // Avoid writing defaults back to storage during the same initial mount
+      // commit (React StrictMode runs mount/unmount cycles in dev).
+      setRefreshConfigHydrated(true)
     }
   }, [])
 
   useEffect(() => {
+    if (!refreshConfigHydrated) return
     if (typeof window === 'undefined') return
     try {
       window.localStorage.setItem(
@@ -909,6 +915,7 @@ export function HoldingsPage() {
       // Ignore persistence errors.
     }
   }, [
+    refreshConfigHydrated,
     autoRefreshEnabled,
     refreshDays,
     refreshHours,
