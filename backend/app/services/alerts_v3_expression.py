@@ -754,6 +754,9 @@ _ALLOWED_BUILTINS: set[str] = {
     "ROC",
     "Z_SCORE",
     "BOLLINGER",
+    # Explicit cross helpers (Phase C)
+    "CROSSOVER",
+    "CROSSUNDER",
     # math
     "ABS",
     "SQRT",
@@ -1109,6 +1112,38 @@ def _eval_numeric(
             v = _atr(highs, lows, closes, length)
             v.bar_time = bar_time
             return v
+
+        if name in {"CROSSOVER", "CROSSUNDER"}:
+            if len(node.args) != 2:
+                raise IndicatorAlertError(f"{name} expects (a, b)")
+            a = _eval_numeric(
+                node.args[0],
+                db=db,
+                settings=settings,
+                cache=cache,
+                holding=holding,
+                params=params,
+                custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
+            )
+            b = _eval_numeric(
+                node.args[1],
+                db=db,
+                settings=settings,
+                cache=cache,
+                holding=holding,
+                params=params,
+                custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
+            )
+            bar_time = a.bar_time or b.bar_time
+            if a.prev is None or a.now is None or b.prev is None or b.now is None:
+                return SeriesValue(None, None, bar_time)
+            if name == "CROSSOVER":
+                now = 1.0 if (a.prev <= b.prev and a.now > b.now) else 0.0
+            else:
+                now = 1.0 if (a.prev >= b.prev and a.now < b.now) else 0.0
+            return SeriesValue(now, 0.0, bar_time)
 
         if name == "ABS":
             if len(node.args) != 1:

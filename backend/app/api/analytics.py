@@ -13,6 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET
 from app.db.session import get_db
 from app.models import AnalyticsTrade, Candle, Group, GroupMember, Order, Strategy, User
+from app.schemas.alerts_v3 import AlertVariableDef
 from app.schemas.analytics import (
     AnalyticsRebuildResponse,
     AnalyticsSummary,
@@ -23,6 +24,21 @@ from app.schemas.analytics import (
     RiskSizingRequest,
     RiskSizingResponse,
     SymbolCorrelationStats,
+)
+from app.services.alerts_v3_compiler import (
+    compile_alert_expression_parts,
+    compile_custom_indicators_for_user,
+)
+from app.services.alerts_v3_expression import (
+    _EVENT_ALIASES,
+    CallNode,
+    ComparisonNode,
+    EventNode,
+    ExprNode,
+    LogicalNode,
+    NotNode,
+    NumberNode,
+    _eval_numeric,
 )
 from app.services.analytics import compute_strategy_analytics, rebuild_trades
 from app.services.market_data import (
@@ -773,6 +789,461 @@ class SymbolSeriesResponse(BaseModel):
     head_gap_days: int = 0
     tail_gap_days: int = 0
     needs_hydrate_history: bool = False
+
+
+def _model_dump(obj) -> dict:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()  # type: ignore[attr-defined]
+    return obj.dict()  # type: ignore[attr-defined]
+
+
+class _InMemoryCandleCache:
+    """Minimal CandleCache-compatible wrapper for historical per-bar evaluation."""
+
+    def __init__(self, *, symbol: str, exchange: str, candles: list[dict]) -> None:
+        self.symbol = symbol
+        self.exchange = exchange
+        self._candles = candles
+        self._end = len(candles) - 1
+
+        self._opens = [float(c["open"]) for c in candles]
+        self._highs = [float(c["high"]) for c in candles]
+        self._lows = [float(c["low"]) for c in candles]
+        self._closes = [float(c["close"]) for c in candles]
+        self._volumes = [float(c.get("volume") or 0.0) for c in candles]
+
+    def set_end(self, idx: int) -> None:
+        self._end = max(0, min(idx, len(self._candles) - 1))
+
+    def series(self, tf: str, source: str) -> tuple[list[float], datetime | None]:
+        tf = (tf or "").strip().lower()
+        if tf != "1d":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Symbol explorer indicators/signals currently support 1d only.",
+            )
+
+        source = (source or "").strip().lower()
+        values: list[float]
+        if source == "open":
+            values = self._opens
+        elif source == "high":
+            values = self._highs
+        elif source == "low":
+            values = self._lows
+        elif source == "close":
+            values = self._closes
+        elif source == "volume":
+            values = self._volumes
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported source '{source}'.",
+            )
+
+        end = self._end
+        bar_time = self._candles[end]["ts"] if self._candles else None
+        return values[: end + 1], bar_time
+
+
+class SymbolIndicatorsRequest(BaseModel):
+    symbol: str
+    exchange: str = "NSE"
+    range: str = "6m"
+    timeframe: str = "1d"
+    hydrate_mode: str = "auto"  # none|auto|force
+    variables: List[AlertVariableDef] = []
+
+
+class SymbolIndicatorsResponse(BaseModel):
+    symbol: str
+    exchange: str
+    start: datetime
+    end: datetime
+    ts: List[str]
+    series: Dict[str, List[Optional[float]]]
+    errors: Dict[str, str] = {}
+
+
+@router.post("/symbol-indicators", response_model=SymbolIndicatorsResponse)
+def symbol_indicators(
+    payload: SymbolIndicatorsRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> SymbolIndicatorsResponse:
+    """Compute indicator series for a symbol over the requested window."""
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    sym, exch = _normalize_symbol_exchange(payload.symbol, payload.exchange)
+    now = _now_ist_naive()
+    start, end = _clamp_range(now, payload.range)
+
+    hydrate_mode = (payload.hydrate_mode or "auto").strip().lower()
+    tf = (payload.timeframe or "1d").strip().lower()
+    if tf != "1d":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only 1d timeframe is supported for symbol indicators (currently).",
+        )
+
+    if hydrate_mode == "force":
+        ensure_history_window(
+            db,
+            settings,
+            symbol=sym,
+            exchange=exch,
+            base_timeframe=tf,
+            start=start,
+            end=end,
+        )
+    elif hydrate_mode == "auto":
+        # Single symbol: best-effort ensure history so overlays can compute.
+        try:
+            ensure_history(
+                db,
+                settings,
+                symbol=sym,
+                exchange=exch,
+                base_timeframe=tf,
+                start=start,
+                end=end,
+            )
+        except Exception:
+            pass
+
+    candles = load_series(
+        db,
+        settings,
+        symbol=sym,
+        exchange=exch,
+        timeframe="1d",  # type: ignore[arg-type]
+        start=start,
+        end=end,
+        allow_fetch=False,
+    )
+    if not candles:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No candles found for this symbol in the requested window.",
+        )
+
+    custom_indicators = compile_custom_indicators_for_user(db, user_id=user.id)
+
+    raw_vars = [_model_dump(v) for v in (payload.variables or [])]
+    # Compile variables (condition is a harmless constant).
+    _cond_ast, _cadence, var_map = compile_alert_expression_parts(
+        db,
+        user_id=user.id,
+        variables=raw_vars,
+        condition_dsl="1 > 0",
+        evaluation_cadence="1d",
+        custom_indicators=custom_indicators,
+    )
+
+    # Build a name map preserving the user's casing when possible.
+    name_map: dict[str, str] = {}
+    for v in payload.variables or []:
+        if not (v.name or "").strip():
+            continue
+        name_map[v.name.strip().upper()] = v.name.strip()
+
+    cache = _InMemoryCandleCache(symbol=sym, exchange=exch, candles=candles)
+    ts = [c["ts"].date().isoformat() for c in candles if c.get("ts")]
+    n = len(ts)
+
+    out: Dict[str, List[Optional[float]]] = {}
+    errors: Dict[str, str] = {}
+
+    for var_upper, expr in var_map.items():
+        display = name_map.get(var_upper, var_upper)
+        values: List[Optional[float]] = [None] * n
+        try:
+            for i in range(n):
+                cache.set_end(i)
+                v = _eval_numeric(
+                    expr,
+                    db=db,
+                    settings=settings,
+                    cache=cache,  # type: ignore[arg-type]
+                    holding=None,
+                    params={},
+                    custom_indicators=custom_indicators,
+                    allow_fetch=False,
+                )
+                values[i] = float(v.now) if v.now is not None else None
+        except Exception as exc:
+            errors[display] = str(exc)
+        out[display] = values
+
+    return SymbolIndicatorsResponse(
+        symbol=sym,
+        exchange=exch,
+        start=start,
+        end=end,
+        ts=ts,
+        series=out,
+        errors=errors,
+    )
+
+
+class SignalMarker(BaseModel):
+    ts: str
+    kind: str  # TRUE/CROSSOVER/CROSSUNDER
+    text: Optional[str] = None
+
+
+class SymbolSignalsRequest(BaseModel):
+    symbol: str
+    exchange: str = "NSE"
+    range: str = "6m"
+    timeframe: str = "1d"
+    hydrate_mode: str = "auto"  # none|auto|force
+    variables: List[AlertVariableDef] = []
+    condition_dsl: str
+
+
+class SymbolSignalsResponse(BaseModel):
+    symbol: str
+    exchange: str
+    start: datetime
+    end: datetime
+    markers: List[SignalMarker] = []
+    errors: List[str] = []
+
+
+@router.post("/symbol-signals", response_model=SymbolSignalsResponse)
+def symbol_signals(
+    payload: SymbolSignalsRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> SymbolSignalsResponse:
+    """Evaluate a DSL condition historically and return chart markers."""
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    sym, exch = _normalize_symbol_exchange(payload.symbol, payload.exchange)
+    now = _now_ist_naive()
+    start, end = _clamp_range(now, payload.range)
+
+    hydrate_mode = (payload.hydrate_mode or "auto").strip().lower()
+    tf = (payload.timeframe or "1d").strip().lower()
+    if tf != "1d":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only 1d timeframe is supported for symbol signals (currently).",
+        )
+
+    if hydrate_mode == "force":
+        ensure_history_window(
+            db,
+            settings,
+            symbol=sym,
+            exchange=exch,
+            base_timeframe=tf,
+            start=start,
+            end=end,
+        )
+    elif hydrate_mode == "auto":
+        try:
+            ensure_history(
+                db,
+                settings,
+                symbol=sym,
+                exchange=exch,
+                base_timeframe=tf,
+                start=start,
+                end=end,
+            )
+        except Exception:
+            pass
+
+    candles = load_series(
+        db,
+        settings,
+        symbol=sym,
+        exchange=exch,
+        timeframe="1d",  # type: ignore[arg-type]
+        start=start,
+        end=end,
+        allow_fetch=False,
+    )
+    if not candles:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No candles found for this symbol in the requested window.",
+        )
+
+    custom_indicators = compile_custom_indicators_for_user(db, user_id=user.id)
+    raw_vars = [_model_dump(v) for v in (payload.variables or [])]
+    cond_ast, _cadence, _var_map = compile_alert_expression_parts(
+        db,
+        user_id=user.id,
+        variables=raw_vars,
+        condition_dsl=payload.condition_dsl,
+        evaluation_cadence="1d",
+        custom_indicators=custom_indicators,
+    )
+
+    cache = _InMemoryCandleCache(symbol=sym, exchange=exch, candles=candles)
+
+    root_kind: str | None = None
+    if isinstance(cond_ast, CallNode) and cond_ast.name.upper() in {
+        "CROSSOVER",
+        "CROSSUNDER",
+    }:
+        root_kind = cond_ast.name.upper()
+    if isinstance(cond_ast, EventNode):
+        op = _EVENT_ALIASES.get(cond_ast.op.upper(), cond_ast.op.upper())
+        if op == "CROSSES_ABOVE":
+            root_kind = "CROSSOVER"
+        elif op == "CROSSES_BELOW":
+            root_kind = "CROSSUNDER"
+
+    markers: list[SignalMarker] = []
+    errors: list[str] = []
+
+    def _bool(n: ExprNode) -> bool:
+        if isinstance(n, LogicalNode):
+            op = n.op.upper()
+            if op == "AND":
+                return all(_bool(c) for c in n.children)
+            if op == "OR":
+                return any(_bool(c) for c in n.children)
+            raise ValueError(f"Unknown logical op '{n.op}'")
+        if isinstance(n, NotNode):
+            return not _bool(n.child)
+        if isinstance(n, ComparisonNode):
+            left = _eval_numeric(
+                n.left,
+                db=db,
+                settings=settings,
+                cache=cache,  # type: ignore[arg-type]
+                holding=None,
+                params={},
+                custom_indicators=custom_indicators,
+                allow_fetch=False,
+            )
+            right = _eval_numeric(
+                n.right,
+                db=db,
+                settings=settings,
+                cache=cache,  # type: ignore[arg-type]
+                holding=None,
+                params={},
+                custom_indicators=custom_indicators,
+                allow_fetch=False,
+            )
+            if left.now is None or right.now is None:
+                return False
+            op = n.op
+            if op == "GT":
+                return left.now > right.now
+            if op == "GTE":
+                return left.now >= right.now
+            if op == "LT":
+                return left.now < right.now
+            if op == "LTE":
+                return left.now <= right.now
+            if op == "EQ":
+                return left.now == right.now
+            if op == "NEQ":
+                return left.now != right.now
+            raise ValueError(f"Unknown comparison op '{op}'")
+        if isinstance(n, EventNode):
+            op = _EVENT_ALIASES.get(n.op.upper(), n.op.upper())
+            left = _eval_numeric(
+                n.left,
+                db=db,
+                settings=settings,
+                cache=cache,  # type: ignore[arg-type]
+                holding=None,
+                params={},
+                custom_indicators=custom_indicators,
+                allow_fetch=False,
+            )
+            right = _eval_numeric(
+                n.right,
+                db=db,
+                settings=settings,
+                cache=cache,  # type: ignore[arg-type]
+                holding=None,
+                params={},
+                custom_indicators=custom_indicators,
+                allow_fetch=False,
+            )
+            if op in {"CROSSES_ABOVE", "CROSSES_BELOW"}:
+                if left.prev is None or left.now is None:
+                    return False
+                if isinstance(n.right, NumberNode):
+                    level = float(n.right.value)
+                    if op == "CROSSES_ABOVE":
+                        return left.prev <= level < left.now
+                    return left.prev >= level > left.now
+                if right.prev is None or right.now is None:
+                    return False
+                if op == "CROSSES_ABOVE":
+                    return left.prev <= right.prev and left.now > right.now
+                return left.prev >= right.prev and left.now < right.now
+
+            if op in {"MOVING_UP", "MOVING_DOWN"}:
+                if left.prev is None or left.now is None:
+                    return False
+                if right.now is None or left.prev == 0:
+                    return False
+                change_pct = (left.now - left.prev) / abs(left.prev) * 100.0
+                threshold = float(right.now)
+                if op == "MOVING_UP":
+                    return change_pct >= threshold
+                return (-change_pct) >= threshold
+
+            raise ValueError(f"Unknown event op '{n.op}'")
+
+        # Numeric root: treat non-zero as True.
+        numeric = _eval_numeric(
+            n,
+            db=db,
+            settings=settings,
+            cache=cache,  # type: ignore[arg-type]
+            holding=None,
+            params={},
+            custom_indicators=custom_indicators,
+            allow_fetch=False,
+        )
+        return bool(numeric.now)
+
+    ts_list = [c["ts"].date().isoformat() for c in candles if c.get("ts")]
+    n = len(ts_list)
+    for i in range(n):
+        cache.set_end(i)
+        try:
+            ok = _bool(cond_ast)
+        except Exception as exc:
+            errors.append(str(exc))
+            break
+        if not ok:
+            continue
+        kind = root_kind or "TRUE"
+        markers.append(SignalMarker(ts=ts_list[i], kind=kind))
+
+    return SymbolSignalsResponse(
+        symbol=sym,
+        exchange=exch,
+        start=start,
+        end=end,
+        markers=markers,
+        errors=errors[:10],
+    )
 
 
 @router.post("/symbol-series", response_model=SymbolSeriesResponse)

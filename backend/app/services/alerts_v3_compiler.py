@@ -60,6 +60,9 @@ _CUSTOM_INDICATOR_ALLOWED_BUILTINS: Set[str] = {
     "ROC",
     "Z_SCORE",
     "BOLLINGER",
+    # Explicit cross helpers (Phase C)
+    "CROSSOVER",
+    "CROSSUNDER",
     # Math helpers
     "ABS",
     "SQRT",

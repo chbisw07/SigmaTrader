@@ -1,27 +1,41 @@
 import Box from '@mui/material/Box'
 import Alert from '@mui/material/Alert'
+import Accordion from '@mui/material/Accordion'
+import AccordionDetails from '@mui/material/AccordionDetails'
+import AccordionSummary from '@mui/material/AccordionSummary'
 import Button from '@mui/material/Button'
 import Checkbox from '@mui/material/Checkbox'
 import FormControlLabel from '@mui/material/FormControlLabel'
+import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import Tooltip from '@mui/material/Tooltip'
 import Autocomplete from '@mui/material/Autocomplete'
 import { alpha, useTheme } from '@mui/material/styles'
 import { useEffect, useMemo, useState } from 'react'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import RefreshIcon from '@mui/icons-material/Refresh'
 
 import { listGroupMembers, listGroups, type Group } from '../services/groups'
 import { fetchHoldings, type Holding } from '../services/positions'
 import {
   fetchBasketIndices,
   fetchSymbolSeries,
+  fetchSymbolIndicators,
+  fetchSymbolSignals,
   hydrateHistory,
   type BasketIndexResponse,
+  type AlertVariableDef,
+  type SignalMarker,
+  type SymbolIndicatorsResponse,
   type SymbolSeriesResponse,
 } from '../services/dashboard'
 import { PriceChart, type PriceChartType } from '../components/PriceChart'
+import { DslEditor } from '../components/DslEditor'
+import { listCustomIndicators, type CustomIndicator } from '../services/alertsV3'
 
 type RangeOption = { value: any; label: string; helper?: string }
 
@@ -378,6 +392,7 @@ function MultiLineChart({
 }
 
 export function DashboardPage() {
+  const theme = useTheme()
   const [groups, setGroups] = useState<Group[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
   const [groupsError, setGroupsError] = useState<string | null>(null)
@@ -405,6 +420,24 @@ export function DashboardPage() {
   const [loadingSymbolData, setLoadingSymbolData] = useState(false)
   const [symbolDataError, setSymbolDataError] = useState<string | null>(null)
 
+  type IndicatorRow = AlertVariableDef & {
+    enabled: boolean
+    plot: 'price' | 'hidden'
+  }
+  const [indicatorRows, setIndicatorRows] = useState<IndicatorRow[]>([])
+  const [indicatorData, setIndicatorData] = useState<SymbolIndicatorsResponse | null>(null)
+  const [indicatorLoading, setIndicatorLoading] = useState(false)
+  const [indicatorError, setIndicatorError] = useState<string | null>(null)
+
+  const [signalDsl, setSignalDsl] = useState<string>('') // boolean DSL
+  const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
+  const [signalLoading, setSignalLoading] = useState(false)
+  const [signalError, setSignalError] = useState<string | null>(null)
+
+  const [customIndicators, setCustomIndicators] = useState<CustomIndicator[]>([])
+  const [customIndicatorsLoading, setCustomIndicatorsLoading] = useState(false)
+  const [customIndicatorsError, setCustomIndicatorsError] = useState<string | null>(null)
+
   useEffect(() => {
     let active = true
     const load = async () => {
@@ -426,6 +459,27 @@ export function DashboardPage() {
     return () => {
       active = false
     }
+  }, [])
+
+  const refreshCustomIndicators = async () => {
+    setCustomIndicatorsLoading(true)
+    setCustomIndicatorsError(null)
+    try {
+      const res = await listCustomIndicators()
+      setCustomIndicators(res)
+    } catch (err) {
+      setCustomIndicators([])
+      setCustomIndicatorsError(
+        err instanceof Error ? err.message : 'Failed to load custom indicators',
+      )
+    } finally {
+      setCustomIndicatorsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshCustomIndicators()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleRefresh = async () => {
@@ -620,6 +674,76 @@ export function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSymbol, symbolRange])
 
+  useEffect(() => {
+    setIndicatorData(null)
+    setSignalMarkers([])
+    setSignalError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSymbol, symbolRange])
+
+  const enabledVariables = useMemo(() => {
+    return indicatorRows
+      .filter((r) => r.enabled && String(r.name || '').trim())
+      .map((r) => ({
+        name: String(r.name || '').trim(),
+        dsl: r.dsl ?? null,
+        kind: r.kind ?? null,
+        params: r.params ?? null,
+      }))
+  }, [indicatorRows])
+
+  const applyIndicators = async () => {
+    if (!selectedSymbol) return
+    setIndicatorLoading(true)
+    setIndicatorError(null)
+    try {
+      const res = await fetchSymbolIndicators({
+        symbol: selectedSymbol.label,
+        range: symbolRange,
+        timeframe: '1d',
+        hydrate_mode: 'auto',
+        variables: enabledVariables,
+      })
+      setIndicatorData(res)
+      const keys = Object.keys(res.errors || {})
+      if (keys.length > 0) {
+        setIndicatorError(`Some indicators failed: ${keys.slice(0, 3).join(', ')}`)
+      }
+    } catch (err) {
+      setIndicatorData(null)
+      setIndicatorError(err instanceof Error ? err.message : 'Failed to compute indicators')
+    } finally {
+      setIndicatorLoading(false)
+    }
+  }
+
+  const runSignals = async () => {
+    if (!selectedSymbol) return
+    if (!signalDsl.trim()) {
+      setSignalError('Enter a DSL expression.')
+      return
+    }
+    setSignalLoading(true)
+    setSignalError(null)
+    try {
+      const res = await fetchSymbolSignals({
+        symbol: selectedSymbol.label,
+        range: symbolRange,
+        timeframe: '1d',
+        hydrate_mode: 'auto',
+        variables: enabledVariables,
+        condition_dsl: signalDsl,
+      })
+      setSignalMarkers(res.markers || [])
+      if (res.errors?.length) setSignalError(res.errors[0]!)
+    } catch (err) {
+      setSignalMarkers([])
+      setSignalError(err instanceof Error ? err.message : 'Failed to evaluate signals')
+    } finally {
+      setSignalLoading(false)
+    }
+  }
+
   const perf = useMemo(() => {
     const pts = symbolData?.points ?? []
     if (pts.length < 2) return null
@@ -642,6 +766,38 @@ export function DashboardPage() {
       y2: at(504),
     }
   }, [symbolData])
+
+  const chartOverlays = useMemo(() => {
+    if (!indicatorData) return []
+    const ts = indicatorData.ts || []
+    const series = indicatorData.series || {}
+    const colorFor = (kind: string) => {
+      const k = kind.toUpperCase()
+      if (k === 'SMA') return theme.palette.warning.main
+      if (k === 'EMA') return theme.palette.info.main
+      if (k === 'RSI') return theme.palette.secondary.main
+      if (k === 'BOLLINGER') return theme.palette.success.main
+      return theme.palette.text.secondary
+    }
+    const plotted = indicatorRows.filter((r) => r.enabled && r.plot === 'price')
+    return plotted
+      .map((r) => {
+        const name = String(r.name || '').trim()
+        if (!name) return null
+        const values = series[name] || series[name.toUpperCase()] || null
+        if (!values) return null
+        return {
+          name,
+          color: colorFor(String(r.kind || '')),
+          points: ts.map((t, i) => ({ ts: t, value: values[i] ?? null })),
+        }
+      })
+      .filter(Boolean) as Array<{
+      name: string
+      color: string
+      points: Array<{ ts: string; value: number | null }>
+    }>
+  }, [indicatorData, indicatorRows, theme])
 
   return (
     <Box>
@@ -950,6 +1106,8 @@ export function DashboardPage() {
               <PriceChart
                 candles={symbolData?.points ?? []}
                 chartType={chartType}
+                overlays={chartOverlays}
+                markers={signalMarkers}
                 height={340}
               />
 
@@ -959,6 +1117,353 @@ export function DashboardPage() {
                   {symbolData.tail_gap_days}d
                 </Typography>
               )}
+
+              <Accordion disableGutters defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2">Indicators</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() =>
+                          setIndicatorRows((prev) => [
+                            ...prev,
+                            { name: '', kind: 'SMA', params: { source: 'close', length: 20, timeframe: '1d' }, enabled: true, plot: 'price' },
+                          ])
+                        }
+                      >
+                        Add indicator
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        onClick={() => void applyIndicators()}
+                        disabled={indicatorLoading || enabledVariables.length === 0}
+                      >
+                        {indicatorLoading ? 'Applying…' : 'Apply'}
+                      </Button>
+                      <Tooltip title="Refresh custom indicators">
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => void refreshCustomIndicators()}
+                            disabled={customIndicatorsLoading}
+                          >
+                            <RefreshIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Button
+                        size="small"
+                        variant="text"
+                        onClick={() =>
+                          window.open('/alerts?tab=indicators', '_blank', 'noopener,noreferrer')
+                        }
+                      >
+                        Add new indicator
+                      </Button>
+                      <Box sx={{ flex: 1 }} />
+                      <Button
+                        size="small"
+                        color="error"
+                        onClick={() => {
+                          setIndicatorRows([])
+                          setIndicatorData(null)
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    </Stack>
+
+                    {customIndicatorsError && (
+                      <Typography variant="caption" color="error">
+                        {customIndicatorsError}
+                      </Typography>
+                    )}
+                    {indicatorError && (
+                      <Typography variant="caption" color="error">
+                        {indicatorError}
+                      </Typography>
+                    )}
+
+                    <Stack spacing={1}>
+                      {indicatorRows.map((row, idx) => {
+                        const params = (row.params ?? {}) as Record<string, any>
+                        const kind = String(row.kind || 'SMA').toUpperCase()
+                        const needsSource = ['SMA','EMA','RSI','STDDEV','ROC','Z_SCORE','BOLLINGER','RET'].includes(kind)
+                        const needsLength = ['SMA','EMA','RSI','STDDEV','ROC','Z_SCORE','BOLLINGER','ATR'].includes(kind)
+                        const showMult = kind === 'BOLLINGER'
+                        const showTimeframe = kind !== 'CUSTOM'
+                        return (
+                          <Stack key={idx} direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ md: 'center' }}>
+                            <FormControlLabel
+                              sx={{ mr: 0 }}
+                              control={
+                                <Checkbox
+                                  checked={row.enabled}
+                                  onChange={(e) =>
+                                    setIndicatorRows((prev) =>
+                                      prev.map((r, i) => (i === idx ? { ...r, enabled: e.target.checked } : r)),
+                                    )
+                                  }
+                                />
+                              }
+                              label=""
+                            />
+                            <TextField
+                              label="Name"
+                              size="small"
+                              value={row.name}
+                              onChange={(e) =>
+                                setIndicatorRows((prev) =>
+                                  prev.map((r, i) => (i === idx ? { ...r, name: e.target.value } : r)),
+                                )
+                              }
+                              sx={{ minWidth: 160, flex: 1 }}
+                            />
+                            <TextField
+                              label="Type"
+                              select
+                              size="small"
+                              value={kind}
+                              onChange={(e) =>
+                                setIndicatorRows((prev) =>
+                                  prev.map((r, i) =>
+                                    i === idx ? { ...r, kind: e.target.value, params: { ...params } } : r,
+                                  ),
+                                )
+                              }
+                              sx={{ minWidth: 140 }}
+                            >
+                              {['SMA','EMA','RSI','STDDEV','ROC','Z_SCORE','BOLLINGER','ATR','RET','CUSTOM'].map((k) => (
+                                <MenuItem key={k} value={k}>{k}</MenuItem>
+                              ))}
+                            </TextField>
+                            <TextField
+                              label="Plot"
+                              select
+                              size="small"
+                              value={row.plot}
+                              onChange={(e) =>
+                                setIndicatorRows((prev) =>
+                                  prev.map((r, i) => (i === idx ? { ...r, plot: e.target.value as any } : r)),
+                                )
+                              }
+                              sx={{ minWidth: 120 }}
+                            >
+                              <MenuItem value="price">Price</MenuItem>
+                              <MenuItem value="hidden">Hidden</MenuItem>
+                            </TextField>
+
+                            {kind === 'CUSTOM' ? (
+                              <>
+                                <Autocomplete
+                                  options={customIndicators}
+                                  loading={customIndicatorsLoading}
+                                  value={
+                                    customIndicators.find(
+                                      (ci) =>
+                                        ci.name.toUpperCase() ===
+                                        String(params.function ?? '').toUpperCase(),
+                                    ) ?? null
+                                  }
+                                  onChange={(_e, value) =>
+                                    setIndicatorRows((prev) =>
+                                      prev.map((r, i) =>
+                                        i === idx
+                                          ? { ...r, kind: 'CUSTOM', params: { ...params, function: value?.name ?? '' } }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  getOptionLabel={(o) => o.name}
+                                  isOptionEqualToValue={(a, b) => a.id === b.id}
+                                  renderInput={(p) => (
+                                    <TextField {...p} label="Function" size="small" sx={{ minWidth: 240 }} />
+                                  )}
+                                />
+                                <TextField
+                                  label="Args (comma-separated DSL)"
+                                  size="small"
+                                  value={(Array.isArray(params.args) ? params.args : []).join(', ')}
+                                  onChange={(e) => {
+                                    const args = e.target.value
+                                      .split(',')
+                                      .map((s) => s.trim())
+                                      .filter(Boolean)
+                                    setIndicatorRows((prev) =>
+                                      prev.map((r, i) =>
+                                        i === idx ? { ...r, params: { ...params, args } } : r,
+                                      ),
+                                    )
+                                  }}
+                                  sx={{ minWidth: 260, flex: 1 }}
+                                />
+                              </>
+                            ) : (
+                              <>
+                                {needsSource ? (
+                                <TextField
+                                  label="Source"
+                                  select
+                                  size="small"
+                                  value={String(params.source ?? 'close')}
+                                  onChange={(e) =>
+                                    setIndicatorRows((prev) =>
+                                      prev.map((r, i) =>
+                                        i === idx ? { ...r, params: { ...params, source: e.target.value } } : r,
+                                      ),
+                                    )
+                                  }
+                                  sx={{ minWidth: 120 }}
+                                >
+                                  {['close','open','high','low','volume'].map((s) => (
+                                    <MenuItem key={s} value={s}>{s}</MenuItem>
+                                  ))}
+                                </TextField>
+                                ) : null}
+                              </>
+                            )}
+
+                            {needsLength && kind !== 'RET' && kind !== 'CUSTOM' && (
+                              <TextField
+                                label="Length"
+                                size="small"
+                                type="number"
+                                value={Number(params.length ?? 14)}
+                                onChange={(e) =>
+                                  setIndicatorRows((prev) =>
+                                    prev.map((r, i) =>
+                                      i === idx ? { ...r, params: { ...params, length: Number(e.target.value || 0) } } : r,
+                                    ),
+                                  )
+                                }
+                                sx={{ width: 110 }}
+                              />
+                            )}
+
+                            {showMult && (
+                              <TextField
+                                label="Mult"
+                                size="small"
+                                type="number"
+                                value={Number(params.mult ?? 2)}
+                                onChange={(e) =>
+                                  setIndicatorRows((prev) =>
+                                    prev.map((r, i) =>
+                                      i === idx ? { ...r, params: { ...params, mult: Number(e.target.value || 0) } } : r,
+                                    ),
+                                  )
+                                }
+                                sx={{ width: 110 }}
+                              />
+                            )}
+
+                            {showTimeframe ? (
+                              <TextField
+                                label="TF"
+                                select
+                                size="small"
+                                value={String(params.timeframe ?? '1d')}
+                                onChange={(e) =>
+                                  setIndicatorRows((prev) =>
+                                    prev.map((r, i) =>
+                                      i === idx ? { ...r, params: { ...params, timeframe: e.target.value } } : r,
+                                    ),
+                                  )
+                                }
+                                sx={{ width: 90 }}
+                              >
+                                <MenuItem value="1d">1d</MenuItem>
+                              </TextField>
+                            ) : null}
+
+                            <Button
+                              size="small"
+                              color="error"
+                              onClick={() =>
+                                setIndicatorRows((prev) => prev.filter((_r, i) => i !== idx))
+                              }
+                            >
+                              Remove
+                            </Button>
+                          </Stack>
+                        )
+                      })}
+                    </Stack>
+                  </Stack>
+                </AccordionDetails>
+              </Accordion>
+
+              <Accordion disableGutters defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2">DSL signals</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack spacing={1}>
+                    <DslEditor
+                      languageId="sigma-dsl-dashboard"
+                      value={signalDsl}
+                      onChange={(v) => setSignalDsl(v)}
+                      height={140}
+                      operands={[
+                        ...(indicatorRows
+                          .map((r) => String(r.name || '').trim())
+                          .filter(Boolean)),
+                        'open',
+                        'high',
+                        'low',
+                        'close',
+                        'volume',
+                      ]}
+                      customIndicators={customIndicators.map((ci) => ({
+                        id: ci.id,
+                        name: ci.name,
+                        params: ci.params || [],
+                        description: ci.description || null,
+                      }))}
+                      onCtrlEnter={() => void runSignals()}
+                    />
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Button
+                        size="small"
+                        variant="contained"
+                        onClick={() => void runSignals()}
+                        disabled={signalLoading}
+                      >
+                        {signalLoading ? 'Running…' : 'Run'}
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setSignalDsl('')
+                          setSignalMarkers([])
+                          setSignalError(null)
+                        }}
+                      >
+                        Clear
+                      </Button>
+                      <Box sx={{ flex: 1 }} />
+                      <Typography variant="caption" color="text.secondary">
+                        Ctrl+Enter to run
+                      </Typography>
+                    </Stack>
+                    {signalError && (
+                      <Typography variant="caption" color="error">
+                        {signalError}
+                      </Typography>
+                    )}
+                    {signalMarkers.length > 0 && (
+                      <Typography variant="caption" color="text.secondary">
+                        Markers: {signalMarkers.length}
+                      </Typography>
+                    )}
+                  </Stack>
+                </AccordionDetails>
+              </Accordion>
             </Stack>
           </Paper>
       </Box>

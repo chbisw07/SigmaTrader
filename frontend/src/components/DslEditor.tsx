@@ -87,6 +87,8 @@ export function DslEditor({
       { label: 'ROC', snippet: 'ROC(${1:close}, ${2:14})' },
       { label: 'Z_SCORE', snippet: 'Z_SCORE(${1:close}, ${2:20})' },
       { label: 'BOLLINGER', snippet: 'BOLLINGER(${1:close}, ${2:20}, ${3:2})' },
+      { label: 'CROSSOVER', snippet: 'CROSSOVER(${1:a}, ${2:b})' },
+      { label: 'CROSSUNDER', snippet: 'CROSSUNDER(${1:a}, ${2:b})' },
 
       { label: 'ABS', snippet: 'ABS(${1:x})' },
       { label: 'SQRT', snippet: 'SQRT(${1:x})' },

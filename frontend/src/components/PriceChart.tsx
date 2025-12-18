@@ -9,6 +9,8 @@ import {
   type BusinessDay,
   type IChartApi,
   type LineData,
+  type LineSeriesPartialOptions,
+  type LineWidth,
   type Time,
 } from 'lightweight-charts'
 
@@ -23,6 +25,24 @@ export type PriceCandle = {
   volume: number
 }
 
+export type PriceOverlayPoint = {
+  ts: string // YYYY-MM-DD
+  value: number | null
+}
+
+export type PriceOverlay = {
+  name: string
+  color?: string
+  lineWidth?: number
+  points: PriceOverlayPoint[]
+}
+
+export type PriceSignalMarker = {
+  ts: string // YYYY-MM-DD
+  kind: string
+  text?: string | null
+}
+
 function toBusinessDay(dateIso: string): BusinessDay {
   const [y, m, d] = dateIso.split('-').map((v) => Number(v))
   return { year: y!, month: m!, day: d! }
@@ -31,10 +51,14 @@ function toBusinessDay(dateIso: string): BusinessDay {
 export function PriceChart({
   candles,
   chartType,
+  overlays = [],
+  markers = [],
   height = 320,
 }: {
   candles: PriceCandle[]
   chartType: PriceChartType
+  overlays?: PriceOverlay[]
+  markers?: PriceSignalMarker[]
   height?: number
 }) {
   const theme = useTheme()
@@ -42,6 +66,8 @@ export function PriceChart({
   const chartRef = useRef<IChartApi | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const seriesRef = useRef<any>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const overlaySeriesRefs = useRef<any[]>([])
 
   const normalizedCandles = useMemo(() => {
     if (!candles || candles.length === 0) return []
@@ -117,12 +143,16 @@ export function PriceChart({
       chart.remove()
       chartRef.current = null
       seriesRef.current = null
+      overlaySeriesRefs.current = []
     }
   }, [theme])
 
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
+
+    for (const s of overlaySeriesRefs.current) chart.removeSeries(s)
+    overlaySeriesRefs.current = []
 
     if (seriesRef.current) {
       chart.removeSeries(seriesRef.current)
@@ -152,6 +182,97 @@ export function PriceChart({
 
     chart.timeScale().fitContent()
   }, [chartType, seriesData, lineColor, upColor, downColor])
+
+  const normalizedOverlays = useMemo(() => {
+    return (overlays ?? [])
+      .map((o) => {
+        const byDate = new Map<string, number>()
+        for (const p of o.points ?? []) {
+          if (!p?.ts) continue
+          if (p.value == null || !Number.isFinite(p.value)) continue
+          byDate.set(p.ts, p.value)
+        }
+        const data = Array.from(byDate.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([ts, value]) => ({
+            time: toBusinessDay(ts) as unknown as Time,
+            value,
+          }))
+        return { ...o, data }
+      })
+      .filter((o) => o.data.length > 0)
+  }, [overlays])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    // Clear existing overlays.
+    for (const s of overlaySeriesRefs.current) chart.removeSeries(s)
+    overlaySeriesRefs.current = []
+
+    const palette = [
+      theme.palette.warning.main,
+      theme.palette.success.main,
+      theme.palette.info.main,
+      theme.palette.secondary.main,
+    ]
+
+    normalizedOverlays.forEach((o, idx) => {
+      const lineWidth = Math.min(4, Math.max(1, Math.round(o.lineWidth ?? 2))) as LineWidth
+      const opts: LineSeriesPartialOptions = {
+        color: o.color || palette[idx % palette.length]!,
+        lineWidth,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      }
+      const s = chart.addLineSeries(opts)
+      overlaySeriesRefs.current.push(s)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      s.setData(o.data as any)
+    })
+  }, [normalizedOverlays, theme])
+
+  useEffect(() => {
+    if (!seriesRef.current) return
+    const baseSeries = seriesRef.current
+
+    const markerData = (markers ?? [])
+      .filter((m) => m?.ts)
+      .map((m) => {
+        const kind = String(m.kind || '').toUpperCase()
+        const isCrossUp = kind === 'CROSSOVER'
+        const isCrossDown = kind === 'CROSSUNDER'
+        const isTrue = kind === 'TRUE'
+        return {
+          time: toBusinessDay(m.ts) as unknown as Time,
+          position: isCrossDown ? 'aboveBar' : 'belowBar',
+          color: isCrossUp
+            ? theme.palette.success.main
+            : isCrossDown
+              ? theme.palette.error.main
+              : theme.palette.primary.main,
+          shape: isCrossUp ? 'arrowUp' : isCrossDown ? 'arrowDown' : isTrue ? 'circle' : 'circle',
+          text: m.text ? String(m.text) : undefined,
+        }
+      })
+      .sort((a, b) => {
+        // Sort by YYYY-MM-DD.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ta = (a.time as any) as { year: number; month: number; day: number }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tb = (b.time as any) as { year: number; month: number; day: number }
+        const sa = `${ta.year}-${String(ta.month).padStart(2, '0')}-${String(ta.day).padStart(2, '0')}`
+        const sb = `${tb.year}-${String(tb.month).padStart(2, '0')}-${String(tb.day).padStart(2, '0')}`
+        return sa.localeCompare(sb)
+      })
+
+    try {
+      baseSeries.setMarkers(markerData)
+    } catch {
+      // ignore marker failures (e.g. series type not supporting markers)
+    }
+  }, [markers, theme])
 
   return (
     <Box
