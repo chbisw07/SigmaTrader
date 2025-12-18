@@ -456,6 +456,7 @@ def load_series(
     timeframe: Timeframe,
     start: datetime,
     end: datetime,
+    allow_fetch: bool = True,
 ) -> List[Dict]:
     """Return OHLCV series for the given symbol/timeframe and window.
 
@@ -466,15 +467,16 @@ def load_series(
     """
 
     base_timeframe = BASE_TIMEFRAME_MAP[timeframe]
-    ensure_history(
-        db,
-        settings,
-        symbol=symbol,
-        exchange=exchange,
-        base_timeframe=base_timeframe,
-        start=start,
-        end=end,
-    )
+    if allow_fetch:
+        ensure_history(
+            db,
+            settings,
+            symbol=symbol,
+            exchange=exchange,
+            base_timeframe=base_timeframe,
+            start=start,
+            end=end,
+        )
 
     candles: List[Candle] = (
         db.query(Candle)

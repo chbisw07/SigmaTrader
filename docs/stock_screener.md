@@ -2,6 +2,21 @@
 
 ---
 
+## 0. Phase 2 update (Alert V3 screener)
+
+This document originally described a “screener panel” embedded in the Holdings page, backed by the legacy indicator-alert DSL.
+
+As of Phase 2 of the Alerts V3 refactor:
+- Screener is a **dedicated page** (`/screener`) with its own workflow (targets → variables/condition → run → results).
+- The Holdings-page screener/advanced-filters UI is removed to avoid duplicating functionality.
+- Screener evaluation uses the **Alert V3 compiler + evaluator** (same DSL, indicators, and semantics as v3 alerts).
+- Targets are the **union** of:
+  - Holdings (optional), and
+  - one or more groups (deduped by `symbol+exchange`).
+- Screener runs are on-demand (no periodic scheduling); large universes can execute asynchronously while the UI polls run status.
+
+The rest of this document is still useful as conceptual background, but implementation details that mention the “Holdings screener bar” should be treated as superseded by the dedicated Screener page.
+
 ## 1. Motivation and current behaviour
 
 **Question**  
@@ -221,4 +236,3 @@ For alerts:
    - Defer full “universe‑wide” scanning and heavier factor‑model logic to later phases.
 
 In short: replacing the current advanced filters with a true screener is a natural, high‑leverage next step. It is technically feasible, aligns well with your DSL/alerts architecture, and can greatly improve how you select and act on opportunities across your holdings.
-

@@ -741,6 +741,19 @@ What remains (Phase 2+):
 - Re‑implement **Screener** on top of Alert V3.
 - Once Screener no longer depends on the legacy DSL/indicator alert machinery, delete the remaining legacy code paths entirely.
 
+### 11.2 Phase 2: dedicated Screener page on Alert V3
+
+Phase 2 introduces a **dedicated Screener page** (`/screener`) which:
+- Runs an on-demand scan over the **union** of Holdings + selected Groups (deduped by `symbol+exchange`).
+- Uses the same **Alert V3 variables + DSL** compiler/evaluator as alerts (no legacy DSL).
+- Supports the same **structured variable builder** UX as Alerts (type/source/length/timeframe) with an optional DSL fallback.
+- Returns a results grid with key columns (Last, RSI/SMA) and optional “show variable values”.
+- Supports “Create group from matches” to snapshot the result set into a new group for later alerting.
+
+Implementation notes:
+- Backend endpoints live under `/api/screener-v3` (run + poll + create-group-from-run).
+- Runs may execute synchronously for small universes and asynchronously (polling by run id) for larger ones; see `ST_SCREENER_SYNC_LIMIT`.
+
 ---
 
 ## 12) Open decisions (confirm before implementation)

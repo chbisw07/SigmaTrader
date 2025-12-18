@@ -6,12 +6,7 @@ import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import MenuItem from '@mui/material/MenuItem'
-import Tabs from '@mui/material/Tabs'
-import Tab from '@mui/material/Tab'
-import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
-import Paper from '@mui/material/Paper'
 import Select from '@mui/material/Select'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
@@ -32,7 +27,6 @@ import {
 } from '@mui/x-data-grid'
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import Editor, { type OnMount } from '@monaco-editor/react'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
 import {
@@ -49,7 +43,6 @@ import {
   type HoldingsCorrelationResult,
   computeRiskSizing,
   type RiskSizingResponse,
-  evaluateHoldingsScreenerDsl,
 } from '../services/analytics'
 import {
   bulkAddGroupMembers,
@@ -89,351 +82,6 @@ type HoldingRow = Holding & {
 }
 
 type HoldingsViewMode = 'default' | 'risk'
-
-type HoldingsFilterField =
-  | 'symbol'
-  | 'groups'
-  | 'quantity'
-  | 'average_price'
-  | 'invested'
-  | 'last_price'
-  | 'current_value'
-  | 'rsi14'
-  | 'perf1m'
-  | 'perf1y'
-  | 'volatility20d'
-  | 'atr14'
-  | 'volumeVsAvg20d'
-  | 'max_pnl_pct'
-  | 'drawdown_from_peak_pct'
-  | 'unrealized_pnl'
-  | 'pnl_percent'
-  | 'today_pnl_percent'
-
-type HoldingsFilterOperator =
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'eq'
-  | 'neq'
-  | 'contains'
-  | 'startsWith'
-  | 'endsWith'
-
-type HoldingsFilter = {
-  id: string
-  field: HoldingsFilterField
-  operator: HoldingsFilterOperator
-  value: string
-  compareTo?: 'value' | 'field'
-  compareField?: HoldingsFilterField
-}
-
-type HoldingsFilterFieldConfig = {
-  field: HoldingsFilterField
-  label: string
-  type: 'string' | 'number'
-  getValue: (row: HoldingRow) => string | number | null
-}
-
-const SIGMA_DSL_LANGUAGE_ID = 'sigma-dsl'
-const SIGMA_DSL_INDICATOR_SUGGESTIONS = [
-  'PRICE',
-  'RSI',
-  'SMA',
-  'MA',
-  'MA_CROSS',
-  'VOLATILITY',
-  'ATR',
-  'PERF_PCT',
-  'MOMENTUM',
-  'VOLUME_RATIO',
-  'VWAP',
-  'PVT',
-  'PVT_SLOPE',
-]
-const SIGMA_DSL_FIELD_SUGGESTIONS = [
-  'QTY',
-  'AVG_PRICE',
-  'INVESTED',
-  'CURRENT_VALUE',
-  'PNL_PCT',
-  'TODAY_PNL_PCT',
-  'MAX_PNL_PCT',
-  'DRAWDOWN_PCT',
-  'DRAWDOWN_FROM_PEAK_PCT',
-]
-const SIGMA_DSL_KEYWORD_SUGGESTIONS = [
-  'AND',
-  'OR',
-  'NOT',
-  'CROSS_ABOVE',
-  'CROSS_BELOW',
-]
-const SIGMA_DSL_TIMEFRAME_SUGGESTIONS = [
-  '1m',
-  '5m',
-  '15m',
-  '1h',
-  '1d',
-  '1mo',
-  '1y',
-]
-
-let sigmaDslCompletionsRegistered = false
-
-function ensureSigmaDsl(monaco: any) {
-  const alreadyRegistered = monaco.languages
-    .getLanguages()
-    .some((lang: { id?: string }) => lang.id === SIGMA_DSL_LANGUAGE_ID)
-  if (!alreadyRegistered) {
-    monaco.languages.register({ id: SIGMA_DSL_LANGUAGE_ID })
-  }
-
-  if (sigmaDslCompletionsRegistered) return
-  sigmaDslCompletionsRegistered = true
-
-  monaco.languages.registerCompletionItemProvider(SIGMA_DSL_LANGUAGE_ID, {
-    triggerCharacters: ['(', ',', ' '],
-    provideCompletionItems(model: any, position: any) {
-      const word = model.getWordUntilPosition(position)
-      const range = new monaco.Range(
-        position.lineNumber,
-        word.startColumn,
-        position.lineNumber,
-        word.endColumn,
-      )
-
-      const makeItems = (
-        labels: string[],
-        kind: any,
-      ) =>
-        labels.map((label) => ({
-          label,
-          kind,
-          insertText: label,
-          range,
-        }))
-
-      const suggestions = [
-        ...makeItems(
-          SIGMA_DSL_INDICATOR_SUGGESTIONS,
-          monaco.languages.CompletionItemKind.Function,
-        ),
-        ...makeItems(
-          SIGMA_DSL_FIELD_SUGGESTIONS,
-          monaco.languages.CompletionItemKind.Variable,
-        ),
-        ...makeItems(
-          SIGMA_DSL_KEYWORD_SUGGESTIONS,
-          monaco.languages.CompletionItemKind.Keyword,
-        ),
-        ...makeItems(
-          SIGMA_DSL_TIMEFRAME_SUGGESTIONS,
-          monaco.languages.CompletionItemKind.Constant,
-        ),
-      ]
-      return { suggestions }
-    },
-  })
-}
-
-function configureSigmaDslEditor(editor: any) {
-  editor.updateOptions({
-    quickSuggestions: { other: true, comments: false, strings: true },
-    suggestOnTriggerCharacters: true,
-    wordBasedSuggestions: 'off',
-    suggestSelection: 'first',
-    parameterHints: { enabled: true },
-  })
-
-  let suggestTimer: number | null = null
-  editor.onDidChangeModelContent((ev: any) => {
-    if (!editor.hasTextFocus()) return
-    const hasNonWhitespaceChange = (ev?.changes || []).some((c: any) =>
-      String(c?.text || '').trim().length > 0,
-    )
-    if (!hasNonWhitespaceChange) return
-
-    if (suggestTimer) {
-      window.clearTimeout(suggestTimer)
-    }
-    suggestTimer = window.setTimeout(() => {
-      try {
-        editor.trigger('sigma-dsl', 'editor.action.triggerSuggest', {})
-      } catch {
-        // Ignore suggestion errors.
-      }
-    }, 200)
-  })
-}
-
-const HOLDINGS_FILTER_FIELDS: HoldingsFilterFieldConfig[] = [
-  {
-    field: 'symbol',
-    label: 'Symbol',
-    type: 'string',
-    getValue: (row) => row.symbol,
-  },
-  {
-    field: 'groups',
-    label: 'Groups',
-    type: 'string',
-    getValue: (row) => row.groupsLabel ?? null,
-  },
-  {
-    field: 'quantity',
-    label: 'Qty',
-    type: 'number',
-    getValue: (row) =>
-      row.quantity != null ? Number(row.quantity) : null,
-  },
-  {
-    field: 'average_price',
-    label: 'Avg Price',
-    type: 'number',
-    getValue: (row) =>
-      row.average_price != null ? Number(row.average_price) : null,
-  },
-  {
-    field: 'invested',
-    label: 'Invested',
-    type: 'number',
-    getValue: (row) =>
-      row.quantity != null && row.average_price != null
-        ? Number(row.quantity) * Number(row.average_price)
-        : null,
-  },
-  {
-    field: 'last_price',
-    label: 'Last Price',
-    type: 'number',
-    getValue: (row) =>
-      row.last_price != null ? Number(row.last_price) : null,
-  },
-  {
-    field: 'current_value',
-    label: 'Current Value',
-    type: 'number',
-    getValue: (row) =>
-      row.quantity != null && row.last_price != null
-        ? Number(row.quantity) * Number(row.last_price)
-        : null,
-  },
-  {
-    field: 'rsi14',
-    label: 'RSI(14)',
-    type: 'number',
-    getValue: (row) => row.indicators?.rsi14 ?? null,
-  },
-  {
-    field: 'perf1m',
-    label: '1M PnL %',
-    type: 'number',
-    getValue: (row) => row.indicators?.perf1mPct ?? null,
-  },
-  {
-    field: 'perf1y',
-    label: '1Y PnL %',
-    type: 'number',
-    getValue: (row) => row.indicators?.perf1yPct ?? null,
-  },
-  {
-    field: 'volatility20d',
-    label: 'Vol 20D %',
-    type: 'number',
-    getValue: (row) => row.indicators?.volatility20dPct ?? null,
-  },
-  {
-    field: 'atr14',
-    label: 'ATR(14) %',
-    type: 'number',
-    getValue: (row) => row.indicators?.atr14Pct ?? null,
-  },
-  {
-    field: 'volumeVsAvg20d',
-    label: 'Vol / 20D Avg',
-    type: 'number',
-    getValue: (row) => row.indicators?.volumeVsAvg20d ?? null,
-  },
-  {
-    field: 'max_pnl_pct',
-    label: 'Max P&L % (since entry)',
-    type: 'number',
-    getValue: (row) => row.indicators?.maxPnlPct ?? null,
-  },
-  {
-    field: 'drawdown_from_peak_pct',
-    label: 'Drawdown from peak %',
-    type: 'number',
-    getValue: (row) => row.indicators?.drawdownFromPeakPct ?? null,
-  },
-  {
-    field: 'unrealized_pnl',
-    label: 'Unrealized P&L',
-    type: 'number',
-    getValue: (row) => (row.pnl != null ? Number(row.pnl) : null),
-  },
-  {
-    field: 'pnl_percent',
-    label: 'P&L %',
-    type: 'number',
-    getValue: (row) =>
-      row.total_pnl_percent != null
-        ? Number(row.total_pnl_percent)
-        : null,
-  },
-  {
-    field: 'today_pnl_percent',
-    label: "Today's P&L %",
-    type: 'number',
-    getValue: (row) =>
-      row.today_pnl_percent != null
-        ? Number(row.today_pnl_percent)
-        : null,
-  },
-]
-
-const NUMERIC_OPERATOR_OPTIONS: {
-  value: HoldingsFilterOperator
-  label: string
-}[] = [
-  { value: 'gt', label: '>' },
-  { value: 'gte', label: '>=' },
-  { value: 'lt', label: '<' },
-  { value: 'lte', label: '<=' },
-  { value: 'eq', label: '=' },
-  { value: 'neq', label: '!=' },
-]
-
-const STRING_OPERATOR_OPTIONS: {
-  value: HoldingsFilterOperator
-  label: string
-}[] = [
-  { value: 'contains', label: 'contains' },
-  { value: 'eq', label: 'equals' },
-  { value: 'startsWith', label: 'starts with' },
-  { value: 'endsWith', label: 'ends with' },
-]
-
-function getFieldConfig(
-  field: HoldingsFilterField,
-): HoldingsFilterFieldConfig {
-  const cfg =
-    HOLDINGS_FILTER_FIELDS.find((f) => f.field === field) ??
-    HOLDINGS_FILTER_FIELDS[0]
-  return cfg
-}
-
-function getOperatorOptions(
-  field: HoldingsFilterField,
-): { value: HoldingsFilterOperator; label: string }[] {
-  const cfg = getFieldConfig(field)
-  return cfg.type === 'string'
-    ? STRING_OPERATOR_OPTIONS
-    : NUMERIC_OPERATOR_OPTIONS
-}
 
 const ANALYTICS_LOOKBACK_DAYS = 730
 const BRACKET_BASE_MTP_DEFAULT = 5
@@ -516,33 +164,6 @@ export function HoldingsPage() {
   const [groupCreateError, setGroupCreateError] = useState<string | null>(null)
 
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
-
-  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
-  const [advancedFilters, setAdvancedFilters] = useState<HoldingsFilter[]>([])
-  const [screenerMode, setScreenerMode] = useState<'builder' | 'dsl'>(
-    'builder',
-  )
-  const [screenerLogicOperator, setScreenerLogicOperator] = useState<
-    GridLogicOperator
-  >(GridLogicOperator.And)
-  const [screenerDsl, setScreenerDsl] = useState<string>('')
-  const [screenerDslMatches, setScreenerDslMatches] = useState<string[] | null>(
-    null,
-  )
-  const [screenerDslError, setScreenerDslError] = useState<string | null>(null)
-  const [screenerDslLoading, setScreenerDslLoading] = useState(false)
-  const [screenerDslHelpOpen, setScreenerDslHelpOpen] = useState(false)
-
-  const handleScreenerDslMount: OnMount = (editor, monaco) => {
-    ensureSigmaDsl(monaco)
-
-    const model = editor.getModel()
-    if (model) {
-      monaco.editor.setModelLanguage(model, SIGMA_DSL_LANGUAGE_ID)
-    }
-
-    configureSigmaDslEditor(editor)
-  }
 
   const [viewMode, setViewMode] = useState<HoldingsViewMode>('default')
   const [columnVisibilityModel, setColumnVisibilityModel] =
@@ -944,30 +565,7 @@ export function HoldingsPage() {
     refreshSeconds,
   ])
 
-  let filteredRows: HoldingRow[] = holdings
-
-  // Builder-mode screener (advanced filters).
-  if (
-    screenerMode === 'builder'
-    && advancedFiltersOpen
-    && advancedFilters.length > 0
-  ) {
-    filteredRows = applyAdvancedFilters(
-      holdings,
-      advancedFilters,
-      screenerLogicOperator,
-    )
-  }
-
-  // DSL-mode screener: narrow to symbols returned by the backend.
-  if (
-    screenerMode === 'dsl'
-    && screenerDslMatches
-    && screenerDslMatches.length > 0
-  ) {
-    const matchSet = new Set<string>(screenerDslMatches)
-    filteredRows = holdings.filter((row) => matchSet.has(row.symbol))
-  }
+  const filteredRows: HoldingRow[] = holdings
 
   const totalActiveAlerts = holdings.reduce((acc, h) => {
     const found = h as HoldingRow & { _activeAlertCount?: number }
@@ -2662,74 +2260,6 @@ export function HoldingsPage() {
         <Box
           sx={{
             display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            flexWrap: 'wrap',
-          }}
-        >
-          <Button
-            size="small"
-            variant={advancedFiltersOpen ? 'contained' : 'outlined'}
-            onClick={() => {
-              setAdvancedFiltersOpen((prev) => !prev)
-              if (!advancedFiltersOpen && advancedFilters.length === 0) {
-                setAdvancedFilters([
-                  {
-                    id: `f-${Date.now()}`,
-                    field: 'symbol',
-                    operator: 'contains',
-                    value: '',
-                  },
-                ])
-              }
-            }}
-            sx={{ mr: 1 }}
-          >
-            {advancedFiltersOpen ? 'Hide screener' : 'Screener'}
-          </Button>
-          {advancedFiltersOpen && (
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                flexWrap: 'wrap',
-              }}
-            >
-              <Tabs
-                value={screenerMode}
-                onChange={(_event, value) =>
-                  setScreenerMode(value === 'dsl' ? 'dsl' : 'builder')
-                }
-                textColor="primary"
-                indicatorColor="primary"
-                sx={{
-                  minHeight: 32,
-                  '& .MuiTab-root': { minHeight: 32, paddingX: 1.5 },
-                }}
-              >
-                <Tab label="Builder" value="builder" />
-                <Tab label="DSL expression" value="dsl" />
-              </Tabs>
-              {screenerMode === 'builder' && (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ verticalAlign: 'middle' }}
-                >
-                  Conditions are combined with{' '}
-                  {screenerLogicOperator === GridLogicOperator.Or
-                    ? 'OR'
-                    : 'AND'}
-                  .
-                </Typography>
-              )}
-            </Box>
-          )}
-        </Box>
-        <Box
-          sx={{
-            display: 'flex',
             flexDirection: 'column',
             alignItems: 'flex-end',
             gap: 0.5,
@@ -2891,6 +2421,7 @@ export function HoldingsPage() {
         </Box>
       </Box>
 
+      {/*
       {advancedFiltersOpen && screenerMode === 'builder' && (
         <Paper
           sx={{
@@ -3364,6 +2895,7 @@ export function HoldingsPage() {
           <Button onClick={() => setScreenerDslHelpOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
+      */}
 
       {/* Old chart-period-only box removed; merged into combined toolbar above */}
       {/* <Box
@@ -5780,94 +5312,4 @@ function computeHoldingIndicators(
   }
 
   return indicators
-}
-
-function applyAdvancedFilters(
-  rows: HoldingRow[],
-  filters: HoldingsFilter[],
-  logicOperator: GridLogicOperator,
-): HoldingRow[] {
-  if (!filters.length) return rows
-
-  const activeFilters = filters.filter((f) => {
-    const mode = f.compareTo ?? 'value'
-    if (mode === 'field') {
-      return f.compareField != null && String(f.compareField).trim().length > 0
-    }
-    return String(f.value).trim().length > 0
-  })
-  if (!activeFilters.length) return rows
-
-  const useAnd = logicOperator !== GridLogicOperator.Or
-
-  const matches = (row: HoldingRow, filter: HoldingsFilter): boolean => {
-    const fieldConfig = getFieldConfig(filter.field)
-    const rawVal = fieldConfig.getValue(row)
-
-    if (rawVal == null) {
-      return false
-    }
-
-    const rhsMode = filter.compareTo ?? 'value'
-    const rhsRaw = (() => {
-      if (rhsMode === 'field') {
-        if (!filter.compareField) return null
-        const rhsCfg = getFieldConfig(filter.compareField)
-        return rhsCfg.getValue(row)
-      }
-      return filter.value
-    })()
-
-    if (rhsRaw == null) {
-      return false
-    }
-
-    if (fieldConfig.type === 'string') {
-      const value = String(rawVal).toLowerCase()
-      const needle = String(rhsRaw).toLowerCase()
-      switch (filter.operator) {
-        case 'contains':
-          return value.includes(needle)
-        case 'startsWith':
-          return value.startsWith(needle)
-        case 'endsWith':
-          return value.endsWith(needle)
-        case 'eq':
-          return value === needle
-        case 'neq':
-          return value !== needle
-        default:
-          return true
-      }
-    }
-
-    const numericVal = Number(rawVal)
-    const threshold = Number(rhsRaw)
-    if (!Number.isFinite(numericVal) || !Number.isFinite(threshold)) {
-      return true
-    }
-
-    switch (filter.operator) {
-      case 'gt':
-        return numericVal > threshold
-      case 'gte':
-        return numericVal >= threshold
-      case 'lt':
-        return numericVal < threshold
-      case 'lte':
-        return numericVal <= threshold
-      case 'eq':
-        return numericVal === threshold
-      case 'neq':
-        return numericVal !== threshold
-      default:
-        return true
-    }
-  }
-
-  return rows.filter((row) =>
-    useAnd
-      ? activeFilters.every((filter) => matches(row, filter))
-      : activeFilters.some((filter) => matches(row, filter)),
-  )
 }

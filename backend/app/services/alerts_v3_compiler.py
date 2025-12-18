@@ -455,9 +455,71 @@ def compile_alert_expression(
     return condition_ast, cadence
 
 
+def compile_alert_expression_parts(
+    db: Session,
+    *,
+    user_id: int,
+    variables: list[dict[str, Any]],
+    condition_dsl: str,
+    evaluation_cadence: str | None = None,
+    custom_indicators: CustomIndicatorMap | None = None,
+) -> tuple[ExprNode, str, Dict[str, ExprNode]]:
+    """Compile (variables + condition DSL) and return the resolved variable AST map.
+
+    This is useful for tooling such as the Screener UI, where we want to
+    evaluate variables for display without persisting an AlertDefinition.
+    """
+
+    custom_indicators = custom_indicators or compile_custom_indicators_for_user(
+        db, user_id=user_id
+    )
+
+    var_map: Dict[str, ExprNode] = {}
+    referenced_timeframes: Set[str] = set()
+
+    for item in variables:
+        vname, expr = _build_variable_ast(item)
+        expr = _substitute_idents(expr, var_map)
+        _ensure_numeric_only(expr, context=f"Variable '{vname}'")
+        var_map[vname] = expr
+        referenced_timeframes |= _collect_timeframes(expr)
+
+    condition_ast = parse_v3_expression(condition_dsl)
+    condition_ast = _substitute_idents(condition_ast, var_map)
+    referenced_timeframes |= _collect_timeframes(condition_ast)
+
+    for n in _walk(condition_ast):
+        if isinstance(n, EventNode) and n.op.upper() in {"MOVING_UP", "MOVING_DOWN"}:
+            if not isinstance(n.right, NumberNode):
+                raise IndicatorAlertError(
+                    "MOVING_UP/DOWN RHS must be a numeric constant"
+                )
+
+    known_custom = set(custom_indicators.keys())
+    for n in _walk(condition_ast):
+        if isinstance(n, CallNode):
+            fn = n.name.upper()
+            if fn in known_custom:
+                expected, _body = custom_indicators[fn]
+                if len(n.args) != len(expected):
+                    raise IndicatorAlertError(
+                        f"{fn} expects {len(expected)} args but got {len(n.args)}"
+                    )
+                continue
+            if fn not in _CUSTOM_INDICATOR_ALLOWED_BUILTINS:
+                raise IndicatorAlertError(f"Unknown function '{n.name}'")
+
+    cadence = (evaluation_cadence or "").strip()
+    if not cadence:
+        cadence = _pick_default_cadence(referenced_timeframes)
+
+    return condition_ast, cadence, var_map
+
+
 __all__ = [
     "compile_custom_indicators_for_user",
     "compile_alert_definition",
     "compile_alert_expression",
+    "compile_alert_expression_parts",
     "CustomIndicatorMap",
 ]

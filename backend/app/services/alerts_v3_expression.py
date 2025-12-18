@@ -303,6 +303,7 @@ def compute_metric(
     exchange: str,
     metric: str,
     holding: HoldingRead | None = None,
+    allow_fetch: bool = True,
 ) -> Tuple[Optional[float], Optional[float], Optional[datetime]]:
     # Approximate from positions + daily candles.
     metric = metric.upper()
@@ -352,7 +353,9 @@ def compute_metric(
     avg_price = float(pos.avg_price)
     invested = qty * avg_price
 
-    candles = _load_candles_for_rule(db, settings, symbol, exchange, "1d")
+    candles = _load_candles_for_rule(
+        db, settings, symbol, exchange, "1d", allow_fetch=allow_fetch
+    )
     closes = [float(c["close"]) for c in candles] if candles else []
     last_price = closes[-1] if closes else None
     prev_price = closes[-2] if len(closes) >= 2 else None
@@ -584,12 +587,19 @@ def _roll_agg(values: Sequence[float], length: int, kind: str) -> SeriesValue:
 
 class CandleCache:
     def __init__(
-        self, db: Session, settings: Settings, symbol: str, exchange: str
+        self,
+        db: Session,
+        settings: Settings,
+        symbol: str,
+        exchange: str,
+        *,
+        allow_fetch: bool = True,
     ) -> None:
         self.db = db
         self.settings = settings
         self.symbol = symbol
         self.exchange = exchange
+        self.allow_fetch = allow_fetch
         self._candles: Dict[str, list[dict[str, Any]]] = {}
 
     def candles(self, tf: str) -> list[dict[str, Any]]:
@@ -600,7 +610,12 @@ class CandleCache:
                 # Resample from daily candles in-memory.
                 days = (
                     _load_candles_for_rule(
-                        self.db, self.settings, self.symbol, self.exchange, "1d"
+                        self.db,
+                        self.settings,
+                        self.symbol,
+                        self.exchange,
+                        "1d",
+                        allow_fetch=self.allow_fetch,
                     )
                     or []
                 )
@@ -614,6 +629,7 @@ class CandleCache:
                     self.symbol,
                     self.exchange,
                     tf,  # type: ignore[arg-type]
+                    allow_fetch=self.allow_fetch,
                 )
                 self._candles[tf] = candles or []
         return self._candles[tf]
@@ -744,6 +760,7 @@ def _eval_numeric(
     holding: HoldingRead | None,
     params: Dict[str, SeriesValue],
     custom_indicators: Dict[str, Tuple[List[str], ExprNode]],
+    allow_fetch: bool,
 ) -> SeriesValue:
     if isinstance(node, NumberNode):
         return SeriesValue(node.value, node.value, None)
@@ -762,6 +779,7 @@ def _eval_numeric(
                 exchange=cache.exchange,
                 metric=name,
                 holding=holding,
+                allow_fetch=allow_fetch,
             )
             return SeriesValue(now, prev, bar_time)
         raise IndicatorAlertError(f"Unknown identifier '{node.name}'")
@@ -775,6 +793,7 @@ def _eval_numeric(
             holding=holding,
             params=params,
             custom_indicators=custom_indicators,
+            allow_fetch=allow_fetch,
         )
         if v.now is None or v.prev is None:
             return SeriesValue(None, None, v.bar_time)
@@ -793,6 +812,7 @@ def _eval_numeric(
             holding=holding,
             params=params,
             custom_indicators=custom_indicators,
+            allow_fetch=allow_fetch,
         )
         b = _eval_numeric(
             node.right,
@@ -802,6 +822,7 @@ def _eval_numeric(
             holding=holding,
             params=params,
             custom_indicators=custom_indicators,
+            allow_fetch=allow_fetch,
         )
         if a.now is None or a.prev is None or b.now is None or b.prev is None:
             return SeriesValue(None, None, a.bar_time or b.bar_time)
@@ -838,6 +859,7 @@ def _eval_numeric(
                     holding=holding,
                     params=params,
                     custom_indicators=custom_indicators,
+                    allow_fetch=allow_fetch,
                 )
             return _eval_numeric(
                 body,
@@ -847,6 +869,7 @@ def _eval_numeric(
                 holding=holding,
                 params=inner_params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
 
         # Built-ins
@@ -884,6 +907,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             length = int(length_val.now) if length_val.now is not None else 0
             tf = _coerce_tf(node.args[2]).lower() if len(node.args) == 3 else "1d"
@@ -912,6 +936,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             length = int(length_val.now) if length_val.now is not None else 0
             tf = _coerce_tf(node.args[1]).lower()
@@ -933,6 +958,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             if v.now is None or v.prev is None:
                 return SeriesValue(None, None, v.bar_time)
@@ -949,6 +975,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             if v.now is None or v.prev is None or v.now < 0 or v.prev < 0:
                 return SeriesValue(None, None, v.bar_time)
@@ -965,6 +992,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             if v.now is None or v.prev is None or v.now <= 0 or v.prev <= 0:
                 return SeriesValue(None, None, v.bar_time)
@@ -981,6 +1009,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             if v.now is None or v.prev is None:
                 return SeriesValue(None, None, v.bar_time)
@@ -997,6 +1026,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             b = _eval_numeric(
                 node.args[1],
@@ -1006,6 +1036,7 @@ def _eval_numeric(
                 holding=holding,
                 params=params,
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             if a.now is None or a.prev is None or b.now is None or b.prev is None:
                 return SeriesValue(None, None, a.bar_time or b.bar_time)
@@ -1030,13 +1061,14 @@ def eval_condition(
     exchange: str,
     holding: HoldingRead | None = None,
     custom_indicators: Dict[str, Tuple[List[str], ExprNode]],
+    allow_fetch: bool = True,
 ) -> Tuple[bool, Dict[str, float], Optional[datetime]]:
     """Evaluate a compiled v3 alert condition for a symbol.
 
     Returns: (matched, snapshot, bar_time)
     """
 
-    cache = CandleCache(db, settings, symbol, exchange)
+    cache = CandleCache(db, settings, symbol, exchange, allow_fetch=allow_fetch)
     snapshot: Dict[str, float] = {}
 
     def _bool(n: ExprNode) -> bool:
@@ -1058,6 +1090,7 @@ def eval_condition(
                 holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             right = _eval_numeric(
                 n.right,
@@ -1067,6 +1100,7 @@ def eval_condition(
                 holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             if left.now is None or right.now is None:
                 return False
@@ -1096,6 +1130,7 @@ def eval_condition(
                 holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             right = _eval_numeric(
                 n.right,
@@ -1105,6 +1140,7 @@ def eval_condition(
                 holding=holding,
                 params={},
                 custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
             )
             if op in {"CROSSES_ABOVE", "CROSSES_BELOW"}:
                 if left.prev is None or left.now is None:
@@ -1145,6 +1181,7 @@ def eval_condition(
             holding=holding,
             params={},
             custom_indicators=custom_indicators,
+            allow_fetch=allow_fetch,
         )
         return bool(numeric.now)
 

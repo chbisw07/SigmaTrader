@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     admin_username: str | None = None
     admin_password: str | None = None
     enable_legacy_alerts: bool = False
+    screener_sync_limit: int = 1000
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.

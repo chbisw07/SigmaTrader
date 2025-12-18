@@ -250,6 +250,8 @@ def _load_candles_for_rule(
     symbol: str,
     exchange: str,
     timeframe: Timeframe,
+    *,
+    allow_fetch: bool = True,
 ) -> List[Dict]:
     now_ist = datetime.now(UTC) + IST_OFFSET
     end = now_ist.replace(tzinfo=None)
@@ -268,6 +270,7 @@ def _load_candles_for_rule(
         timeframe=timeframe,
         start=start,
         end=end,
+        allow_fetch=allow_fetch,
     )
 
 

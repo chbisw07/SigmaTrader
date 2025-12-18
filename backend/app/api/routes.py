@@ -13,6 +13,7 @@ from . import (
     paper,
     positions,
     risk_settings,
+    screener_v3,
     strategies,
     system_events,
     webhook,
@@ -103,6 +104,13 @@ router.include_router(
     prefix="/api/alerts-v3",
     dependencies=[Depends(require_admin)],
     tags=["alerts-v3"],
+)
+
+router.include_router(
+    screener_v3.router,
+    prefix="/api/screener-v3",
+    dependencies=[Depends(require_admin)],
+    tags=["screener-v3"],
 )
 
 router.include_router(
