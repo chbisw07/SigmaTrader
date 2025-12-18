@@ -306,8 +306,8 @@ export function ScreenerPage() {
       field: `var_${name}`,
       headerName: name,
       width: 140,
-      valueGetter: (params: any) =>
-        ((params.row as ScreenerRow).variables ?? {})[name] ?? null,
+      valueGetter: (_value: any, row: any) =>
+        ((row as ScreenerRow | undefined)?.variables ?? {})[name] ?? null,
     }))
   }, [showVariables, variables])
 
