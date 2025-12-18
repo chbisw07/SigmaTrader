@@ -424,198 +424,151 @@ export function ScreenerPage() {
         Screener
       </Typography>
 
-      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-        <Stack spacing={2}>
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-            <Autocomplete
-              multiple
-              options={groups}
-              loading={loadingGroups}
-              getOptionLabel={(g) => g.name}
-              value={selectedGroups}
-              onChange={(_e, value) => setSelectedGroups(value)}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Groups (union)"
-                  helperText={groupsError || 'Select one or more groups (deduped).'}
-                  error={!!groupsError}
-                />
-              )}
-              sx={{ flex: 1, minWidth: 320 }}
-            />
-            <Stack spacing={1} sx={{ minWidth: 240 }}>
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={includeHoldings}
-                    onChange={(e) => setIncludeHoldings(e.target.checked)}
+      <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2}>
+        <Paper
+          variant="outlined"
+          sx={{
+            p: 2,
+            flex: { lg: 2 },
+            minWidth: { lg: 440 },
+          }}
+        >
+          <Stack spacing={2}>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+              <Autocomplete
+                multiple
+                options={groups}
+                loading={loadingGroups}
+                getOptionLabel={(g) => g.name}
+                value={selectedGroups}
+                onChange={(_e, value) => setSelectedGroups(value)}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Groups (union)"
+                    helperText={groupsError || 'Select one or more groups (deduped).'}
+                    error={!!groupsError}
                   />
-                }
-                label="Include Holdings (Zerodha)"
+                )}
+                sx={{ flex: 1, minWidth: 320 }}
               />
-              <TextField
-                label="Evaluation cadence (optional)"
-                size="small"
-                value={evaluationCadence}
-                onChange={(e) => setEvaluationCadence(e.target.value)}
-                helperText="Leave blank to auto-pick from referenced timeframes."
-              />
-            </Stack>
-          </Stack>
-
-          <Box>
-            <Stack direction="row" spacing={1} sx={{ mb: 1, alignItems: 'center' }}>
-              <Typography variant="subtitle2">Variables</Typography>
-              <Button size="small" onClick={handleAddVariable}>
-                Add variable
-              </Button>
-            </Stack>
-            {variables.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
-                Optional: define readable aliases like <code>RSI_1D_14</code> ={' '}
-                <code>RSI(close, 14, &quot;1d&quot;)</code>.
-              </Typography>
-            ) : (
-              <Stack spacing={1}>
-                {variables.map((v, idx) => (
-                  <Box
-                    key={idx}
-                    sx={{
-                      display: 'flex',
-                      gap: 1,
-                      flexWrap: 'wrap',
-                      alignItems: 'flex-start',
-                    }}
-                  >
-                    <TextField
-                      label="Name"
-                      size="small"
-                      value={v.name}
-                      onChange={(e) => updateVar(idx, { ...v, name: e.target.value })}
-                      sx={{ width: 200 }}
+              <Stack spacing={1} sx={{ minWidth: 240 }}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={includeHoldings}
+                      onChange={(e) => setIncludeHoldings(e.target.checked)}
                     />
-                    <TextField
-                      label="Type"
-                      select
-                      size="small"
-                      value={variableKindOf(v)}
-                      onChange={(e) => setVariableKind(idx, e.target.value as VariableKind)}
-                      sx={{ width: 190 }}
+                  }
+                  label="Include Holdings (Zerodha)"
+                />
+                <TextField
+                  label="Evaluation cadence (optional)"
+                  size="small"
+                  value={evaluationCadence}
+                  onChange={(e) => setEvaluationCadence(e.target.value)}
+                  helperText="Leave blank to auto-pick from referenced timeframes."
+                />
+              </Stack>
+            </Stack>
+
+            <Box>
+              <Stack direction="row" spacing={1} sx={{ mb: 1, alignItems: 'center' }}>
+                <Typography variant="subtitle2">Variables</Typography>
+                <Button size="small" onClick={handleAddVariable}>
+                  Add variable
+                </Button>
+              </Stack>
+              {variables.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  Optional: define readable aliases like <code>RSI_1D_14</code> ={' '}
+                  <code>RSI(close, 14, &quot;1d&quot;)</code>.
+                </Typography>
+              ) : (
+                <Stack spacing={1}>
+                  {variables.map((v, idx) => (
+                    <Box
+                      key={idx}
+                      sx={{
+                        display: 'flex',
+                        gap: 1,
+                        flexWrap: 'wrap',
+                        alignItems: 'flex-start',
+                      }}
                     >
-                      <MenuItem value="DSL">DSL (advanced)</MenuItem>
-                      <MenuItem value="METRIC">Metric</MenuItem>
-                      <MenuItem value="PRICE">Price (close)</MenuItem>
-                      <MenuItem value="OPEN">Open</MenuItem>
-                      <MenuItem value="HIGH">High</MenuItem>
-                      <MenuItem value="LOW">Low</MenuItem>
-                      <MenuItem value="CLOSE">Close</MenuItem>
-                      <MenuItem value="VOLUME">Volume</MenuItem>
-                      <MenuItem value="SMA">SMA</MenuItem>
-                      <MenuItem value="EMA">EMA</MenuItem>
-                      <MenuItem value="RSI">RSI</MenuItem>
-                      <MenuItem value="STDDEV">StdDev</MenuItem>
-                      <MenuItem value="MAX">Max</MenuItem>
-                      <MenuItem value="MIN">Min</MenuItem>
-                      <MenuItem value="AVG">Avg</MenuItem>
-                      <MenuItem value="SUM">Sum</MenuItem>
-                      <MenuItem value="RET">Return</MenuItem>
-                      <MenuItem value="ATR">ATR</MenuItem>
-                      <MenuItem value="LAG">Lag</MenuItem>
-                      <MenuItem value="ROC">ROC</MenuItem>
-                      <MenuItem value="Z_SCORE">Z-Score</MenuItem>
-                      <MenuItem value="BOLLINGER">Bollinger</MenuItem>
-                      <MenuItem value="CUSTOM">Custom indicator</MenuItem>
-                    </TextField>
-                    {variableKindOf(v) === 'DSL' && (
                       <TextField
-                        label="DSL"
+                        label="Name"
                         size="small"
-                        value={v.dsl ?? ''}
-                        onChange={(e) => updateVar(idx, { ...v, dsl: e.target.value })}
-                        sx={{ flex: 1, minWidth: 260 }}
+                        value={v.name}
+                        onChange={(e) => updateVar(idx, { ...v, name: e.target.value })}
+                        sx={{ width: 200 }}
                       />
-                    )}
-                    {variableKindOf(v) === 'METRIC' && (
                       <TextField
-                        label="Metric"
+                        label="Type"
                         select
                         size="small"
-                        value={String(varParams(v).metric ?? ALERT_V3_METRICS[0])}
-                        onChange={(e) =>
-                          updateVar(idx, { ...v, kind: 'METRIC', params: { metric: e.target.value } })
-                        }
-                        sx={{ minWidth: 240 }}
+                        value={variableKindOf(v)}
+                        onChange={(e) => setVariableKind(idx, e.target.value as VariableKind)}
+                        sx={{ width: 190 }}
                       >
-                        {ALERT_V3_METRICS.map((m) => (
-                          <MenuItem key={m} value={m}>
-                            {m}
-                          </MenuItem>
-                        ))}
+                        <MenuItem value="DSL">DSL (advanced)</MenuItem>
+                        <MenuItem value="METRIC">Metric</MenuItem>
+                        <MenuItem value="PRICE">Price (close)</MenuItem>
+                        <MenuItem value="OPEN">Open</MenuItem>
+                        <MenuItem value="HIGH">High</MenuItem>
+                        <MenuItem value="LOW">Low</MenuItem>
+                        <MenuItem value="CLOSE">Close</MenuItem>
+                        <MenuItem value="VOLUME">Volume</MenuItem>
+                        <MenuItem value="SMA">SMA</MenuItem>
+                        <MenuItem value="EMA">EMA</MenuItem>
+                        <MenuItem value="RSI">RSI</MenuItem>
+                        <MenuItem value="STDDEV">StdDev</MenuItem>
+                        <MenuItem value="MAX">Max</MenuItem>
+                        <MenuItem value="MIN">Min</MenuItem>
+                        <MenuItem value="AVG">Avg</MenuItem>
+                        <MenuItem value="SUM">Sum</MenuItem>
+                        <MenuItem value="RET">Return</MenuItem>
+                        <MenuItem value="ATR">ATR</MenuItem>
+                        <MenuItem value="LAG">Lag</MenuItem>
+                        <MenuItem value="ROC">ROC</MenuItem>
+                        <MenuItem value="Z_SCORE">Z-Score</MenuItem>
+                        <MenuItem value="BOLLINGER">Bollinger</MenuItem>
+                        <MenuItem value="CUSTOM">Custom indicator</MenuItem>
                       </TextField>
-                    )}
-                    {['PRICE', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME'].includes(
-                      variableKindOf(v),
-                    ) && (
-                      <TextField
-                        label="Timeframe"
-                        select
-                        size="small"
-                        value={String(varParams(v).timeframe ?? '1d')}
-                        onChange={(e) =>
-                          updateVar(idx, {
-                            ...v,
-                            kind: variableKindOf(v) as any,
-                            params: { timeframe: e.target.value },
-                          })
-                        }
-                        sx={{ minWidth: 160 }}
-                      >
-                        {ALERT_V3_TIMEFRAMES.map((tf) => (
-                          <MenuItem key={tf} value={tf}>
-                            {tf}
-                          </MenuItem>
-                        ))}
-                      </TextField>
-                    )}
-                    {['SMA', 'EMA', 'RSI', 'STDDEV', 'MAX', 'MIN', 'AVG', 'SUM'].includes(
-                      variableKindOf(v),
-                    ) && (
-                      <>
+                      {variableKindOf(v) === 'DSL' && (
                         <TextField
-                          label="Source"
-                          select
+                          label="DSL"
                           size="small"
-                          value={String(varParams(v).source ?? 'close')}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: variableKindOf(v) as any,
-                              params: { ...varParams(v), source: e.target.value },
-                            })
-                          }
-                          sx={{ minWidth: 140 }}
-                        >
-                          {ALERT_V3_SOURCES.map((s) => (
-                            <MenuItem key={s} value={s}>
-                              {s}
-                            </MenuItem>
-                          ))}
-                        </TextField>
-                        <TextField
-                          label="Length"
-                          size="small"
-                          type="number"
-                          value={String(varParams(v).length ?? 14)}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: variableKindOf(v) as any,
-                              params: { ...varParams(v), length: Number(e.target.value) || 0 },
-                            })
-                          }
-                          sx={{ width: 120 }}
+                          value={v.dsl ?? ''}
+                          onChange={(e) => updateVar(idx, { ...v, dsl: e.target.value })}
+                          sx={{ flex: 1, minWidth: 260 }}
                         />
+                      )}
+                      {variableKindOf(v) === 'METRIC' && (
+                        <TextField
+                          label="Metric"
+                          select
+                          size="small"
+                          value={String(varParams(v).metric ?? ALERT_V3_METRICS[0])}
+                          onChange={(e) =>
+                            updateVar(idx, {
+                              ...v,
+                              kind: 'METRIC',
+                              params: { metric: e.target.value },
+                            })
+                          }
+                          sx={{ minWidth: 240 }}
+                        >
+                          {ALERT_V3_METRICS.map((m) => (
+                            <MenuItem key={m} value={m}>
+                              {m}
+                            </MenuItem>
+                          ))}
+                        </TextField>
+                      )}
+                      {['PRICE', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME'].includes(
+                        variableKindOf(v),
+                      ) && (
                         <TextField
                           label="Timeframe"
                           select
@@ -625,10 +578,10 @@ export function ScreenerPage() {
                             updateVar(idx, {
                               ...v,
                               kind: variableKindOf(v) as any,
-                              params: { ...varParams(v), timeframe: e.target.value },
+                              params: { timeframe: e.target.value },
                             })
                           }
-                          sx={{ width: 140 }}
+                          sx={{ minWidth: 160 }}
                         >
                           {ALERT_V3_TIMEFRAMES.map((tf) => (
                             <MenuItem key={tf} value={tf}>
@@ -636,129 +589,31 @@ export function ScreenerPage() {
                             </MenuItem>
                           ))}
                         </TextField>
-                      </>
-                    )}
-                    {variableKindOf(v) === 'RET' && (
-                      <>
-                        <TextField
-                          label="Source"
-                          select
-                          size="small"
-                          value={String(varParams(v).source ?? 'close')}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: 'RET',
-                              params: { ...varParams(v), source: e.target.value },
-                            })
-                          }
-                          sx={{ minWidth: 140 }}
-                        >
-                          {ALERT_V3_SOURCES.map((s) => (
-                            <MenuItem key={s} value={s}>
-                              {s}
-                            </MenuItem>
-                          ))}
-                        </TextField>
-                        <TextField
-                          label="Timeframe"
-                          select
-                          size="small"
-                          value={String(varParams(v).timeframe ?? '1d')}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: 'RET',
-                              params: { ...varParams(v), timeframe: e.target.value },
-                            })
-                          }
-                          sx={{ width: 140 }}
-                        >
-                          {ALERT_V3_TIMEFRAMES.map((tf) => (
-                            <MenuItem key={tf} value={tf}>
-                              {tf}
-                            </MenuItem>
-                          ))}
-                        </TextField>
-                      </>
-                    )}
-                    {variableKindOf(v) === 'ATR' && (
-                      <>
-                        <TextField
-                          label="Length"
-                          size="small"
-                          type="number"
-                          value={String(varParams(v).length ?? 14)}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: 'ATR',
-                              params: { ...varParams(v), length: Number(e.target.value) || 0 },
-                            })
-                          }
-                          sx={{ width: 120 }}
-                        />
-                        <TextField
-                          label="Timeframe"
-                          select
-                          size="small"
-                          value={String(varParams(v).timeframe ?? '1d')}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: 'ATR',
-                              params: { ...varParams(v), timeframe: e.target.value },
-                            })
-                          }
-                          sx={{ width: 140 }}
-                        >
-                          {ALERT_V3_TIMEFRAMES.map((tf) => (
-                            <MenuItem key={tf} value={tf}>
-                              {tf}
-                            </MenuItem>
-                          ))}
-                        </TextField>
-                      </>
-                    )}
-                    {['LAG', 'ROC', 'Z_SCORE', 'BOLLINGER'].includes(variableKindOf(v)) && (
-                      <>
-                        <TextField
-                          label="Source"
-                          select
-                          size="small"
-                          value={String(varParams(v).source ?? 'close')}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: variableKindOf(v) as any,
-                              params: { ...varParams(v), source: e.target.value },
-                            })
-                          }
-                          sx={{ minWidth: 140 }}
-                        >
-                          {ALERT_V3_SOURCES.map((s) => (
-                            <MenuItem key={s} value={s}>
-                              {s}
-                            </MenuItem>
-                          ))}
-                        </TextField>
-                        {variableKindOf(v) === 'LAG' && (
+                      )}
+                      {['SMA', 'EMA', 'RSI', 'STDDEV', 'MAX', 'MIN', 'AVG', 'SUM'].includes(
+                        variableKindOf(v),
+                      ) && (
+                        <>
                           <TextField
-                            label="Bars"
+                            label="Source"
+                            select
                             size="small"
-                            type="number"
-                            value={String(varParams(v).bars ?? 1)}
+                            value={String(varParams(v).source ?? 'close')}
                             onChange={(e) =>
                               updateVar(idx, {
                                 ...v,
-                                kind: 'LAG',
-                                params: { ...varParams(v), bars: Number(e.target.value) || 0 },
+                                kind: variableKindOf(v) as any,
+                                params: { ...varParams(v), source: e.target.value },
                               })
                             }
-                            sx={{ width: 120 }}
-                          />
-                        )}
-                        {['ROC', 'Z_SCORE'].includes(variableKindOf(v)) && (
+                            sx={{ minWidth: 140 }}
+                          >
+                            {ALERT_V3_SOURCES.map((s) => (
+                              <MenuItem key={s} value={s}>
+                                {s}
+                              </MenuItem>
+                            ))}
+                          </TextField>
                           <TextField
                             label="Length"
                             size="small"
@@ -773,413 +628,598 @@ export function ScreenerPage() {
                             }
                             sx={{ width: 120 }}
                           />
-                        )}
-                        {variableKindOf(v) === 'BOLLINGER' && (
-                          <>
+                          <TextField
+                            label="Timeframe"
+                            select
+                            size="small"
+                            value={String(varParams(v).timeframe ?? '1d')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: variableKindOf(v) as any,
+                                params: { ...varParams(v), timeframe: e.target.value },
+                              })
+                            }
+                            sx={{ width: 140 }}
+                          >
+                            {ALERT_V3_TIMEFRAMES.map((tf) => (
+                              <MenuItem key={tf} value={tf}>
+                                {tf}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                        </>
+                      )}
+                      {variableKindOf(v) === 'RET' && (
+                        <>
+                          <TextField
+                            label="Source"
+                            select
+                            size="small"
+                            value={String(varParams(v).source ?? 'close')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'RET',
+                                params: { ...varParams(v), source: e.target.value },
+                              })
+                            }
+                            sx={{ minWidth: 140 }}
+                          >
+                            {ALERT_V3_SOURCES.map((s) => (
+                              <MenuItem key={s} value={s}>
+                                {s}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                          <TextField
+                            label="Timeframe"
+                            select
+                            size="small"
+                            value={String(varParams(v).timeframe ?? '1d')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'RET',
+                                params: { ...varParams(v), timeframe: e.target.value },
+                              })
+                            }
+                            sx={{ width: 140 }}
+                          >
+                            {ALERT_V3_TIMEFRAMES.map((tf) => (
+                              <MenuItem key={tf} value={tf}>
+                                {tf}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                        </>
+                      )}
+                      {variableKindOf(v) === 'ATR' && (
+                        <>
+                          <TextField
+                            label="Length"
+                            size="small"
+                            type="number"
+                            value={String(varParams(v).length ?? 14)}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'ATR',
+                                params: { ...varParams(v), length: Number(e.target.value) || 0 },
+                              })
+                            }
+                            sx={{ width: 120 }}
+                          />
+                          <TextField
+                            label="Timeframe"
+                            select
+                            size="small"
+                            value={String(varParams(v).timeframe ?? '1d')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'ATR',
+                                params: { ...varParams(v), timeframe: e.target.value },
+                              })
+                            }
+                            sx={{ width: 140 }}
+                          >
+                            {ALERT_V3_TIMEFRAMES.map((tf) => (
+                              <MenuItem key={tf} value={tf}>
+                                {tf}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                        </>
+                      )}
+                      {['LAG', 'ROC', 'Z_SCORE', 'BOLLINGER'].includes(variableKindOf(v)) && (
+                        <>
+                          <TextField
+                            label="Source"
+                            select
+                            size="small"
+                            value={String(varParams(v).source ?? 'close')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: variableKindOf(v) as any,
+                                params: { ...varParams(v), source: e.target.value },
+                              })
+                            }
+                            sx={{ minWidth: 140 }}
+                          >
+                            {ALERT_V3_SOURCES.map((s) => (
+                              <MenuItem key={s} value={s}>
+                                {s}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                          {variableKindOf(v) === 'LAG' && (
+                            <TextField
+                              label="Bars"
+                              size="small"
+                              type="number"
+                              value={String(varParams(v).bars ?? 1)}
+                              onChange={(e) =>
+                                updateVar(idx, {
+                                  ...v,
+                                  kind: 'LAG',
+                                  params: { ...varParams(v), bars: Number(e.target.value) || 0 },
+                                })
+                              }
+                              sx={{ width: 120 }}
+                            />
+                          )}
+                          {['ROC', 'Z_SCORE'].includes(variableKindOf(v)) && (
                             <TextField
                               label="Length"
                               size="small"
                               type="number"
-                              value={String(varParams(v).length ?? 20)}
+                              value={String(varParams(v).length ?? 14)}
                               onChange={(e) =>
                                 updateVar(idx, {
                                   ...v,
-                                  kind: 'BOLLINGER',
+                                  kind: variableKindOf(v) as any,
                                   params: { ...varParams(v), length: Number(e.target.value) || 0 },
                                 })
                               }
                               sx={{ width: 120 }}
                             />
-                            <TextField
-                              label="Mult"
-                              size="small"
-                              type="number"
-                              value={String(varParams(v).mult ?? 2)}
-                              onChange={(e) =>
+                          )}
+                          {variableKindOf(v) === 'BOLLINGER' && (
+                            <>
+                              <TextField
+                                label="Length"
+                                size="small"
+                                type="number"
+                                value={String(varParams(v).length ?? 20)}
+                                onChange={(e) =>
+                                  updateVar(idx, {
+                                    ...v,
+                                    kind: 'BOLLINGER',
+                                    params: { ...varParams(v), length: Number(e.target.value) || 0 },
+                                  })
+                                }
+                                sx={{ width: 120 }}
+                              />
+                              <TextField
+                                label="Mult"
+                                size="small"
+                                type="number"
+                                value={String(varParams(v).mult ?? 2)}
+                                onChange={(e) =>
+                                  updateVar(idx, {
+                                    ...v,
+                                    kind: 'BOLLINGER',
+                                    params: { ...varParams(v), mult: Number(e.target.value) || 0 },
+                                  })
+                                }
+                                sx={{ width: 120 }}
+                              />
+                            </>
+                          )}
+                          <TextField
+                            label="Timeframe"
+                            select
+                            size="small"
+                            value={String(varParams(v).timeframe ?? '1d')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: variableKindOf(v) as any,
+                                params: { ...varParams(v), timeframe: e.target.value },
+                              })
+                            }
+                            sx={{ width: 140 }}
+                          >
+                            {ALERT_V3_TIMEFRAMES.map((tf) => (
+                              <MenuItem key={tf} value={tf}>
+                                {tf}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                        </>
+                      )}
+                      {variableKindOf(v) === 'CUSTOM' && (
+                        <>
+                          <Box
+                            sx={{
+                              display: 'flex',
+                              gap: 1,
+                              flexWrap: 'wrap',
+                              alignItems: 'center',
+                            }}
+                          >
+                            <Autocomplete
+                              options={customIndicators}
+                              loading={customIndicatorsLoading}
+                              value={
+                                customIndicators.find(
+                                  (ci) =>
+                                    ci.name.toUpperCase() ===
+                                    String(varParams(v).function ?? '').toUpperCase(),
+                                ) ?? null
+                              }
+                              onChange={(_e, value) =>
                                 updateVar(idx, {
                                   ...v,
-                                  kind: 'BOLLINGER',
-                                  params: { ...varParams(v), mult: Number(e.target.value) || 0 },
+                                  kind: 'CUSTOM',
+                                  params: { ...varParams(v), function: value?.name ?? '' },
                                 })
                               }
-                              sx={{ width: 120 }}
+                              getOptionLabel={(o) => o.name}
+                              isOptionEqualToValue={(a, b) => a.id === b.id}
+                              renderOption={(props, option) => (
+                                <li {...props}>
+                                  <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                                    <Typography variant="body2">
+                                      {option.name}
+                                      {option.params?.length
+                                        ? `(${option.params.join(', ')})`
+                                        : ''}
+                                    </Typography>
+                                    {option.description ? (
+                                      <Typography variant="caption" color="text.secondary">
+                                        {option.description}
+                                      </Typography>
+                                    ) : null}
+                                  </Box>
+                                </li>
+                              )}
+                              renderInput={(params) => (
+                                <TextField
+                                  {...params}
+                                  label="Function"
+                                  size="small"
+                                  sx={{ minWidth: 260 }}
+                                  helperText={
+                                    customIndicatorsError
+                                      ? customIndicatorsError
+                                      : !customIndicatorsLoading &&
+                                          customIndicators.length === 0
+                                        ? 'No custom indicators yet.'
+                                        : undefined
+                                  }
+                                />
+                              )}
                             />
-                          </>
-                        )}
-                        <TextField
-                          label="Timeframe"
-                          select
-                          size="small"
-                          value={String(varParams(v).timeframe ?? '1d')}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: variableKindOf(v) as any,
-                              params: { ...varParams(v), timeframe: e.target.value },
-                            })
-                          }
-                          sx={{ width: 140 }}
-                        >
-                          {ALERT_V3_TIMEFRAMES.map((tf) => (
-                            <MenuItem key={tf} value={tf}>
-                              {tf}
-                            </MenuItem>
-                          ))}
-                        </TextField>
-                      </>
-                    )}
-                    {variableKindOf(v) === 'CUSTOM' && (
-                      <>
-                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <Autocomplete
-                            options={customIndicators}
-                            loading={customIndicatorsLoading}
+                            <Tooltip title="Refresh indicators">
+                              <span>
+                                <IconButton
+                                  size="small"
+                                  onClick={() => void refreshCustomIndicators()}
+                                  disabled={customIndicatorsLoading}
+                                >
+                                  <RefreshIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Button
+                              size="small"
+                              variant="text"
+                              onClick={() =>
+                                window.open(
+                                  '/alerts?tab=indicators',
+                                  '_blank',
+                                  'noopener,noreferrer',
+                                )
+                              }
+                            >
+                              Add new indicator
+                            </Button>
+                          </Box>
+                          <TextField
+                            label="Args (comma-separated DSL)"
+                            size="small"
                             value={
-                              customIndicators.find(
-                                (ci) =>
-                                  ci.name.toUpperCase() ===
-                                  String(varParams(v).function ?? '').toUpperCase(),
-                              ) ?? null
+                              (Array.isArray(varParams(v).args) ? varParams(v).args : []).join(
+                                ', ',
+                              )
                             }
-                            onChange={(_e, value) =>
+                            onChange={(e) => {
+                              const args = e.target.value
+                                .split(',')
+                                .map((s) => s.trim())
+                                .filter(Boolean)
                               updateVar(idx, {
                                 ...v,
                                 kind: 'CUSTOM',
-                                params: { ...varParams(v), function: value?.name ?? '' },
+                                params: { ...varParams(v), args },
                               })
-                            }
-                            getOptionLabel={(o) => o.name}
-                            isOptionEqualToValue={(a, b) => a.id === b.id}
-                            renderOption={(props, option) => (
-                              <li {...props}>
-                                <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                                  <Typography variant="body2">
-                                    {option.name}
-                                    {option.params?.length
-                                      ? `(${option.params.join(', ')})`
-                                      : ''}
-                                  </Typography>
-                                  {option.description ? (
-                                    <Typography variant="caption" color="text.secondary">
-                                      {option.description}
-                                    </Typography>
-                                  ) : null}
-                                </Box>
-                              </li>
-                            )}
-                            renderInput={(params) => (
-                              <TextField
-                                {...params}
-                                label="Function"
-                                size="small"
-                                sx={{ minWidth: 260 }}
-                                helperText={
-                                  customIndicatorsError
-                                    ? customIndicatorsError
-                                    : !customIndicatorsLoading && customIndicators.length === 0
-                                      ? 'No custom indicators yet.'
-                                      : undefined
-                                }
-                              />
-                            )}
+                            }}
+                            sx={{ minWidth: 280, flex: 1 }}
                           />
-                          <Tooltip title="Refresh indicators">
-                            <span>
-                              <IconButton
-                                size="small"
-                                onClick={() => void refreshCustomIndicators()}
-                                disabled={customIndicatorsLoading}
-                              >
-                                <RefreshIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          <Button
-                            size="small"
-                            variant="text"
-                            onClick={() =>
-                              window.open(
-                                '/alerts?tab=indicators',
-                                '_blank',
-                                'noopener,noreferrer',
-                              )
-                            }
-                          >
-                            Add new indicator
-                          </Button>
-                        </Box>
-                        <TextField
-                          label="Args (comma-separated DSL)"
-                          size="small"
-                          value={(Array.isArray(varParams(v).args) ? varParams(v).args : []).join(', ')}
-                          onChange={(e) => {
-                            const args = e.target.value
-                              .split(',')
-                              .map((s) => s.trim())
-                              .filter(Boolean)
-                            updateVar(idx, {
-                              ...v,
-                              kind: 'CUSTOM',
-                              params: { ...varParams(v), args },
-                            })
-                          }}
-                          sx={{ minWidth: 280, flex: 1 }}
-                        />
-                      </>
-                    )}
-                    <Button
-                      color="error"
-                      onClick={() =>
-                        setVariables((cur) => cur.filter((_x, i) => i !== idx))
-                      }
-                    >
-                      Remove
-                    </Button>
-                  </Box>
-                ))}
-              </Stack>
-            )}
-          </Box>
+                        </>
+                      )}
+                      <Button
+                        color="error"
+                        onClick={() =>
+                          setVariables((cur) => cur.filter((_x, i) => i !== idx))
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+            </Box>
 
-          <Box>
-            <Typography variant="subtitle2" sx={{ mb: 1 }}>
-              Condition
-            </Typography>
-            <Tabs
-              value={conditionTab}
-              onChange={(_e, v) => setConditionTab(v)}
-              sx={{ mb: 1 }}
-            >
-              <Tab label="Builder" />
-              <Tab label="Advanced (DSL)" />
-            </Tabs>
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Condition
+              </Typography>
+              <Tabs
+                value={conditionTab}
+                onChange={(_e, v) => setConditionTab(v)}
+                sx={{ mb: 1 }}
+              >
+                <Tab label="Builder" />
+                <Tab label="Advanced (DSL)" />
+              </Tabs>
 
-            {conditionTab === 0 ? (
-              <Stack spacing={1}>
-                <TextField
-                  select
-                  size="small"
-                  label="Join"
-                  value={conditionJoin}
-                  onChange={(e) =>
-                    setConditionJoin(e.target.value === 'OR' ? 'OR' : 'AND')
-                  }
-                  sx={{ width: 180 }}
-                >
-                  <MenuItem value="AND">AND</MenuItem>
-                  <MenuItem value="OR">OR</MenuItem>
-                </TextField>
-                {conditionRows.map((r, idx) => (
-                  <Stack
-                    key={idx}
-                    direction={{ xs: 'column', md: 'row' }}
-                    spacing={1}
-                    alignItems="center"
+              {conditionTab === 0 ? (
+                <Stack spacing={1}>
+                  <TextField
+                    select
+                    size="small"
+                    label="Join"
+                    value={conditionJoin}
+                    onChange={(e) =>
+                      setConditionJoin(e.target.value === 'OR' ? 'OR' : 'AND')
+                    }
+                    sx={{ width: 180 }}
                   >
-                    <Autocomplete
-                      freeSolo
-                      options={operandOptions}
-                      value={r.lhs}
-                      onChange={(_e, v) =>
-                        setConditionRows((prev) =>
-                          prev.map((row, i) =>
-                            i === idx ? { ...row, lhs: String(v ?? '') } : row,
-                          ),
-                        )
-                      }
-                      onInputChange={(_e, v) =>
-                        setConditionRows((prev) =>
-                          prev.map((row, i) => (i === idx ? { ...row, lhs: v } : row)),
-                        )
-                      }
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          label="LHS"
-                          size="small"
-                          sx={{ flex: 1, minWidth: 240 }}
-                        />
-                      )}
-                    />
-                    <TextField
-                      label="Op"
-                      size="small"
-                      select
-                      value={r.op}
-                      onChange={(e) => {
-                        const next = e.target.value
-                        setConditionRows((cur) =>
-                          cur.map((row, i) => (i === idx ? { ...row, op: next } : row)),
-                        )
-                      }}
-                      sx={{ width: 180 }}
+                    <MenuItem value="AND">AND</MenuItem>
+                    <MenuItem value="OR">OR</MenuItem>
+                  </TextField>
+                  {conditionRows.map((r, idx) => (
+                    <Stack
+                      key={idx}
+                      direction={{ xs: 'column', md: 'row' }}
+                      spacing={1}
+                      alignItems="center"
                     >
-                      {CONDITION_OPS.map((o) => (
-                        <MenuItem key={o.value} value={o.value}>
-                          {o.label}
-                        </MenuItem>
-                      ))}
-                    </TextField>
-                    <Autocomplete
-                      freeSolo
-                      options={operandOptions}
-                      value={r.rhs}
-                      onChange={(_e, v) =>
-                        setConditionRows((prev) =>
-                          prev.map((row, i) =>
-                            i === idx ? { ...row, rhs: String(v ?? '') } : row,
-                          ),
-                        )
-                      }
-                      onInputChange={(_e, v) =>
-                        setConditionRows((prev) =>
-                          prev.map((row, i) => (i === idx ? { ...row, rhs: v } : row)),
-                        )
-                      }
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          label="RHS"
-                          size="small"
-                          sx={{ flex: 1, minWidth: 240 }}
-                          helperText={
-                            r.op === 'MOVING_UP' || r.op === 'MOVING_DOWN'
-                              ? 'RHS must be numeric'
-                              : undefined
-                          }
-                        />
-                      )}
-                    />
+                      <Autocomplete
+                        freeSolo
+                        options={operandOptions}
+                        value={r.lhs}
+                        onChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((row, i) =>
+                              i === idx ? { ...row, lhs: String(v ?? '') } : row,
+                            ),
+                          )
+                        }
+                        onInputChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((row, i) =>
+                              i === idx ? { ...row, lhs: v } : row,
+                            ),
+                          )
+                        }
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="LHS"
+                            size="small"
+                            sx={{ flex: 1, minWidth: 240 }}
+                          />
+                        )}
+                      />
+                      <TextField
+                        label="Op"
+                        size="small"
+                        select
+                        value={r.op}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setConditionRows((cur) =>
+                            cur.map((row, i) =>
+                              i === idx ? { ...row, op: next } : row,
+                            ),
+                          )
+                        }}
+                        sx={{ width: 180 }}
+                      >
+                        {CONDITION_OPS.map((o) => (
+                          <MenuItem key={o.value} value={o.value}>
+                            {o.label}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                      <Autocomplete
+                        freeSolo
+                        options={operandOptions}
+                        value={r.rhs}
+                        onChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((row, i) =>
+                              i === idx ? { ...row, rhs: String(v ?? '') } : row,
+                            ),
+                          )
+                        }
+                        onInputChange={(_e, v) =>
+                          setConditionRows((prev) =>
+                            prev.map((row, i) =>
+                              i === idx ? { ...row, rhs: v } : row,
+                            ),
+                          )
+                        }
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="RHS"
+                            size="small"
+                            sx={{ flex: 1, minWidth: 240 }}
+                            helperText={
+                              r.op === 'MOVING_UP' || r.op === 'MOVING_DOWN'
+                                ? 'RHS must be numeric'
+                                : undefined
+                            }
+                          />
+                        )}
+                      />
+                      <Button
+                        color="error"
+                        disabled={conditionRows.length === 1}
+                        onClick={() =>
+                          setConditionRows((cur) => cur.filter((_x, i) => i !== idx))
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </Stack>
+                  ))}
+                  <Stack direction="row" spacing={1}>
                     <Button
-                      color="error"
-                      disabled={conditionRows.length === 1}
+                      size="small"
                       onClick={() =>
-                        setConditionRows((cur) => cur.filter((_x, i) => i !== idx))
+                        setConditionRows((cur) => [
+                          ...cur,
+                          { lhs: '', op: '>', rhs: '' },
+                        ])
                       }
                     >
-                      Remove
+                      Add condition
                     </Button>
                   </Stack>
-                ))}
-                <Stack direction="row" spacing={1}>
-                  <Button
+                  <TextField
+                    label="Expression preview"
+                    value={builderDsl || ''}
                     size="small"
-                    onClick={() =>
-                      setConditionRows((cur) => [...cur, { lhs: '', op: '>', rhs: '' }])
-                    }
-                  >
-                    Add condition
-                  </Button>
+                    InputProps={{ readOnly: true }}
+                    fullWidth
+                  />
                 </Stack>
-                <TextField
-                  label="Expression preview"
-                  value={builderDsl || ''}
-                  size="small"
-                  InputProps={{ readOnly: true }}
-                  fullWidth
-                />
-              </Stack>
-            ) : (
-              <Box>
-                <Stack direction="row" spacing={1} sx={{ mb: 0.5 }} alignItems="center">
-                  <Typography variant="subtitle2">DSL expression</Typography>
-                  <Box sx={{ flex: 1 }} />
-                  <Button
-                    size="small"
-                    variant="text"
-                    disabled={!conditionDsl}
-                    onClick={() => setConditionDsl('')}
-                  >
-                    Clear
-                  </Button>
-                </Stack>
-                <DslEditor
-                  languageId="st-dsl-screener-condition"
-                  value={conditionDsl}
-                  onChange={setConditionDsl}
-                  operands={operandOptions}
-                  customIndicators={customIndicators}
-                  height={160}
-                  onCtrlEnter={() => void handleRun()}
-                />
-                <Typography variant="caption" color="text.secondary">
-                  Suggestions show as you type; press <code>Tab</code> to accept a snippet; press{' '}
-                  <code>Ctrl</code>+<code>Enter</code> to run.
+              ) : (
+                <Box>
+                  <Stack direction="row" spacing={1} sx={{ mb: 0.5 }} alignItems="center">
+                    <Typography variant="subtitle2">DSL expression</Typography>
+                    <Box sx={{ flex: 1 }} />
+                    <Button
+                      size="small"
+                      variant="text"
+                      disabled={!conditionDsl}
+                      onClick={() => setConditionDsl('')}
+                    >
+                      Clear
+                    </Button>
+                  </Stack>
+                  <DslEditor
+                    languageId="st-dsl-screener-condition"
+                    value={conditionDsl}
+                    onChange={setConditionDsl}
+                    operands={operandOptions}
+                    customIndicators={customIndicators}
+                    height={160}
+                    onCtrlEnter={() => void handleRun()}
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    Suggestions show as you type; press <code>Tab</code> to accept a snippet; press{' '}
+                    <code>Ctrl</code>+<code>Enter</code> to run.
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+
+            <Stack direction="row" spacing={2} alignItems="center">
+              <Button variant="contained" onClick={handleRun} disabled={runLoading}>
+                {runLoading ? 'Running…' : 'Run screener'}
+              </Button>
+              {run && (
+                <Typography variant="body2" color="text.secondary">
+                  Run #{run.id} — {run.status} — {run.matched_symbols}/
+                  {run.total_symbols} matched — missing {run.missing_symbols}
                 </Typography>
-              </Box>
-            )}
-          </Box>
-
-          <Stack direction="row" spacing={2} alignItems="center">
-            <Button variant="contained" onClick={handleRun} disabled={runLoading}>
-              {runLoading ? 'Running…' : 'Run screener'}
-            </Button>
-            {run && (
-              <Typography variant="body2" color="text.secondary">
-                Run #{run.id} — {run.status} — {run.matched_symbols}/
-                {run.total_symbols} matched — missing {run.missing_symbols}
-              </Typography>
-            )}
-            {runError && (
-              <Typography variant="body2" color="error">
-                {runError}
-              </Typography>
-            )}
+              )}
+              {runError && (
+                <Typography variant="body2" color="error">
+                  {runError}
+                </Typography>
+              )}
+            </Stack>
           </Stack>
-        </Stack>
-      </Paper>
+        </Paper>
 
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Stack direction="row" spacing={2} sx={{ mb: 1 }} alignItems="center">
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={matchedOnly}
-                onChange={(e) => setMatchedOnly(e.target.checked)}
-              />
-            }
-            label="Matched only"
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={showVariables}
-                onChange={(e) => setShowVariables(e.target.checked)}
-              />
-            }
-            label="Show variable values"
-          />
-          <Button
-            variant="outlined"
-            disabled={!run || run.status !== 'DONE' || run.matched_symbols === 0}
-            onClick={() => {
-              setCreateGroupError(null)
-              setCreateGroupOpen(true)
-            }}
-          >
-            Create group from matches
-          </Button>
-          <Box sx={{ flex: 1 }} />
-          <Button variant="text" onClick={() => navigate('/groups')}>
-            Manage groups
-          </Button>
-        </Stack>
-        <Box sx={{ height: 560, width: '100%' }}>
-          <DataGrid
-            rows={gridRows}
-            columns={columns}
-            loading={runLoading || (run?.status === 'RUNNING')}
-            disableRowSelectionOnClick
-            initialState={{
-              pagination: { paginationModel: { pageSize: 25 } },
-            }}
-            pageSizeOptions={[25, 50, 100]}
-            localeText={{
-              noRowsLabel: run ? 'No rows.' : 'Run a screener to see results.',
-            }}
-          />
-        </Box>
-      </Paper>
+        <Paper
+          variant="outlined"
+          sx={{
+            p: 2,
+            flex: { lg: 3 },
+          }}
+        >
+          <Stack direction="row" spacing={2} sx={{ mb: 1 }} alignItems="center">
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={matchedOnly}
+                  onChange={(e) => setMatchedOnly(e.target.checked)}
+                />
+              }
+              label="Matched only"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={showVariables}
+                  onChange={(e) => setShowVariables(e.target.checked)}
+                />
+              }
+              label="Show variable values"
+            />
+            <Button
+              variant="outlined"
+              disabled={!run || run.status !== 'DONE' || run.matched_symbols === 0}
+              onClick={() => {
+                setCreateGroupError(null)
+                setCreateGroupOpen(true)
+              }}
+            >
+              Create group from matches
+            </Button>
+            <Box sx={{ flex: 1 }} />
+            <Button variant="text" onClick={() => navigate('/groups')}>
+              Manage groups
+            </Button>
+          </Stack>
+          <Box sx={{ height: { xs: 560, lg: 720 }, width: '100%' }}>
+            <DataGrid
+              rows={gridRows}
+              columns={columns}
+              loading={runLoading || (run?.status === 'RUNNING')}
+              disableRowSelectionOnClick
+              initialState={{
+                pagination: { paginationModel: { pageSize: 25 } },
+              }}
+              pageSizeOptions={[25, 50, 100]}
+              localeText={{
+                noRowsLabel: run ? 'No rows.' : 'Run a screener to see results.',
+              }}
+            />
+          </Box>
+        </Paper>
+      </Stack>
 
       <Dialog open={createGroupOpen} onClose={() => setCreateGroupOpen(false)}>
         <DialogTitle>Create group from matches</DialogTitle>
