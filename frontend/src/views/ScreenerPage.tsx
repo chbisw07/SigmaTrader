@@ -24,6 +24,7 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { DslEditor } from '../components/DslEditor'
 import type { AlertVariableDef } from '../services/alertsV3'
 import {
   ALERT_V3_METRICS,
@@ -190,9 +191,7 @@ export function ScreenerPage() {
     error: customIndicatorsError,
     refresh: refreshCustomIndicators,
   } = useCustomIndicators({
-    enabled: variables.some(
-      (v) => (v.kind || '').toString().toUpperCase() === 'CUSTOM',
-    ),
+    enabled: true,
   })
 
   const operandOptions = useMemo(() => {
@@ -1081,15 +1080,33 @@ export function ScreenerPage() {
                 />
               </Stack>
             ) : (
-              <TextField
-                label="DSL expression"
-                value={conditionDsl}
-                onChange={(e) => setConditionDsl(e.target.value)}
-                multiline
-                minRows={4}
-                fullWidth
-                helperText="Use the same DSL as Alerts V3 (variables, metrics, indicators, events)."
-              />
+              <Box>
+                <Stack direction="row" spacing={1} sx={{ mb: 0.5 }} alignItems="center">
+                  <Typography variant="subtitle2">DSL expression</Typography>
+                  <Box sx={{ flex: 1 }} />
+                  <Button
+                    size="small"
+                    variant="text"
+                    disabled={!conditionDsl}
+                    onClick={() => setConditionDsl('')}
+                  >
+                    Clear
+                  </Button>
+                </Stack>
+                <DslEditor
+                  languageId="st-dsl-screener-condition"
+                  value={conditionDsl}
+                  onChange={setConditionDsl}
+                  operands={operandOptions}
+                  customIndicators={customIndicators}
+                  height={160}
+                  onCtrlEnter={() => void handleRun()}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  Suggestions show as you type; press <code>Tab</code> to accept a snippet; press{' '}
+                  <code>Ctrl</code>+<code>Enter</code> to run.
+                </Typography>
+              </Box>
             )}
           </Box>
 

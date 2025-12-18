@@ -30,6 +30,7 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { DslEditor } from '../components/DslEditor'
 import {
   createAlertDefinition,
   createCustomIndicator,
@@ -466,11 +467,7 @@ function AlertV3EditorDialog({
     error: customIndicatorsError,
     refresh: refreshCustomIndicators,
   } = useCustomIndicators({
-    enabled:
-      open &&
-      variables.some(
-        (v) => (v.kind || '').toString().toUpperCase() === 'CUSTOM',
-      ),
+    enabled: open,
   })
 
   useEffect(() => {
@@ -1516,17 +1513,23 @@ function AlertV3EditorDialog({
             )}
 
             {conditionTab === 1 && (
-              <TextField
-                label="Condition DSL"
-                size="small"
-                value={conditionDsl}
-                onChange={(e) => setConditionDsl(e.target.value)}
-                multiline
-                minRows={4}
-                fullWidth
-                sx={{ mb: 2 }}
-                helperText='Example: RSI_1H_14 < 30 AND TODAY_PNL_PCT > 5'
-              />
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                  Condition DSL
+                </Typography>
+                <DslEditor
+                  languageId="st-dsl-alerts-condition"
+                  value={conditionDsl}
+                  onChange={setConditionDsl}
+                  operands={operandOptions}
+                  customIndicators={customIndicators}
+                  height={160}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  Example: <code>RSI_1H_14 &lt; 30 AND TODAY_PNL_PCT &gt; 5</code> — press{' '}
+                  <code>Tab</code> to accept a suggestion/snippet.
+                </Typography>
+              </Box>
             )}
 
             <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 1 }}>
