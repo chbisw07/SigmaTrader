@@ -585,6 +585,77 @@ def _roll_agg(values: Sequence[float], length: int, kind: str) -> SeriesValue:
     return SeriesValue(now, prev, None)
 
 
+def _lag(values: Sequence[float], bars: int) -> SeriesValue:
+    if bars < 0 or len(values) <= bars:
+        return SeriesValue(None, None, None)
+    now_idx = -1 - bars
+    prev_idx = -2 - bars
+    now = values[now_idx] if abs(now_idx) <= len(values) else None
+    prev = values[prev_idx] if abs(prev_idx) <= len(values) else None
+    return SeriesValue(now, prev, None)
+
+
+def _roc(values: Sequence[float], length: int) -> SeriesValue:
+    if length <= 0 or len(values) <= length:
+        return SeriesValue(None, None, None)
+
+    def _roc_at(end_idx: int) -> Optional[float]:
+        # end_idx is inclusive index into values
+        if end_idx - length < 0:
+            return None
+        prev_val = values[end_idx - length]
+        curr_val = values[end_idx]
+        if prev_val == 0:
+            return None
+        return (curr_val - prev_val) / prev_val * 100.0
+
+    now = _roc_at(len(values) - 1)
+    prev = _roc_at(len(values) - 2) if len(values) >= length + 2 else None
+    return SeriesValue(now, prev, None)
+
+
+def _z_score(values: Sequence[float], length: int) -> SeriesValue:
+    if length <= 1 or len(values) < length:
+        return SeriesValue(None, None, None)
+
+    def _z(slice_vals: Sequence[float]) -> Optional[float]:
+        if len(slice_vals) < length:
+            return None
+        window = slice_vals[-length:]
+        mean = sum(window) / length
+        var = sum((v - mean) ** 2 for v in window) / max(length - 1, 1)
+        std = sqrt(var)
+        if std == 0:
+            return None
+        return (window[-1] - mean) / std
+
+    now = _z(values)
+    prev = _z(values[:-1]) if len(values) >= length + 1 else None
+    return SeriesValue(now, prev, None)
+
+
+def _bollinger(values: Sequence[float], length: int, mult: float) -> SeriesValue:
+    if length <= 0 or len(values) < length:
+        return SeriesValue(None, None, None)
+
+    def _band(slice_vals: Sequence[float]) -> Optional[float]:
+        if len(slice_vals) < length:
+            return None
+        window = slice_vals[-length:]
+        mean = sum(window) / length
+        if mult == 0:
+            return mean
+        if length <= 1:
+            return None
+        var = sum((v - mean) ** 2 for v in window) / max(length - 1, 1)
+        std = sqrt(var)
+        return mean + mult * std
+
+    now = _band(values)
+    prev = _band(values[:-1]) if len(values) >= length + 1 else None
+    return SeriesValue(now, prev, None)
+
+
 class CandleCache:
     def __init__(
         self,
@@ -678,6 +749,11 @@ _ALLOWED_BUILTINS: set[str] = {
     "MIN",
     "AVG",
     "SUM",
+    # time-series mechanics (Phase B)
+    "LAG",
+    "ROC",
+    "Z_SCORE",
+    "BOLLINGER",
     # math
     "ABS",
     "SQRT",
@@ -922,6 +998,93 @@ def _eval_numeric(
                 v = _stddev(series, length)
             else:
                 v = _roll_agg(series, length, name)
+            v.bar_time = bar_time
+            return v
+
+        if name == "LAG":
+            if len(node.args) != 2:
+                raise IndicatorAlertError("LAG expects (src, bars)")
+            bars_val = _eval_numeric(
+                node.args[1],
+                db=db,
+                settings=settings,
+                cache=cache,
+                holding=holding,
+                params=params,
+                custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
+            )
+            bars = int(bars_val.now) if bars_val.now is not None else -1
+            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            v = _lag(series, bars)
+            v.bar_time = bar_time
+            return v
+
+        if name == "ROC":
+            if len(node.args) != 2:
+                raise IndicatorAlertError("ROC expects (src, len)")
+            length_val = _eval_numeric(
+                node.args[1],
+                db=db,
+                settings=settings,
+                cache=cache,
+                holding=holding,
+                params=params,
+                custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
+            )
+            length = int(length_val.now) if length_val.now is not None else 0
+            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            v = _roc(series, length)
+            v.bar_time = bar_time
+            return v
+
+        if name == "Z_SCORE":
+            if len(node.args) != 2:
+                raise IndicatorAlertError("Z_SCORE expects (src, len)")
+            length_val = _eval_numeric(
+                node.args[1],
+                db=db,
+                settings=settings,
+                cache=cache,
+                holding=holding,
+                params=params,
+                custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
+            )
+            length = int(length_val.now) if length_val.now is not None else 0
+            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            v = _z_score(series, length)
+            v.bar_time = bar_time
+            return v
+
+        if name == "BOLLINGER":
+            if len(node.args) != 3:
+                raise IndicatorAlertError("BOLLINGER expects (src, len, mult)")
+            length_val = _eval_numeric(
+                node.args[1],
+                db=db,
+                settings=settings,
+                cache=cache,
+                holding=holding,
+                params=params,
+                custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
+            )
+            mult_val = _eval_numeric(
+                node.args[2],
+                db=db,
+                settings=settings,
+                cache=cache,
+                holding=holding,
+                params=params,
+                custom_indicators=custom_indicators,
+                allow_fetch=allow_fetch,
+            )
+            length = int(length_val.now) if length_val.now is not None else 0
+            mult = float(mult_val.now) if mult_val.now is not None else 0.0
+            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            v = _bollinger(series, length, mult)
             v.bar_time = bar_time
             return v
 

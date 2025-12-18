@@ -55,6 +55,11 @@ _CUSTOM_INDICATOR_ALLOWED_BUILTINS: Set[str] = {
     "MIN",
     "AVG",
     "SUM",
+    # Time-series mechanics (Phase B)
+    "LAG",
+    "ROC",
+    "Z_SCORE",
+    "BOLLINGER",
     # Math helpers
     "ABS",
     "SQRT",
@@ -268,6 +273,37 @@ def _build_variable_ast(var: dict[str, Any]) -> tuple[str, ExprNode]:
         tf = str(params.get("timeframe") or "1d")
         return name.upper(), CallNode("ATR", [NumberNode(length), IdentNode(tf)])
 
+    if kind in {"LAG"}:
+        source = str(params.get("source") or "close")
+        bars = int(params.get("bars") or params.get("lag") or 1)
+        tf = str(params.get("timeframe") or "1d")
+        series = CallNode(source.upper(), [IdentNode(tf)])
+        return name.upper(), CallNode("LAG", [series, NumberNode(bars)])
+
+    if kind in {"ROC"}:
+        source = str(params.get("source") or "close")
+        length = int(params.get("length") or params.get("window") or 14)
+        tf = str(params.get("timeframe") or "1d")
+        series = CallNode(source.upper(), [IdentNode(tf)])
+        return name.upper(), CallNode("ROC", [series, NumberNode(length)])
+
+    if kind in {"Z_SCORE"}:
+        source = str(params.get("source") or "close")
+        length = int(params.get("length") or params.get("window") or 14)
+        tf = str(params.get("timeframe") or "1d")
+        series = CallNode(source.upper(), [IdentNode(tf)])
+        return name.upper(), CallNode("Z_SCORE", [series, NumberNode(length)])
+
+    if kind in {"BOLLINGER"}:
+        source = str(params.get("source") or "close")
+        length = int(params.get("length") or params.get("window") or 20)
+        mult = float(params.get("mult") or params.get("multiplier") or 2.0)
+        tf = str(params.get("timeframe") or "1d")
+        series = CallNode(source.upper(), [IdentNode(tf)])
+        return name.upper(), CallNode(
+            "BOLLINGER", [series, NumberNode(length), NumberNode(mult)]
+        )
+
     if kind in {"CUSTOM"}:
         fn = str(params.get("function") or params.get("name") or "").strip()
         if not _is_valid_ident(fn):
@@ -307,6 +343,10 @@ def _collect_timeframes(expr: ExprNode) -> Set[str]:
                     tfs.add(n.args[2].name.strip().strip('"').strip("'").lower())
                 if len(n.args) == 2:
                     tfs.add("1d")
+            if fn in {"LAG", "ROC", "Z_SCORE", "BOLLINGER"}:
+                # These accept a "src" series expression which may or may not
+                # encode a timeframe. Default to 1d if unspecified.
+                tfs.add("1d")
             if fn == "RET" and len(n.args) == 2 and isinstance(n.args[1], IdentNode):
                 tfs.add(n.args[1].name.strip().strip('"').strip("'").lower())
             if fn == "ATR" and len(n.args) in {2, 3}:

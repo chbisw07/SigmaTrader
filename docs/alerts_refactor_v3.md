@@ -506,7 +506,7 @@ Add:
 - `LAG(src, bars)`
 - `ROC(src, len)`
 - `Z_SCORE(src, len)`
-- `BOLLINGER(src, len, mult)`
+- `BOLLINGER(src, len, mult)` (returns `SMA(src,len) + mult*STDDEV(src,len)`; use `mult=-2` for lower band)
 
 Enables:
 - momentum indicators, z‑score mean reversion, Bollinger systems.
