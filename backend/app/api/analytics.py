@@ -5,13 +5,14 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import and_, func, tuple_
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user_optional
 from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET
 from app.db.session import get_db
-from app.models import AnalyticsTrade, Order, Strategy, User
+from app.models import AnalyticsTrade, Candle, Group, GroupMember, Order, Strategy, User
 from app.schemas.analytics import (
     AnalyticsRebuildResponse,
     AnalyticsSummary,
@@ -24,12 +25,27 @@ from app.schemas.analytics import (
     SymbolCorrelationStats,
 )
 from app.services.analytics import compute_strategy_analytics, rebuild_trades
-from app.services.market_data import Timeframe, load_series
+from app.services.market_data import (
+    Timeframe,
+    ensure_history,
+    ensure_history_window,
+    load_series,
+)
 from app.services.risk_sizing import compute_risk_position_size
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
 router = APIRouter()
+
+_BASKET_RANGE_DAYS: Dict[str, int] = {
+    "1d": 1,
+    "1w": 7,
+    "1m": 30,
+    "3m": 90,
+    "6m": 180,
+    "1y": 365,
+    "2y": 730,
+}
 
 
 class AnalyticsSummaryParams(BaseModel):
@@ -249,6 +265,705 @@ def _compute_pearson_corr(xs: Sequence[float], ys: Sequence[float]) -> Optional[
     if denom_x <= 0 or denom_y <= 0:
         return None
     return num / (denom_x**0.5 * denom_y**0.5)
+
+
+class BasketIndexRequest(BaseModel):
+    include_holdings: bool = True
+    group_ids: List[int] = []
+    range: str = "6m"  # 1d/1w/1m/3m/6m/ytd/1y/2y
+    base: float = 100.0
+
+
+class BasketIndexPoint(BaseModel):
+    ts: str  # ISO date string
+    value: float
+    used_symbols: int
+    total_symbols: int
+
+
+class BasketIndexSeries(BaseModel):
+    key: str
+    label: str
+    points: List[BasketIndexPoint]
+    missing_symbols: int
+    needs_hydrate_history_symbols: int = 0
+
+
+class BasketIndexResponse(BaseModel):
+    start: datetime
+    end: datetime
+    series: List[BasketIndexSeries]
+
+
+def _now_ist_naive() -> datetime:
+    return (datetime.now(UTC) + IST_OFFSET).replace(tzinfo=None)
+
+
+def _compute_equal_weight_index(
+    closes_by_symbol: Dict[str, Dict[datetime, float]],
+    *,
+    base: float,
+) -> Tuple[List[Tuple[datetime, float, int, int]], int]:
+    symbols = sorted(closes_by_symbol.keys())
+    all_dates: List[datetime] = sorted(
+        {d for m in closes_by_symbol.values() for d in m.keys()}
+    )
+    if not all_dates or not symbols:
+        return [], len(symbols)
+
+    last_close: Dict[str, float] = {}
+    idx = base
+    points: List[Tuple[datetime, float, int, int]] = []
+
+    # Initialize on first date using coverage only (no returns).
+    first_date = all_dates[0]
+    for sym in symbols:
+        c = closes_by_symbol[sym].get(first_date)
+        if c is not None:
+            last_close[sym] = c
+    points.append((first_date, idx, len(last_close), len(symbols)))
+
+    for dt in all_dates[1:]:
+        used = 0
+        ret_sum = 0.0
+        for sym in symbols:
+            today = closes_by_symbol[sym].get(dt)
+            if today is None:
+                continue
+            prev = last_close.get(sym)
+            last_close[sym] = today
+            if prev is None or prev == 0:
+                continue
+            used += 1
+            ret_sum += (today - prev) / prev
+        if used > 0:
+            idx *= 1.0 + (ret_sum / used)
+        points.append((dt, idx, used, len(symbols)))
+
+    missing_symbols = len(symbols) - len(last_close)
+    return points, missing_symbols
+
+
+def _clamp_range(now: datetime, range_key: str) -> tuple[datetime, datetime]:
+    range_key = (range_key or "").strip().lower()
+    if range_key == "ytd":
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return start, now
+    days = _BASKET_RANGE_DAYS.get(range_key)
+    if days is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid range. Use 1d/1w/1m/3m/6m/ytd/1y/2y.",
+        )
+    # For daily candles, users expect "1D" to include at least two candles
+    # (yesterday + today). We also floor the start to midnight so we don't
+    # accidentally exclude the first day candle due to the current time-of-day.
+    lookback_days = days
+    if range_key == "1d":
+        lookback_days = 2
+    start = now - timedelta(days=lookback_days)
+    start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, now
+
+
+def _gap_days(a: datetime | None, b: datetime | None) -> int:
+    if a is None or b is None:
+        return 0
+    return max(0, (b.date() - a.date()).days)
+
+
+def _big_gap_threshold_days(requested_days: int) -> int:
+    """Heuristic for 'big gap' detection relative to the requested window."""
+
+    if requested_days <= 0:
+        return 7
+    # For a 1M window, a 10-day head gap is meaningful; for 6M+, 60 days.
+    return max(7, min(60, requested_days // 3))
+
+
+def _normalize_symbol_exchange(symbol: str, exchange: str | None) -> tuple[str, str]:
+    sym = (symbol or "").strip().upper()
+    exch = (exchange or "NSE").strip().upper() or "NSE"
+    if ":" in sym:
+        prefix, rest = sym.split(":", 1)
+        if prefix in {"NSE", "BSE", "NFO", "MCX"} and rest.strip():
+            exch = prefix
+            sym = rest.strip().upper()
+    return sym, exch
+
+
+def _load_global_min_ts_by_symbol(
+    db: Session,
+    *,
+    timeframe: str,
+    pairs: list[tuple[str, str]],
+) -> dict[tuple[str, str], datetime]:
+    """Return earliest known candle per symbol+exchange for a timeframe.
+
+    Used to distinguish "true missing history" from "late entrant" symbols
+    whose earliest available candle itself is after the requested window start.
+    """
+
+    if not pairs:
+        return {}
+    rows = (
+        db.query(Candle.symbol, Candle.exchange, func.min(Candle.ts))
+        .filter(
+            Candle.timeframe == timeframe,
+            tuple_(Candle.symbol, Candle.exchange).in_(pairs),
+        )
+        .group_by(Candle.symbol, Candle.exchange)
+        .all()
+    )
+    out: dict[tuple[str, str], datetime] = {}
+    for sym, exch, ts in rows:
+        if ts is None:
+            continue
+        out[(sym, exch)] = ts
+    return out
+
+
+def _maybe_hydrate_tail_gap(
+    db: Session,
+    settings: Settings,
+    *,
+    symbol: str,
+    exchange: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    max_days: int,
+) -> bool:
+    """Auto-hydrate small tail gaps (last N days) to keep data fresh."""
+
+    existing_max: datetime | None = (
+        db.query(func.max(Candle.ts))
+        .filter(
+            Candle.symbol == symbol,
+            Candle.exchange == exchange,
+            Candle.timeframe == timeframe,
+            and_(Candle.ts >= start, Candle.ts <= end),
+        )
+        .scalar()
+    )
+    if existing_max is None:
+        return False
+    gap = _gap_days(existing_max, end)
+    if gap <= 0 or gap > max_days:
+        return False
+    # Use `ensure_history` (min/max extension) to avoid re-fetching the entire
+    # tail window when only a few forward days are missing.
+    ensure_history(
+        db,
+        settings,
+        symbol=symbol,
+        exchange=exchange,
+        base_timeframe=timeframe,
+        start=end - timedelta(days=max_days),
+        end=end,
+    )
+    return True
+
+
+@router.post("/basket-indices", response_model=BasketIndexResponse)
+def basket_indices(
+    payload: BasketIndexRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> BasketIndexResponse:
+    """Compute simple equal-weight index series for holdings and/or groups.
+
+    Indices are based on daily close candles available in the local DB.
+    Market-data backfills are disabled here to keep the dashboard responsive.
+    """
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    now = _now_ist_naive()
+    start, end = _clamp_range(now, payload.range)
+    requested_days = _gap_days(start, end)
+    big_gap_days = _big_gap_threshold_days(requested_days)
+
+    # Resolve universes.
+    universes: List[Tuple[str, str, List[Tuple[str, str]]]] = []
+    holdings_members: list[tuple[str, str]] = []
+    group_members: list[tuple[str, str]] = []
+    if payload.include_holdings:
+        try:
+            from app.api.positions import list_holdings
+
+            holdings = list_holdings(db=db, settings=settings, user=user)
+        except Exception:
+            holdings = []
+        members = []
+        for h in holdings:
+            if not h.symbol or not h.quantity or h.quantity <= 0:
+                continue
+            sym, exch = _normalize_symbol_exchange(
+                h.symbol, getattr(h, "exchange", None)
+            )
+            if not sym:
+                continue
+            members.append((sym, exch))
+        holdings_members = members[:]
+        universes.append(("holdings", "Holdings (Zerodha)", members))
+
+    if payload.group_ids:
+        groups: List[Group] = (
+            db.query(Group)
+            .filter(Group.id.in_(payload.group_ids))
+            .order_by(Group.name.asc())
+            .all()
+        )
+        for g in groups:
+            members = (
+                db.query(GroupMember)
+                .filter(GroupMember.group_id == g.id)
+                .order_by(GroupMember.created_at.asc())
+                .all()
+            )
+            symbols = [
+                _normalize_symbol_exchange(m.symbol, m.exchange)
+                for m in members
+                if m.symbol
+            ]
+            group_members.extend(symbols)
+            universes.append((f"group:{g.id}", g.name, symbols))
+
+    # Load candles for all symbols (deduped).
+    uniq: Dict[Tuple[str, str], Dict[datetime, float]] = {}
+    for _key, _label, members in universes:
+        for sym, exch in members:
+            uniq.setdefault((sym, exch), {})
+
+    global_min_map = _load_global_min_ts_by_symbol(
+        db,
+        timeframe="1d",
+        pairs=sorted(uniq.keys()),
+    )
+
+    # Data freshness policy on Refresh:
+    # - For holdings symbols: ensure requested window is present (min/max extension).
+    #   This should prevent "hydrate needed" surprises for holdings.
+    # - For group symbols: auto-fill small recent tail gaps; big gaps remain explicit.
+    holding_set = set(holdings_members)
+    allow_full_fetch = requested_days <= 60
+    for sym, exch in uniq.keys():
+        try:
+            if allow_full_fetch or (sym, exch) in holding_set:
+                ensure_history(
+                    db,
+                    settings,
+                    symbol=sym,
+                    exchange=exch,
+                    base_timeframe="1d",
+                    start=start,
+                    end=end,
+                )
+            else:
+                _maybe_hydrate_tail_gap(
+                    db,
+                    settings,
+                    symbol=sym,
+                    exchange=exch,
+                    timeframe="1d",
+                    start=start,
+                    end=end,
+                    max_days=60,
+                )
+        except Exception:
+            # If a symbol cannot be hydrated (e.g. missing instrument token),
+            # keep dashboard responsive and let "Hydrate universe" surface details.
+            pass
+
+    for sym, exch in uniq.keys():
+        candles = load_series(
+            db,
+            settings,
+            symbol=sym,
+            exchange=exch,
+            timeframe="1d",  # type: ignore[arg-type]
+            start=start,
+            end=end,
+            allow_fetch=False,
+        )
+        uniq[(sym, exch)] = {c["ts"]: float(c["close"]) for c in candles if c.get("ts")}
+
+    # Build per-universe indices.
+    out_series: List[BasketIndexSeries] = []
+    for key, label, members in universes:
+        closes_by_symbol: Dict[str, Dict[datetime, float]] = {}
+        needs_hydrate_history = 0
+        for sym, exch in members:
+            series = uniq.get((sym, exch), {})
+            closes_by_symbol[f"{exch}:{sym}"] = series
+            if not series:
+                needs_hydrate_history += 1
+                continue
+            first = min(series.keys())
+            if _gap_days(start, first) > big_gap_days:
+                global_min = global_min_map.get((sym, exch))
+                if global_min is None:
+                    needs_hydrate_history += 1
+                else:
+                    # Late entrant / limited-history: earliest known candle is itself
+                    # after the window start, so hydrating more can't fix it.
+                    if global_min <= start + timedelta(days=big_gap_days):
+                        needs_hydrate_history += 1
+
+        points, missing = _compute_equal_weight_index(
+            closes_by_symbol,
+            base=float(payload.base or 100.0),
+        )
+        out_series.append(
+            BasketIndexSeries(
+                key=key,
+                label=label,
+                missing_symbols=missing,
+                needs_hydrate_history_symbols=needs_hydrate_history,
+                points=[
+                    BasketIndexPoint(
+                        ts=dt.date().isoformat(),
+                        value=float(val),
+                        used_symbols=int(used),
+                        total_symbols=int(total),
+                    )
+                    for dt, val, used, total in points
+                ],
+            )
+        )
+
+    return BasketIndexResponse(start=start, end=end, series=out_series)
+
+
+class HydrateUniverseRequest(BaseModel):
+    include_holdings: bool = True
+    group_ids: List[int] = []
+    range: str = "6m"  # 1d/1w/1m/3m/6m/ytd/1y/2y
+    timeframe: str = "1d"
+
+
+class HydrateUniverseResponse(BaseModel):
+    hydrated: int
+    failed: int
+    errors: List[str] = []
+
+
+@router.post("/hydrate-history", response_model=HydrateUniverseResponse)
+def hydrate_history(
+    payload: HydrateUniverseRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> HydrateUniverseResponse:
+    """Fetch and persist missing candle history for a universe (explicit action).
+
+    This endpoint is intended for "big gaps" backfills that the UI triggers
+    explicitly via a "Hydrate now" button.
+    """
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    tf = (payload.timeframe or "1d").strip().lower()
+    if tf != "1d":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only 1d timeframe is supported for hydration on dashboard.",
+        )
+
+    now = _now_ist_naive()
+    start, end = _clamp_range(now, payload.range)
+
+    members: list[tuple[str, str]] = []
+    if payload.include_holdings:
+        from app.api.positions import list_holdings
+
+        holdings = list_holdings(db=db, settings=settings, user=user)
+        for h in holdings:
+            if not h.symbol or not h.quantity or h.quantity <= 0:
+                continue
+            sym, exch = _normalize_symbol_exchange(
+                h.symbol, getattr(h, "exchange", None)
+            )
+            if not sym:
+                continue
+            members.append((sym, exch))
+
+    if payload.group_ids:
+        groups: List[Group] = (
+            db.query(Group)
+            .filter(Group.id.in_(payload.group_ids))
+            .order_by(Group.name.asc())
+            .all()
+        )
+        allowed = {g.id for g in groups if g.owner_id is None or g.owner_id == user.id}
+        if allowed:
+            rows: List[GroupMember] = (
+                db.query(GroupMember)
+                .filter(GroupMember.group_id.in_(sorted(allowed)))  # type: ignore[arg-type]
+                .all()
+            )
+            for r in rows:
+                if not r.symbol:
+                    continue
+                sym, exch = _normalize_symbol_exchange(r.symbol, r.exchange)
+                if not sym:
+                    continue
+                members.append((sym, exch))
+
+    uniq: list[tuple[str, str]] = sorted(set(members))
+    hydrated = 0
+    errors: list[str] = []
+    for sym, exch in uniq:
+        try:
+            ensure_history_window(
+                db,
+                settings,
+                symbol=sym,
+                exchange=exch,
+                base_timeframe=tf,
+                start=start,
+                end=end,
+            )
+            hydrated += 1
+        except Exception as exc:  # pragma: no cover - network/provider
+            errors.append(f"{exch}:{sym}: {exc}")
+
+    return HydrateUniverseResponse(
+        hydrated=hydrated,
+        failed=len(errors),
+        errors=errors[:30],
+    )
+
+
+class SymbolSeriesRequest(BaseModel):
+    symbol: str
+    exchange: str = "NSE"
+    range: str = "6m"  # 1w/1m/3m/6m/ytd/1y/2y
+    timeframe: str = "1d"
+    hydrate_mode: str = "auto"  # none|auto|force
+
+
+class SymbolSeriesPoint(BaseModel):
+    ts: str  # ISO date string (date-only)
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class SymbolSeriesResponse(BaseModel):
+    symbol: str
+    exchange: str
+    start: datetime
+    end: datetime
+    points: List[SymbolSeriesPoint]
+    local_first: datetime | None = None
+    local_last: datetime | None = None
+    head_gap_days: int = 0
+    tail_gap_days: int = 0
+    needs_hydrate_history: bool = False
+
+
+@router.post("/symbol-series", response_model=SymbolSeriesResponse)
+def symbol_series(
+    payload: SymbolSeriesRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> SymbolSeriesResponse:
+    """Return daily candles for a symbol and optionally hydrate missing data.
+
+    Hydration policy:
+    - `auto`: silently hydrate small tail gaps (last 30–60 days).
+    - `force`: hydrate the entire requested window (explicit user action).
+    - `none`: never fetch (local DB only).
+    """
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+        )
+
+    sym = (payload.symbol or "").strip().upper()
+    sym, exch = _normalize_symbol_exchange(sym, payload.exchange)
+    tf = (payload.timeframe or "1d").strip().lower()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol is required.")
+    if tf != "1d":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only 1d timeframe is supported for Symbol Explorer (currently).",
+        )
+
+    now = _now_ist_naive()
+    start, end = _clamp_range(now, payload.range)
+    requested_days = _gap_days(start, end)
+    big_gap_days = _big_gap_threshold_days(requested_days)
+
+    # Inspect local coverage first.
+    local_min: datetime | None = (
+        db.query(func.min(Candle.ts))
+        .filter(
+            Candle.symbol == sym,
+            Candle.exchange == exch,
+            Candle.timeframe == tf,
+            and_(Candle.ts >= start, Candle.ts <= end),
+        )
+        .scalar()
+    )
+    local_max: datetime | None = (
+        db.query(func.max(Candle.ts))
+        .filter(
+            Candle.symbol == sym,
+            Candle.exchange == exch,
+            Candle.timeframe == tf,
+            and_(Candle.ts >= start, Candle.ts <= end),
+        )
+        .scalar()
+    )
+
+    head_gap = _gap_days(start, local_min) if local_min is not None else requested_days
+    tail_gap = _gap_days(local_max, end) if local_max is not None else requested_days
+
+    hydrate_mode = (payload.hydrate_mode or "auto").strip().lower()
+    did_hydrate = False
+    if hydrate_mode == "force":
+        ensure_history_window(
+            db,
+            settings,
+            symbol=sym,
+            exchange=exch,
+            base_timeframe=tf,
+            start=start,
+            end=end,
+        )
+        did_hydrate = True
+    elif hydrate_mode == "auto":
+        # Single-symbol explorer: it's acceptable to hydrate the requested window
+        # automatically (bounded by MAX_HISTORY_YEARS) so the chart "just works",
+        # even when the symbol isn't in holdings.
+        try:
+            ensure_history(
+                db,
+                settings,
+                symbol=sym,
+                exchange=exch,
+                base_timeframe=tf,
+                start=start,
+                end=end,
+            )
+            did_hydrate = True
+        except Exception:
+            did_hydrate = False
+        if not did_hydrate:
+            # Best-effort tail fill (may still succeed even if the full window didn't).
+            try:
+                did_hydrate = _maybe_hydrate_tail_gap(
+                    db,
+                    settings,
+                    symbol=sym,
+                    exchange=exch,
+                    timeframe=tf,
+                    start=start,
+                    end=end,
+                    max_days=60,
+                )
+            except Exception:
+                did_hydrate = False
+
+    if did_hydrate:
+        local_min = (
+            db.query(func.min(Candle.ts))
+            .filter(
+                Candle.symbol == sym,
+                Candle.exchange == exch,
+                Candle.timeframe == tf,
+                and_(Candle.ts >= start, Candle.ts <= end),
+            )
+            .scalar()
+        )
+        local_max = (
+            db.query(func.max(Candle.ts))
+            .filter(
+                Candle.symbol == sym,
+                Candle.exchange == exch,
+                Candle.timeframe == tf,
+                and_(Candle.ts >= start, Candle.ts <= end),
+            )
+            .scalar()
+        )
+        head_gap = (
+            _gap_days(start, local_min) if local_min is not None else requested_days
+        )
+        tail_gap = (
+            _gap_days(local_max, end) if local_max is not None else requested_days
+        )
+
+    candles = load_series(
+        db,
+        settings,
+        symbol=sym,
+        exchange=exch,
+        timeframe="1d",  # type: ignore[arg-type]
+        start=start,
+        end=end,
+        allow_fetch=False,
+    )
+
+    needs_hydrate_history = False
+    if not candles:
+        needs_hydrate_history = True
+    elif local_min is not None and head_gap > big_gap_days:
+        global_min = (
+            db.query(func.min(Candle.ts))
+            .filter(
+                Candle.symbol == sym,
+                Candle.exchange == exch,
+                Candle.timeframe == tf,
+            )
+            .scalar()
+        )
+        if global_min is None:
+            needs_hydrate_history = True
+        else:
+            # Late entrant / limited-history: earliest known candle is itself late.
+            needs_hydrate_history = global_min <= start + timedelta(days=big_gap_days)
+
+    return SymbolSeriesResponse(
+        symbol=sym,
+        exchange=exch,
+        start=start,
+        end=end,
+        points=[
+            SymbolSeriesPoint(
+                ts=c["ts"].date().isoformat(),
+                open=float(c["open"]),
+                high=float(c["high"]),
+                low=float(c["low"]),
+                close=float(c["close"]),
+                volume=float(c.get("volume") or 0.0),
+            )
+            for c in candles
+            if c.get("ts")
+        ],
+        local_first=local_min,
+        local_last=local_max,
+        head_gap_days=int(head_gap),
+        tail_gap_days=int(tail_gap),
+        needs_hydrate_history=needs_hydrate_history,
+    )
 
 
 @router.get(

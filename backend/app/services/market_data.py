@@ -386,6 +386,49 @@ def ensure_history(
             )
 
 
+def ensure_history_window(
+    db: Session,
+    settings: Settings,
+    *,
+    symbol: str,
+    exchange: str,
+    base_timeframe: str,
+    start: datetime,
+    end: datetime,
+) -> None:
+    """Ensure candles exist for the full requested window (fills internal gaps).
+
+    Unlike `ensure_history`, which only extends history before/after the
+    currently known min/max, this function always attempts to fetch the full
+    `[start, end]` window and relies on deduplication + the unique constraint
+    to avoid double inserts.
+
+    This is ideal for explicit "Hydrate now" actions where correctness is
+    preferred over minimizing fetch calls, and it also fills internal gaps.
+    """
+
+    with _history_lock:
+        now = _now_ist_naive()
+        max_age = now - timedelta(days=365 * MAX_HISTORY_YEARS)
+
+        if start < max_age:
+            start = max_age
+        if end > now:
+            end = now
+        if start >= end:
+            return
+
+        _fetch_and_store_history(
+            db,
+            settings,
+            symbol=symbol,
+            exchange=exchange,
+            base_timeframe=base_timeframe,
+            start=start,
+            end=end,
+        )
+
+
 def _aggregate_intraday(candles: List[Candle], *, minutes: int) -> List[Dict]:
     buckets: dict[datetime, Dict[str, float]] = {}
     for c in candles:
