@@ -4,6 +4,7 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import CssBaseline from '@mui/material/CssBaseline'
+import Divider from '@mui/material/Divider'
 import Drawer from '@mui/material/Drawer'
 import IconButton from '@mui/material/IconButton'
 import List from '@mui/material/List'
@@ -51,17 +52,20 @@ type NavItem = {
   icon: ReactNode
 }
 
-const navItems: NavItem[] = [
+const mainNavItems: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: <DashboardIcon /> },
-  { label: 'Queue', to: '/queue', icon: <ListAltIcon /> },
-  { label: 'Orders', to: '/orders', icon: <ReceiptLongIcon /> },
-  { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
   { label: 'Holdings', to: '/holdings', icon: <AccountBalanceWalletIcon /> },
-  { label: 'Screener', to: '/screener', icon: <ManageSearchIcon /> },
+  { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
+  { label: 'Orders', to: '/orders', icon: <ReceiptLongIcon /> },
+  { label: 'Queue', to: '/queue', icon: <ListAltIcon /> },
   { label: 'Groups', to: '/groups', icon: <ViewListIcon /> },
+  { label: 'Screener', to: '/screener', icon: <ManageSearchIcon /> },
   { label: 'Alerts', to: '/alerts', icon: <NotificationsActiveIcon /> },
   { label: 'Analytics', to: '/analytics', icon: <AnalyticsIcon /> },
   { label: 'System Events', to: '/system-events', icon: <WarningIcon /> },
+]
+
+const bottomNavItems: NavItem[] = [
   { label: 'Appearance', to: '/appearance', icon: <PaletteIcon /> },
   { label: 'Settings', to: '/settings', icon: <SettingsIcon /> },
 ]
@@ -117,9 +121,9 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
     : drawerWidth
 
   const drawer = (
-    <div>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <List>
-        {navItems.map((item) => (
+        {mainNavItems.map((item) => (
           <ListItem key={item.to} disablePadding>
             <ListItemButton
               component={NavLink}
@@ -145,7 +149,38 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
           </ListItem>
         ))}
       </List>
-    </div>
+
+      <Box sx={{ flex: 1 }} />
+      <Divider />
+
+      <List>
+        {bottomNavItems.map((item) => (
+          <ListItem key={item.to} disablePadding>
+            <ListItemButton
+              component={NavLink}
+              to={item.to}
+              sx={{
+                '&.active': {
+                  bgcolor: 'action.selected',
+                },
+                justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                px: sidebarCollapsed ? 1 : 2,
+              }}
+            >
+              <ListItemIcon
+                sx={{
+                  minWidth: sidebarCollapsed ? 0 : 40,
+                  justifyContent: 'center',
+                }}
+              >
+                {item.icon}
+              </ListItemIcon>
+              {!sidebarCollapsed && <ListItemText primary={item.label} />}
+            </ListItemButton>
+          </ListItem>
+        ))}
+      </List>
+    </Box>
   )
 
   const statusLabel =
