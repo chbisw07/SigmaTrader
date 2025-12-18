@@ -13,10 +13,12 @@ import { type ThemeId, THEME_IDS } from '../theme'
 import { useAppTheme } from '../themeContext'
 
 const THEME_LABELS: Record<ThemeId, string> = {
-  dark: 'Dark (default)',
+  dark: 'Dark',
   light: 'Light',
   lightComfort: 'Light (comfortable)',
   lightHighContrast: 'Light (high contrast)',
+  lightSapphire: 'Light (sapphire)',
+  lightMint: 'Light (mint) (default)',
   amber: 'Dark (amber accent)',
 }
 
