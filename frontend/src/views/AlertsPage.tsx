@@ -26,6 +26,7 @@ import {
   type GridRenderCellParams,
 } from '@mui/x-data-grid'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
@@ -49,6 +50,7 @@ import {
 	type CustomIndicatorUpdate,
 } from '../services/alertsV3'
 import { ALERT_V3_METRICS, ALERT_V3_SOURCES, ALERT_V3_TIMEFRAMES } from '../services/alertsV3Constants'
+import { useCustomIndicators } from '../hooks/useCustomIndicators'
 
 const formatDateTimeIst = (value: unknown): string => {
   if (!value) return '—'
@@ -85,6 +87,13 @@ export function AlertsPage() {
 
   const location = useLocation()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const tabParam = (params.get('tab') || '').toLowerCase()
+    if (tabParam === 'indicators') setTab(1)
+    if (tabParam === 'events') setTab(2)
+  }, [location.search])
 
   const handleOpenAlert = (alertId: number) => {
     setOpenAlertId(alertId)
@@ -446,6 +455,19 @@ function AlertV3EditorDialog({
   const [conditionRows, setConditionRows] = useState<ConditionRow[]>([
     { lhs: '', op: '>', rhs: '' },
   ])
+
+  const {
+    customIndicators,
+    loading: customIndicatorsLoading,
+    error: customIndicatorsError,
+    refresh: refreshCustomIndicators,
+  } = useCustomIndicators({
+    enabled:
+      open &&
+      variables.some(
+        (v) => (v.kind || '').toString().toUpperCase() === 'CUSTOM',
+      ),
+  })
 
   useEffect(() => {
     if (!open) return
@@ -1074,19 +1096,84 @@ function AlertV3EditorDialog({
               )}
               {variableKindOf(v) === 'CUSTOM' && (
                 <>
-                  <TextField
-                    label="Function"
-                    size="small"
-                    value={String(varParams(v).function ?? '')}
-                    onChange={(e) =>
-                      updateVar(idx, {
-                        ...v,
-                        kind: 'CUSTOM',
-                        params: { ...varParams(v), function: e.target.value },
-                      })
-                    }
-                    sx={{ minWidth: 200 }}
-                  />
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Autocomplete
+                      options={customIndicators}
+                      loading={customIndicatorsLoading}
+                      value={
+                        customIndicators.find(
+                          (ci) =>
+                            ci.name.toUpperCase() ===
+                            String(varParams(v).function ?? '').toUpperCase(),
+                        ) ?? null
+                      }
+                      onChange={(_e, value) =>
+                        updateVar(idx, {
+                          ...v,
+                          kind: 'CUSTOM',
+                          params: { ...varParams(v), function: value?.name ?? '' },
+                        })
+                      }
+                      getOptionLabel={(o) => o.name}
+                      isOptionEqualToValue={(a, b) => a.id === b.id}
+                      renderOption={(props, option) => (
+                        <li {...props}>
+                          <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                            <Typography variant="body2">
+                              {option.name}
+                              {option.params?.length
+                                ? `(${option.params.join(', ')})`
+                                : ''}
+                            </Typography>
+                            {option.description ? (
+                              <Typography variant="caption" color="text.secondary">
+                                {option.description}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                        </li>
+                      )}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label="Function"
+                          size="small"
+                          sx={{ minWidth: 260 }}
+                          helperText={
+                            customIndicatorsError
+                              ? customIndicatorsError
+                              : !customIndicatorsLoading && customIndicators.length === 0
+                                ? 'No custom indicators yet.'
+                                : undefined
+                          }
+                        />
+                      )}
+                    />
+                    <Tooltip title="Refresh indicators">
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={() => void refreshCustomIndicators()}
+                          disabled={customIndicatorsLoading}
+                        >
+                          <RefreshIcon fontSize="small" />
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={() =>
+                        window.open(
+                          '/alerts?tab=indicators',
+                          '_blank',
+                          'noopener,noreferrer',
+                        )
+                      }
+                    >
+                      Add new indicator
+                    </Button>
+                  </Box>
                   <TextField
                     label="Args (comma-separated DSL)"
                     size="small"

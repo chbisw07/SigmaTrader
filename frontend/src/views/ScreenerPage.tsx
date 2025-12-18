@@ -6,18 +6,21 @@ import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import FormControlLabel from '@mui/material/FormControlLabel'
+import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import TextField from '@mui/material/TextField'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import Autocomplete from '@mui/material/Autocomplete'
 import {
   DataGrid,
   type GridColDef,
 } from '@mui/x-data-grid'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -27,6 +30,7 @@ import {
   ALERT_V3_SOURCES,
   ALERT_V3_TIMEFRAMES,
 } from '../services/alertsV3Constants'
+import { useCustomIndicators } from '../hooks/useCustomIndicators'
 import { listGroups, type Group } from '../services/groups'
 import {
   createGroupFromScreenerRun,
@@ -171,6 +175,17 @@ export function ScreenerPage() {
       }),
     )
   }
+
+  const {
+    customIndicators,
+    loading: customIndicatorsLoading,
+    error: customIndicatorsError,
+    refresh: refreshCustomIndicators,
+  } = useCustomIndicators({
+    enabled: variables.some(
+      (v) => (v.kind || '').toString().toUpperCase() === 'CUSTOM',
+    ),
+  })
 
   const operandOptions = useMemo(() => {
     const vars = variables
@@ -696,19 +711,84 @@ export function ScreenerPage() {
                     )}
                     {variableKindOf(v) === 'CUSTOM' && (
                       <>
-                        <TextField
-                          label="Function"
-                          size="small"
-                          value={String(varParams(v).function ?? '')}
-                          onChange={(e) =>
-                            updateVar(idx, {
-                              ...v,
-                              kind: 'CUSTOM',
-                              params: { ...varParams(v), function: e.target.value },
-                            })
-                          }
-                          sx={{ minWidth: 200 }}
-                        />
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <Autocomplete
+                            options={customIndicators}
+                            loading={customIndicatorsLoading}
+                            value={
+                              customIndicators.find(
+                                (ci) =>
+                                  ci.name.toUpperCase() ===
+                                  String(varParams(v).function ?? '').toUpperCase(),
+                              ) ?? null
+                            }
+                            onChange={(_e, value) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'CUSTOM',
+                                params: { ...varParams(v), function: value?.name ?? '' },
+                              })
+                            }
+                            getOptionLabel={(o) => o.name}
+                            isOptionEqualToValue={(a, b) => a.id === b.id}
+                            renderOption={(props, option) => (
+                              <li {...props}>
+                                <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                                  <Typography variant="body2">
+                                    {option.name}
+                                    {option.params?.length
+                                      ? `(${option.params.join(', ')})`
+                                      : ''}
+                                  </Typography>
+                                  {option.description ? (
+                                    <Typography variant="caption" color="text.secondary">
+                                      {option.description}
+                                    </Typography>
+                                  ) : null}
+                                </Box>
+                              </li>
+                            )}
+                            renderInput={(params) => (
+                              <TextField
+                                {...params}
+                                label="Function"
+                                size="small"
+                                sx={{ minWidth: 260 }}
+                                helperText={
+                                  customIndicatorsError
+                                    ? customIndicatorsError
+                                    : !customIndicatorsLoading && customIndicators.length === 0
+                                      ? 'No custom indicators yet.'
+                                      : undefined
+                                }
+                              />
+                            )}
+                          />
+                          <Tooltip title="Refresh indicators">
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => void refreshCustomIndicators()}
+                                disabled={customIndicatorsLoading}
+                              >
+                                <RefreshIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Button
+                            size="small"
+                            variant="text"
+                            onClick={() =>
+                              window.open(
+                                '/alerts?tab=indicators',
+                                '_blank',
+                                'noopener,noreferrer',
+                              )
+                            }
+                          >
+                            Add new indicator
+                          </Button>
+                        </Box>
                         <TextField
                           label="Args (comma-separated DSL)"
                           size="small"
