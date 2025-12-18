@@ -94,6 +94,7 @@ function MultiLineChart({
   base?: number
 }) {
   const theme = useTheme()
+  const [hoverX, setHoverX] = useState<number | null>(null)
   const width = 900
   const paddingLeft = 56
   const paddingRight = 20
@@ -160,10 +161,8 @@ function MultiLineChart({
   if (xTicks[xTicks.length - 1] !== uniqX[uniqX.length - 1]) xTicks.push(uniqX[uniqX.length - 1]!)
   const xTickLabels = xTicks.map((x) => formatDateLabel(x, spanDays))
 
-  const [hoverX, setHoverX] = useState<number | null>(null)
-
-  const hoverIndex = useMemo(() => {
-    if (hoverX == null || uniqX.length === 0) return null
+  let hoverDateX: number | null = null
+  if (hoverX != null && uniqX.length > 0) {
     // Binary search nearest x in uniqX.
     let lo = 0
     let hi = uniqX.length - 1
@@ -176,21 +175,20 @@ function MultiLineChart({
     const prev = idx > 0 ? idx - 1 : idx
     const a = uniqX[prev]!
     const b = uniqX[idx]!
-    return Math.abs(a - hoverX) <= Math.abs(b - hoverX) ? prev : idx
-  }, [hoverX, uniqX])
+    hoverDateX = Math.abs(a - hoverX) <= Math.abs(b - hoverX) ? a : b
+  }
 
-  const hoverDateX = hoverIndex == null ? null : uniqX[hoverIndex]!
-
-  const hoverSummary = useMemo(() => {
-    if (hoverDateX == null) return null
-    const dateLabel = formatDateLabel(hoverDateX, spanDays)
-    const items = series.map((s) => {
-      const point = s.points.find((p) => p.x === hoverDateX) ?? null
-      const cov = s.coverage?.[hoverDateX] ?? null
-      return { label: s.label, color: s.color, point, cov }
-    })
-    return { dateLabel, items }
-  }, [hoverDateX, series, spanDays])
+  const hoverSummary =
+    hoverDateX == null
+      ? null
+      : {
+          dateLabel: formatDateLabel(hoverDateX, spanDays),
+          items: series.map((s) => {
+            const point = s.points.find((p) => p.x === hoverDateX) ?? null
+            const cov = s.coverage?.[hoverDateX] ?? null
+            return { label: s.label, color: s.color, point, cov }
+          }),
+        }
 
   return (
     <Box sx={{ width: '100%', position: 'relative' }}>

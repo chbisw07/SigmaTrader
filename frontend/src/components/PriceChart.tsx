@@ -43,14 +43,24 @@ export function PriceChart({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const seriesRef = useRef<any>(null)
 
+  const normalizedCandles = useMemo(() => {
+    if (!candles || candles.length === 0) return []
+    const byDate = new Map<string, PriceCandle>()
+    for (const c of candles) {
+      if (!c?.ts) continue
+      byDate.set(c.ts, c) // last write wins
+    }
+    return Array.from(byDate.values()).sort((a, b) => a.ts.localeCompare(b.ts))
+  }, [candles])
+
   const upColor = theme.palette.mode === 'dark' ? '#22c55e' : '#16a34a'
   const downColor = theme.palette.mode === 'dark' ? '#ef4444' : '#dc2626'
   const lineColor = theme.palette.primary.main
 
   const seriesData = useMemo(() => {
-    if (candles.length === 0) return []
+    if (normalizedCandles.length === 0) return []
     if (chartType === 'line') {
-      return candles.map(
+      return normalizedCandles.map(
         (c) =>
           ({
             time: toBusinessDay(c.ts) as unknown as Time,
@@ -58,14 +68,14 @@ export function PriceChart({
           }) satisfies LineData,
       )
     }
-    return candles.map((c) => ({
+    return normalizedCandles.map((c) => ({
       time: toBusinessDay(c.ts) as unknown as Time,
       open: c.open,
       high: c.high,
       low: c.low,
       close: c.close,
     }))
-  }, [candles, chartType])
+  }, [normalizedCandles, chartType])
 
   useEffect(() => {
     const el = containerRef.current
