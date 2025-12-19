@@ -93,6 +93,17 @@ function formatCompact(value: number): string {
   return value.toFixed(2)
 }
 
+function formatIstDateTime(value: string | null | undefined): string {
+  if (!value) return ''
+  const raw = new Date(value)
+  if (Number.isNaN(raw.getTime())) return ''
+  // `value` is an ISO timestamp in UTC (toISOString); the browser converts it
+  // to the user's local timezone (IST on your Ubuntu dev machine).
+  return raw.toLocaleString('en-IN')
+}
+
+const INDICES_CACHE_KEY = 'st_dashboard_indices_cache_v1'
+
 function MultiLineChart({
   series,
   height = 280,
@@ -401,9 +412,10 @@ export function DashboardPage() {
   const [selectedGroups, setSelectedGroups] = useState<Group[]>([])
   const [range, setRange] = useState<any>('6m')
 
-  const [data, setData] = useState<BasketIndexResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+	  const [data, setData] = useState<BasketIndexResponse | null>(null)
+	  const [loading, setLoading] = useState(false)
+	  const [error, setError] = useState<string | null>(null)
+	  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null)
 
   const [hydratingUniverse, setHydratingUniverse] = useState(false)
   const [hydrateError, setHydrateError] = useState<string | null>(null)
@@ -477,34 +489,53 @@ export function DashboardPage() {
     }
   }
 
-  useEffect(() => {
-    void refreshCustomIndicators()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const handleRefresh = async () => {
-    const groupIds = selectedGroups.map((g) => g.id)
-    if (!includeHoldings && groupIds.length === 0) {
-      setError('Select Holdings and/or at least one group.')
-      return
+	  useEffect(() => {
+	    void refreshCustomIndicators()
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	  }, [])
+	
+ 	  const handleRefresh = async () => {
+	    const groupIds = selectedGroups.map((g) => g.id)
+	    if (!includeHoldings && groupIds.length === 0) {
+	      setError('Select Holdings and/or at least one group.')
+	      return
     }
     setLoading(true)
-    setError(null)
-    try {
-      const res = await fetchBasketIndices({
-        include_holdings: includeHoldings,
-        group_ids: groupIds,
-        range,
-        base: 100,
-      } as any)
-      setData(res)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to compute indices')
-      setData(null)
+	    setError(null)
+	    try {
+	      const sortedGroupIds = [...groupIds].sort((a, b) => a - b)
+	      const res = await fetchBasketIndices({
+	        include_holdings: includeHoldings,
+	        group_ids: sortedGroupIds,
+	        range,
+	        base: 100,
+	      } as any)
+	      setData(res)
+	      const refreshedAt = new Date().toISOString()
+	      setLastRefreshedAt(refreshedAt)
+	      if (typeof window !== 'undefined') {
+	        try {
+	          const cache = {
+	            config: {
+	              include_holdings: includeHoldings,
+	              range,
+	              group_ids: sortedGroupIds,
+	            },
+	            response: res,
+	            refreshed_at: refreshedAt,
+	          }
+	          window.localStorage.setItem(INDICES_CACHE_KEY, JSON.stringify(cache))
+	        } catch {
+	          // ignore cache errors
+	        }
+	      }
+	    } catch (err) {
+	      setError(err instanceof Error ? err.message : 'Failed to compute indices')
+	      setData(null)
     } finally {
       setLoading(false)
-    }
-  }
+	    }
+	  }
 
   const handleHydrateUniverse = async () => {
     const groupIds = selectedGroups.map((g) => g.id)
@@ -533,11 +564,47 @@ export function DashboardPage() {
     }
   }
 
-  useEffect(() => {
-    // Load something useful by default.
-    void handleRefresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+	  useEffect(() => {
+	    const init = async () => {
+	      const groupIds = selectedGroups.map((g) => g.id)
+	      const sortedGroupIds = [...groupIds].sort((a, b) => a - b)
+	      if (typeof window !== 'undefined') {
+	        try {
+	          const raw = window.localStorage.getItem(INDICES_CACHE_KEY)
+	          if (raw) {
+	            const parsed = JSON.parse(raw) as {
+	              config?: { include_holdings?: boolean; range?: any; group_ids?: number[] }
+	              response?: BasketIndexResponse
+	              refreshed_at?: string
+	            }
+	            const cfg = parsed.config
+	            if (
+	              cfg &&
+	              typeof cfg.include_holdings === 'boolean' &&
+	              cfg.range === range &&
+	              Array.isArray(cfg.group_ids)
+	            ) {
+	              const cachedIds = cfg.group_ids.slice().sort((a, b) => a - b)
+	              const sameLength = cachedIds.length === sortedGroupIds.length
+	              const sameIds =
+	                sameLength &&
+	                cachedIds.every((v, idx) => v === sortedGroupIds[idx])
+	              if (sameIds && cfg.include_holdings === includeHoldings && parsed.response) {
+	                setData(parsed.response)
+	                setLastRefreshedAt(parsed.refreshed_at ?? null)
+	                return
+	              }
+	            }
+	          }
+	        } catch {
+	          // ignore cache errors
+	        }
+	      }
+	      await handleRefresh()
+	    }
+	    void init()
+	    // eslint-disable-next-line react-hooks/exhaustive-deps
+	  }, [])
 
   const palette = [
     '#2563eb',
@@ -814,15 +881,20 @@ export function DashboardPage() {
       >
         <Paper variant="outlined" sx={{ p: 2, flex: 1, minWidth: 0 }}>
           <Stack spacing={1.5}>
-            <Stack direction="row" spacing={2} alignItems="center" sx={{ flexWrap: 'wrap' }}>
-              <Typography variant="h6">Basket indices (base 100)</Typography>
-              <Box sx={{ flex: 1 }} />
-              {data && (
-                <Typography variant="body2" color="text.secondary">
-                  {data.start.slice(0, 10)} → {data.end.slice(0, 10)}
-                </Typography>
-              )}
-            </Stack>
+	            <Stack direction="row" spacing={2} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+	              <Typography variant="h6">Basket indices (base 100)</Typography>
+	              <Box sx={{ flex: 1 }} />
+	              {data && (
+	                <Typography variant="body2" color="text.secondary">
+	                  {data.start.slice(0, 10)} → {data.end.slice(0, 10)}
+	                </Typography>
+	              )}
+	              {lastRefreshedAt && (
+	                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+	                  Last refreshed: {formatIstDateTime(lastRefreshedAt)}
+	                </Typography>
+	              )}
+	            </Stack>
 
             <Stack
               direction={{ xs: 'column', md: 'row' }}

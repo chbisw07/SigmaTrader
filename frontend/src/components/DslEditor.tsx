@@ -1,7 +1,7 @@
 import Box from '@mui/material/Box'
 import { useTheme } from '@mui/material/styles'
 import Editor, { useMonaco } from '@monaco-editor/react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 
 type CustomIndicatorForDsl = {
   id: number
@@ -30,7 +30,7 @@ function _snippetForCustomIndicator(ci: CustomIndicatorForDsl): string {
   return `${ci.name}(${args})`
 }
 
-export function DslEditor({
+	export function DslEditor({
   languageId,
   value,
   onChange,
@@ -38,9 +38,14 @@ export function DslEditor({
   operands = [],
   customIndicators = [],
   onCtrlEnter,
-}: DslEditorProps) {
-  const theme = useTheme()
-  const monaco = useMonaco()
+	  }: DslEditorProps) {
+	  const theme = useTheme()
+	  const monaco = useMonaco()
+	  const ctrlEnterRef = useRef<(() => void) | undefined>(onCtrlEnter)
+
+	  useEffect(() => {
+	    ctrlEnterRef.current = onCtrlEnter
+	  }, [onCtrlEnter])
 
   const completions = useMemo(() => {
     const uniqOperands = Array.from(
@@ -222,17 +227,19 @@ export function DslEditor({
       <Editor
         language={languageId}
         theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'vs'}
-        height={height}
-        value={value}
-        onChange={(v) => onChange(v ?? '')}
-        onMount={(editor, editorMonaco) => {
-          if (!onCtrlEnter) return
-          editor.addCommand(
-            // Ctrl+Enter on Windows/Linux, Cmd+Enter on macOS.
-            editorMonaco.KeyMod.CtrlCmd | editorMonaco.KeyCode.Enter,
-            () => onCtrlEnter(),
-          )
-        }}
+	        height={height}
+	        value={value}
+	        onChange={(v) => onChange(v ?? '')}
+	        onMount={(editor, editorMonaco) => {
+	          if (!ctrlEnterRef.current) return
+	          editor.addCommand(
+	            // Ctrl+Enter on Windows/Linux, Cmd+Enter on macOS.
+	            editorMonaco.KeyMod.CtrlCmd | editorMonaco.KeyCode.Enter,
+	            () => {
+	              if (ctrlEnterRef.current) ctrlEnterRef.current()
+	            },
+	          )
+	        }}
         options={{
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
