@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC
+from datetime import date as date_type
+from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -323,11 +326,17 @@ class Position(Base):
     __tablename__ = "positions"
 
     __table_args__ = (
-        UniqueConstraint("symbol", "product", name="ux_positions_symbol_product"),
+        UniqueConstraint(
+            "symbol",
+            "exchange",
+            "product",
+            name="ux_positions_symbol_exchange_product",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, default="NSE")
     product: Mapped[str] = mapped_column(String(16), nullable=False)
     qty: Mapped[float] = mapped_column(Float, nullable=False)
     avg_price: Mapped[float] = mapped_column(Float, nullable=False)
@@ -335,6 +344,55 @@ class Position(Base):
     last_updated: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)
     )
+
+
+class PositionSnapshot(Base):
+    __tablename__ = "position_snapshots"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "as_of_date",
+            "symbol",
+            "exchange",
+            "product",
+            name="ux_position_snapshots_date_symbol_exchange_product",
+        ),
+        Index("ix_position_snapshots_date_symbol", "as_of_date", "symbol"),
+        Index("ix_position_snapshots_symbol_date", "symbol", "as_of_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    as_of_date: Mapped[date_type] = mapped_column(Date, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, default="NSE")
+    product: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    qty: Mapped[float] = mapped_column(Float, nullable=False)
+    avg_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    last_price: Mapped[Optional[float]] = mapped_column(Float)
+    close_price: Mapped[Optional[float]] = mapped_column(Float)
+    value: Mapped[Optional[float]] = mapped_column(Float)
+    m2m: Mapped[Optional[float]] = mapped_column(Float)
+    unrealised: Mapped[Optional[float]] = mapped_column(Float)
+    realised: Mapped[Optional[float]] = mapped_column(Float)
+
+    buy_qty: Mapped[Optional[float]] = mapped_column(Float)
+    buy_avg_price: Mapped[Optional[float]] = mapped_column(Float)
+    sell_qty: Mapped[Optional[float]] = mapped_column(Float)
+    sell_avg_price: Mapped[Optional[float]] = mapped_column(Float)
+
+    day_buy_qty: Mapped[Optional[float]] = mapped_column(Float)
+    day_buy_avg_price: Mapped[Optional[float]] = mapped_column(Float)
+    day_sell_qty: Mapped[Optional[float]] = mapped_column(Float)
+    day_sell_avg_price: Mapped[Optional[float]] = mapped_column(Float)
+
+    holding_qty: Mapped[Optional[float]] = mapped_column(Float)
 
 
 class AnalyticsTrade(Base):
@@ -372,5 +430,6 @@ __all__ = [
     "Alert",
     "Order",
     "Position",
+    "PositionSnapshot",
     "AnalyticsTrade",
 ]

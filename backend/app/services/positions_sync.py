@@ -1,12 +1,39 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
 from app.clients import ZerodhaClient
-from app.models import Position
+from app.models import Position, PositionSnapshot
+
+
+def _as_float(value: object, default: float | None = None) -> float | None:
+    if value is None:
+        return default
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _canon_symbol(sym: str) -> str:
+    """Return a canonical symbol key (upper + alphanumerics only)."""
+
+    sym_u = sym.strip().upper()
+    return "".join(ch for ch in sym_u if ch.isalnum())
+
+
+def _as_of_date_ist(now_utc: datetime) -> date:
+    # IST is the market session timezone for Zerodha (India).
+    try:
+        from zoneinfo import ZoneInfo
+
+        return now_utc.astimezone(ZoneInfo("Asia/Kolkata")).date()
+    except Exception:
+        # Fallback: treat local timezone as IST if zoneinfo isn't available.
+        return now_utc.date()
 
 
 def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
@@ -28,26 +55,106 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
 
     updated = 0
     now = datetime.now(UTC)
+    as_of = _as_of_date_ist(now)
+
+    # Replace any previously captured snapshot for this day.
+    db.query(PositionSnapshot).filter(PositionSnapshot.as_of_date == as_of).delete()
+
+    # Best-effort: fetch holdings so we can attach cost-basis avg price for
+    # delivery sells (CNC) where positions payload often lacks buy_price.
+    holdings_avg: dict[tuple[str, str], float] = {}
+    holdings_qty: dict[tuple[str, str], float] = {}
+    instruments: list[tuple[str, str]] = []
+    try:
+        holdings = client.list_holdings()
+        for h in holdings:
+            sym = h.get("tradingsymbol")
+            exch = h.get("exchange") or "NSE"
+            avg = _as_float(h.get("average_price"))
+            if isinstance(sym, str) and isinstance(exch, str) and avg is not None:
+                sym_raw = sym
+                sym_u = sym_raw.strip().upper()
+                sym_key = _canon_symbol(sym_raw)
+                exch_u = exch.strip().upper()
+                holdings_avg[(exch_u, sym_key)] = float(avg)
+                qty = _as_float(h.get("quantity"))
+                if qty is not None:
+                    holdings_qty[(exch_u, sym_key)] = float(qty)
+                # Keep original symbol for LTP lookups.
+                instruments.append((exch_u, sym_u))
+    except Exception:
+        holdings_avg = {}
+
+    for entry in net:
+        sym = entry.get("tradingsymbol")
+        exch = entry.get("exchange") or "NSE"
+        if isinstance(sym, str) and isinstance(exch, str):
+            instruments.append((exch.strip().upper(), sym.strip().upper()))
+
+    ltp_map: dict[tuple[str, str], dict[str, float | None]] = {}
+    try:
+        uniq = sorted(set(instruments))
+        ltp_map = client.get_ltp_bulk(uniq)
+    except Exception:
+        ltp_map = {}
 
     for entry in net:
         symbol = entry.get("tradingsymbol")
+        exchange = entry.get("exchange") or "NSE"
         product = entry.get("product")
-        quantity = entry.get("quantity", 0)
-        avg_price = entry.get("average_price", 0)
-        pnl = entry.get("pnl", 0)
+        quantity = _as_float(entry.get("quantity", 0), 0.0)
+        avg_price = _as_float(entry.get("average_price", 0), 0.0)
+        pnl = _as_float(entry.get("pnl", 0), 0.0)
 
-        if not isinstance(symbol, str) or not isinstance(product, str):
+        if (
+            not isinstance(symbol, str)
+            or not isinstance(exchange, str)
+            or not isinstance(product, str)
+        ):
             continue
 
-        try:
-            qty_f = float(quantity)
-            avg_price_f = float(avg_price)
-            pnl_f = float(pnl)
-        except (TypeError, ValueError):
-            continue
+        qty_f = float(quantity or 0.0)
+        avg_price_f = float(avg_price or 0.0)
+        pnl_f = float(pnl or 0.0)
+
+        exch_u = exchange.strip().upper()
+        symbol_u = symbol.strip().upper()
+        symbol_key = _canon_symbol(symbol)
+        key = (exch_u, symbol_key)
+        holding_avg = holdings_avg.get(key)
+        holding_qty_val = holdings_qty.get(key)
+
+        if holding_avg is None or holding_qty_val is None:
+            # Fallback: match by symbol only (any exchange) to be resilient
+            # to NSE/BSE mismatches between positions and holdings.
+            for (ex2, sym2), avg2 in holdings_avg.items():
+                if sym2 != symbol_key:
+                    continue
+                holding_avg = avg2
+                holding_qty_val = holdings_qty.get((ex2, sym2))
+                break
+
+        buy_qty = _as_float(entry.get("buy_quantity"))
+        buy_avg = _as_float(entry.get("buy_price"))
+        if product == "CNC" and holding_avg is not None and holding_avg > 0:
+            # For delivery positions Zerodha often does not populate buy_price
+            # on the positions payload for pure SELL days. Prefer holdings
+            # average cost as the canonical entry price.
+            buy_avg = holding_avg
+
+        last_price = _as_float(entry.get("last_price"))
+        close_price = _as_float(entry.get("close_price"))
+        quote = ltp_map.get((exch_u, symbol_u), {})
+        if last_price is None:
+            qp = quote.get("last_price")
+            last_price = float(qp) if qp is not None else None
+        if close_price is None:
+            qp = quote.get("prev_close")
+            close_price = float(qp) if qp is not None else None
 
         position = Position(
-            symbol=symbol,
+            symbol=symbol_u,
+            exchange=exch_u,
             product=product,
             qty=qty_f,
             avg_price=avg_price_f,
@@ -55,10 +162,36 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
             last_updated=now,
         )
         db.add(position)
+
+        snap = PositionSnapshot(
+            as_of_date=as_of,
+            captured_at=now,
+            symbol=symbol_u,
+            exchange=exch_u,
+            product=product,
+            qty=qty_f,
+            avg_price=avg_price_f,
+            pnl=pnl_f,
+            last_price=last_price,
+            close_price=close_price,
+            value=_as_float(entry.get("value")),
+            m2m=_as_float(entry.get("m2m")),
+            unrealised=_as_float(entry.get("unrealised")),
+            realised=_as_float(entry.get("realised")),
+            buy_qty=buy_qty,
+            buy_avg_price=buy_avg,
+            sell_qty=_as_float(entry.get("sell_quantity")),
+            sell_avg_price=_as_float(entry.get("sell_price")),
+            day_buy_qty=_as_float(entry.get("day_buy_quantity")),
+            day_buy_avg_price=_as_float(entry.get("day_buy_price")),
+            day_sell_qty=_as_float(entry.get("day_sell_quantity")),
+            day_sell_avg_price=_as_float(entry.get("day_sell_price")),
+            holding_qty=holding_qty_val,
+        )
+        db.add(snap)
         updated += 1
 
-    if updated:
-        db.commit()
+    db.commit()
 
     return updated
 

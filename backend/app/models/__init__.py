@@ -10,6 +10,7 @@ from .trading import (
     IndicatorRule,
     Order,
     Position,
+    PositionSnapshot,
     RiskSettings,
     Strategy,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "CustomIndicator",
     "Order",
     "Position",
+    "PositionSnapshot",
     "RiskSettings",
     "Strategy",
     "BrokerConnection",

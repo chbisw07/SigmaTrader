@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import List
+from datetime import date, datetime
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -11,8 +11,8 @@ from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
-from app.models import BrokerConnection, Order, Position, User
-from app.schemas.positions import HoldingRead, PositionRead
+from app.models import BrokerConnection, Order, Position, PositionSnapshot, User
+from app.schemas.positions import HoldingRead, PositionRead, PositionSnapshotRead
 from app.services.broker_secrets import get_broker_secret
 from app.services.market_data import ensure_instrument_from_holding_entry
 from app.services.positions_sync import sync_positions_from_zerodha
@@ -20,6 +20,14 @@ from app.services.positions_sync import sync_positions_from_zerodha
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
 router = APIRouter()
+
+
+def _model_validate(schema_cls, obj):
+    """Compat helper for Pydantic v1/v2."""
+
+    if hasattr(schema_cls, "model_validate"):
+        return schema_cls.model_validate(obj)  # type: ignore[attr-defined]
+    return schema_cls.from_orm(obj)  # type: ignore[call-arg]
 
 
 def _get_zerodha_client_for_positions(
@@ -91,9 +99,155 @@ def list_positions(db: Session = Depends(get_db)) -> List[Position]:
 
     return (
         db.query(Position)
-        .order_by(Position.symbol, Position.product)  # type: ignore[arg-type]
+        .order_by(
+            Position.symbol,
+            Position.exchange,
+            Position.product,
+        )  # type: ignore[arg-type]
         .all()
     )
+
+
+@router.get("/daily", response_model=List[PositionSnapshotRead])
+def list_daily_positions(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    symbol: Optional[str] = None,
+    include_zero: bool = True,
+    db: Session = Depends(get_db),
+) -> List[PositionSnapshotRead]:
+    """Return daily position snapshots captured from Zerodha positions.
+
+    If start/end are omitted, this defaults to the latest available date.
+    """
+
+    q = db.query(PositionSnapshot)
+
+    if start_date is None and end_date is None:
+        latest = (
+            db.query(PositionSnapshot.as_of_date)
+            .order_by(PositionSnapshot.as_of_date.desc())
+            .limit(1)
+            .scalar()
+        )
+        if latest is None:
+            return []
+        start_date = latest
+        end_date = latest
+
+    if start_date is not None:
+        q = q.filter(PositionSnapshot.as_of_date >= start_date)
+    if end_date is not None:
+        q = q.filter(PositionSnapshot.as_of_date <= end_date)
+
+    if symbol:
+        like = f"%{symbol.strip().upper()}%"
+        q = q.filter(PositionSnapshot.symbol.like(like))
+
+    if not include_zero:
+        q = q.filter(PositionSnapshot.qty != 0)
+
+    rows: List[PositionSnapshot] = q.order_by(
+        PositionSnapshot.as_of_date.desc(),
+        PositionSnapshot.symbol.asc(),
+        PositionSnapshot.exchange.asc(),
+        PositionSnapshot.product.asc(),
+    ).all()
+
+    out: List[PositionSnapshotRead] = []
+
+    def _first_price(*vals: Optional[float]) -> Optional[float]:
+        for v in vals:
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv != 0:
+                return fv
+        return None
+
+    for r in rows:
+        # Derived: remaining qty == net qty for the snapshot.
+        item = _model_validate(PositionSnapshotRead, r)
+
+        product = (r.product or "").upper()
+
+        if r.holding_qty is not None:
+            remaining = float(r.holding_qty)
+        else:
+            remaining = float(r.qty)
+            if product == "CNC" and remaining < 0:
+                remaining = 0.0
+        item.remaining_qty = remaining
+
+        day_buy_qty = float(r.day_buy_qty or 0.0)
+        day_sell_qty = float(r.day_sell_qty or 0.0)
+        buy_qty = float(r.buy_qty or 0.0)
+        sell_qty = float(r.sell_qty or 0.0)
+
+        if day_buy_qty > 0 and day_sell_qty > 0:
+            order_type = "BOTH"
+        elif day_buy_qty > 0:
+            order_type = "BUY"
+        elif day_sell_qty > 0:
+            order_type = "SELL"
+        elif remaining > 0:
+            order_type = "HOLD"
+        elif remaining < 0:
+            order_type = "SHORT"
+        else:
+            order_type = "FLAT"
+        item.order_type = order_type
+
+        traded_qty = 0.0
+        if order_type == "BUY":
+            traded_qty = day_buy_qty or buy_qty or abs(float(r.qty))
+        elif order_type == "SELL":
+            traded_qty = day_sell_qty or sell_qty or abs(float(r.qty))
+        elif order_type == "BOTH":
+            traded_qty = (day_buy_qty or buy_qty) + (day_sell_qty or sell_qty)
+        item.traded_qty = float(traded_qty or 0.0)
+
+        avg_buy = _first_price(r.buy_avg_price, r.day_buy_avg_price)
+        avg_sell = _first_price(r.sell_avg_price, r.day_sell_avg_price)
+        item.avg_buy_price = avg_buy
+        item.avg_sell_price = avg_sell
+
+        ltp = r.last_price if r.last_price is not None else None
+        item.ltp = float(ltp) if ltp is not None else None
+
+        pnl_value: Optional[float] = None
+        pnl_pct: Optional[float] = None
+        today_pnl: Optional[float] = None
+        today_pnl_pct: Optional[float] = None
+
+        if order_type == "SELL" and traded_qty and avg_buy and avg_sell:
+            pnl_value = traded_qty * (avg_sell - avg_buy)
+            pnl_pct = ((avg_sell - avg_buy) / avg_buy * 100.0) if avg_buy else None
+            if item.ltp is not None:
+                today_pnl = traded_qty * (item.ltp - avg_sell)
+                today_pnl_pct = (
+                    ((avg_sell - item.ltp) / avg_sell * 100.0) if avg_sell else None
+                )
+        elif order_type == "BUY":
+            # Treat as open long; use remaining (not traded) for unrealised P&L.
+            if remaining and avg_buy and item.ltp is not None:
+                pnl_value = remaining * (item.ltp - avg_buy)
+                pnl_pct = ((item.ltp - avg_buy) / avg_buy * 100.0) if avg_buy else None
+                today_pnl = traded_qty * (item.ltp - avg_buy) if traded_qty else None
+                today_pnl_pct = (
+                    ((item.ltp - avg_buy) / avg_buy * 100.0) if avg_buy else None
+                )
+
+        item.pnl_value = pnl_value
+        item.pnl_pct = pnl_pct
+        item.today_pnl = today_pnl
+        item.today_pnl_pct = today_pnl_pct
+
+        out.append(item)
+    return out
 
 
 @router.get("/holdings", response_model=List[HoldingRead])

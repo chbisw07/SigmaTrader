@@ -341,9 +341,14 @@ def compute_metric(
             v = float(holding.today_pnl_percent)
             return v, v, None
 
+    exch = (exchange or "NSE").upper()
     pos = (
         db.query(Position)
-        .filter(Position.symbol == symbol, Position.product == "CNC")
+        .filter(
+            Position.symbol == symbol,
+            Position.exchange == exch,
+            Position.product == "CNC",
+        )
         .one_or_none()
     )
     if pos is None:

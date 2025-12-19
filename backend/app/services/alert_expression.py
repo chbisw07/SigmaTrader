@@ -297,9 +297,14 @@ def _compute_field_samples_for_expr(
     if not field_names:
         return {}
 
+    exch = (exchange or "NSE").upper()
     pos = (
         db.query(Position)
-        .filter(Position.symbol == symbol, Position.product == "CNC")
+        .filter(
+            Position.symbol == symbol,
+            Position.exchange == exch,
+            Position.product == "CNC",
+        )
         .one_or_none()
     )
     if pos is None:

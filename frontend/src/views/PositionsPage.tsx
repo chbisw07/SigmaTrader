@@ -1,38 +1,47 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
-import Paper from '@mui/material/Paper'
-import Table from '@mui/material/Table'
-import TableBody from '@mui/material/TableBody'
-import TableCell from '@mui/material/TableCell'
-import TableHead from '@mui/material/TableHead'
-import TableRow from '@mui/material/TableRow'
+import FormControlLabel from '@mui/material/FormControlLabel'
+import Checkbox from '@mui/material/Checkbox'
+import Stack from '@mui/material/Stack'
+import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
+import { DataGrid, GridToolbar, type GridColDef } from '@mui/x-data-grid'
 
 import {
-  fetchPositions,
+  fetchDailyPositions,
   syncPositions,
-  type Position,
+  type PositionSnapshot,
 } from '../services/positions'
 
-const formatIst = (iso: string): string => {
-  const utc = new Date(iso)
-  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
-  const ist = new Date(istMs)
-  return ist.toLocaleString('en-IN')
-}
+const formatIst = (iso: string): string =>
+  new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
 
 export function PositionsPage() {
-  const [positions, setPositions] = useState<Position[]>([])
+  const [positions, setPositions] = useState<PositionSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
-  const load = async () => {
+  const [startDate, setStartDate] = useState<string>('')
+  const [endDate, setEndDate] = useState<string>('')
+  const [symbolQuery, setSymbolQuery] = useState<string>('')
+  const [includeZero, setIncludeZero] = useState(true)
+
+  const load = async (opts?: { preferLatest?: boolean }) => {
     try {
       setLoading(true)
-      const data = await fetchPositions()
+      const params =
+        opts?.preferLatest && !startDate && !endDate && !symbolQuery
+          ? undefined
+          : {
+              start_date: startDate || undefined,
+              end_date: endDate || undefined,
+              symbol: symbolQuery || undefined,
+              include_zero: includeZero,
+            }
+      const data = await fetchDailyPositions(params)
       setPositions(data)
       setError(null)
     } catch (err) {
@@ -43,14 +52,15 @@ export function PositionsPage() {
   }
 
   useEffect(() => {
-    void load()
+    void load({ preferLatest: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       await syncPositions()
-      await load()
+      await load({ preferLatest: true })
     } catch (err) {
       setError(
         err instanceof Error
@@ -61,6 +71,85 @@ export function PositionsPage() {
       setRefreshing(false)
     }
   }
+
+  const handleApply = async () => {
+    await load()
+  }
+
+  const columns: GridColDef[] = [
+    { field: 'as_of_date', headerName: 'Date', width: 110 },
+    { field: 'symbol', headerName: 'Symbol', width: 140 },
+    { field: 'exchange', headerName: 'Exch', width: 80 },
+    { field: 'product', headerName: 'Product', width: 90 },
+    { field: 'order_type', headerName: 'Type', width: 90 },
+    {
+      field: 'traded_qty',
+      headerName: 'Qty',
+      width: 90,
+      type: 'number',
+    },
+    {
+      field: 'remaining_qty',
+      headerName: 'Remaining',
+      width: 100,
+      type: 'number',
+    },
+    {
+      field: 'avg_buy_price',
+      headerName: 'Avg Buy',
+      width: 110,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+    },
+    {
+      field: 'avg_sell_price',
+      headerName: 'Avg Sell',
+      width: 110,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+    },
+    {
+      field: 'pnl_value',
+      headerName: 'P&L',
+      width: 110,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+    },
+    {
+      field: 'pnl_pct',
+      headerName: 'P&L %',
+      width: 110,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? `${Number(v).toFixed(2)}%` : ''),
+    },
+    {
+      field: 'ltp',
+      headerName: 'LTP',
+      width: 100,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+    },
+    {
+      field: 'today_pnl',
+      headerName: 'Today P&L',
+      width: 120,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+    },
+    {
+      field: 'today_pnl_pct',
+      headerName: 'Today %',
+      width: 110,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? `${Number(v).toFixed(2)}%` : ''),
+    },
+    {
+      field: 'captured_at',
+      headerName: 'Captured',
+      width: 170,
+      valueFormatter: (v) => (v ? formatIst(String(v)) : ''),
+    },
+  ]
 
   return (
     <Box>
@@ -78,16 +167,59 @@ export function PositionsPage() {
         }}
       >
         <Typography color="text.secondary">
-          Current net positions cached from Zerodha. Use Refresh to update.
+          Daily position snapshots (from Zerodha positions). Refresh captures a new snapshot for today.
         </Typography>
-        <Button
-          size="small"
-          variant="outlined"
-          onClick={handleRefresh}
-          disabled={loading || refreshing}
-        >
-          {refreshing ? 'Refreshing…' : 'Refresh from Zerodha'}
-        </Button>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <TextField
+            label="From"
+            type="date"
+            size="small"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+          />
+          <TextField
+            label="To"
+            type="date"
+            size="small"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+          />
+          <TextField
+            label="Symbol"
+            size="small"
+            value={symbolQuery}
+            onChange={(e) => setSymbolQuery(e.target.value.toUpperCase())}
+            sx={{ minWidth: 140 }}
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={includeZero}
+                onChange={(e) => setIncludeZero(e.target.checked)}
+              />
+            }
+            label="Include zero qty"
+            sx={{ mr: 0 }}
+          />
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleApply}
+            disabled={loading || refreshing}
+          >
+            Apply
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleRefresh}
+            disabled={loading || refreshing}
+          >
+            {refreshing ? 'Refreshing…' : 'Refresh from Zerodha'}
+          </Button>
+        </Stack>
       </Box>
 
       {loading ? (
@@ -100,43 +232,27 @@ export function PositionsPage() {
           {error}
         </Typography>
       ) : (
-        <Paper>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Symbol</TableCell>
-                <TableCell>Product</TableCell>
-                <TableCell align="right">Qty</TableCell>
-                <TableCell align="right">Avg Price</TableCell>
-                <TableCell align="right">P&L</TableCell>
-                <TableCell>Last Updated</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {positions.map((p) => (
-                <TableRow key={`${p.symbol}-${p.product}`}>
-                  <TableCell>{p.symbol}</TableCell>
-                  <TableCell>{p.product}</TableCell>
-                  <TableCell align="right">{p.qty}</TableCell>
-                  <TableCell align="right">{p.avg_price.toFixed(2)}</TableCell>
-                  <TableCell align="right">{p.pnl.toFixed(2)}</TableCell>
-                  <TableCell>{formatIst(p.last_updated)}</TableCell>
-                </TableRow>
-              ))}
-              {positions.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={6}>
-                    <Typography variant="body2" color="text.secondary">
-                      No positions currently.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </Paper>
+        <Box sx={{ height: 'calc(100vh - 230px)', minHeight: 360 }}>
+          <DataGrid
+            rows={positions}
+            columns={columns}
+            getRowId={(r) => r.id}
+            density="compact"
+            disableRowSelectionOnClick
+            slots={{ toolbar: GridToolbar }}
+            slotProps={{
+              toolbar: {
+                showQuickFilter: true,
+                quickFilterProps: { debounceMs: 300 },
+              },
+            }}
+            initialState={{
+              pagination: { paginationModel: { pageSize: 25 } },
+            }}
+            pageSizeOptions={[25, 50, 100]}
+          />
+        </Box>
       )}
     </Box>
   )
 }
-
