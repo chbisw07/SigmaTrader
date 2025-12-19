@@ -21,7 +21,7 @@ import {
   type GridColDef,
 } from '@mui/x-data-grid'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { DslEditor } from '../components/DslEditor'
@@ -69,6 +69,9 @@ type VariableKind =
   | 'CUSTOM'
 
 const DEFAULT_CONDITION_ROWS: ConditionRow[] = [{ lhs: '', op: '>', rhs: '' }]
+
+const SCREENER_LEFT_PANEL_WIDTH_STORAGE_KEY = 'st_screener_left_panel_width_v1'
+const DEFAULT_LEFT_PANEL_WIDTH = 760
 
 const CONDITION_OPS = [
   { value: '>', label: '>' },
@@ -124,6 +127,63 @@ export function ScreenerPage() {
   const [createGroupName, setCreateGroupName] = useState('')
   const [createGroupSubmitting, setCreateGroupSubmitting] = useState(false)
   const [createGroupError, setCreateGroupError] = useState<string | null>(null)
+
+  // Resizable panel state (like Groups page)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [leftPanelWidth, setLeftPanelWidth] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_LEFT_PANEL_WIDTH
+    try {
+      const raw = window.localStorage.getItem(SCREENER_LEFT_PANEL_WIDTH_STORAGE_KEY)
+      const parsed = raw != null ? Number(raw) : Number.NaN
+      return Number.isFinite(parsed) && parsed >= 300 ? parsed : DEFAULT_LEFT_PANEL_WIDTH
+    } catch {
+      return DEFAULT_LEFT_PANEL_WIDTH
+    }
+  })
+  const [isResizing, setIsResizing] = useState(false)
+
+  const startResizing = useCallback(() => setIsResizing(true), [])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing || !containerRef.current) return
+      const rect = containerRef.current.getBoundingClientRect()
+      const newWidth = e.clientX - rect.left
+      if (newWidth > 300 && newWidth < rect.width - 300) setLeftPanelWidth(newWidth)
+    }
+
+    const handleMouseUp = () => setIsResizing(false)
+
+    if (isResizing) {
+      window.addEventListener('mousemove', handleMouseMove)
+      window.addEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+    } else {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+  }, [isResizing])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (isResizing) return
+    try {
+      window.localStorage.setItem(
+        SCREENER_LEFT_PANEL_WIDTH_STORAGE_KEY,
+        String(Math.round(leftPanelWidth)),
+      )
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [isResizing, leftPanelWidth])
 
   const builderDsl = useMemo(
     () => buildDslFromRows(conditionJoin, conditionRows),
@@ -424,15 +484,17 @@ export function ScreenerPage() {
         Screener
       </Typography>
 
-      <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2}>
-        <Paper
-          variant="outlined"
-          sx={{
-            p: 2,
-            flex: { lg: 2 },
-            minWidth: { lg: 440 },
-          }}
-        >
+      <Box
+        ref={containerRef}
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          gap: 0,
+          alignItems: 'stretch',
+        }}
+      >
+        <Box sx={{ width: { xs: '100%', md: leftPanelWidth }, minWidth: 300, flexShrink: 0 }}>
+          <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
           <Stack spacing={2}>
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
               <Autocomplete
@@ -993,13 +1055,13 @@ export function ScreenerPage() {
                     <MenuItem value="AND">AND</MenuItem>
                     <MenuItem value="OR">OR</MenuItem>
                   </TextField>
-                  {conditionRows.map((r, idx) => (
-                    <Stack
-                      key={idx}
-                      direction={{ xs: 'column', md: 'row' }}
-                      spacing={1}
-                      alignItems="center"
-                    >
+	                  {conditionRows.map((r, idx) => (
+	                    <Stack
+	                      key={idx}
+	                      direction={{ xs: 'column', md: 'row' }}
+	                      spacing={1}
+	                      alignItems="center"
+	                    >
                       <Autocomplete
                         freeSolo
                         options={operandOptions}
@@ -1018,29 +1080,29 @@ export function ScreenerPage() {
                             ),
                           )
                         }
-                        renderInput={(params) => (
-                          <TextField
-                            {...params}
-                            label="LHS"
-                            size="small"
-                            sx={{ flex: 1, minWidth: 240 }}
-                          />
-                        )}
+	                        renderInput={(params) => (
+	                          <TextField
+	                            {...params}
+	                            label="LHS"
+	                            size="small"
+	                            sx={{ flex: 1, minWidth: 200 }}
+	                          />
+	                        )}
                       />
                       <TextField
                         label="Op"
                         size="small"
                         select
-                        value={r.op}
+	                        value={r.op}
                         onChange={(e) => {
                           const next = e.target.value
                           setConditionRows((cur) =>
                             cur.map((row, i) =>
                               i === idx ? { ...row, op: next } : row,
                             ),
-                          )
-                        }}
-                        sx={{ width: 180 }}
+	                          )
+	                        }}
+	                        sx={{ minWidth: 200, maxWidth: 240 }}
                       >
                         {CONDITION_OPS.map((o) => (
                           <MenuItem key={o.value} value={o.value}>
@@ -1066,12 +1128,12 @@ export function ScreenerPage() {
                             ),
                           )
                         }
-                        renderInput={(params) => (
-                          <TextField
-                            {...params}
-                            label="RHS"
-                            size="small"
-                            sx={{ flex: 1, minWidth: 240 }}
+	                        renderInput={(params) => (
+	                          <TextField
+	                            {...params}
+	                            label="RHS"
+	                            size="small"
+	                            sx={{ flex: 1, minWidth: 200 }}
                             helperText={
                               r.op === 'MOVING_UP' || r.op === 'MOVING_DOWN'
                                 ? 'RHS must be numeric'
@@ -1160,15 +1222,39 @@ export function ScreenerPage() {
               )}
             </Stack>
           </Stack>
-        </Paper>
+          </Paper>
+        </Box>
 
-        <Paper
-          variant="outlined"
+        {/* Draggable Divider */}
+        <Box
+          onMouseDown={startResizing}
           sx={{
-            p: 2,
-            flex: { lg: 3 },
+            width: 12,
+            cursor: 'col-resize',
+            display: { xs: 'none', md: 'flex' },
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            '&:hover .divider-line': {
+              bgcolor: 'primary.main',
+              height: '40px',
+            },
           }}
         >
+          <Box
+            className="divider-line"
+            sx={{
+              width: 4,
+              height: '24px',
+              bgcolor: 'divider',
+              borderRadius: 1,
+              transition: 'all 0.2s',
+            }}
+          />
+        </Box>
+
+        <Box sx={{ flex: 1, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
+          <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
           <Stack direction="row" spacing={2} sx={{ mb: 1 }} alignItems="center">
             <FormControlLabel
               control={
@@ -1218,8 +1304,9 @@ export function ScreenerPage() {
               }}
             />
           </Box>
-        </Paper>
-      </Stack>
+          </Paper>
+        </Box>
+      </Box>
 
       <Dialog open={createGroupOpen} onClose={() => setCreateGroupOpen(false)}>
         <DialogTitle>Create group from matches</DialogTitle>
