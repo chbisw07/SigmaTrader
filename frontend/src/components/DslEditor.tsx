@@ -56,7 +56,7 @@ function _snippetForCustomIndicator(ci: CustomIndicatorForDsl): string {
       ),
     )
 
-    const sources = ['open', 'high', 'low', 'close', 'volume']
+    const sources = ['open', 'high', 'low', 'close', 'volume', 'hlc3']
 
     const keywordItems = [
       { label: 'AND', insertText: 'AND' },
@@ -88,18 +88,11 @@ function _snippetForCustomIndicator(ci: CustomIndicatorForDsl): string {
       { label: 'RET', snippet: 'RET(${1:close}, "${2:1d}")' },
       { label: 'ATR', snippet: 'ATR(${1:14}, "${2:1d}")' },
 
-      { label: 'LAG', snippet: 'LAG(${1:close}, ${2:1})' },
-      { label: 'ROC', snippet: 'ROC(${1:close}, ${2:14})' },
-      { label: 'Z_SCORE', snippet: 'Z_SCORE(${1:close}, ${2:20})' },
-      { label: 'BOLLINGER', snippet: 'BOLLINGER(${1:close}, ${2:20}, ${3:2})' },
-      { label: 'CROSSOVER', snippet: 'CROSSOVER(${1:a}, ${2:b})' },
-      { label: 'CROSSUNDER', snippet: 'CROSSUNDER(${1:a}, ${2:b})' },
+      { label: 'OBV', snippet: 'OBV(${1:close}, ${2:volume}, "${3:1d}")' },
+      { label: 'VWAP', snippet: 'VWAP(${1:hlc3}, ${2:volume}, "${3:1d}")' },
 
-      { label: 'ABS', snippet: 'ABS(${1:x})' },
-      { label: 'SQRT', snippet: 'SQRT(${1:x})' },
-      { label: 'LOG', snippet: 'LOG(${1:x})' },
-      { label: 'EXP', snippet: 'EXP(${1:x})' },
-      { label: 'POW', snippet: 'POW(${1:x}, ${2:y})' },
+      { label: 'CROSSING_ABOVE', snippet: 'CROSSING_ABOVE(${1:a}, ${2:b})' },
+      { label: 'CROSSING_BELOW', snippet: 'CROSSING_BELOW(${1:a}, ${2:b})' },
     ]
 
     const customFnItems = (customIndicators ?? [])

@@ -843,7 +843,7 @@ export function DashboardPage() {
       if (k === 'SMA') return theme.palette.warning.main
       if (k === 'EMA') return theme.palette.info.main
       if (k === 'RSI') return theme.palette.secondary.main
-      if (k === 'BOLLINGER') return theme.palette.success.main
+      if (k === 'VWAP') return theme.palette.success.main
       return theme.palette.text.secondary
     }
     const plotted = indicatorRows.filter((r) => r.enabled && r.plot === 'price')
@@ -1265,9 +1265,8 @@ export function DashboardPage() {
                       {indicatorRows.map((row, idx) => {
                         const params = (row.params ?? {}) as Record<string, any>
                         const kind = String(row.kind || 'SMA').toUpperCase()
-                        const needsSource = ['SMA','EMA','RSI','STDDEV','ROC','Z_SCORE','BOLLINGER','RET'].includes(kind)
-                        const needsLength = ['SMA','EMA','RSI','STDDEV','ROC','Z_SCORE','BOLLINGER','ATR'].includes(kind)
-                        const showMult = kind === 'BOLLINGER'
+                        const needsSource = ['SMA', 'EMA', 'RSI', 'STDDEV', 'RET', 'OBV', 'VWAP'].includes(kind)
+                        const needsLength = ['SMA', 'EMA', 'RSI', 'STDDEV', 'ATR'].includes(kind)
                         const showTimeframe = kind !== 'CUSTOM'
                         return (
                           <Stack key={idx} direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ md: 'center' }}>
@@ -1310,7 +1309,7 @@ export function DashboardPage() {
                               }
                               sx={{ minWidth: 140 }}
                             >
-                              {['SMA','EMA','RSI','STDDEV','ROC','Z_SCORE','BOLLINGER','ATR','RET','CUSTOM'].map((k) => (
+                              {['SMA', 'EMA', 'RSI', 'STDDEV', 'ATR', 'RET', 'OBV', 'VWAP', 'CUSTOM'].map((k) => (
                                 <MenuItem key={k} value={k}>{k}</MenuItem>
                               ))}
                             </TextField>
@@ -1379,7 +1378,7 @@ export function DashboardPage() {
                               <>
                                 {needsSource ? (
                                 <TextField
-                                  label="Source"
+                                  label={kind === 'VWAP' ? 'Price' : 'Source'}
                                   select
                                   size="small"
                                   value={String(params.source ?? 'close')}
@@ -1392,7 +1391,7 @@ export function DashboardPage() {
                                   }
                                   sx={{ minWidth: 120 }}
                                 >
-                                  {['close','open','high','low','volume'].map((s) => (
+                                  {['close', 'open', 'high', 'low', 'hlc3', 'volume'].map((s) => (
                                     <MenuItem key={s} value={s}>{s}</MenuItem>
                                   ))}
                                 </TextField>
@@ -1410,23 +1409,6 @@ export function DashboardPage() {
                                   setIndicatorRows((prev) =>
                                     prev.map((r, i) =>
                                       i === idx ? { ...r, params: { ...params, length: Number(e.target.value || 0) } } : r,
-                                    ),
-                                  )
-                                }
-                                sx={{ width: 110 }}
-                              />
-                            )}
-
-                            {showMult && (
-                              <TextField
-                                label="Mult"
-                                size="small"
-                                type="number"
-                                value={Number(params.mult ?? 2)}
-                                onChange={(e) =>
-                                  setIndicatorRows((prev) =>
-                                    prev.map((r, i) =>
-                                      i === idx ? { ...r, params: { ...params, mult: Number(e.target.value || 0) } } : r,
                                     ),
                                   )
                                 }

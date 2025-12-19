@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from math import exp, log, sqrt
+from math import exp, isfinite, log, sqrt
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy.orm import Session
@@ -437,6 +437,228 @@ class SeriesValue:
     bar_time: Optional[datetime]
 
 
+_NAN = float("nan")
+
+
+def _as_optional(v: float | None) -> Optional[float]:
+    if v is None or not isfinite(v):
+        return None
+    return float(v)
+
+
+def _series_len(values: Sequence[float]) -> int:
+    return len(values)
+
+
+def _align_series(
+    a: Sequence[float], b: Sequence[float]
+) -> tuple[list[float], list[float]]:
+    n = min(len(a), len(b))
+    return list(a[:n]), list(b[:n])
+
+
+def _binop_series(a: Sequence[float], b: Sequence[float], op: str) -> list[float]:
+    aa, bb = _align_series(a, b)
+    out: list[float] = []
+    for x, y in zip(aa, bb, strict=False):
+        if not isfinite(x) or not isfinite(y):
+            out.append(_NAN)
+            continue
+        if op == "+":
+            out.append(x + y)
+        elif op == "-":
+            out.append(x - y)
+        elif op == "*":
+            out.append(x * y)
+        elif op == "/":
+            out.append(_NAN if y == 0 else x / y)
+        else:
+            out.append(_NAN)
+    return out
+
+
+def _unary_series(values: Sequence[float], op: str) -> list[float]:
+    if op == "-":
+        return [(-v if isfinite(v) else _NAN) for v in values]
+    return [(_NAN if not isfinite(v) else v) for v in values]
+
+
+def _sma_series(values: Sequence[float], length: int) -> list[float]:
+    n = len(values)
+    if length <= 0:
+        return [_NAN] * n
+    out = [_NAN] * n
+    for i in range(n):
+        if i + 1 < length:
+            continue
+        window = values[i - length + 1 : i + 1]
+        if any(not isfinite(v) for v in window):
+            continue
+        out[i] = sum(window) / length
+    return out
+
+
+def _ema_series(values: Sequence[float], length: int) -> list[float]:
+    n = len(values)
+    if length <= 0:
+        return [_NAN] * n
+    out = [_NAN] * n
+    if n < length:
+        return out
+    k = 2.0 / (length + 1.0)
+    seed = values[:length]
+    if any(not isfinite(v) for v in seed):
+        return out
+    ema = sum(seed) / length
+    out[length - 1] = ema
+    for i in range(length, n):
+        v = values[i]
+        if not isfinite(v) or not isfinite(ema):
+            ema = _NAN
+        else:
+            ema = v * k + ema * (1 - k)
+        out[i] = ema
+    return out
+
+
+def _rsi_series(values: Sequence[float], length: int) -> list[float]:
+    n = len(values)
+    out = [_NAN] * n
+    if length <= 0 or n < length + 1:
+        return out
+    for i in range(length, n):
+        window = values[i - length : i + 1]
+        if any(not isfinite(v) for v in window):
+            continue
+        gains: list[float] = []
+        losses: list[float] = []
+        for prev, curr in zip(window[:-1], window[1:], strict=False):
+            delta = curr - prev
+            if delta >= 0:
+                gains.append(delta)
+                losses.append(0.0)
+            else:
+                gains.append(0.0)
+                losses.append(-delta)
+        avg_gain = sum(gains) / length
+        avg_loss = sum(losses) / length
+        if avg_loss == 0:
+            out[i] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            out[i] = 100.0 - 100.0 / (1.0 + rs)
+    return out
+
+
+def _stddev_series(values: Sequence[float], length: int) -> list[float]:
+    n = len(values)
+    out = [_NAN] * n
+    if length <= 1:
+        return out
+    for i in range(n):
+        if i + 1 < length:
+            continue
+        window = values[i - length + 1 : i + 1]
+        if any(not isfinite(v) for v in window):
+            continue
+        mean = sum(window) / length
+        var = sum((v - mean) ** 2 for v in window) / max(length - 1, 1)
+        out[i] = sqrt(var)
+    return out
+
+
+def _ret_series(values: Sequence[float]) -> list[float]:
+    n = len(values)
+    out = [_NAN] * n
+    for i in range(1, n):
+        a = values[i - 1]
+        b = values[i]
+        if not isfinite(a) or not isfinite(b) or a == 0:
+            continue
+        out[i] = (b - a) / a * 100.0
+    return out
+
+
+def _atr_series(
+    highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], length: int
+) -> list[float]:
+    n = min(len(highs), len(lows), len(closes))
+    out = [_NAN] * n
+    if length <= 0 or n < length + 1:
+        return out
+    trs: list[float] = [_NAN] * n
+    for i in range(1, n):
+        h = highs[i]
+        low = lows[i]
+        pc = closes[i - 1]
+        if any(not isfinite(v) for v in (h, low, pc)):
+            continue
+        trs[i] = max(h - low, abs(h - pc), abs(low - pc))
+    for i in range(n):
+        if i < length:
+            continue
+        window = trs[i - length + 1 : i + 1]
+        if any(not isfinite(v) for v in window):
+            continue
+        out[i] = sum(window) / length
+    return out
+
+
+def _obv_series(closes: Sequence[float], volumes: Sequence[float]) -> list[float]:
+    n = min(len(closes), len(volumes))
+    out = [_NAN] * n
+    if n == 0:
+        return out
+    obv = 0.0
+    out[0] = obv
+    for i in range(1, n):
+        c0 = closes[i - 1]
+        c1 = closes[i]
+        v = volumes[i]
+        if any(not isfinite(x) for x in (c0, c1, v)):
+            out[i] = _NAN
+            continue
+        if c1 > c0:
+            obv += v
+        elif c1 < c0:
+            obv -= v
+        out[i] = obv
+    return out
+
+
+def _vwap_series(
+    *,
+    candles: Sequence[dict[str, Any]],
+    prices: Sequence[float],
+    volumes: Sequence[float],
+) -> list[float]:
+    n = min(len(candles), len(prices), len(volumes))
+    out = [_NAN] * n
+    if n == 0:
+        return out
+    cum_pv = 0.0
+    cum_v = 0.0
+    current_day = candles[0]["ts"].date() if candles and candles[0].get("ts") else None
+    for i in range(n):
+        ts = candles[i].get("ts")
+        day = ts.date() if ts is not None else None
+        if current_day is None:
+            current_day = day
+        if day is not None and current_day is not None and day != current_day:
+            current_day = day
+            cum_pv = 0.0
+            cum_v = 0.0
+        p = prices[i]
+        v = volumes[i]
+        if not isfinite(p) or not isfinite(v) or v < 0:
+            out[i] = _NAN
+            continue
+        cum_pv += p * v
+        cum_v += v
+        out[i] = _NAN if cum_v == 0 else (cum_pv / cum_v)
+    return out
+
+
 def _rolling_window(values: Sequence[float], end: int, length: int) -> List[float]:
     start = max(end - length + 1, 0)
     return list(values[start : end + 1])
@@ -744,6 +966,8 @@ _ALLOWED_BUILTINS: set[str] = {
     "ATR",
     "STDDEV",
     "RET",
+    "OBV",
+    "VWAP",
     # rolling
     "MAX",
     "MIN",
@@ -757,6 +981,8 @@ _ALLOWED_BUILTINS: set[str] = {
     # Explicit cross helpers (Phase C)
     "CROSSOVER",
     "CROSSUNDER",
+    "CROSSING_ABOVE",
+    "CROSSING_BELOW",
     # math
     "ABS",
     "SQRT",
@@ -792,18 +1018,65 @@ def _eval_series(
 ) -> Tuple[list[float], Optional[datetime]]:
     """Evaluate a series-producing expression into a numeric series.
 
-    MVP: supports OHLCV primitives and PRICE/VOLUME calls. Higher-order
-    series operations (e.g. SMA(RSI(...))) are not supported yet.
+    This supports:
+    - primitives: open/high/low/close/volume (+ derived `hlc3`)
+    - arithmetic on series (+, -, *, /)
+    - indicator functions that return series, enabling composition
+      (e.g. RSI(SMA(close, 14, "1d"), 14, "1d"))
     """
+
+    tf_hint = (tf_hint or "1d").strip().lower()
+
+    def _len_from(n: ExprNode) -> int:
+        if isinstance(n, NumberNode):
+            return int(n.value)
+        raise IndicatorAlertError("Length must be a numeric constant")
+
+    def _float_from(n: ExprNode) -> float:
+        if isinstance(n, NumberNode):
+            return float(n.value)
+        raise IndicatorAlertError("Value must be a numeric constant")
+
+    if isinstance(node, NumberNode):
+        candles = cache.candles(tf_hint)
+        n = len(candles)
+        bar_time = candles[-1]["ts"] if candles else None
+        return [float(node.value)] * n, bar_time
 
     if isinstance(node, IdentNode):
         key = node.name.strip().lower()
         if key in {"open", "high", "low", "close", "volume"}:
             return cache.series(tf_hint, key)
+        if key == "hlc3":
+            highs, bar_time = cache.series(tf_hint, "high")
+            lows, _ = cache.series(tf_hint, "low")
+            closes, _ = cache.series(tf_hint, "close")
+            n = min(len(highs), len(lows), len(closes))
+            out: list[float] = []
+            for i in range(n):
+                h = highs[i]
+                low = lows[i]
+                c = closes[i]
+                out.append(
+                    _NAN
+                    if any(not isfinite(v) for v in (h, low, c))
+                    else (h + low + c) / 3.0
+                )
+            return out, bar_time
         raise IndicatorAlertError(f"Unsupported series identifier '{node.name}'")
+
+    if isinstance(node, UnaryNode):
+        series, bar_time = _eval_series(node.child, cache=cache, tf_hint=tf_hint)
+        return _unary_series(series, node.op), bar_time
+
+    if isinstance(node, BinaryNode):
+        left, lt = _eval_series(node.left, cache=cache, tf_hint=tf_hint)
+        right, rt = _eval_series(node.right, cache=cache, tf_hint=tf_hint)
+        return _binop_series(left, right, node.op), (lt or rt)
 
     if isinstance(node, CallNode):
         fn = node.name.upper()
+
         if fn in {"OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"}:
             if len(node.args) != 1:
                 raise IndicatorAlertError(f"{fn} expects (timeframe)")
@@ -811,7 +1084,6 @@ def _eval_series(
             return cache.series(tf, fn.lower())
 
         if fn == "PRICE":
-            # PRICE(timeframe) or PRICE(source, timeframe)
             if len(node.args) == 1:
                 tf = _coerce_tf(node.args[0]).lower()
                 return cache.series(tf, "close")
@@ -826,6 +1098,108 @@ def _eval_series(
             raise IndicatorAlertError(
                 "PRICE expects (timeframe) or (source, timeframe)"
             )
+
+        if fn in {"SMA", "EMA", "RSI", "STDDEV", "MAX", "MIN", "AVG", "SUM"}:
+            if len(node.args) not in {2, 3}:
+                raise IndicatorAlertError(f"{fn} expects (series, length, timeframe?)")
+            length = _len_from(node.args[1])
+            tf = _coerce_tf(node.args[2]).lower() if len(node.args) == 3 else tf_hint
+            src, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            if fn == "SMA":
+                return _sma_series(src, length), bar_time
+            if fn == "EMA":
+                return _ema_series(src, length), bar_time
+            if fn == "RSI":
+                return _rsi_series(src, length), bar_time
+            if fn == "STDDEV":
+                return _stddev_series(src, length), bar_time
+            # For rolling aggregations in series context, treat them as
+            # SMA-like windows.
+            if fn == "MAX":
+                out = [_NAN] * len(src)
+                for i in range(len(src)):
+                    if i + 1 < length:
+                        continue
+                    window = src[i - length + 1 : i + 1]
+                    if any(not isfinite(v) for v in window):
+                        continue
+                    out[i] = max(window)
+                return out, bar_time
+            if fn == "MIN":
+                out = [_NAN] * len(src)
+                for i in range(len(src)):
+                    if i + 1 < length:
+                        continue
+                    window = src[i - length + 1 : i + 1]
+                    if any(not isfinite(v) for v in window):
+                        continue
+                    out[i] = min(window)
+                return out, bar_time
+            if fn == "SUM":
+                out = [_NAN] * len(src)
+                for i in range(len(src)):
+                    if i + 1 < length:
+                        continue
+                    window = src[i - length + 1 : i + 1]
+                    if any(not isfinite(v) for v in window):
+                        continue
+                    out[i] = sum(window)
+                return out, bar_time
+            if fn == "AVG":
+                return _sma_series(src, length), bar_time
+
+        if fn == "RET":
+            if len(node.args) != 2:
+                raise IndicatorAlertError("RET expects (source, timeframe)")
+            tf = _coerce_tf(node.args[1]).lower()
+            src, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            return _ret_series(src), bar_time
+
+        if fn == "ATR":
+            if len(node.args) != 2:
+                raise IndicatorAlertError("ATR expects (length, timeframe)")
+            length = _len_from(node.args[0])
+            tf = _coerce_tf(node.args[1]).lower()
+            highs, bar_time = cache.series(tf, "high")
+            lows, _ = cache.series(tf, "low")
+            closes, _ = cache.series(tf, "close")
+            return _atr_series(highs, lows, closes, length), bar_time
+
+        if fn == "OBV":
+            if len(node.args) != 3:
+                raise IndicatorAlertError("OBV expects (close, volume, timeframe)")
+            tf = _coerce_tf(node.args[2]).lower()
+            closes, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            vols, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf)
+            return _obv_series(closes, vols), bar_time
+
+        if fn == "VWAP":
+            if len(node.args) != 3:
+                raise IndicatorAlertError("VWAP expects (price, volume, timeframe)")
+            tf = _coerce_tf(node.args[2]).lower()
+            candles = cache.candles(tf)
+            prices, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            vols, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf)
+            return _vwap_series(candles=candles, prices=prices, volumes=vols), bar_time
+
+        if fn in {"CROSSOVER", "CROSSUNDER", "CROSSING_ABOVE", "CROSSING_BELOW"}:
+            if len(node.args) != 2:
+                raise IndicatorAlertError(f"{fn} expects (a, b)")
+            a, bt = _eval_series(node.args[0], cache=cache, tf_hint=tf_hint)
+            b, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf_hint)
+            aa, bb = _align_series(a, b)
+            out = [0.0] * len(aa)
+            is_up = fn in {"CROSSOVER", "CROSSING_ABOVE"}
+            for i in range(1, len(out)):
+                a0, a1 = aa[i - 1], aa[i]
+                b0, b1 = bb[i - 1], bb[i]
+                if any(not isfinite(v) for v in (a0, a1, b0, b1)):
+                    continue
+                if is_up:
+                    out[i] = 1.0 if (a0 <= b0 and a1 > b1) else 0.0
+                else:
+                    out[i] = 1.0 if (a0 >= b0 and a1 < b1) else 0.0
+            return out, bt
 
     raise IndicatorAlertError("Unsupported series expression")
 
@@ -973,6 +1347,14 @@ def _eval_numeric(
             v.bar_time = bar_time
             return v
 
+        if name in {"OBV", "VWAP"}:
+            # Compute from full series; works for both latest-only and per-bar
+            # (in-memory) caches.
+            series, bar_time = _eval_series(node, cache=cache, tf_hint="1d")
+            now = series[-1] if series else None
+            prev = series[-2] if len(series) >= 2 else None
+            return SeriesValue(_as_optional(now), _as_optional(prev), bar_time)
+
         if name in {"SMA", "EMA", "RSI", "STDDEV", "MAX", "MIN", "AVG", "SUM"}:
             if len(node.args) not in {2, 3}:
                 raise IndicatorAlertError(
@@ -1113,9 +1495,14 @@ def _eval_numeric(
             v.bar_time = bar_time
             return v
 
-        if name in {"CROSSOVER", "CROSSUNDER"}:
+        if name in {"CROSSOVER", "CROSSUNDER", "CROSSING_ABOVE", "CROSSING_BELOW"}:
             if len(node.args) != 2:
                 raise IndicatorAlertError(f"{name} expects (a, b)")
+            mapped = name
+            if name == "CROSSING_ABOVE":
+                mapped = "CROSSOVER"
+            elif name == "CROSSING_BELOW":
+                mapped = "CROSSUNDER"
             a = _eval_numeric(
                 node.args[0],
                 db=db,
@@ -1139,7 +1526,7 @@ def _eval_numeric(
             bar_time = a.bar_time or b.bar_time
             if a.prev is None or a.now is None or b.prev is None or b.now is None:
                 return SeriesValue(None, None, bar_time)
-            if name == "CROSSOVER":
+            if mapped == "CROSSOVER":
                 now = 1.0 if (a.prev <= b.prev and a.now > b.now) else 0.0
             else:
                 now = 1.0 if (a.prev >= b.prev and a.now < b.now) else 0.0

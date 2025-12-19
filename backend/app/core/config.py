@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     admin_password: str | None = None
     enable_legacy_alerts: bool = False
     screener_sync_limit: int = 1000
+    # DSL profile controls the allowed function surface when compiling new
+    # expressions ("recommended" is intentionally small; "extended" keeps all
+    # experimental functions).
+    dsl_profile: str = "recommended"  # recommended|extended
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.

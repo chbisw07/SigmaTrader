@@ -56,16 +56,10 @@ type VariableKind =
   | 'EMA'
   | 'RSI'
   | 'STDDEV'
-  | 'MAX'
-  | 'MIN'
-  | 'AVG'
-  | 'SUM'
   | 'RET'
   | 'ATR'
-  | 'LAG'
-  | 'ROC'
-  | 'Z_SCORE'
-  | 'BOLLINGER'
+  | 'OBV'
+  | 'VWAP'
   | 'CUSTOM'
 
 const DEFAULT_CONDITION_ROWS: ConditionRow[] = [{ lhs: '', op: '>', rhs: '' }]
@@ -225,20 +219,14 @@ export function ScreenerPage() {
           kind === 'SMA' ||
           kind === 'EMA' ||
           kind === 'RSI' ||
-          kind === 'STDDEV' ||
-          kind === 'MAX' ||
-          kind === 'MIN' ||
-          kind === 'AVG' ||
-          kind === 'SUM'
+          kind === 'STDDEV'
         ) {
           return { name, kind, params: { source: 'close', length: 14, timeframe: '1d' } }
         }
         if (kind === 'RET') return { name, kind: 'RET', params: { source: 'close', timeframe: '1d' } }
         if (kind === 'ATR') return { name, kind: 'ATR', params: { length: 14, timeframe: '1d' } }
-        if (kind === 'LAG') return { name, kind: 'LAG', params: { source: 'close', bars: 1, timeframe: '1d' } }
-        if (kind === 'ROC') return { name, kind: 'ROC', params: { source: 'close', length: 14, timeframe: '1d' } }
-        if (kind === 'Z_SCORE') return { name, kind: 'Z_SCORE', params: { source: 'close', length: 20, timeframe: '1d' } }
-        if (kind === 'BOLLINGER') return { name, kind: 'BOLLINGER', params: { source: 'close', length: 20, mult: 2, timeframe: '1d' } }
+        if (kind === 'OBV') return { name, kind: 'OBV', params: { source: 'close', timeframe: '1d' } }
+        if (kind === 'VWAP') return { name, kind: 'VWAP', params: { price: 'hlc3', timeframe: '1d' } }
         if (kind === 'CUSTOM') return { name, kind: 'CUSTOM', params: { function: '', args: [] } }
         return v
       }),
@@ -585,16 +573,10 @@ export function ScreenerPage() {
                         <MenuItem value="EMA">EMA</MenuItem>
                         <MenuItem value="RSI">RSI</MenuItem>
                         <MenuItem value="STDDEV">StdDev</MenuItem>
-                        <MenuItem value="MAX">Max</MenuItem>
-                        <MenuItem value="MIN">Min</MenuItem>
-                        <MenuItem value="AVG">Avg</MenuItem>
-                        <MenuItem value="SUM">Sum</MenuItem>
                         <MenuItem value="RET">Return</MenuItem>
                         <MenuItem value="ATR">ATR</MenuItem>
-                        <MenuItem value="LAG">Lag</MenuItem>
-                        <MenuItem value="ROC">ROC</MenuItem>
-                        <MenuItem value="Z_SCORE">Z-Score</MenuItem>
-                        <MenuItem value="BOLLINGER">Bollinger</MenuItem>
+                        <MenuItem value="OBV">OBV</MenuItem>
+                        <MenuItem value="VWAP">VWAP</MenuItem>
                         <MenuItem value="CUSTOM">Custom indicator</MenuItem>
                       </TextField>
                       {variableKindOf(v) === 'DSL' && (
@@ -652,7 +634,7 @@ export function ScreenerPage() {
                           ))}
                         </TextField>
                       )}
-                      {['SMA', 'EMA', 'RSI', 'STDDEV', 'MAX', 'MIN', 'AVG', 'SUM'].includes(
+                      {['SMA', 'EMA', 'RSI', 'STDDEV'].includes(
                         variableKindOf(v),
                       ) && (
                         <>
@@ -699,6 +681,94 @@ export function ScreenerPage() {
                               updateVar(idx, {
                                 ...v,
                                 kind: variableKindOf(v) as any,
+                                params: { ...varParams(v), timeframe: e.target.value },
+                              })
+                            }
+                            sx={{ width: 140 }}
+                          >
+                            {ALERT_V3_TIMEFRAMES.map((tf) => (
+                              <MenuItem key={tf} value={tf}>
+                                {tf}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                        </>
+                      )}
+                      {variableKindOf(v) === 'OBV' && (
+                        <>
+                          <TextField
+                            label="Close source"
+                            select
+                            size="small"
+                            value={String(varParams(v).source ?? 'close')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'OBV',
+                                params: { ...varParams(v), source: e.target.value },
+                              })
+                            }
+                            sx={{ minWidth: 160 }}
+                          >
+                            {['close', 'hlc3'].map((s) => (
+                              <MenuItem key={s} value={s}>
+                                {s}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                          <TextField
+                            label="Timeframe"
+                            select
+                            size="small"
+                            value={String(varParams(v).timeframe ?? '1d')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'OBV',
+                                params: { ...varParams(v), timeframe: e.target.value },
+                              })
+                            }
+                            sx={{ width: 140 }}
+                          >
+                            {ALERT_V3_TIMEFRAMES.map((tf) => (
+                              <MenuItem key={tf} value={tf}>
+                                {tf}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                        </>
+                      )}
+                      {variableKindOf(v) === 'VWAP' && (
+                        <>
+                          <TextField
+                            label="Price"
+                            select
+                            size="small"
+                            value={String(varParams(v).price ?? 'hlc3')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'VWAP',
+                                params: { ...varParams(v), price: e.target.value },
+                              })
+                            }
+                            sx={{ minWidth: 160 }}
+                          >
+                            {['hlc3', 'close', 'open', 'high', 'low'].map((s) => (
+                              <MenuItem key={s} value={s}>
+                                {s}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                          <TextField
+                            label="Timeframe"
+                            select
+                            size="small"
+                            value={String(varParams(v).timeframe ?? '1d')}
+                            onChange={(e) =>
+                              updateVar(idx, {
+                                ...v,
+                                kind: 'VWAP',
                                 params: { ...varParams(v), timeframe: e.target.value },
                               })
                             }
@@ -781,114 +851,6 @@ export function ScreenerPage() {
                               updateVar(idx, {
                                 ...v,
                                 kind: 'ATR',
-                                params: { ...varParams(v), timeframe: e.target.value },
-                              })
-                            }
-                            sx={{ width: 140 }}
-                          >
-                            {ALERT_V3_TIMEFRAMES.map((tf) => (
-                              <MenuItem key={tf} value={tf}>
-                                {tf}
-                              </MenuItem>
-                            ))}
-                          </TextField>
-                        </>
-                      )}
-                      {['LAG', 'ROC', 'Z_SCORE', 'BOLLINGER'].includes(variableKindOf(v)) && (
-                        <>
-                          <TextField
-                            label="Source"
-                            select
-                            size="small"
-                            value={String(varParams(v).source ?? 'close')}
-                            onChange={(e) =>
-                              updateVar(idx, {
-                                ...v,
-                                kind: variableKindOf(v) as any,
-                                params: { ...varParams(v), source: e.target.value },
-                              })
-                            }
-                            sx={{ minWidth: 140 }}
-                          >
-                            {ALERT_V3_SOURCES.map((s) => (
-                              <MenuItem key={s} value={s}>
-                                {s}
-                              </MenuItem>
-                            ))}
-                          </TextField>
-                          {variableKindOf(v) === 'LAG' && (
-                            <TextField
-                              label="Bars"
-                              size="small"
-                              type="number"
-                              value={String(varParams(v).bars ?? 1)}
-                              onChange={(e) =>
-                                updateVar(idx, {
-                                  ...v,
-                                  kind: 'LAG',
-                                  params: { ...varParams(v), bars: Number(e.target.value) || 0 },
-                                })
-                              }
-                              sx={{ width: 120 }}
-                            />
-                          )}
-                          {['ROC', 'Z_SCORE'].includes(variableKindOf(v)) && (
-                            <TextField
-                              label="Length"
-                              size="small"
-                              type="number"
-                              value={String(varParams(v).length ?? 14)}
-                              onChange={(e) =>
-                                updateVar(idx, {
-                                  ...v,
-                                  kind: variableKindOf(v) as any,
-                                  params: { ...varParams(v), length: Number(e.target.value) || 0 },
-                                })
-                              }
-                              sx={{ width: 120 }}
-                            />
-                          )}
-                          {variableKindOf(v) === 'BOLLINGER' && (
-                            <>
-                              <TextField
-                                label="Length"
-                                size="small"
-                                type="number"
-                                value={String(varParams(v).length ?? 20)}
-                                onChange={(e) =>
-                                  updateVar(idx, {
-                                    ...v,
-                                    kind: 'BOLLINGER',
-                                    params: { ...varParams(v), length: Number(e.target.value) || 0 },
-                                  })
-                                }
-                                sx={{ width: 120 }}
-                              />
-                              <TextField
-                                label="Mult"
-                                size="small"
-                                type="number"
-                                value={String(varParams(v).mult ?? 2)}
-                                onChange={(e) =>
-                                  updateVar(idx, {
-                                    ...v,
-                                    kind: 'BOLLINGER',
-                                    params: { ...varParams(v), mult: Number(e.target.value) || 0 },
-                                  })
-                                }
-                                sx={{ width: 120 }}
-                              />
-                            </>
-                          )}
-                          <TextField
-                            label="Timeframe"
-                            select
-                            size="small"
-                            value={String(varParams(v).timeframe ?? '1d')}
-                            onChange={(e) =>
-                              updateVar(idx, {
-                                ...v,
-                                kind: variableKindOf(v) as any,
                                 params: { ...varParams(v), timeframe: e.target.value },
                               })
                             }

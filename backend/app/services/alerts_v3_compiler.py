@@ -37,8 +37,7 @@ class CompiledCustomIndicator:
 CustomIndicatorMap = Dict[str, Tuple[List[str], ExprNode]]
 
 
-_CUSTOM_INDICATOR_ALLOWED_BUILTINS: Set[str] = {
-    # MVP surface (Phase A) from docs/alerts_refactor_v3.md
+_DSL_BUILTINS_RECOMMENDED: Set[str] = {
     "OPEN",
     "HIGH",
     "LOW",
@@ -51,18 +50,27 @@ _CUSTOM_INDICATOR_ALLOWED_BUILTINS: Set[str] = {
     "ATR",
     "STDDEV",
     "RET",
+    "OBV",
+    "VWAP",
+    # Cross helpers (event-only semantics)
+    "CROSSOVER",
+    "CROSSUNDER",
+    "CROSSING_ABOVE",
+    "CROSSING_BELOW",
+}
+
+_DSL_BUILTINS_EXTENDED: Set[str] = {
+    *_DSL_BUILTINS_RECOMMENDED,
+    # Rolling
     "MAX",
     "MIN",
     "AVG",
     "SUM",
-    # Time-series mechanics (Phase B)
+    # Time-series mechanics
     "LAG",
     "ROC",
     "Z_SCORE",
     "BOLLINGER",
-    # Explicit cross helpers (Phase C)
-    "CROSSOVER",
-    "CROSSUNDER",
     # Math helpers
     "ABS",
     "SQRT",
@@ -70,6 +78,13 @@ _CUSTOM_INDICATOR_ALLOWED_BUILTINS: Set[str] = {
     "EXP",
     "POW",
 }
+
+
+def _dsl_allowed_builtins(profile: str | None) -> Set[str]:
+    p = (profile or "recommended").strip().lower()
+    if p == "extended":
+        return _DSL_BUILTINS_EXTENDED
+    return _DSL_BUILTINS_RECOMMENDED
 
 
 def _load_json_list(raw: str) -> list[dict[str, Any]]:
@@ -130,12 +145,14 @@ def _ensure_numeric_only(expr: ExprNode, *, context: str) -> None:
             raise IndicatorAlertError(f"{context} must be a numeric expression")
 
 
-def _validate_custom_indicator_ast(expr: ExprNode, *, name: str) -> None:
+def _validate_custom_indicator_ast(
+    expr: ExprNode, *, name: str, allowed_builtins: Set[str]
+) -> None:
     _ensure_numeric_only(expr, context=f"Custom indicator '{name}'")
     for n in _walk(expr):
         if isinstance(n, CallNode):
             fn = n.name.upper()
-            if fn not in _CUSTOM_INDICATOR_ALLOWED_BUILTINS:
+            if fn not in allowed_builtins:
                 raise IndicatorAlertError(
                     f"Custom indicator '{name}' uses unsupported function '{n.name}'"
                 )
@@ -145,7 +162,9 @@ def compile_custom_indicators_for_user(
     db: Session,
     *,
     user_id: int,
+    dsl_profile: str | None = None,
 ) -> CustomIndicatorMap:
+    allowed_builtins = _dsl_allowed_builtins(dsl_profile)
     indicators: list[CustomIndicator] = (
         db.query(CustomIndicator)
         .filter(CustomIndicator.user_id == user_id, CustomIndicator.enabled.is_(True))
@@ -180,7 +199,9 @@ def compile_custom_indicators_for_user(
         else:
             body = parse_v3_expression(ind.body_dsl)
 
-        _validate_custom_indicator_ast(body, name=name)
+        _validate_custom_indicator_ast(
+            body, name=name, allowed_builtins=allowed_builtins
+        )
 
         # Persist compiled AST if missing or invalid.
         if not ind.body_ast_json:
@@ -271,6 +292,20 @@ def _build_variable_ast(var: dict[str, Any]) -> tuple[str, ExprNode]:
         tf = str(params.get("timeframe") or "1d")
         return name.upper(), CallNode("RET", [IdentNode(source), IdentNode(tf)])
 
+    if kind in {"OBV"}:
+        source = str(params.get("source") or "close")
+        tf = str(params.get("timeframe") or "1d")
+        return name.upper(), CallNode(
+            "OBV", [IdentNode(source), IdentNode("volume"), IdentNode(tf)]
+        )
+
+    if kind in {"VWAP"}:
+        price = str(params.get("price") or params.get("source") or "hlc3")
+        tf = str(params.get("timeframe") or "1d")
+        return name.upper(), CallNode(
+            "VWAP", [IdentNode(price), IdentNode("volume"), IdentNode(tf)]
+        )
+
     if kind in {"ATR"}:
         length = int(params.get("length") or params.get("window") or 14)
         tf = str(params.get("timeframe") or "1d")
@@ -352,6 +387,12 @@ def _collect_timeframes(expr: ExprNode) -> Set[str]:
                 tfs.add("1d")
             if fn == "RET" and len(n.args) == 2 and isinstance(n.args[1], IdentNode):
                 tfs.add(n.args[1].name.strip().strip('"').strip("'").lower())
+            if (
+                fn in {"OBV", "VWAP"}
+                and len(n.args) == 3
+                and isinstance(n.args[2], IdentNode)
+            ):
+                tfs.add(n.args[2].name.strip().strip('"').strip("'").lower())
             if fn == "ATR" and len(n.args) in {2, 3}:
                 tf_node = n.args[-1]
                 if isinstance(tf_node, IdentNode):
@@ -380,12 +421,14 @@ def compile_alert_definition(
     alert: AlertDefinition,
     user_id: int,
     custom_indicators: CustomIndicatorMap | None = None,
+    dsl_profile: str | None = None,
 ) -> ExprNode:
     """Compile the alert's condition DSL into an AST with variables inlined."""
 
     custom_indicators = custom_indicators or compile_custom_indicators_for_user(
-        db, user_id=user_id
+        db, user_id=user_id, dsl_profile=dsl_profile
     )
+    allowed_builtins = _dsl_allowed_builtins(dsl_profile)
 
     raw_vars = _load_json_list(alert.variables_json or "[]")
     var_map: Dict[str, ExprNode] = {}
@@ -425,7 +468,7 @@ def compile_alert_definition(
                 continue
             # Built-ins are validated at evaluation time as well; keep a minimal
             # allowlist here.
-            if fn not in _CUSTOM_INDICATOR_ALLOWED_BUILTINS:
+            if fn not in allowed_builtins:
                 raise IndicatorAlertError(f"Unknown function '{n.name}'")
 
     # Auto-fill cadence when unset/blank.
@@ -446,6 +489,7 @@ def compile_alert_expression(
     condition_dsl: str,
     evaluation_cadence: str | None = None,
     custom_indicators: CustomIndicatorMap | None = None,
+    dsl_profile: str | None = None,
 ) -> tuple[ExprNode, str]:
     """Compile (variables + condition DSL) without persisting an AlertDefinition.
 
@@ -453,8 +497,9 @@ def compile_alert_expression(
     """
 
     custom_indicators = custom_indicators or compile_custom_indicators_for_user(
-        db, user_id=user_id
+        db, user_id=user_id, dsl_profile=dsl_profile
     )
+    allowed_builtins = _dsl_allowed_builtins(dsl_profile)
 
     var_map: Dict[str, ExprNode] = {}
     referenced_timeframes: Set[str] = set()
@@ -488,7 +533,7 @@ def compile_alert_expression(
                         f"{fn} expects {len(expected)} args but got {len(n.args)}"
                     )
                 continue
-            if fn not in _CUSTOM_INDICATOR_ALLOWED_BUILTINS:
+            if fn not in allowed_builtins:
                 raise IndicatorAlertError(f"Unknown function '{n.name}'")
 
     cadence = (evaluation_cadence or "").strip()
@@ -506,6 +551,7 @@ def compile_alert_expression_parts(
     condition_dsl: str,
     evaluation_cadence: str | None = None,
     custom_indicators: CustomIndicatorMap | None = None,
+    dsl_profile: str | None = None,
 ) -> tuple[ExprNode, str, Dict[str, ExprNode]]:
     """Compile (variables + condition DSL) and return the resolved variable AST map.
 
@@ -514,8 +560,9 @@ def compile_alert_expression_parts(
     """
 
     custom_indicators = custom_indicators or compile_custom_indicators_for_user(
-        db, user_id=user_id
+        db, user_id=user_id, dsl_profile=dsl_profile
     )
+    allowed_builtins = _dsl_allowed_builtins(dsl_profile)
 
     var_map: Dict[str, ExprNode] = {}
     referenced_timeframes: Set[str] = set()
@@ -549,7 +596,7 @@ def compile_alert_expression_parts(
                         f"{fn} expects {len(expected)} args but got {len(n.args)}"
                     )
                 continue
-            if fn not in _CUSTOM_INDICATOR_ALLOWED_BUILTINS:
+            if fn not in allowed_builtins:
                 raise IndicatorAlertError(f"Unknown function '{n.name}'")
 
     cadence = (evaluation_cadence or "").strip()

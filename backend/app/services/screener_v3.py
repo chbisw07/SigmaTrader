@@ -278,7 +278,9 @@ def evaluate_screener_v3(
     evaluation_cadence: str | None,
     allow_fetch: bool,
 ) -> tuple[list[ScreenerRow], str, dict[str, int]]:
-    custom = compile_custom_indicators_for_user(db, user_id=user.id)
+    custom = compile_custom_indicators_for_user(
+        db, user_id=user.id, dsl_profile=settings.dsl_profile
+    )
     vars_dicts = [_model_dump(v) for v in variables]
     cond_ast, cadence, var_map = compile_alert_expression_parts(
         db,
@@ -287,6 +289,7 @@ def evaluate_screener_v3(
         condition_dsl=condition_dsl,
         evaluation_cadence=evaluation_cadence,
         custom_indicators=custom,
+        dsl_profile=settings.dsl_profile,
     )
 
     targets = _iter_target_symbols(

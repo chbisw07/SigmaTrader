@@ -308,6 +308,7 @@ def list_alert_definitions(
 def create_alert_definition(
     payload: AlertDefinitionCreate,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
 ) -> AlertDefinitionRead:
     action_type, action_params_json = _action_params_to_json(
@@ -335,7 +336,9 @@ def create_alert_definition(
     db.flush()
 
     try:
-        compile_alert_definition(db, alert=alert, user_id=user.id)
+        compile_alert_definition(
+            db, alert=alert, user_id=user.id, dsl_profile=settings.dsl_profile
+        )
     except IndicatorAlertError as exc:
         db.rollback()
         raise HTTPException(
@@ -359,6 +362,7 @@ def update_alert_definition(
     alert_id: int,
     payload: AlertDefinitionUpdate,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
 ) -> AlertDefinitionRead:
     alert = _get_alert_or_404(db, user.id, alert_id)
@@ -397,7 +401,9 @@ def update_alert_definition(
     alert.action_params_json = normalized_params_json
 
     try:
-        compile_alert_definition(db, alert=alert, user_id=user.id)
+        compile_alert_definition(
+            db, alert=alert, user_id=user.id, dsl_profile=settings.dsl_profile
+        )
     except IndicatorAlertError as exc:
         db.rollback()
         raise HTTPException(
@@ -442,6 +448,7 @@ def list_custom_indicators(
 def create_custom_indicator(
     payload: CustomIndicatorCreate,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
 ) -> CustomIndicatorRead:
     ind = CustomIndicator(
@@ -456,7 +463,9 @@ def create_custom_indicator(
     db.flush()
 
     try:
-        compile_custom_indicators_for_user(db, user_id=user.id)
+        compile_custom_indicators_for_user(
+            db, user_id=user.id, dsl_profile=settings.dsl_profile
+        )
     except IndicatorAlertError as exc:
         db.rollback()
         raise HTTPException(
@@ -482,6 +491,7 @@ def update_custom_indicator(
     indicator_id: int,
     payload: CustomIndicatorUpdate,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
 ) -> CustomIndicatorRead:
     ind = _get_indicator_or_404(db, user.id, indicator_id)
@@ -499,7 +509,9 @@ def update_custom_indicator(
     db.add(ind)
 
     try:
-        compile_custom_indicators_for_user(db, user_id=user.id)
+        compile_custom_indicators_for_user(
+            db, user_id=user.id, dsl_profile=settings.dsl_profile
+        )
     except IndicatorAlertError as exc:
         db.rollback()
         raise HTTPException(
@@ -545,7 +557,8 @@ def list_alert_events(
     for e in rows:
         data = _model_validate(AlertEventRead, e)
         try:
-            data.snapshot = json.loads(e.snapshot_json or "{}")  # type: ignore[assignment]
+            snapshot = json.loads(e.snapshot_json or "{}")
+            data.snapshot = snapshot  # type: ignore[assignment]
         except json.JSONDecodeError:
             data.snapshot = {}  # type: ignore[assignment]
         out.append(data)
@@ -567,7 +580,9 @@ def test_alert_expression_api(
     """
 
     try:
-        custom = compile_custom_indicators_for_user(db, user_id=user.id)
+        custom = compile_custom_indicators_for_user(
+            db, user_id=user.id, dsl_profile=settings.dsl_profile
+        )
         vars_dicts = _variables_to_dicts(payload.variables)
         expr_ast, cadence = compile_alert_expression(
             db,
@@ -576,6 +591,7 @@ def test_alert_expression_api(
             condition_dsl=payload.condition_dsl,
             evaluation_cadence=payload.evaluation_cadence,
             custom_indicators=custom,
+            dsl_profile=settings.dsl_profile,
         )
     except IndicatorAlertError as exc:
         raise HTTPException(

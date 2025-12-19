@@ -725,7 +725,9 @@ def hydrate_history(
         if allowed:
             rows: List[GroupMember] = (
                 db.query(GroupMember)
-                .filter(GroupMember.group_id.in_(sorted(allowed)))  # type: ignore[arg-type]
+                .filter(
+                    GroupMember.group_id.in_(sorted(allowed))  # type: ignore[arg-type]
+                )
                 .all()
             )
             for r in rows:
@@ -933,7 +935,9 @@ def symbol_indicators(
             detail="No candles found for this symbol in the requested window.",
         )
 
-    custom_indicators = compile_custom_indicators_for_user(db, user_id=user.id)
+    custom_indicators = compile_custom_indicators_for_user(
+        db, user_id=user.id, dsl_profile=settings.dsl_profile
+    )
 
     raw_vars = [_model_dump(v) for v in (payload.variables or [])]
     # Compile variables (condition is a harmless constant).
@@ -944,6 +948,7 @@ def symbol_indicators(
         condition_dsl="1 > 0",
         evaluation_cadence="1d",
         custom_indicators=custom_indicators,
+        dsl_profile=settings.dsl_profile,
     )
 
     # Build a name map preserving the user's casing when possible.
@@ -1084,7 +1089,9 @@ def symbol_signals(
             detail="No candles found for this symbol in the requested window.",
         )
 
-    custom_indicators = compile_custom_indicators_for_user(db, user_id=user.id)
+    custom_indicators = compile_custom_indicators_for_user(
+        db, user_id=user.id, dsl_profile=settings.dsl_profile
+    )
     raw_vars = [_model_dump(v) for v in (payload.variables or [])]
     cond_ast, _cadence, _var_map = compile_alert_expression_parts(
         db,
@@ -1093,6 +1100,7 @@ def symbol_signals(
         condition_dsl=payload.condition_dsl,
         evaluation_cadence="1d",
         custom_indicators=custom_indicators,
+        dsl_profile=settings.dsl_profile,
     )
 
     cache = _InMemoryCandleCache(symbol=sym, exchange=exch, candles=candles)
@@ -1101,8 +1109,16 @@ def symbol_signals(
     if isinstance(cond_ast, CallNode) and cond_ast.name.upper() in {
         "CROSSOVER",
         "CROSSUNDER",
+        "CROSSING_ABOVE",
+        "CROSSING_BELOW",
     }:
-        root_kind = cond_ast.name.upper()
+        name = cond_ast.name.upper()
+        if name == "CROSSING_ABOVE":
+            root_kind = "CROSSOVER"
+        elif name == "CROSSING_BELOW":
+            root_kind = "CROSSUNDER"
+        else:
+            root_kind = name
     if isinstance(cond_ast, EventNode):
         op = _EVENT_ALIASES.get(cond_ast.op.upper(), cond_ast.op.upper())
         if op == "CROSSES_ABOVE":
@@ -1224,6 +1240,7 @@ def symbol_signals(
 
     ts_list = [c["ts"].date().isoformat() for c in candles if c.get("ts")]
     n = len(ts_list)
+    prev_ok = False
     for i in range(n):
         cache.set_end(i)
         try:
@@ -1231,10 +1248,17 @@ def symbol_signals(
         except Exception as exc:
             errors.append(str(exc))
             break
-        if not ok:
-            continue
-        kind = root_kind or "TRUE"
-        markers.append(SignalMarker(ts=ts_list[i], kind=kind))
+        if root_kind:
+            # CROSS* operators are event-like and should be true only on the
+            # crossover bar.
+            if ok:
+                markers.append(SignalMarker(ts=ts_list[i], kind=root_kind))
+        else:
+            # For generic boolean signals, emit markers only on transitions
+            # (false -> true).
+            if ok and not prev_ok:
+                markers.append(SignalMarker(ts=ts_list[i], kind="TRUE"))
+        prev_ok = ok
 
     return SymbolSignalsResponse(
         symbol=sym,

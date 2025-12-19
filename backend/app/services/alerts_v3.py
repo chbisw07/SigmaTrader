@@ -249,7 +249,9 @@ def evaluate_alerts_v3_once() -> None:
 
                 custom = custom_by_user.get(user.id)
                 if custom is None:
-                    custom = compile_custom_indicators_for_user(db, user_id=user.id)
+                    custom = compile_custom_indicators_for_user(
+                        db, user_id=user.id, dsl_profile=settings.dsl_profile
+                    )
                     custom_by_user[user.id] = custom
 
                 # Compile condition AST if missing.
@@ -258,11 +260,19 @@ def evaluate_alerts_v3_once() -> None:
                         cond_ast = loads_ast(alert.condition_ast_json)
                     except IndicatorAlertError:
                         cond_ast = compile_alert_definition(
-                            db, alert=alert, user_id=user.id, custom_indicators=custom
+                            db,
+                            alert=alert,
+                            user_id=user.id,
+                            custom_indicators=custom,
+                            dsl_profile=settings.dsl_profile,
                         )
                 else:
                     cond_ast = compile_alert_definition(
-                        db, alert=alert, user_id=user.id, custom_indicators=custom
+                        db,
+                        alert=alert,
+                        user_id=user.id,
+                        custom_indicators=custom,
+                        dsl_profile=settings.dsl_profile,
                     )
 
                 holdings_map = None
