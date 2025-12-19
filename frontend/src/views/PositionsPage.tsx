@@ -7,7 +7,7 @@ import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
-import { DataGrid, GridToolbar, type GridColDef } from '@mui/x-data-grid'
+import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mui/x-data-grid'
 
 import {
   fetchDailyPositions,
@@ -18,14 +18,34 @@ import {
 const formatIst = (iso: string): string =>
   new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
 
+const formatDateLocal = (d: Date): string => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+const defaultDateRange = (): { from: string; to: string } => {
+  const today = new Date()
+  const dayOfWeek = today.getDay() // 0=Sun,1=Mon
+  const diffToMonday = (dayOfWeek + 6) % 7
+  const monday = new Date(today)
+  monday.setDate(today.getDate() - diffToMonday)
+  return {
+    from: formatDateLocal(monday),
+    to: formatDateLocal(today),
+  }
+}
+
 export function PositionsPage() {
+  const defaults = defaultDateRange()
   const [positions, setPositions] = useState<PositionSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
-  const [startDate, setStartDate] = useState<string>('')
-  const [endDate, setEndDate] = useState<string>('')
+  const [startDate, setStartDate] = useState<string>(defaults.from)
+  const [endDate, setEndDate] = useState<string>(defaults.to)
   const [symbolQuery, setSymbolQuery] = useState<string>('')
   const [includeZero, setIncludeZero] = useState(true)
 
@@ -114,6 +134,8 @@ export function PositionsPage() {
       width: 110,
       type: 'number',
       valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'pnl_pct',
@@ -121,6 +143,8 @@ export function PositionsPage() {
       width: 110,
       type: 'number',
       valueFormatter: (v) => (v != null ? `${Number(v).toFixed(2)}%` : ''),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'ltp',
@@ -135,6 +159,8 @@ export function PositionsPage() {
       width: 120,
       type: 'number',
       valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'today_pnl_pct',
@@ -142,11 +168,13 @@ export function PositionsPage() {
       width: 110,
       type: 'number',
       valueFormatter: (v) => (v != null ? `${Number(v).toFixed(2)}%` : ''),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'captured_at',
       headerName: 'Captured',
-      width: 170,
+      width: 190,
       valueFormatter: (v) => (v ? formatIst(String(v)) : ''),
     },
   ]
@@ -239,6 +267,11 @@ export function PositionsPage() {
             getRowId={(r) => r.id}
             density="compact"
             disableRowSelectionOnClick
+            sx={{
+              '& .pnl-negative': {
+                color: 'error.main',
+              },
+            }}
             slots={{ toolbar: GridToolbar }}
             slotProps={{
               toolbar: {
