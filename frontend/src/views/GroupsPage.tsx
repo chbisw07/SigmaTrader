@@ -2,8 +2,11 @@ import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
 import EditIcon from '@mui/icons-material/Edit'
 import PlayListAddIcon from '@mui/icons-material/PlaylistAdd'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
+import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Checkbox from '@mui/material/Checkbox'
 import Chip from '@mui/material/Chip'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
@@ -19,6 +22,9 @@ import Radio from '@mui/material/Radio'
 import RadioGroup from '@mui/material/RadioGroup'
 import Select from '@mui/material/Select'
 import Stack from '@mui/material/Stack'
+import Step from '@mui/material/Step'
+import StepLabel from '@mui/material/StepLabel'
+import Stepper from '@mui/material/Stepper'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import {
@@ -38,6 +44,7 @@ import {
   deleteGroup,
   deleteGroupMember,
   fetchGroup,
+  importWatchlistCsv,
   listGroups,
   updateGroup,
   updateGroupMember,
@@ -115,6 +122,81 @@ function normalizeLines(text: string): string[] {
     .filter(Boolean)
 }
 
+function parseCsvLine(line: string): string[] {
+  const out: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+    if (ch === ',' && !inQuotes) {
+      out.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  out.push(current)
+  return out.map((s) => s.trim())
+}
+
+function parseCsv(text: string): { headers: string[]; rows: string[][] } {
+  const lines = text
+    .split(/\r?\n/g)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+  if (!lines.length) return { headers: [], rows: [] }
+  const headers = parseCsvLine(lines[0] ?? '')
+  const rows = lines.slice(1).map((l) => parseCsvLine(l))
+  return { headers, rows }
+}
+
+function dedupeHeaders(headers: string[]): {
+  keys: string[]
+  labels: Record<string, string>
+} {
+  const counts = new Map<string, number>()
+  const keys: string[] = []
+  const labels: Record<string, string> = {}
+  headers.forEach((raw) => {
+    const base = (raw || '').trim() || 'Column'
+    const seen = counts.get(base) ?? 0
+    counts.set(base, seen + 1)
+    const key = seen === 0 ? base : `${base}__${seen + 1}`
+    const label = seen === 0 ? base : `${base} (${seen + 1})`
+    keys.push(key)
+    labels[key] = label
+  })
+  return { keys, labels }
+}
+
+function disallowedColumnReason(label: string): string | null {
+  const s = (label || '').trim()
+  if (!s) return 'Empty column.'
+  const rules: Array<[RegExp, string]> = [
+    [/\b(open|high|low|close|ohlc)\b/i, 'OHLC price fields are not importable.'],
+    [/\b(volume|vol)\b/i, 'Volume fields are not importable.'],
+    [/\b(price|ltp|last\s*price|bid|ask)\b/i, 'Price fields are not importable.'],
+    [/\b(pnl|p&l|p\/l|profit|loss)\b/i, 'P&L fields are not importable.'],
+    [/\b(return|ret|change|chg|drawdown|dd)\b/i, 'Performance fields are not importable.'],
+    [/\b(rsi|sma|ema|atr|macd|stoch|boll|stddev|vwap|obv)\b/i, 'Indicator fields are not importable.'],
+    [/\b(beta|alpha|sharpe|sortino|volatility|iv)\b/i, 'Risk/volatility metrics are not importable.'],
+    [/\b(p\s*\/\s*e|p\s*\/\s*b|pe\b|pb\b|eps\b|roe\b|roce\b|ratio)\b/i, 'Fundamental ratio fields are not importable.'],
+  ]
+  for (const [pat, reason] of rules) {
+    if (pat.test(s)) return reason
+  }
+  return null
+}
+
 function formatPercent(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(Number(value))) return '—'
   return `${(Number(value) * 100).toFixed(1)}%`
@@ -185,6 +267,37 @@ export function GroupsPage() {
   >([])
   const [allocationError, setAllocationError] = useState<string | null>(null)
   const [allocationBusy, setAllocationBusy] = useState(false)
+
+  // Import watchlist (CSV) wizard state
+  const [importOpen, setImportOpen] = useState(false)
+  const [importStep, setImportStep] = useState(0)
+  const [importFileName, setImportFileName] = useState<string | null>(null)
+  const [importHeaders, setImportHeaders] = useState<string[]>([])
+  const [importHeaderLabels, setImportHeaderLabels] = useState<
+    Record<string, string>
+  >({})
+  const [importRows, setImportRows] = useState<Array<Record<string, string>>>([])
+  const [importPreviewRows, setImportPreviewRows] = useState<
+    Array<Record<string, string>>
+  >([])
+  const [importSymbolColumn, setImportSymbolColumn] = useState<string>('')
+  const [importExchangeColumn, setImportExchangeColumn] = useState<string>('')
+  const [importDefaultExchange, setImportDefaultExchange] = useState('NSE')
+  const [importStripPrefix, setImportStripPrefix] = useState(true)
+  const [importStripSpecial, setImportStripSpecial] = useState(true)
+  const [importSelectedColumns, setImportSelectedColumns] = useState<string[]>([])
+  const [importGroupName, setImportGroupName] = useState('')
+  const [importGroupDescription, setImportGroupDescription] = useState('')
+  const [importReplaceIfExists, setImportReplaceIfExists] = useState(false)
+  const [importBusy, setImportBusy] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importResult, setImportResult] = useState<{
+    groupId: number
+    importedMembers: number
+    importedColumns: number
+    skippedSymbols: number
+    skippedColumns: number
+  } | null>(null)
 
   // Resizable panel state
   const containerRef = useRef<HTMLDivElement>(null)
@@ -326,6 +439,134 @@ export function GroupsPage() {
     setEditingGroupId(null)
     setGroupForm(DEFAULT_GROUP_FORM)
     setGroupDialogOpen(true)
+  }
+
+  const openImportWatchlist = () => {
+    setImportOpen(true)
+    setImportStep(0)
+    setImportFileName(null)
+    setImportHeaders([])
+    setImportHeaderLabels({})
+    setImportRows([])
+    setImportPreviewRows([])
+    setImportSymbolColumn('')
+    setImportExchangeColumn('')
+    setImportDefaultExchange('NSE')
+    setImportStripPrefix(true)
+    setImportStripSpecial(true)
+    setImportSelectedColumns([])
+    setImportGroupName('')
+    setImportGroupDescription('')
+    setImportReplaceIfExists(false)
+    setImportBusy(false)
+    setImportError(null)
+    setImportResult(null)
+  }
+
+  const handleImportFile = async (file: File | null) => {
+    if (!file) return
+    try {
+      setImportError(null)
+      setImportBusy(true)
+      const text = await file.text()
+      const parsed = parseCsv(text)
+      if (!parsed.headers.length) {
+        setImportError('CSV has no header row.')
+        return
+      }
+      const { keys, labels } = dedupeHeaders(parsed.headers)
+      const rows: Array<Record<string, string>> = []
+      for (const row of parsed.rows) {
+        const obj: Record<string, string> = {}
+        keys.forEach((k, i) => {
+          obj[k] = String(row[i] ?? '').trim()
+        })
+        rows.push(obj)
+      }
+      setImportFileName(file.name)
+      setImportHeaders(keys)
+      setImportHeaderLabels(labels)
+      setImportRows(rows)
+      setImportPreviewRows(rows.slice(0, 10))
+      const likelySymbol =
+        keys.find((h) => /symbol/i.test(labels[h] ?? h)) ?? keys[0] ?? ''
+      setImportSymbolColumn(likelySymbol)
+      const likelyExchange = keys.find((h) => /exch/i.test(labels[h] ?? h)) ?? ''
+      setImportExchangeColumn(likelyExchange)
+
+      const defaults = keys
+        .filter((h) => h !== likelySymbol && h !== likelyExchange)
+        .filter((h) => disallowedColumnReason(labels[h] ?? h) == null)
+      setImportSelectedColumns(defaults)
+      setImportStep(1)
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Failed to read CSV.')
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  const submitImportWatchlist = async () => {
+    const name = importGroupName.trim()
+    if (!name) {
+      setImportError('Group name is required.')
+      return
+    }
+    if (!importSymbolColumn) {
+      setImportError('Select a symbol column.')
+      return
+    }
+    if (!importRows.length) {
+      setImportError('No rows found in CSV.')
+      return
+    }
+
+    const existingByName = groups.find(
+      (g) => g.name.toLowerCase() === name.toLowerCase(),
+    )
+    const conflictMode =
+      existingByName && importReplaceIfExists ? 'REPLACE_DATASET' : 'ERROR'
+    if (existingByName && !importReplaceIfExists) {
+      setImportError(
+        'A group with this name already exists. Enable “Replace existing” to overwrite.',
+      )
+      return
+    }
+
+    try {
+      setImportBusy(true)
+      setImportError(null)
+      const res = await importWatchlistCsv({
+        group_name: name,
+        group_description: importGroupDescription.trim() || null,
+        source: 'TRADINGVIEW',
+        original_filename: importFileName,
+        symbol_column: importSymbolColumn,
+        exchange_column: importExchangeColumn || null,
+        default_exchange: importDefaultExchange.trim() || 'NSE',
+        selected_columns: importSelectedColumns,
+        header_labels: importHeaderLabels,
+        rows: importRows,
+        strip_exchange_prefix: importStripPrefix,
+        strip_special_chars: importStripSpecial,
+        allow_kite_fallback: true,
+        conflict_mode: conflictMode as 'ERROR' | 'REPLACE_DATASET' | 'REPLACE_GROUP',
+        replace_members: true,
+      })
+      setImportResult({
+        groupId: res.group_id,
+        importedMembers: res.imported_members,
+        importedColumns: res.imported_columns,
+        skippedSymbols: res.skipped_symbols?.length ?? 0,
+        skippedColumns: res.skipped_columns?.length ?? 0,
+      })
+      await reloadGroups(res.group_id)
+      setImportStep(2)
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Import failed.')
+    } finally {
+      setImportBusy(false)
+    }
   }
 
   const openEditGroup = (groupId: number) => {
@@ -827,6 +1068,14 @@ export function GroupsPage() {
               <Typography variant="h6">Groups</Typography>
               <Box sx={{ flexGrow: 1 }} />
               <Button
+                startIcon={<UploadFileIcon />}
+                size="small"
+                variant="outlined"
+                onClick={openImportWatchlist}
+              >
+                Import
+              </Button>
+              <Button
                 startIcon={<AddIcon />}
                 size="small"
                 variant="contained"
@@ -1050,6 +1299,242 @@ export function GroupsPage() {
           <Button variant="contained" onClick={() => void submitGroupDialog()}>
             Save
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle>Import watchlist (CSV)</DialogTitle>
+        <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Stepper activeStep={importStep}>
+            <Step>
+              <StepLabel>Upload</StepLabel>
+            </Step>
+            <Step>
+              <StepLabel>Map &amp; select</StepLabel>
+            </Step>
+            <Step>
+              <StepLabel>Done</StepLabel>
+            </Step>
+          </Stepper>
+
+          {importError && <Alert severity="error">{importError}</Alert>}
+
+          {importStep === 0 && (
+            <Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Upload a TradingView (or similar) CSV export. SigmaTrader validates symbols against broker
+                instruments (NSE/BSE) and only imports metadata-like columns.
+              </Typography>
+              <Button variant="contained" component="label" disabled={importBusy}>
+                Choose CSV
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  hidden
+                  onChange={(e) => void handleImportFile(e.target.files?.[0] ?? null)}
+                />
+              </Button>
+              {importFileName && (
+                <Typography variant="caption" sx={{ ml: 2 }}>
+                  {importFileName}
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {importStep === 1 && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
+                <TextField
+                  label="Group name"
+                  value={importGroupName}
+                  onChange={(e) => setImportGroupName(e.target.value)}
+                  fullWidth
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={importReplaceIfExists}
+                      onChange={(e) => setImportReplaceIfExists(e.target.checked)}
+                    />
+                  }
+                  label="Replace existing (same name)"
+                />
+              </Stack>
+              <TextField
+                label="Description (optional)"
+                value={importGroupDescription}
+                onChange={(e) => setImportGroupDescription(e.target.value)}
+                fullWidth
+              />
+
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
+                <FormControl fullWidth>
+                  <InputLabel>Symbol column</InputLabel>
+                  <Select
+                    label="Symbol column"
+                    value={importSymbolColumn}
+                    onChange={(e) => {
+                      const next = String(e.target.value)
+                      setImportSymbolColumn(next)
+                      setImportSelectedColumns((prev) => prev.filter((c) => c !== next))
+                    }}
+                  >
+                    {importHeaders.map((h) => (
+                      <MenuItem key={h} value={h}>
+                        {importHeaderLabels[h] ?? h}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl fullWidth>
+                  <InputLabel>Exchange column</InputLabel>
+                  <Select
+                    label="Exchange column"
+                    value={importExchangeColumn}
+                    onChange={(e) => setImportExchangeColumn(String(e.target.value))}
+                  >
+                    <MenuItem value="">(none — use default)</MenuItem>
+                    {importHeaders.map((h) => (
+                      <MenuItem key={h} value={h}>
+                        {importHeaderLabels[h] ?? h}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <TextField
+                  label="Default exchange"
+                  value={importDefaultExchange}
+                  onChange={(e) => setImportDefaultExchange(e.target.value)}
+                  sx={{ width: { xs: '100%', md: 160 } }}
+                />
+              </Stack>
+
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={importStripPrefix}
+                      onChange={(e) => setImportStripPrefix(e.target.checked)}
+                    />
+                  }
+                  label="Strip EXCH: prefix"
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={importStripSpecial}
+                      onChange={(e) => setImportStripSpecial(e.target.checked)}
+                    />
+                  }
+                  label="Strip special chars"
+                />
+              </Stack>
+
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Columns to import (metadata only)
+                </Typography>
+                <Box
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+                    gap: 0.5,
+                  }}
+                >
+                  {importHeaders
+                    .filter((h) => h !== importSymbolColumn && h !== importExchangeColumn)
+                    .map((h) => {
+                      const label = importHeaderLabels[h] ?? h
+                      const reason = disallowedColumnReason(label)
+                      const checked = importSelectedColumns.includes(h)
+                      return (
+                        <FormControlLabel
+                          key={h}
+                          control={
+                            <Checkbox
+                              checked={checked}
+                              disabled={reason != null}
+                              onChange={(e) => {
+                                const nextChecked = e.target.checked
+                                setImportSelectedColumns((current) => {
+                                  if (nextChecked) return Array.from(new Set([...current, h]))
+                                  return current.filter((c) => c !== h)
+                                })
+                              }}
+                            />
+                          }
+                          label={reason ? `${label} (blocked)` : label}
+                        />
+                      )
+                    })}
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Price/volume/performance/indicator/ratio-like fields are blocked because SigmaTrader computes them internally from candles.
+                </Typography>
+              </Box>
+
+              <Divider />
+
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Preview (first {importPreviewRows.length} rows)
+                </Typography>
+                <Paper variant="outlined" sx={{ p: 1, maxHeight: 200, overflow: 'auto' }}>
+                  <pre style={{ margin: 0, fontSize: 12 }}>
+                    {JSON.stringify(importPreviewRows, null, 2)}
+                  </pre>
+                </Paper>
+              </Box>
+            </Box>
+          )}
+
+          {importStep === 2 && importResult && (
+            <Alert severity="success">
+              Imported {importResult.importedMembers} symbols with {importResult.importedColumns} columns.
+              {importResult.skippedSymbols ? ` Skipped symbols: ${importResult.skippedSymbols}.` : ''}
+              {importResult.skippedColumns ? ` Skipped columns: ${importResult.skippedColumns}.` : ''}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {importStep === 1 && (
+            <Button onClick={() => setImportStep(0)} disabled={importBusy}>
+              Back
+            </Button>
+          )}
+          <Button onClick={() => setImportOpen(false)} disabled={importBusy}>
+            Close
+          </Button>
+          {importStep === 1 && (
+            <Button
+              variant="contained"
+              onClick={() => void submitImportWatchlist()}
+              disabled={importBusy || !importRows.length}
+            >
+              Import
+            </Button>
+          )}
+          {importStep === 2 && importResult && (
+            <Button
+              variant="contained"
+              onClick={() => {
+                navigate(
+                  `/holdings?${new URLSearchParams({
+                    universe: `group:${importResult.groupId}`,
+                  }).toString()}`,
+                )
+                setImportOpen(false)
+              }}
+            >
+              Open in holdings grid
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 

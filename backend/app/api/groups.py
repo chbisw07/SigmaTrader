@@ -3,13 +3,21 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user_optional
+from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.models import Group, GroupMember, User
+from app.models import Group, GroupImport, GroupImportValue, GroupMember, User
+from app.schemas.group_imports import (
+    GroupImportDatasetRead,
+    GroupImportDatasetValuesRead,
+    GroupImportWatchlistRequest,
+    GroupImportWatchlistResponse,
+)
 from app.schemas.groups import (
     GroupCreate,
     GroupDetailRead,
@@ -20,6 +28,7 @@ from app.schemas.groups import (
     GroupRead,
     GroupUpdate,
 )
+from app.services.group_imports import import_watchlist_dataset
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -45,6 +54,20 @@ def _get_group_or_404(db: Session, group_id: int) -> Group:
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return group
+
+
+def _get_group_by_name(
+    db: Session,
+    *,
+    name: str,
+    user: User | None,
+) -> Group | None:
+    owner_id = user.id if user is not None else None
+    return (
+        db.query(Group)
+        .filter(Group.owner_id == owner_id, func.lower(Group.name) == name.lower())
+        .one_or_none()
+    )
 
 
 @router.get("/", response_model=List[GroupRead])
@@ -73,6 +96,185 @@ def list_groups(
         payload.member_count = int(member_count or 0)
         results.append(payload)
     return results
+
+
+@router.post("/import/watchlist", response_model=GroupImportWatchlistResponse)
+def import_watchlist(
+    payload: GroupImportWatchlistRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> GroupImportWatchlistResponse:
+    group_name = payload.group_name.strip()
+    if not group_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Group name is required.",
+        )
+
+    existing = _get_group_by_name(db, name=group_name, user=user)
+    group: Group
+    if existing is not None:
+        if payload.conflict_mode == "ERROR":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A group with this name already exists.",
+            )
+        if payload.conflict_mode == "REPLACE_GROUP":
+            db.delete(existing)
+            db.commit()
+            existing = None
+        elif payload.conflict_mode == "REPLACE_DATASET":
+            group = existing
+    if existing is None:
+        group = Group(
+            owner_id=user.id if user is not None else None,
+            name=group_name,
+            kind="WATCHLIST",
+            description=(payload.group_description or None),
+        )
+        db.add(group)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A group with this name already exists.",
+            ) from exc
+        db.refresh(group)
+
+    try:
+        result = import_watchlist_dataset(
+            db,
+            settings,
+            group=group,
+            source=payload.source,
+            original_filename=payload.original_filename,
+            symbol_column=payload.symbol_column,
+            exchange_column=payload.exchange_column,
+            default_exchange=payload.default_exchange,
+            selected_columns=payload.selected_columns,
+            header_labels=payload.header_labels,
+            rows=payload.rows,
+            strip_exchange_prefix=payload.strip_exchange_prefix,
+            strip_special_chars=payload.strip_special_chars,
+            allow_kite_fallback=payload.allow_kite_fallback,
+            replace_members=payload.replace_members,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return GroupImportWatchlistResponse(
+        group_id=result.group_id,
+        import_id=result.import_id,
+        imported_members=result.imported_members,
+        imported_columns=result.imported_columns,
+        skipped_symbols=result.skipped_symbols,
+        skipped_columns=result.skipped_columns,
+        warnings=result.warnings,
+    )
+
+
+@router.get("/{group_id}/dataset", response_model=GroupImportDatasetRead)
+def get_group_dataset(
+    group_id: int,
+    db: Session = Depends(get_db),
+) -> GroupImportDatasetRead:
+    _get_group_or_404(db, group_id)
+    record: GroupImport | None = (
+        db.query(GroupImport).filter(GroupImport.group_id == group_id).one_or_none()
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No dataset for this group.",
+        )
+
+    import json
+
+    try:
+        schema = json.loads(record.schema_json or "[]")
+    except Exception:
+        schema = []
+    try:
+        mapping = json.loads(record.symbol_mapping_json or "{}")
+    except Exception:
+        mapping = {}
+
+    columns = []
+    for col in schema:
+        if not isinstance(col, dict):
+            continue
+        key = str(col.get("key") or "").strip()
+        label = str(col.get("label") or key).strip()
+        if not key:
+            continue
+        columns.append(
+            {
+                "key": key,
+                "label": label,
+                "type": col.get("type") or "string",
+                "source_header": col.get("source_header"),
+            }
+        )
+
+    return GroupImportDatasetRead(
+        id=record.id,
+        group_id=record.group_id,
+        source=record.source,
+        original_filename=record.original_filename,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        columns=columns,
+        symbol_mapping=mapping,
+    )
+
+
+class _GroupDatasetValuesResponse(BaseModel):
+    items: list[GroupImportDatasetValuesRead]
+
+
+@router.get("/{group_id}/dataset/values", response_model=_GroupDatasetValuesResponse)
+def get_group_dataset_values(
+    group_id: int,
+    db: Session = Depends(get_db),
+) -> _GroupDatasetValuesResponse:
+    _get_group_or_404(db, group_id)
+    record: GroupImport | None = (
+        db.query(GroupImport).filter(GroupImport.group_id == group_id).one_or_none()
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No dataset for this group.",
+        )
+
+    import json
+
+    values: list[GroupImportDatasetValuesRead] = []
+    rows = (
+        db.query(GroupImportValue)
+        .filter(GroupImportValue.import_id == record.id)
+        .order_by(GroupImportValue.id)
+        .all()
+    )
+    for row in rows:
+        try:
+            payload = json.loads(row.values_json or "{}")
+        except Exception:
+            payload = {}
+        values.append(
+            GroupImportDatasetValuesRead(
+                symbol=row.symbol,
+                exchange=row.exchange,
+                values=payload if isinstance(payload, dict) else {},
+            )
+        )
+    return _GroupDatasetValuesResponse(items=values)
 
 
 @router.post("/", response_model=GroupRead)

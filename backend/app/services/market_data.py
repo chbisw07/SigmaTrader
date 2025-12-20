@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from typing import Dict, Iterable, List, Literal
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -207,6 +207,111 @@ def _get_instrument_token(
     db.add(inst)
     db.commit()
     return token
+
+
+def resolve_market_instruments_bulk(
+    db: Session,
+    settings: Settings,
+    *,
+    pairs: list[tuple[str, str]],
+    allow_kite_fallback: bool = True,
+) -> dict[tuple[str, str], MarketInstrument]:
+    """Resolve (symbol, exchange) pairs to MarketInstrument rows.
+
+    This is used by features such as group imports to enforce that every
+    symbol maps to a known broker instrument (NSE/BSE). When an instrument
+    is not present in the local cache, SigmaTrader can optionally fall back
+    to fetching Kite instruments once per exchange and upserting matches.
+    """
+
+    if not pairs:
+        return {}
+
+    normalized = [(sym.strip().upper(), exch.strip().upper()) for sym, exch in pairs]
+    unique_pairs = sorted(set(normalized))
+
+    cached = (
+        db.query(MarketInstrument)
+        .filter(
+            tuple_(
+                MarketInstrument.symbol,
+                MarketInstrument.exchange,
+            ).in_(unique_pairs),
+            MarketInstrument.active.is_(True),
+        )
+        .all()
+    )
+    out: dict[tuple[str, str], MarketInstrument] = {
+        (inst.symbol, inst.exchange): inst for inst in cached
+    }
+
+    if not allow_kite_fallback:
+        return out
+
+    missing = [(sym, exch) for sym, exch in unique_pairs if (sym, exch) not in out]
+    if not missing:
+        return out
+
+    # Fetch instruments once per exchange and upsert matches for missing symbols.
+    missing_by_exchange: dict[str, set[str]] = {}
+    for sym, exch in missing:
+        missing_by_exchange.setdefault(exch, set()).add(sym)
+
+    try:
+        kite = _get_kite_client(db, settings)
+    except Exception:
+        # If broker is not connected, just return cached instruments.
+        return out
+
+    inserted_any = False
+    for exch, want in missing_by_exchange.items():
+        if not want:
+            continue
+        try:
+            instruments = kite.instruments(exch)
+        except Exception:
+            continue
+
+        # Match by tradingsymbol for the desired exchange.
+        found: dict[str, tuple[str, str | None]] = {}
+        for row in instruments:
+            ts = row.get("tradingsymbol")
+            if not isinstance(ts, str):
+                continue
+            if ts not in want:
+                continue
+            token_val = row.get("instrument_token")
+            if token_val is None:
+                continue
+            token = str(token_val)
+            name = row.get("name")
+            found[ts] = (token, str(name) if name else None)
+            if len(found) == len(want):
+                break
+
+        for sym, (token, name) in found.items():
+            existing = out.get((sym, exch))
+            if existing is not None:
+                continue
+            inst = MarketInstrument(
+                symbol=sym,
+                exchange=exch,
+                instrument_token=token,
+                name=name,
+                active=True,
+            )
+            db.add(inst)
+            out[(sym, exch)] = inst
+            inserted_any = True
+
+    if inserted_any:
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            # Best-effort only; ignore race/uniqueness and continue.
+
+    return out
 
 
 def _iter_history_chunks(

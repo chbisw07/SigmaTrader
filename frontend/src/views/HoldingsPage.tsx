@@ -48,6 +48,8 @@ import {
   bulkAddGroupMembers,
   createGroup,
   fetchGroup,
+  fetchGroupDataset,
+  fetchGroupDatasetValues,
   fetchGroupMemberships,
   listGroups,
   type Group,
@@ -99,6 +101,10 @@ export function HoldingsPage() {
   const [universeId, setUniverseId] = useState<string>('holdings')
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
   const [activeGroup, setActiveGroup] = useState<GroupDetail | null>(null)
+  const [activeGroupDataset, setActiveGroupDataset] = useState<{
+    columns: Array<{ key: string; label: string; type: string }>
+    valuesByKey: Map<string, Record<string, unknown>>
+  } | null>(null)
 
   const [tradeOpen, setTradeOpen] = useState(false)
   const [tradeHolding, setTradeHolding] = useState<HoldingRow | null>(null)
@@ -227,6 +233,7 @@ export function HoldingsPage() {
       // Clear any stale labels immediately; rows will repopulate once the
       // latest request completes.
       setActiveGroup(null)
+      setActiveGroupDataset(null)
       const [rawHoldings, groups] = await Promise.all([
         fetchHoldings(),
         listGroups().catch(() => [] as Group[]),
@@ -303,10 +310,50 @@ export function HoldingsPage() {
                   reference_price: m.reference_price ?? null,
                 } as HoldingRow
               })
+
+            // Attach dynamic import columns (if any) for this group.
+            try {
+              const dataset = await fetchGroupDataset(groupId)
+              if (requestId !== loadRequestId.current) return
+              if (dataset?.columns?.length) {
+                const values = await fetchGroupDatasetValues(groupId)
+                if (requestId !== loadRequestId.current) return
+                const valuesByKey = new Map<string, Record<string, unknown>>()
+                for (const item of values) {
+                  const k = `${(item.exchange || 'NSE').toUpperCase()}:${(item.symbol || '').toUpperCase()}`
+                  valuesByKey.set(k, item.values ?? {})
+                }
+                setActiveGroupDataset({
+                  columns: dataset.columns.map((c) => ({
+                    key: c.key,
+                    label: c.label,
+                    type: c.type,
+                  })),
+                  valuesByKey,
+                })
+                baseRows = baseRows.map((row) => {
+                  const exch = (row.exchange ?? 'NSE').toUpperCase()
+                  const key = `${exch}:${(row.symbol || '').toUpperCase()}`
+                  const vals = valuesByKey.get(key) ?? {}
+                  const next: HoldingRow & Record<string, unknown> = { ...row }
+                  for (const col of dataset.columns) {
+                    next[`import_${col.key}`] =
+                      (vals as Record<string, unknown>)[col.key] ?? null
+                  }
+                  return next as HoldingRow
+                })
+              } else {
+                setActiveGroupDataset(null)
+              }
+            } catch {
+              // Best-effort only. If import dataset fails to load, holdings still render.
+              setActiveGroupDataset(null)
+            }
           }
         }
       } else {
         setActiveGroup(null)
+        setActiveGroupDataset(null)
       }
 
       if (requestId !== loadRequestId.current) return
@@ -1723,7 +1770,7 @@ export function HoldingsPage() {
           .join(', ')
       : tradePctEquity
 
-  const columns: GridColDef[] = [
+  const baseColumns: GridColDef[] = [
     {
       field: 'index',
       headerName: '#',
@@ -2099,6 +2146,43 @@ export function HoldingsPage() {
       },
     },
   ]
+
+  const importColumns: GridColDef[] = activeGroupDataset?.columns?.length
+    ? activeGroupDataset.columns.map((c) => {
+        const field = `import_${c.key}`
+        const isNumber = c.type === 'number'
+        return {
+          field,
+          headerName: c.label,
+          type: isNumber ? 'number' : 'string',
+          minWidth: 140,
+          flex: 1,
+          valueGetter: (_value, row) =>
+            (row as unknown as Record<string, unknown>)[field] ?? null,
+          valueFormatter: (value: unknown) => {
+            if (value == null) return '—'
+            if (isNumber) {
+              const n = Number(value)
+              return Number.isFinite(n) ? n.toFixed(2) : String(value)
+            }
+            return String(value)
+          },
+        } satisfies GridColDef
+      })
+    : []
+
+  const columns: GridColDef[] =
+    importColumns.length > 0
+      ? (() => {
+          const symbolIndex = baseColumns.findIndex((c) => c.field === 'symbol')
+          const insertAt = symbolIndex >= 0 ? symbolIndex + 1 : 2
+          return [
+            ...baseColumns.slice(0, insertAt),
+            ...importColumns,
+            ...baseColumns.slice(insertAt),
+          ]
+        })()
+      : baseColumns
 
   return (
     <Box>

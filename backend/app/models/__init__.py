@@ -1,5 +1,6 @@
 from .alerts_v3 import AlertDefinition, AlertEvent, CustomIndicator
 from .broker import BrokerConnection, BrokerSecret
+from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
 from .market_data import Candle, MarketInstrument
 from .screener_v3 import ScreenerRun
@@ -36,5 +37,7 @@ __all__ = [
     "IndicatorRule",
     "Group",
     "GroupMember",
+    "GroupImport",
+    "GroupImportValue",
     "ScreenerRun",
 ]

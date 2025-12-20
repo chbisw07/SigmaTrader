@@ -32,6 +32,54 @@ export type GroupDetail = Group & {
   members: GroupMember[]
 }
 
+export type GroupImportColumnType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'date'
+  | 'datetime'
+
+export type GroupImportColumn = {
+  key: string
+  label: string
+  type: GroupImportColumnType
+  source_header?: string | null
+}
+
+export type GroupImportDataset = {
+  id: number
+  group_id: number
+  source: string
+  original_filename?: string | null
+  created_at: string
+  updated_at: string
+  columns: GroupImportColumn[]
+  symbol_mapping: Record<string, unknown>
+}
+
+export type GroupImportDatasetValuesItem = {
+  symbol: string
+  exchange: string
+  values: Record<string, unknown>
+}
+
+export type GroupImportWatchlistResponse = {
+  group_id: number
+  import_id: number
+  imported_members: number
+  imported_columns: number
+  skipped_symbols: Array<{
+    row_index: number
+    raw_symbol?: string | null
+    raw_exchange?: string | null
+    normalized_symbol?: string | null
+    normalized_exchange?: string | null
+    reason: string
+  }>
+  skipped_columns: Array<{ header: string; reason: string }>
+  warnings: string[]
+}
+
 async function readApiError(res: Response): Promise<string> {
   const contentType = res.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
@@ -127,6 +175,68 @@ export async function fetchGroup(groupId: number): Promise<GroupDetail> {
     )
   }
   return (await res.json()) as GroupDetail
+}
+
+export async function importWatchlistCsv(payload: {
+  group_name: string
+  group_description?: string | null
+  source?: string
+  original_filename?: string | null
+  symbol_column: string
+  exchange_column?: string | null
+  default_exchange?: string
+  selected_columns: string[]
+  header_labels?: Record<string, string>
+  rows: Array<Record<string, unknown>>
+  strip_exchange_prefix?: boolean
+  strip_special_chars?: boolean
+  allow_kite_fallback?: boolean
+  conflict_mode?: 'ERROR' | 'REPLACE_DATASET' | 'REPLACE_GROUP'
+  replace_members?: boolean
+}): Promise<GroupImportWatchlistResponse> {
+  const res = await fetch('/api/groups/import/watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await readApiError(res)
+    throw new Error(
+      `Failed to import watchlist (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as GroupImportWatchlistResponse
+}
+
+export async function fetchGroupDataset(
+  groupId: number,
+): Promise<GroupImportDataset | null> {
+  const res = await fetch(`/api/groups/${groupId}/dataset`)
+  if (res.status === 404) return null
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to load group dataset (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as GroupImportDataset
+}
+
+export async function fetchGroupDatasetValues(
+  groupId: number,
+): Promise<GroupImportDatasetValuesItem[]> {
+  const res = await fetch(`/api/groups/${groupId}/dataset/values`)
+  if (res.status === 404) return []
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to load group dataset values (${res.status})${
+        detail ? `: ${detail}` : ''
+      }`,
+    )
+  }
+  const data = (await res.json()) as { items?: GroupImportDatasetValuesItem[] }
+  return Array.isArray(data.items) ? data.items : []
 }
 
 export async function listGroupMembers(groupId: number): Promise<GroupMember[]> {
