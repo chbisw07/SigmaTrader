@@ -319,9 +319,25 @@ export function HoldingsPage() {
                 const values = await fetchGroupDatasetValues(groupId)
                 if (requestId !== loadRequestId.current) return
                 const valuesByKey = new Map<string, Record<string, unknown>>()
+                const valuesBySymbol = new Map<string, Record<string, unknown>>()
+                const symbolMultiplicity = new Map<string, number>()
                 for (const item of values) {
-                  const k = `${(item.exchange || 'NSE').toUpperCase()}:${(item.symbol || '').toUpperCase()}`
+                  const sym = (item.symbol || '').toUpperCase()
+                  const exch = (item.exchange || 'NSE').toUpperCase()
+                  const k = `${exch}:${sym}`
                   valuesByKey.set(k, item.values ?? {})
+
+                  if (sym) {
+                    const nextCount = (symbolMultiplicity.get(sym) ?? 0) + 1
+                    symbolMultiplicity.set(sym, nextCount)
+                    if (nextCount === 1) {
+                      valuesBySymbol.set(sym, item.values ?? {})
+                    } else {
+                      // If the dataset contains the same symbol on multiple exchanges,
+                      // don't guess which one to use for exchange-mismatched rows.
+                      valuesBySymbol.delete(sym)
+                    }
+                  }
                 }
                 setActiveGroupDataset({
                   columns: dataset.columns.map((c) => ({
@@ -333,8 +349,10 @@ export function HoldingsPage() {
                 })
                 baseRows = baseRows.map((row) => {
                   const exch = (row.exchange ?? 'NSE').toUpperCase()
-                  const key = `${exch}:${(row.symbol || '').toUpperCase()}`
-                  const vals = valuesByKey.get(key) ?? {}
+                  const sym = (row.symbol || '').toUpperCase()
+                  const key = `${exch}:${sym}`
+                  const vals =
+                    valuesByKey.get(key) ?? (sym ? valuesBySymbol.get(sym) : null) ?? {}
                   const next: HoldingRow & Record<string, unknown> = { ...row }
                   for (const col of dataset.columns) {
                     next[`import_${col.key}`] =
