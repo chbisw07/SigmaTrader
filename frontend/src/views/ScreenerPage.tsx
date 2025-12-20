@@ -20,10 +20,12 @@ import {
   DataGrid,
   type GridColDef,
 } from '@mui/x-data-grid'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { DslHelpDialog } from '../components/DslHelpDialog'
 import { DslEditor } from '../components/DslEditor'
 import type { AlertVariableDef } from '../services/alertsV3'
 import {
@@ -186,6 +188,7 @@ export function ScreenerPage() {
   const [conditionRows, setConditionRows] =
     useState<ConditionRow[]>(DEFAULT_CONDITION_ROWS)
   const [conditionDsl, setConditionDsl] = useState('')
+  const [helpOpen, setHelpOpen] = useState(false)
   const [evaluationCadence, setEvaluationCadence] = useState<string>('')
 
   const [run, setRun] = useState<ScreenerRun | null>(null)
@@ -1254,6 +1257,11 @@ export function ScreenerPage() {
                   <Stack direction="row" spacing={1} sx={{ mb: 0.5 }} alignItems="center">
                     <Typography variant="subtitle2">DSL expression</Typography>
                     <Box sx={{ flex: 1 }} />
+                    <Tooltip title="Help: DSL syntax, functions, metrics">
+                      <IconButton size="small" onClick={() => setHelpOpen(true)}>
+                        <HelpOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
                     <Button
                       size="small"
                       variant="text"
@@ -1418,6 +1426,12 @@ export function ScreenerPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <DslHelpDialog
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        context="screener"
+      />
     </Box>
   )
 }

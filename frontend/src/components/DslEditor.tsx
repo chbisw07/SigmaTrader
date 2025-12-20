@@ -86,6 +86,7 @@ function _snippetForCustomIndicator(ci: CustomIndicatorForDsl): string {
       { label: 'SUM', snippet: 'SUM(${1:close}, ${2:14}, "${3:1d}")' },
 
       { label: 'RET', snippet: 'RET(${1:close}, "${2:1d}")' },
+      { label: 'ROC', snippet: 'ROC(${1:close}, ${2:14})' },
       { label: 'ATR', snippet: 'ATR(${1:14}, "${2:1d}")' },
 
       { label: 'OBV', snippet: 'OBV(${1:close}, ${2:volume}, "${3:1d}")' },

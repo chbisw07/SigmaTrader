@@ -17,8 +17,10 @@ import Autocomplete from '@mui/material/Autocomplete'
 import { alpha, useTheme } from '@mui/material/styles'
 import { useEffect, useMemo, useState } from 'react'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
 
+import { DslHelpDialog } from '../components/DslHelpDialog'
 import { listGroupMembers, listGroups, type Group } from '../services/groups'
 import { fetchHoldings, type Holding } from '../services/positions'
 import {
@@ -445,6 +447,7 @@ export function DashboardPage() {
   const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
   const [signalLoading, setSignalLoading] = useState(false)
   const [signalError, setSignalError] = useState<string | null>(null)
+  const [dslHelpOpen, setDslHelpOpen] = useState(false)
 
   const [customIndicators, setCustomIndicators] = useState<CustomIndicator[]>([])
   const [customIndicatorsLoading, setCustomIndicatorsLoading] = useState(false)
@@ -1455,6 +1458,19 @@ export function DashboardPage() {
               <Accordion disableGutters defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Typography variant="subtitle2">DSL signals</Typography>
+                  <Box sx={{ flex: 1 }} />
+                  <Tooltip title="Help: DSL syntax, functions, metrics">
+                    <IconButton
+                      size="small"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setDslHelpOpen(true)
+                      }}
+                    >
+                      <HelpOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
                 </AccordionSummary>
                 <AccordionDetails>
                   <Stack spacing={1}>
@@ -1520,6 +1536,12 @@ export function DashboardPage() {
               </Accordion>
             </Stack>
           </Paper>
+
+          <DslHelpDialog
+            open={dslHelpOpen}
+            onClose={() => setDslHelpOpen(false)}
+            context="dashboard"
+          />
       </Box>
     </Box>
   )

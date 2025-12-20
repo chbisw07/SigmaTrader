@@ -6,7 +6,6 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
-import Divider from '@mui/material/Divider'
 import Checkbox from '@mui/material/Checkbox'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
@@ -30,6 +29,7 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { DslHelpDialog } from '../components/DslHelpDialog'
 import { DslEditor } from '../components/DslEditor'
 import {
   createAlertDefinition,
@@ -1799,205 +1799,7 @@ function AlertV3EditorDialog({
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </DialogActions>
-      <AlertDslHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
-    </Dialog>
-  )
-}
-
-function AlertDslHelpDialog({
-  open,
-  onClose,
-}: {
-  open: boolean
-  onClose: () => void
-}) {
-  const [tab, setTab] = useState(0)
-
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>Alert DSL help</DialogTitle>
-      <DialogContent sx={{ pt: 1 }}>
-        <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ mb: 2 }}>
-          <Tab label="Syntax" />
-          <Tab label="Functions" />
-          <Tab label="Metrics" />
-          <Tab label="Examples" />
-        </Tabs>
-
-        {tab === 0 && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Typography variant="body2" color="text.secondary">
-              Use this DSL in both variable definitions and the condition box. Keywords and
-              function names are case-insensitive.
-            </Typography>
-
-            <Box>
-              <Typography variant="subtitle2">Basics</Typography>
-              <Typography variant="body2" component="div">
-                - Logical: <code>AND</code>, <code>OR</code>, <code>NOT</code>
-                <br />
-                - Comparisons: <code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code>,{' '}
-                <code>&lt;=</code>, <code>==</code>, <code>!=</code>
-                <br />
-                - Arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>{' '}
-                (parentheses supported)
-              </Typography>
-            </Box>
-
-            <Box>
-              <Typography variant="subtitle2">Event operators</Typography>
-              <Typography variant="body2" component="div">
-                - <code>A CROSSES_ABOVE B</code> / <code>A CROSSES_BELOW B</code>
-                <br />
-                - Aliases accepted: <code>CROSSING_ABOVE</code>, <code>CROSSING_BELOW</code>
-                <br />
-                - <code>A MOVING_UP N</code> / <code>A MOVING_DOWN N</code> (N is numeric-only)
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                CROSSES_* uses the previous bar vs current bar. MOVING_* checks percent change
-                from previous bar to current bar against N.
-              </Typography>
-            </Box>
-
-            <Box>
-              <Typography variant="subtitle2">Variables</Typography>
-              <Typography variant="body2" color="text.secondary">
-                Variable names must be valid identifiers: letters/underscore first, then letters,
-                numbers, underscore (example: <code>RSI_1H_14</code>).
-              </Typography>
-            </Box>
-
-            <Divider />
-
-            <Typography variant="body2" color="text.secondary">
-              Missing data (no candle history / metric not available) evaluates to “no match”
-              (the condition won’t trigger).
-            </Typography>
-          </Box>
-        )}
-
-        {tab === 1 && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Typography variant="body2" color="text.secondary">
-              Sources: use <code>open</code>, <code>high</code>, <code>low</code>,{' '}
-              <code>close</code>, <code>volume</code>, <code>hlc3</code>. Timeframes can be written as{' '}
-              <code>1d</code> or quoted (<code>&quot;1d&quot;</code>).
-            </Typography>
-
-            <Box>
-              <Typography variant="subtitle2">OHLCV / price</Typography>
-              <Typography variant="body2" component="div">
-                - <code>OPEN(tf)</code>, <code>HIGH(tf)</code>, <code>LOW(tf)</code>,{' '}
-                <code>CLOSE(tf)</code>, <code>VOLUME(tf)</code>
-                <br />
-                - <code>PRICE(tf)</code> (same as <code>CLOSE(tf)</code>)
-                <br />
-                - <code>PRICE(source, tf)</code> where source is open/high/low/close
-              </Typography>
-            </Box>
-
-            <Box>
-              <Typography variant="subtitle2">Indicators</Typography>
-              <Typography variant="body2" component="div">
-                - <code>SMA(series, len, tf?)</code> (tf defaults to 1d)
-                <br />
-                - <code>EMA(series, len, tf?)</code> (tf defaults to 1d)
-                <br />
-                - <code>RSI(series, len, tf?)</code> (tf defaults to 1d)
-                <br />
-                - <code>STDDEV(series, len, tf?)</code> (tf defaults to 1d)
-                <br />
-                - <code>RET(series, tf)</code> (percent return over the latest bar)
-                <br />
-                - <code>ATR(len, tf)</code>
-                <br />
-                - <code>OBV(price, volume, tf?)</code>
-                <br />
-                - <code>VWAP(price, volume, tf?)</code> (use <code>hlc3</code> as a common price input)
-              </Typography>
-            </Box>
-
-            <Box>
-              <Typography variant="subtitle2">Boundary</Typography>
-              <Typography variant="body2" color="text.secondary">
-                The DSL is intentionally limited (no loops, no recursion, no indexing, no if/else).
-              </Typography>
-            </Box>
-
-            <Box>
-              <Typography variant="subtitle2">Custom indicators</Typography>
-              <Typography variant="body2" color="text.secondary">
-                Any enabled custom indicator (from the “Indicators” tab) can be called like a
-                function: <code>MY_IND(arg1, arg2)</code>. The argument count must match the
-                indicator’s parameter list.
-              </Typography>
-            </Box>
-
-            <Box>
-              <Typography variant="subtitle2">Supported timeframes</Typography>
-              <Typography variant="body2" color="text.secondary">
-                {ALERT_V3_TIMEFRAMES.join(', ')} (weekly candles are resampled from daily data).
-              </Typography>
-            </Box>
-          </Box>
-        )}
-
-        {tab === 2 && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Typography variant="body2" color="text.secondary">
-              Metrics are per-symbol values derived from holdings + daily candles. They can be used
-              directly in conditions or assigned to variables.
-            </Typography>
-            <Typography variant="body2">
-              {ALERT_V3_METRICS.map((m) => (
-                <span key={m}>
-                  <code>{m}</code>{' '}
-                </span>
-              ))}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Example: <code>TODAY_PNL_PCT &gt; 5</code>
-            </Typography>
-          </Box>
-        )}
-
-        {tab === 3 && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Typography variant="subtitle2">Common</Typography>
-            <Typography variant="body2" component="div">
-              <code>TODAY_PNL_PCT &gt; 5</code>
-              <br />
-              <code>RSI(close, 14, 1h) &lt; 30 AND TODAY_PNL_PCT &gt; 5</code>
-            </Typography>
-
-            <Typography variant="subtitle2">Crossing / moving</Typography>
-            <Typography variant="body2" component="div">
-              <code>SMA(close, 20, 1d) CROSSES_ABOVE SMA(close, 50, 1d)</code>
-              <br />
-              <code>PRICE(1d) MOVING_UP 2</code>
-            </Typography>
-
-            <Typography variant="subtitle2">Using variables</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-              Define variables:
-            </Typography>
-            <Typography variant="body2" component="div">
-              <code>RSI_1H_14 = RSI(close, 14, 1h)</code>
-              <br />
-              <code>MA_1D_50 = SMA(close, 50, 1d)</code>
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 0.5 }}>
-              Then use them in the condition:
-            </Typography>
-            <Typography variant="body2" component="div">
-              <code>RSI_1H_14 &lt; 30 AND PRICE(1d) &gt; MA_1D_50</code>
-            </Typography>
-          </Box>
-        )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Close</Button>
-      </DialogActions>
+      <DslHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} context="alerts" />
     </Dialog>
   )
 }
