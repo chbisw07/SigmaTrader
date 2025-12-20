@@ -162,6 +162,20 @@ class _Parser:
         if tok is None:
             return left
 
+        # BETWEEN operator: `a BETWEEN lo AND hi` -> (a >= lo AND a <= hi)
+        if tok.kind == "IDENT" and tok.value.upper() == "BETWEEN":
+            self._consume("IDENT")
+            low = self._parse_add()
+            self._consume("IDENT", "AND")
+            high = self._parse_add()
+            return LogicalNode(
+                "AND",
+                [
+                    ComparisonNode("GTE", left, low),
+                    ComparisonNode("LTE", left, high),
+                ],
+            )
+
         # Event operators (as IDENT)
         if tok.kind == "IDENT":
             op = tok.value.upper()
@@ -258,6 +272,45 @@ class _Parser:
         raise IndicatorAlertError(f"Unexpected token '{tok.value}'")
 
 
+def _strip_comments(expr: str) -> str:
+    """Remove `// ...` and `# ...` comments while preserving quoted strings."""
+
+    out: list[str] = []
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(expr)
+    while i < n:
+        ch = expr[i]
+
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            out.append(ch)
+            i += 1
+            continue
+
+        if not in_single and not in_double:
+            if ch == "#":
+                # Skip to end of line.
+                while i < n and expr[i] not in "\r\n":
+                    i += 1
+                continue
+            if ch == "/" and i + 1 < n and expr[i + 1] == "/":
+                while i < n and expr[i] not in "\r\n":
+                    i += 1
+                continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
 def parse_v3_expression(expr: str) -> ExprNode:
     """Parse a v3 alert DSL expression into the v3 AST.
 
@@ -266,7 +319,8 @@ def parse_v3_expression(expr: str) -> ExprNode:
     etc.) is performed in the compilation layer.
     """
 
-    return _Parser(expr).parse()
+    cleaned = _strip_comments(expr or "")
+    return _Parser(cleaned).parse()
 
 
 __all__ = ["parse_v3_expression"]

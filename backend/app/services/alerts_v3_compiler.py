@@ -111,6 +111,81 @@ def _is_valid_ident(name: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name or ""))
 
 
+def _strip_inline_comment(line: str) -> str:
+    """Strip `// ...` and `# ...` from a single line (outside quotes)."""
+
+    out: list[str] = []
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            out.append(ch)
+            i += 1
+            continue
+        if not in_single and not in_double:
+            if ch == "#":
+                break
+            if ch == "/" and i + 1 < n and line[i + 1] == "/":
+                break
+        out.append(ch)
+        i += 1
+    return "".join(out).strip()
+
+
+def _split_inline_variables(condition_dsl: str) -> tuple[list[tuple[str, str]], str]:
+    """Extract inline `NAME = expr` variables from a multi-line DSL block."""
+
+    definitions: list[tuple[str, str]] = []
+    expr_lines: list[str] = []
+
+    for raw in (condition_dsl or "").splitlines():
+        line = _strip_inline_comment(raw).strip()
+        if not line:
+            continue
+
+        # Only treat *single* '=' (assignment) as a variable definition.
+        # Do not treat '==', '!=', '>=', '<=' as assignment.
+        i = 0
+        n = len(line)
+        while i < n and line[i].isspace():
+            i += 1
+        start = i
+        if i >= n:
+            continue
+        if not (line[i].isalpha() or line[i] == "_"):
+            expr_lines.append(line)
+            continue
+        i += 1
+        while i < n and (line[i].isalnum() or line[i] == "_"):
+            i += 1
+        name = line[start:i]
+        j = i
+        while j < n and line[j].isspace():
+            j += 1
+        if j < n and line[j] == "=":
+            if j + 1 < n and line[j + 1] == "=":
+                expr_lines.append(line)
+                continue
+            rhs = line[j + 1 :].strip()
+            if name and rhs and _is_valid_ident(name):
+                definitions.append((name, rhs))
+                continue
+
+        expr_lines.append(line)
+
+    expr = " ".join(expr_lines).strip()
+    return definitions, expr
+
+
 def _walk(node: ExprNode) -> Iterable[ExprNode]:
     yield node
     if isinstance(node, (NumberNode, IdentNode)):
@@ -511,7 +586,19 @@ def compile_alert_expression(
         var_map[vname] = expr
         referenced_timeframes |= _collect_timeframes(expr)
 
-    condition_ast = parse_v3_expression(condition_dsl)
+    inline_defs, expr_text = _split_inline_variables(condition_dsl)
+    for name, rhs in inline_defs:
+        vname = name.upper()
+        expr = parse_v3_expression(rhs)
+        expr = _substitute_idents(expr, var_map)
+        _ensure_numeric_only(expr, context=f"Variable '{vname}'")
+        var_map[vname] = expr
+        referenced_timeframes |= _collect_timeframes(expr)
+
+    if not expr_text.strip():
+        raise IndicatorAlertError("Condition is empty.")
+
+    condition_ast = parse_v3_expression(expr_text)
     condition_ast = _substitute_idents(condition_ast, var_map)
     referenced_timeframes |= _collect_timeframes(condition_ast)
 
@@ -574,7 +661,19 @@ def compile_alert_expression_parts(
         var_map[vname] = expr
         referenced_timeframes |= _collect_timeframes(expr)
 
-    condition_ast = parse_v3_expression(condition_dsl)
+    inline_defs, expr_text = _split_inline_variables(condition_dsl)
+    for name, rhs in inline_defs:
+        vname = name.upper()
+        expr = parse_v3_expression(rhs)
+        expr = _substitute_idents(expr, var_map)
+        _ensure_numeric_only(expr, context=f"Variable '{vname}'")
+        var_map[vname] = expr
+        referenced_timeframes |= _collect_timeframes(expr)
+
+    if not expr_text.strip():
+        raise IndicatorAlertError("Condition is empty.")
+
+    condition_ast = parse_v3_expression(expr_text)
     condition_ast = _substitute_idents(condition_ast, var_map)
     referenced_timeframes |= _collect_timeframes(condition_ast)
 

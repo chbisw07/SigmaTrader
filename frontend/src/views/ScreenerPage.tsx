@@ -80,6 +80,84 @@ const CONDITION_OPS = [
   { value: 'MOVING_DOWN', label: 'MOVING_DOWN' },
 ]
 
+function splitInlineDslVariables(dsl: string): {
+  inlineVariables: Array<{ name: string; dsl: string }>
+  conditionDsl: string
+} {
+  const inlineVariables: Array<{ name: string; dsl: string }> = []
+  const conditionLines: string[] = []
+
+  const isValidIdent = (s: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s)
+
+  const stripInlineComments = (line: string) => {
+    let inSingle = false
+    let inDouble = false
+    let out = ''
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i]
+      const next = i + 1 < line.length ? line[i + 1] : ''
+
+      if (ch === "'" && !inDouble) {
+        inSingle = !inSingle
+        out += ch
+        continue
+      }
+      if (ch === '"' && !inSingle) {
+        inDouble = !inDouble
+        out += ch
+        continue
+      }
+
+      if (!inSingle && !inDouble) {
+        if (ch === '#') break
+        if (ch === '/' && next === '/') break
+      }
+
+      out += ch
+    }
+    return out.trim()
+  }
+
+  const parseAssignment = (line: string) => {
+    // Only treat `NAME = expr` as an assignment.
+    // Do NOT treat `==`, `>=`, `<=`, `!=` as assignment.
+    let i = 0
+    while (i < line.length && /\s/.test(line[i])) i += 1
+    const start = i
+    if (i >= line.length) return null
+    const first = line[i]
+    if (!(/[A-Za-z_]/.test(first))) return null
+    i += 1
+    while (i < line.length && /[A-Za-z0-9_]/.test(line[i])) i += 1
+    const name = line.slice(start, i)
+    let j = i
+    while (j < line.length && /\s/.test(line[j])) j += 1
+    if (j >= line.length || line[j] !== '=') return null
+    if (j + 1 < line.length && line[j + 1] === '=') return null
+    const rhs = line.slice(j + 1).trim()
+    if (!name || !rhs || !isValidIdent(name)) return null
+    return { name, rhs }
+  }
+
+  for (const rawLine of dsl.split(/\r?\n/)) {
+    const line = stripInlineComments(rawLine)
+    if (!line) continue
+
+    const assignment = parseAssignment(line)
+    if (assignment) {
+      inlineVariables.push({ name: assignment.name, dsl: assignment.rhs })
+      continue
+    }
+
+    conditionLines.push(line)
+  }
+
+  return {
+    inlineVariables,
+    conditionDsl: conditionLines.join(' ').trim(),
+  }
+}
+
 function buildDslFromRows(join: 'AND' | 'OR', rows: ConditionRow[]): string {
   const parts = rows
     .map((r) => {
@@ -184,6 +262,34 @@ export function ScreenerPage() {
     [conditionJoin, conditionRows],
   )
 
+  const inlineDsl = useMemo(() => splitInlineDslVariables(conditionDsl), [conditionDsl])
+
+  const effectiveVariables = useMemo(() => {
+    const fromInline = conditionTab === 1 ? inlineDsl.inlineVariables : []
+    const fromUi = variables
+      .map((v) => ({ ...v, name: (v.name || '').trim() }))
+      .filter((v) => v.name)
+
+    const seen = new Set<string>()
+    const ordered: AlertVariableDef[] = []
+
+    for (const v of fromInline) {
+      const key = v.name.toUpperCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      ordered.push({ name: v.name.trim(), dsl: v.dsl })
+    }
+
+    for (const v of fromUi) {
+      const key = v.name.toUpperCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      ordered.push(v)
+    }
+
+    return ordered
+  }, [conditionTab, inlineDsl.inlineVariables, variables])
+
   const variableKindOf = (v: AlertVariableDef): VariableKind => {
     if (v.kind) return v.kind as VariableKind
     return 'DSL'
@@ -243,11 +349,11 @@ export function ScreenerPage() {
   })
 
   const operandOptions = useMemo(() => {
-    const vars = variables
+    const vars = effectiveVariables
       .map((v) => (v.name || '').trim())
       .filter((x) => x.length > 0)
     return Array.from(new Set([...vars, ...ALERT_V3_METRICS]))
-  }, [variables])
+  }, [effectiveVariables])
 
   useEffect(() => {
     let active = true
@@ -305,7 +411,10 @@ export function ScreenerPage() {
 
   const handleRun = async () => {
     const groupIds = selectedGroups.map((g) => g.id)
-    const dsl = conditionTab === 0 ? builderDsl.trim() : conditionDsl.trim()
+    const rawDsl = conditionTab === 0 ? builderDsl : conditionDsl
+    const extracted =
+      conditionTab === 1 ? inlineDsl.conditionDsl : rawDsl
+    const dsl = (conditionTab === 0 ? builderDsl : extracted).trim()
     if (!dsl) {
       setRunError('Condition is empty.')
       return
@@ -321,9 +430,7 @@ export function ScreenerPage() {
       const res = await runScreener({
         include_holdings: includeHoldings,
         group_ids: groupIds,
-        variables: variables
-          .map((v) => ({ ...v, name: v.name.trim() }))
-          .filter((v) => v.name),
+        variables: effectiveVariables,
         condition_dsl: dsl,
         evaluation_cadence: evaluationCadence.trim() || null,
       })
@@ -348,15 +455,21 @@ export function ScreenerPage() {
 
   const variableColumns: GridColDef[] = useMemo(() => {
     if (!showVariables) return []
-    const keys = variables.map((v) => v.name).filter(Boolean)
-    return keys.map((name) => ({
-      field: `var_${name}`,
-      headerName: name,
+    const keys = effectiveVariables.map((v) => v.name).filter(Boolean)
+    return keys.map((name) => {
+      const display = String(name)
+      const upper = display.toUpperCase()
+      return {
+        field: `var_${upper}`,
+        headerName: display,
       width: 140,
       valueGetter: (_value: any, row: any) =>
-        ((row as ScreenerRow | undefined)?.variables ?? {})[name] ?? null,
-    }))
-  }, [showVariables, variables])
+          ((row as ScreenerRow | undefined)?.variables ?? {})[upper] ??
+          ((row as ScreenerRow | undefined)?.variables ?? {})[display] ??
+          null,
+      } as GridColDef
+    })
+  }, [showVariables, effectiveVariables])
 
   const columns: GridColDef[] = useMemo(
     () => [
