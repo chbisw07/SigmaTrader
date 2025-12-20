@@ -18,7 +18,10 @@ import Typography from '@mui/material/Typography'
 import Autocomplete from '@mui/material/Autocomplete'
 import {
   DataGrid,
+  GridLogicOperator,
+  GridToolbar,
   type GridColDef,
+  type GridColumnVisibilityModel,
 } from '@mui/x-data-grid'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -68,6 +71,14 @@ const DEFAULT_CONDITION_ROWS: ConditionRow[] = [{ lhs: '', op: '>', rhs: '' }]
 
 const SCREENER_LEFT_PANEL_WIDTH_STORAGE_KEY = 'st_screener_left_panel_width_v1'
 const DEFAULT_LEFT_PANEL_WIDTH = 760
+const SCREENER_RESULTS_COLUMN_VISIBILITY_STORAGE_KEY =
+  'st_screener_results_column_visibility_v1'
+
+const DEFAULT_SCREENER_COLUMN_VISIBILITY: GridColumnVisibilityModel = {
+  // Useful for debugging, but often empty; keep available via Columns menu.
+  missing_data: false,
+  error: false,
+}
 
 const CONDITION_OPS = [
   { value: '>', label: '>' },
@@ -197,6 +208,21 @@ export function ScreenerPage() {
 
   const [matchedOnly, setMatchedOnly] = useState(true)
   const [showVariables, setShowVariables] = useState(false)
+
+  const [columnVisibilityModel, setColumnVisibilityModel] =
+    useState<GridColumnVisibilityModel>(() => {
+      if (typeof window === 'undefined') return DEFAULT_SCREENER_COLUMN_VISIBILITY
+      try {
+        const raw = window.localStorage.getItem(
+          SCREENER_RESULTS_COLUMN_VISIBILITY_STORAGE_KEY,
+        )
+        if (!raw) return DEFAULT_SCREENER_COLUMN_VISIBILITY
+        const parsed = JSON.parse(raw) as GridColumnVisibilityModel
+        return { ...DEFAULT_SCREENER_COLUMN_VISIBILITY, ...parsed }
+      } catch {
+        return DEFAULT_SCREENER_COLUMN_VISIBILITY
+      }
+    })
 
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
   const [createGroupName, setCreateGroupName] = useState('')
@@ -465,8 +491,8 @@ export function ScreenerPage() {
       return {
         field: `var_${upper}`,
         headerName: display,
-      width: 140,
-      valueGetter: (_value: any, row: any) =>
+        width: 140,
+        valueGetter: (_value: any, row: any) =>
           ((row as ScreenerRow | undefined)?.variables ?? {})[upper] ??
           ((row as ScreenerRow | undefined)?.variables ?? {})[display] ??
           null,
@@ -475,72 +501,52 @@ export function ScreenerPage() {
   }, [showVariables, effectiveVariables])
 
   const columns: GridColDef[] = useMemo(
-    () => [
-      { field: 'symbol', headerName: 'Symbol', width: 140 },
-      { field: 'exchange', headerName: 'Exch', width: 90 },
-      {
-        field: 'matched',
-        headerName: 'Match',
-        width: 90,
-        renderCell: (params: any) => (params.value ? 'YES' : '—'),
-      },
-      {
-        field: 'last_price',
-        headerName: 'Last',
-        width: 110,
-        renderCell: (params: any) =>
-          params.value != null && Number.isFinite(Number(params.value))
-            ? Number(params.value).toFixed(2)
-            : '—',
-      },
-      {
-        field: 'rsi_14_1d',
-        headerName: 'RSI(14) 1d',
-        width: 120,
-        renderCell: (params: any) =>
-          params.value != null && Number.isFinite(Number(params.value))
-            ? Number(params.value).toFixed(2)
-            : '—',
-      },
-      {
-        field: 'sma_20_1d',
-        headerName: 'SMA(20) 1d',
-        width: 120,
-        renderCell: (params: any) =>
-          params.value != null && Number.isFinite(Number(params.value))
-            ? Number(params.value).toFixed(2)
-            : '—',
-      },
-      {
-        field: 'sma_50_1d',
-        headerName: 'SMA(50) 1d',
-        width: 120,
-        renderCell: (params: any) =>
-          params.value != null && Number.isFinite(Number(params.value))
-            ? Number(params.value).toFixed(2)
-            : '—',
-      },
-      {
-        field: 'missing_data',
-        headerName: 'Missing',
-        width: 110,
-        renderCell: (params: any) => (params.value ? 'YES' : '—'),
-      },
-      {
-        field: 'error',
-        headerName: 'Error',
-        width: 260,
-        renderCell: (params: any) =>
-          params.value ? (
-            <Typography variant="caption" color="error">
-              {String(params.value)}
-            </Typography>
-          ) : (
-            '—'
-          ),
-      },
-      ...variableColumns,
-    ],
+    () => {
+      const base: GridColDef[] = [
+        { field: 'symbol', headerName: 'Symbol', width: 140 },
+        { field: 'exchange', headerName: 'Exch', width: 90 },
+        {
+          field: 'matched',
+          headerName: 'Match',
+          width: 90,
+          renderCell: (params: any) => (params.value ? 'YES' : '—'),
+        },
+        {
+          field: 'last_price',
+          headerName: 'Last',
+          width: 110,
+          renderCell: (params: any) =>
+            params.value != null && Number.isFinite(Number(params.value))
+              ? Number(params.value).toFixed(2)
+              : '—',
+        },
+      ]
+
+      const diagnostics: GridColDef[] = [
+        {
+          field: 'missing_data',
+          headerName: 'Missing',
+          width: 110,
+          renderCell: (params: any) => (params.value ? 'YES' : '—'),
+        },
+        {
+          field: 'error',
+          headerName: 'Error',
+          width: 260,
+          renderCell: (params: any) =>
+            params.value ? (
+              <Typography variant="caption" color="error">
+                {String(params.value)}
+              </Typography>
+            ) : (
+              '—'
+            ),
+        },
+      ]
+
+      // Keep Missing/Error at the end.
+      return [...base, ...variableColumns, ...diagnostics]
+    },
     [variableColumns],
   )
 
@@ -1379,6 +1385,28 @@ export function ScreenerPage() {
               columns={columns}
               loading={runLoading || (run?.status === 'RUNNING')}
               disableRowSelectionOnClick
+              columnVisibilityModel={columnVisibilityModel}
+              onColumnVisibilityModelChange={(model) => {
+                setColumnVisibilityModel(model)
+                try {
+                  window.localStorage.setItem(
+                    SCREENER_RESULTS_COLUMN_VISIBILITY_STORAGE_KEY,
+                    JSON.stringify(model),
+                  )
+                } catch {
+                  // Ignore persistence errors.
+                }
+              }}
+              slots={{ toolbar: GridToolbar }}
+              slotProps={{
+                toolbar: {
+                  showQuickFilter: true,
+                  quickFilterProps: { debounceMs: 300 },
+                },
+                filterPanel: {
+                  logicOperators: [GridLogicOperator.And],
+                },
+              }}
               initialState={{
                 pagination: { paginationModel: { pageSize: 25 } },
               }}
