@@ -50,6 +50,7 @@ _DSL_BUILTINS_RECOMMENDED: Set[str] = {
     "ATR",
     "STDDEV",
     "RET",
+    "ROC",
     "OBV",
     "VWAP",
     # Cross helpers (event-only semantics)

@@ -1296,6 +1296,7 @@ export function ScreenerPage() {
                 <Typography variant="body2" color="text.secondary">
                   Run #{run.id} — {run.status} — {run.matched_symbols}/
                   {run.total_symbols} matched — missing {run.missing_symbols}
+                  {run.status === 'ERROR' && run.error ? ` — ${run.error}` : ''}
                 </Typography>
               )}
               {runError && (
