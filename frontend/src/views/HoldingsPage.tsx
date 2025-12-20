@@ -70,6 +70,9 @@ type HoldingIndicators = {
   volumeVsAvg20d?: number
   maxPnlPct?: number
   drawdownFromPeakPct?: number
+  week52Low?: number
+  week52High?: number
+  gapPct?: number
 }
 
 type HoldingRow = Holding & {
@@ -1918,6 +1921,44 @@ export function HoldingsPage() {
       width: 130,
       valueFormatter: (value) =>
         value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'gap_pct',
+      headerName: 'Gap %',
+      type: 'number',
+      width: 110,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.gapPct ?? null,
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value))
+          ? `${Number(value).toFixed(2)}%`
+          : '—',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'week52_low',
+      headerName: '52W Low',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.week52Low ?? null,
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value))
+          ? Number(value).toFixed(2)
+          : '—',
+    },
+    {
+      field: 'week52_high',
+      headerName: '52W High',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.week52High ?? null,
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value))
+          ? Number(value).toFixed(2)
+          : '—',
     },
     {
       field: 'amountRequired',
@@ -5398,6 +5439,28 @@ function computeHoldingIndicators(
   indicators.perf1yPct = computePerfPct(closes, 252)
 
   indicators.volumeVsAvg20d = computeVolumeRatio(volumes, 20)
+
+  // 52-week high/low (approx. 252 trading days).
+  const w52 = points.length > 252 ? points.slice(-252) : points
+  const high52 = w52.map((p) => p.high).filter((v) => Number.isFinite(v))
+  const low52 = w52.map((p) => p.low).filter((v) => Number.isFinite(v))
+  if (high52.length) indicators.week52High = Math.max(...high52)
+  if (low52.length) indicators.week52Low = Math.min(...low52)
+
+  // Gap % = (open - yesterday_close) / yesterday_close
+  if (points.length >= 2) {
+    const todayOpen = points[points.length - 1]?.open
+    const prevClose = points[points.length - 2]?.close
+    if (
+      todayOpen != null
+      && prevClose != null
+      && Number.isFinite(todayOpen)
+      && Number.isFinite(prevClose)
+      && prevClose !== 0
+    ) {
+      indicators.gapPct = ((todayOpen - prevClose) / prevClose) * 100
+    }
+  }
 
   // Max P&L % and drawdown from peak based on average entry price.
   if (avgPrice != null && avgPrice > 0) {
