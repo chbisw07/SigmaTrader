@@ -758,7 +758,22 @@ export function DashboardPage() {
         name: String(r.name || '').trim(),
         dsl: r.dsl ?? null,
         kind: r.kind ?? null,
-        params: r.params ?? null,
+        params: (() => {
+          const kind = String(r.kind || '').toUpperCase()
+          const params = ((r.params ?? {}) as Record<string, any>) ?? {}
+          // Backend expects VWAP params as `{ price, timeframe }` (not `source`).
+          if (kind === 'VWAP') {
+            const price = params.price ?? params.source ?? 'hlc3'
+            const { source: _source, ...rest } = params
+            return { ...rest, price }
+          }
+          // Best-effort compatibility if older rows used `price` for non-VWAP.
+          if (params.source == null && params.price != null) {
+            const { price: _price, ...rest } = params
+            return { ...rest, source: _price }
+          }
+          return params
+        })(),
       }))
   }, [indicatorRows])
 
@@ -777,7 +792,13 @@ export function DashboardPage() {
       setIndicatorData(res)
       const keys = Object.keys(res.errors || {})
       if (keys.length > 0) {
-        setIndicatorError(`Some indicators failed: ${keys.slice(0, 3).join(', ')}`)
+        const firstKey = keys[0]!
+        const firstMsg = (res.errors || {})[firstKey]
+        setIndicatorError(
+          `Some indicators failed: ${keys.slice(0, 3).join(', ')}${
+            firstMsg ? ` — ${firstMsg}` : ''
+          }`,
+        )
       }
     } catch (err) {
       setIndicatorData(null)
@@ -1268,9 +1289,18 @@ export function DashboardPage() {
                       {indicatorRows.map((row, idx) => {
                         const params = (row.params ?? {}) as Record<string, any>
                         const kind = String(row.kind || 'SMA').toUpperCase()
-                        const needsSource = ['SMA', 'EMA', 'RSI', 'STDDEV', 'RET', 'OBV', 'VWAP'].includes(kind)
+                        const needsSourceOrPrice = ['SMA', 'EMA', 'RSI', 'STDDEV', 'RET', 'OBV', 'VWAP'].includes(kind)
                         const needsLength = ['SMA', 'EMA', 'RSI', 'STDDEV', 'ATR'].includes(kind)
                         const showTimeframe = kind !== 'CUSTOM'
+                        const sourceKey = kind === 'VWAP' ? 'price' : 'source'
+                        const sourceValue =
+                          kind === 'VWAP'
+                            ? String(params.price ?? params.source ?? 'hlc3')
+                            : String(params.source ?? params.price ?? 'close')
+                        const sourceOptions =
+                          kind === 'VWAP'
+                            ? ['hlc3', 'close', 'open', 'high', 'low']
+                            : ['close', 'open', 'high', 'low', 'hlc3', 'volume']
                         return (
                           <Stack key={idx} direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ md: 'center' }}>
                             <FormControlLabel
@@ -1306,7 +1336,24 @@ export function DashboardPage() {
                               onChange={(e) =>
                                 setIndicatorRows((prev) =>
                                   prev.map((r, i) =>
-                                    i === idx ? { ...r, kind: e.target.value, params: { ...params } } : r,
+                                    i === idx
+                                      ? (() => {
+                                          const nextKind = String(e.target.value || '').toUpperCase()
+                                          let nextParams: Record<string, any> = { ...params }
+                                          if (nextKind === 'VWAP') {
+                                            const price =
+                                              nextParams.price ?? nextParams.source ?? 'hlc3'
+                                            const { source: _source, ...rest } = nextParams
+                                            nextParams = { ...rest, price }
+                                          } else {
+                                            const source =
+                                              nextParams.source ?? nextParams.price ?? 'close'
+                                            const { price: _price, ...rest } = nextParams
+                                            nextParams = { ...rest, source }
+                                          }
+                                          return { ...r, kind: nextKind, params: nextParams }
+                                        })()
+                                      : r,
                                   ),
                                 )
                               }
@@ -1379,22 +1426,24 @@ export function DashboardPage() {
                               </>
                             ) : (
                               <>
-                                {needsSource ? (
+                                {needsSourceOrPrice ? (
                                 <TextField
                                   label={kind === 'VWAP' ? 'Price' : 'Source'}
                                   select
                                   size="small"
-                                  value={String(params.source ?? 'close')}
+                                  value={sourceValue}
                                   onChange={(e) =>
                                     setIndicatorRows((prev) =>
                                       prev.map((r, i) =>
-                                        i === idx ? { ...r, params: { ...params, source: e.target.value } } : r,
+                                        i === idx
+                                          ? { ...r, params: { ...params, [sourceKey]: e.target.value } }
+                                          : r,
                                       ),
                                     )
                                   }
                                   sx={{ minWidth: 120 }}
                                 >
-                                  {['close', 'open', 'high', 'low', 'hlc3', 'volume'].map((s) => (
+                                  {sourceOptions.map((s) => (
                                     <MenuItem key={s} value={s}>{s}</MenuItem>
                                   ))}
                                 </TextField>

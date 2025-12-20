@@ -817,6 +817,16 @@ class _InMemoryCandleCache:
     def set_end(self, idx: int) -> None:
         self._end = max(0, min(idx, len(self._candles) - 1))
 
+    def candles(self, tf: str) -> list[dict]:
+        tf = (tf or "").strip().lower()
+        if tf != "1d":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Symbol explorer indicators/signals currently support 1d only.",
+            )
+        end = self._end
+        return self._candles[: end + 1] if self._candles else []
+
     def series(self, tf: str, source: str) -> tuple[list[float], datetime | None]:
         tf = (tf or "").strip().lower()
         if tf != "1d":
