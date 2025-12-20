@@ -15,7 +15,7 @@ import Typography from '@mui/material/Typography'
 import Tooltip from '@mui/material/Tooltip'
 import Autocomplete from '@mui/material/Autocomplete'
 import { alpha, useTheme } from '@mui/material/styles'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -105,6 +105,45 @@ function formatIstDateTime(value: string | null | undefined): string {
 }
 
 const INDICES_CACHE_KEY = 'st_dashboard_indices_cache_v1'
+const DASHBOARD_SETTINGS_KEY = 'st_dashboard_settings_v1'
+
+type DashboardSettingsV1 = {
+  includeHoldings?: boolean
+  groupIds?: number[]
+  range?: string
+  symbolRange?: string
+  chartType?: PriceChartType
+  selectedSymbol?: { symbol: string; exchange: string; label: string } | null
+  indicatorRows?: Array<
+    AlertVariableDef & {
+      enabled: boolean
+      plot: 'price' | 'hidden'
+    }
+  >
+  signalDsl?: string
+}
+
+function loadDashboardSettings(): DashboardSettingsV1 {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_SETTINGS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as DashboardSettingsV1
+    if (!parsed || typeof parsed !== 'object') return {}
+    return parsed
+  } catch {
+    return {}
+  }
+}
+
+function saveDashboardSettings(next: DashboardSettingsV1): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(DASHBOARD_SETTINGS_KEY, JSON.stringify(next))
+  } catch {
+    // ignore persistence errors
+  }
+}
 
 function MultiLineChart({
   series,
@@ -406,13 +445,27 @@ function MultiLineChart({
 
 export function DashboardPage() {
   const theme = useTheme()
+  const [initialSettings] = useState<DashboardSettingsV1>(() =>
+    loadDashboardSettings(),
+  )
+  const persistedGroupIdsRef = useRef<number[]>(
+    Array.isArray(initialSettings.groupIds)
+      ? initialSettings.groupIds.filter((x) => typeof x === 'number')
+      : [],
+  )
+  const indicesInitDoneRef = useRef(false)
+
   const [groups, setGroups] = useState<Group[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
   const [groupsError, setGroupsError] = useState<string | null>(null)
 
-  const [includeHoldings, setIncludeHoldings] = useState(true)
+  const [includeHoldings, setIncludeHoldings] = useState(() =>
+    typeof initialSettings.includeHoldings === 'boolean'
+      ? initialSettings.includeHoldings
+      : true,
+  )
   const [selectedGroups, setSelectedGroups] = useState<Group[]>([])
-  const [range, setRange] = useState<any>('6m')
+  const [range, setRange] = useState<any>(() => initialSettings.range ?? '6m')
 
 	  const [data, setData] = useState<BasketIndexResponse | null>(null)
 	  const [loading, setLoading] = useState(false)
@@ -426,10 +479,26 @@ export function DashboardPage() {
   const [symbolOptions, setSymbolOptions] = useState<SymbolKey[]>([])
   const [loadingSymbols, setLoadingSymbols] = useState(false)
   const [symbolsError, setSymbolsError] = useState<string | null>(null)
-  const [selectedSymbol, setSelectedSymbol] = useState<SymbolKey | null>(null)
+  const [selectedSymbol, setSelectedSymbol] = useState<SymbolKey | null>(() => {
+    const s = initialSettings.selectedSymbol
+    if (
+      s &&
+      typeof s === 'object' &&
+      typeof s.symbol === 'string' &&
+      typeof s.exchange === 'string' &&
+      typeof s.label === 'string'
+    ) {
+      return { symbol: s.symbol, exchange: s.exchange, label: s.label }
+    }
+    return null
+  })
 
-  const [symbolRange, setSymbolRange] = useState<any>('6m')
-  const [chartType, setChartType] = useState<PriceChartType>('line')
+  const [symbolRange, setSymbolRange] = useState<any>(
+    () => initialSettings.symbolRange ?? '6m',
+  )
+  const [chartType, setChartType] = useState<PriceChartType>(
+    () => initialSettings.chartType ?? 'line',
+  )
   const [symbolData, setSymbolData] = useState<SymbolSeriesResponse | null>(null)
   const [loadingSymbolData, setLoadingSymbolData] = useState(false)
   const [symbolDataError, setSymbolDataError] = useState<string | null>(null)
@@ -438,12 +507,18 @@ export function DashboardPage() {
     enabled: boolean
     plot: 'price' | 'hidden'
   }
-  const [indicatorRows, setIndicatorRows] = useState<IndicatorRow[]>([])
+  const [indicatorRows, setIndicatorRows] = useState<IndicatorRow[]>(() =>
+    Array.isArray(initialSettings.indicatorRows)
+      ? (initialSettings.indicatorRows as IndicatorRow[])
+      : [],
+  )
   const [indicatorData, setIndicatorData] = useState<SymbolIndicatorsResponse | null>(null)
   const [indicatorLoading, setIndicatorLoading] = useState(false)
   const [indicatorError, setIndicatorError] = useState<string | null>(null)
 
-  const [signalDsl, setSignalDsl] = useState<string>('') // boolean DSL
+  const [signalDsl, setSignalDsl] = useState<string>(
+    () => initialSettings.signalDsl ?? '',
+  ) // boolean DSL
   const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
   const [signalLoading, setSignalLoading] = useState(false)
   const [signalError, setSignalError] = useState<string | null>(null)
@@ -475,6 +550,27 @@ export function DashboardPage() {
       active = false
     }
   }, [])
+
+  const [settingsHydrated, setSettingsHydrated] = useState(false)
+  useEffect(() => {
+    if (settingsHydrated) return
+    if (!groups.length) return
+    if (selectedGroups.length) {
+      setSettingsHydrated(true)
+      return
+    }
+    const ids = persistedGroupIdsRef.current
+    if (!ids.length) {
+      setSettingsHydrated(true)
+      return
+    }
+    const byId = new Map(groups.map((g) => [g.id, g] as const))
+    const next = ids
+      .map((id) => byId.get(id))
+      .filter((g): g is Group => !!g)
+    if (next.length) setSelectedGroups(next)
+    setSettingsHydrated(true)
+  }, [groups, selectedGroups.length, settingsHydrated])
 
   const refreshCustomIndicators = async () => {
     setCustomIndicatorsLoading(true)
@@ -568,8 +664,17 @@ export function DashboardPage() {
   }
 
 	  useEffect(() => {
+      if (indicesInitDoneRef.current) return
+
+      const hasPersistedGroups = persistedGroupIdsRef.current.length > 0
+      // If we have persisted groups, wait until we hydrate them; otherwise we
+      // might run with an empty group selection and miss cache hits.
+      if (hasPersistedGroups && !settingsHydrated) return
+
+      const groupIds = selectedGroups.map((g) => g.id)
+      if (!includeHoldings && groupIds.length === 0) return
+
 	    const init = async () => {
-	      const groupIds = selectedGroups.map((g) => g.id)
 	      const sortedGroupIds = [...groupIds].sort((a, b) => a - b)
 	      if (typeof window !== 'undefined') {
 	        try {
@@ -606,8 +711,40 @@ export function DashboardPage() {
 	      await handleRefresh()
 	    }
 	    void init()
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	  }, [])
+      indicesInitDoneRef.current = true
+	  }, [includeHoldings, range, selectedGroups, settingsHydrated])
+
+  useEffect(() => {
+    const groupIds =
+      selectedGroups.length > 0
+        ? selectedGroups.map((g) => g.id)
+        : settingsHydrated
+          ? []
+          : persistedGroupIdsRef.current
+
+    persistedGroupIdsRef.current = groupIds
+
+    saveDashboardSettings({
+      includeHoldings,
+      groupIds,
+      range: String(range ?? ''),
+      symbolRange: String(symbolRange ?? ''),
+      chartType,
+      selectedSymbol,
+      indicatorRows,
+      signalDsl,
+    })
+  }, [
+    chartType,
+    includeHoldings,
+    indicatorRows,
+    range,
+    selectedGroups,
+    selectedSymbol,
+    settingsHydrated,
+    signalDsl,
+    symbolRange,
+  ])
 
   const palette = [
     '#2563eb',
