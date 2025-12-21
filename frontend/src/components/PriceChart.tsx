@@ -113,6 +113,7 @@ export function PriceChart({
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: theme.palette.text.secondary,
         fontFamily: theme.typography.fontFamily,
+        attributionLogo: false,
       },
       grid: {
         vertLines: { color: 'transparent' },
