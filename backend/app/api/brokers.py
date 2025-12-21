@@ -53,6 +53,7 @@ def _get_supported_brokers() -> List[BrokerInfo]:
     cfg = load_app_config()
     labels: Dict[str, str] = {
         "zerodha": "Zerodha (Kite)",
+        "angelone": "AngelOne (SmartAPI)",
     }
     return [
         BrokerInfo(name=name, label=labels.get(name, name.title()))
@@ -74,6 +75,13 @@ def _get_broker_capabilities(broker_name: str) -> BrokerCapabilities:
             supports_gtt=True,
             supports_margin_preview=True,
             supports_order_preview=True,
+            supports_ltp=True,
+        )
+    if broker_name == "angelone":
+        return BrokerCapabilities(
+            supports_gtt=False,
+            supports_margin_preview=False,
+            supports_order_preview=False,
             supports_ltp=True,
         )
     # Default: conservative "no" for unknown/new brokers until implemented.

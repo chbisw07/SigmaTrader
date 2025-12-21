@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -24,18 +25,61 @@ def get_broker_secret(
     broker configuration.
     """
 
-    query = db.query(BrokerSecret).filter(
-        BrokerSecret.broker_name == broker_name,
-        BrokerSecret.key == key,
-    )
-    if user_id is not None:
-        query = query.filter(BrokerSecret.user_id == user_id)
-    else:
-        query = query.filter(BrokerSecret.user_id.is_(None))
+    broker = (broker_name or "").strip().lower()
+    k = (key or "").strip()
+    k_norm = k.lower()
 
-    secret = query.one_or_none()
-    if secret is not None:
-        return decrypt_token(settings, secret.value_encrypted)
+    alias_keys: list[str] = [k]
+    if broker == "zerodha":
+        if k_norm == "api_key":
+            alias_keys += ["KITE_API_KEY", "ZERODHA_API_KEY"]
+        elif k_norm == "api_secret":
+            alias_keys += ["KITE_API_SECRET", "ZERODHA_API_SECRET"]
+    if broker == "angelone":
+        if k_norm == "api_key":
+            alias_keys += ["SMARTAPI_API_KEY", "ANGELONE_API_KEY"]
+        elif k_norm == "api_secret":
+            alias_keys += ["SMARTAPI_API_SECRET", "ANGELONE_API_SECRET"]
+
+    # Prefer the canonical key first, then any known aliases.
+    for candidate in alias_keys:
+        query = db.query(BrokerSecret).filter(
+            BrokerSecret.broker_name == broker_name,
+            BrokerSecret.key == candidate,
+        )
+        if user_id is not None:
+            query = query.filter(BrokerSecret.user_id == user_id)
+        else:
+            query = query.filter(BrokerSecret.user_id.is_(None))
+        secret = query.one_or_none()
+        if secret is not None:
+            return decrypt_token(settings, secret.value_encrypted)
+
+    # Env fallback (optional): allow deploying without storing secrets in DB.
+    # Settings uses env_prefix=ST_, so these are ST_KITE_API_KEY, etc.
+    if broker == "zerodha":
+        if k_norm == "api_key":
+            return (
+                os.getenv("KITE_API_KEY")
+                or os.getenv("ZERODHA_API_KEY")
+                or os.getenv("ST_KITE_API_KEY")
+                or os.getenv("ST_ZERODHA_API_KEY")
+                or getattr(settings, "zerodha_api_key", None)
+            )
+        if k_norm == "api_secret":
+            return (
+                os.getenv("KITE_API_SECRET")
+                or os.getenv("ZERODHA_API_SECRET")
+                or os.getenv("ST_KITE_API_SECRET")
+                or os.getenv("ST_ZERODHA_API_SECRET")
+            )
+    if broker == "angelone":
+        if k_norm == "api_key":
+            return os.getenv("SMARTAPI_API_KEY") or os.getenv("ST_SMARTAPI_API_KEY")
+        if k_norm == "api_secret":
+            return os.getenv("SMARTAPI_API_SECRET") or os.getenv(
+                "ST_SMARTAPI_API_SECRET"
+            )
 
     return None
 

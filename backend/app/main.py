@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from sqlalchemy import inspect
 from sqlalchemy.exc import OperationalError
 
@@ -104,6 +105,30 @@ app = FastAPI(
     debug=settings.debug,
     lifespan=_lifespan,
 )
+
+
+# Best-effort: translate common broker SDK auth failures into clean API errors.
+# We keep this import optional so test/lightweight environments without
+# `kiteconnect` can still import the backend.
+try:  # pragma: no cover - depends on optional external lib
+    from kiteconnect.exceptions import (
+        TokenException as KiteTokenException,  # type: ignore[import]
+    )
+except Exception:  # pragma: no cover - defensive
+    KiteTokenException = None  # type: ignore[assignment]
+
+if KiteTokenException is not None:  # pragma: no cover
+
+    @app.exception_handler(KiteTokenException)  # type: ignore[arg-type]
+    async def _kite_token_exception_handler(_request, exc):
+        msg = str(exc)
+        lowered = msg.lower()
+        if "access_token" in lowered or "incorrect api_key" in lowered:
+            detail = "Zerodha session is invalid or expired. Please reconnect Zerodha."
+        else:
+            detail = f"Zerodha authentication failed: {msg}"
+        return JSONResponse(status_code=400, content={"detail": detail})
+
 
 app.add_middleware(RequestContextMiddleware)
 app.include_router(api_router)

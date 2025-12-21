@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -19,6 +20,8 @@ from app.services.system_events import record_system_event
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
 router = APIRouter()
+
+_ZERODHA_API_KEY_RE = re.compile(r"^[A-Za-z0-9]{16}$")
 
 
 class ZerodhaConnectRequest(BaseModel):
@@ -78,6 +81,16 @@ def get_login_url(
             "Please configure it in the broker settings.",
         )
 
+    api_key = api_key.strip()
+    if not _ZERODHA_API_KEY_RE.match(api_key):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Zerodha API key appears invalid. "
+                "Please verify broker settings (api_key should be 16 characters)."
+            ),
+        )
+
     url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
     return {"login_url": url}
 
@@ -115,6 +128,17 @@ def connect_zerodha(
             ),
         )
 
+    api_key = api_key.strip()
+    api_secret = api_secret.strip()
+    if not _ZERODHA_API_KEY_RE.match(api_key):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Zerodha API key appears invalid. "
+                "Please verify broker settings (api_key should be 16 characters)."
+            ),
+        )
+
     try:
         from kiteconnect import KiteConnect  # type: ignore[import]
     except ImportError as exc:  # pragma: no cover - defensive
@@ -124,10 +148,18 @@ def connect_zerodha(
         ) from exc
 
     kite = KiteConnect(api_key=api_key)
-    session_data = kite.generate_session(
-        payload.request_token,
-        api_secret=api_secret,
-    )
+    try:
+        session_data = kite.generate_session(
+            payload.request_token,
+            api_secret=api_secret,
+        )
+    except Exception as exc:
+        # Common case: request_token already used/expired or credentials mismatch.
+        msg = str(exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Zerodha connect failed: {msg}",
+        ) from exc
     access_token = session_data.get("access_token")
     if not access_token:  # pragma: no cover - defensive
         raise HTTPException(

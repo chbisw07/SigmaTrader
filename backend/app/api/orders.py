@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from typing import Annotated, List, Optional
 
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user, get_current_user_optional
-from app.clients import ZerodhaClient
+from app.clients import AngelOneClient, AngelOneSession, ZerodhaClient
 from app.config_files import load_app_config
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
@@ -21,6 +22,7 @@ from app.schemas.orders import (
     OrderStatusUpdate,
     OrderUpdate,
 )
+from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
 from app.services.paper_trading import submit_paper_order
 from app.services.risk import evaluate_order_risk
@@ -97,12 +99,68 @@ def _get_zerodha_client(
     return client
 
 
+def _get_angelone_client(
+    db: Session,
+    settings: Settings,
+    user_id: int | None = None,
+) -> AngelOneClient:
+    q = db.query(BrokerConnection).filter(BrokerConnection.broker_name == "angelone")
+    if user_id is not None:
+        q = q.filter(BrokerConnection.user_id == user_id)
+    conn = q.order_by(BrokerConnection.updated_at.desc()).first()
+    if conn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AngelOne is not connected.",
+        )
+
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="angelone",
+        key="api_key",
+        user_id=conn.user_id,
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SmartAPI API key is not configured. "
+            "Please configure it in the broker settings.",
+        )
+
+    raw = decrypt_token(settings, conn.access_token_encrypted)
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"AngelOne session is invalid: {exc}",
+        ) from exc
+
+    jwt = str(parsed.get("jwt_token") or "")
+    if not jwt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AngelOne session is missing jwt_token. Please reconnect.",
+        )
+
+    session = AngelOneSession(
+        jwt_token=jwt,
+        refresh_token=str(parsed.get("refresh_token") or "") or None,
+        feed_token=str(parsed.get("feed_token") or "") or None,
+        client_code=str(parsed.get("client_code") or "") or None,
+    )
+    client = AngelOneClient(api_key=api_key, session=session)
+    client.broker_user_id = getattr(conn, "broker_user_id", None)  # type: ignore[attr-defined]
+    return client
+
+
 def _get_broker_client(
     db: Session,
     settings: Settings,
     broker_name: str,
     user_id: int | None = None,
-) -> ZerodhaClient:
+) -> ZerodhaClient | AngelOneClient:
     broker = _ensure_supported_broker(broker_name)
     if broker == "zerodha":
         # Tests may monkeypatch `_get_zerodha_client` with a 2-arg callable.
@@ -113,6 +171,8 @@ def _get_broker_client(
         except Exception:
             pass
         return _get_zerodha_client(db, settings)
+    if broker == "angelone":
+        return _get_angelone_client(db, settings, user_id=user_id)
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Broker not implemented yet: {broker}",
@@ -584,6 +644,27 @@ def execute_order_internal(
     if broker_account_id:
         order.broker_account_id = broker_account_id
 
+    exchange_u = (exchange or "NSE").strip().upper()
+    broker_tradingsymbol = tradingsymbol
+    angelone_token: str | None = None
+    if broker_name == "angelone":
+        resolved = resolve_broker_symbol_and_token(
+            db,
+            broker_name="angelone",
+            exchange=exchange_u,
+            symbol=tradingsymbol.strip().upper(),
+        )
+        if resolved is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "AngelOne instrument mapping not found for "
+                    f"{exchange_u}:{tradingsymbol}. "
+                    "Please run Instruments → Sync for AngelOne."
+                ),
+            )
+        broker_tradingsymbol, angelone_token = resolved
+
     # Handle GTT orders by creating a Zerodha GTT instead of a
     # regular/AMO order. We currently support single-leg LIMIT GTTs
     # for equity; more advanced patterns (OCO, SL GTT) can be layered
@@ -711,7 +792,16 @@ def execute_order_internal(
                     detail="Price must be positive for SL orders.",
                 )
         try:
-            ltp = client.get_ltp(exchange=exchange, tradingsymbol=tradingsymbol)
+            if broker_name == "angelone":
+                if angelone_token is None:
+                    raise RuntimeError("Missing AngelOne symbol token.")
+                ltp = client.get_ltp(  # type: ignore[call-arg]
+                    exchange=exchange_u,
+                    tradingsymbol=broker_tradingsymbol,
+                    symboltoken=angelone_token,
+                )
+            else:
+                ltp = client.get_ltp(exchange=exchange, tradingsymbol=tradingsymbol)  # type: ignore[call-arg]
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(
                 "Failed to fetch LTP for stop-loss validation",
@@ -756,6 +846,87 @@ def execute_order_internal(
         db.add(order)
         db.commit()
         db.refresh(order)
+
+    if broker_name == "angelone":
+        ordertype_map = {
+            "MARKET": "MARKET",
+            "LIMIT": "LIMIT",
+            "SL": "STOPLOSS_LIMIT",
+            "SL-M": "STOPLOSS_MARKET",
+        }
+        smart_order_type = ordertype_map.get(order.order_type.upper(), "MARKET")
+        producttype = (order.product or "CNC").strip().upper()
+        if producttype not in {"CNC", "MIS"}:
+            producttype = "CNC"
+
+        price: float | None = None
+        if order.order_type in {"LIMIT", "SL"} and order.price is not None:
+            price = float(order.price)
+        trigger_price: float | None = None
+        if order.order_type in {"SL", "SL-M"} and order.trigger_price is not None:
+            trigger_price = float(order.trigger_price)
+
+        try:
+            if angelone_token is None:
+                raise RuntimeError("Missing AngelOne symbol token.")
+            result = client.place_order(  # type: ignore[call-arg]
+                exchange=exchange_u,
+                tradingsymbol=broker_tradingsymbol,
+                symboltoken=angelone_token,
+                transactiontype=order.side,
+                quantity=int(order.qty),
+                ordertype=smart_order_type,
+                producttype=producttype,
+                price=price,
+                triggerprice=trigger_price,
+            )
+        except Exception as exc:
+            message = str(exc)
+            order.status = "FAILED"
+            order.error_message = message
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            record_system_event(
+                db,
+                level="ERROR",
+                category="order",
+                message="AngelOne order placement failed",
+                correlation_id=correlation_id,
+                details={
+                    "order_id": order.id,
+                    "broker_name": broker_name,
+                    "symbol": order.symbol,
+                    "error": message,
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AngelOne order placement failed: {message}",
+            ) from exc
+
+        order.broker_order_id = result.order_id
+        order.status = "SENT"
+        order.error_message = None
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        record_system_event(
+            db,
+            level="INFO",
+            category="order",
+            message="Order sent to angelone",
+            correlation_id=correlation_id,
+            details={
+                "order_id": order.id,
+                "broker_name": broker_name,
+                "broker_order_id": order.broker_order_id,
+                "symbol": order.symbol,
+                "side": order.side,
+                "qty": order.qty,
+            },
+        )
+        return order
 
     def _place(
         *,
@@ -916,9 +1087,19 @@ def sync_orders(
 
     broker = _ensure_supported_broker(broker_name)
     client = _get_broker_client(db, settings, broker, user_id=user.id)
-    from app.services.order_sync import sync_order_statuses
+    if broker == "zerodha":
+        from app.services.order_sync import sync_order_statuses
 
-    updated = sync_order_statuses(db, client, user_id=user.id)
+        updated = sync_order_statuses(db, client, user_id=user.id)  # type: ignore[arg-type]
+    elif broker == "angelone":
+        from app.services.order_sync_angelone import sync_order_statuses_angelone
+
+        updated = sync_order_statuses_angelone(db, client, user_id=user.id)  # type: ignore[arg-type]
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Order sync not implemented for broker: {broker}",
+        )
     return {"updated": updated}
 
 

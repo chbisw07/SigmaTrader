@@ -2,6 +2,10 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
+import Dialog from '@mui/material/Dialog'
+import DialogActions from '@mui/material/DialogActions'
+import DialogContent from '@mui/material/DialogContent'
+import DialogTitle from '@mui/material/DialogTitle'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import MenuItem from '@mui/material/MenuItem'
@@ -37,6 +41,11 @@ import {
   type ZerodhaStatus,
 } from '../services/zerodha'
 import {
+  connectAngelone,
+  fetchAngeloneStatus,
+  type AngeloneStatus,
+} from '../services/angelone'
+import {
   fetchBrokerSecrets,
   fetchBrokers,
   updateBrokerSecret,
@@ -60,10 +69,17 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [brokerStatus, setBrokerStatus] = useState<ZerodhaStatus | null>(null)
+  const [angeloneStatus, setAngeloneStatus] = useState<AngeloneStatus | null>(null)
   const [brokerError, setBrokerError] = useState<string | null>(null)
   const [marketStatus, setMarketStatus] = useState<MarketDataStatus | null>(null)
   const [requestToken, setRequestToken] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
+  const [angeloneClientCode, setAngeloneClientCode] = useState('')
+  const [angelonePassword, setAngelonePassword] = useState('')
+  const [angeloneTotp, setAngeloneTotp] = useState('')
+  const [isConnectingAngelone, setIsConnectingAngelone] = useState(false)
+  const [angeloneOtpPromptOpen, setAngeloneOtpPromptOpen] = useState(false)
+  const [angeloneOtpDraft, setAngeloneOtpDraft] = useState('')
   const [updatingStrategyId, setUpdatingStrategyId] = useState<number | null>(null)
   const [savingRisk, setSavingRisk] = useState(false)
   const [deletingRiskId, setDeletingRiskId] = useState<number | null>(null)
@@ -88,6 +104,12 @@ export function SettingsPage() {
   const [editedKeys, setEditedKeys] = useState<Record<string, string>>({})
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
   const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
+
+  const selectedBrokerApiKey = brokerSecrets.find((s) =>
+    ['api_key', 'KITE_API_KEY', 'ZERODHA_API_KEY', 'SMARTAPI_API_KEY', 'ANGELONE_API_KEY'].includes(
+      s.key,
+    ),
+  )?.value
 
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get('tab')
@@ -141,18 +163,20 @@ export function SettingsPage() {
     let active = true
     const loadStatus = async () => {
       try {
-        const [status, mdStatus] = await Promise.all([
+        const [status, aoStatus, mdStatus] = await Promise.all([
           fetchZerodhaStatus(),
+          fetchAngeloneStatus().catch(() => null),
           fetchMarketDataStatus().catch(() => null),
         ])
         if (!active) return
         setBrokerStatus(status)
+        setAngeloneStatus(aoStatus)
         if (mdStatus) setMarketStatus(mdStatus)
         setBrokerError(null)
       } catch (err) {
         if (!active) return
         setBrokerError(
-          err instanceof Error ? err.message : 'Failed to load Zerodha status',
+          err instanceof Error ? err.message : 'Failed to load broker status',
         )
       }
     }
@@ -232,6 +256,44 @@ export function SettingsPage() {
       recordAppLog('ERROR', msg)
     } finally {
       setIsConnecting(false)
+    }
+  }
+
+  const handleConnectAngelone = async () => {
+    if (!angeloneClientCode.trim()) {
+      setBrokerError('Please enter AngelOne client code.')
+      return
+    }
+    if (!angelonePassword) {
+      setBrokerError('Please enter AngelOne password.')
+      return
+    }
+    if (!angeloneTotp.trim()) {
+      setAngeloneOtpDraft('')
+      setAngeloneOtpPromptOpen(true)
+      return
+    }
+    await connectAngeloneWithTotp(angeloneTotp.trim())
+  }
+
+  const connectAngeloneWithTotp = async (totp: string) => {
+    setIsConnectingAngelone(true)
+    try {
+      await connectAngelone({
+        client_code: angeloneClientCode.trim(),
+        password: angelonePassword,
+        totp,
+      })
+      const status = await fetchAngeloneStatus()
+      setAngeloneStatus(status)
+      setBrokerError(null)
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to complete AngelOne connect'
+      setBrokerError(msg)
+      recordAppLog('ERROR', msg)
+    } finally {
+      setIsConnectingAngelone(false)
     }
   }
 
@@ -570,11 +632,48 @@ export function SettingsPage() {
 
   return (
     <Box>
+      <Dialog
+        open={angeloneOtpPromptOpen}
+        onClose={() => setAngeloneOtpPromptOpen(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Enter AngelOne OTP/TOTP</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Enter the OTP/TOTP you received/generated, then continue to connect.
+          </Typography>
+          <TextField
+            autoFocus
+            size="small"
+            label="TOTP/OTP"
+            value={angeloneOtpDraft}
+            onChange={(e) => setAngeloneOtpDraft(e.target.value)}
+            fullWidth
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAngeloneOtpPromptOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={!angeloneOtpDraft.trim() || isConnectingAngelone}
+            onClick={async () => {
+              const totp = angeloneOtpDraft.trim()
+              if (!totp) return
+              setAngeloneOtpPromptOpen(false)
+              setAngeloneTotp(totp)
+              await connectAngeloneWithTotp(totp)
+            }}
+          >
+            Continue
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Typography variant="h4" gutterBottom>
         Settings
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Manage strategies, risk settings, and Zerodha connection details.
+        Manage strategies, risk settings, and broker connection details.
       </Typography>
 
       <Paper sx={{ mb: 2 }}>
@@ -648,6 +747,27 @@ export function SettingsPage() {
                   color={brokerStatus?.connected ? 'success' : 'default'}
                 />
               )}
+              {selectedBroker === 'zerodha'
+                && selectedBrokerApiKey
+                && selectedBrokerApiKey.trim().length > 0
+                && selectedBrokerApiKey.trim().length !== 16 && (
+                  <Chip
+                    size="small"
+                    label="Zerodha api_key looks invalid"
+                    color="warning"
+                  />
+                )}
+              {selectedBroker === 'angelone' && (
+                <Chip
+                  size="small"
+                  label={
+                    angeloneStatus?.connected
+                      ? 'AngelOne: Connected'
+                      : 'AngelOne: Not connected'
+                  }
+                  color={angeloneStatus?.connected ? 'success' : 'default'}
+                />
+              )}
               {marketStatus && marketStatus.canonical_broker === 'zerodha' && (
                 <Chip
                   size="small"
@@ -672,6 +792,18 @@ export function SettingsPage() {
                   : brokerStatus.user_id}
               </Typography>
             )}
+            {selectedBroker === 'angelone' && angeloneStatus?.connected && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block' }}
+              >
+                AngelOne user:{' '}
+                {angeloneStatus.name && angeloneStatus.client_code
+                  ? `${angeloneStatus.name} (${angeloneStatus.client_code})`
+                  : angeloneStatus.client_code ?? 'Connected'}
+              </Typography>
+            )}
             {selectedBroker === 'zerodha' && brokerStatus?.updated_at && (
               <Typography
                 variant="caption"
@@ -681,6 +813,21 @@ export function SettingsPage() {
                 Last updated{' '}
                 {(() => {
                   const utc = new Date(brokerStatus.updated_at)
+                  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
+                  const ist = new Date(istMs)
+                  return ist.toLocaleString('en-IN')
+                })()}
+              </Typography>
+            )}
+            {selectedBroker === 'angelone' && angeloneStatus?.updated_at && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block' }}
+              >
+                Last updated{' '}
+                {(() => {
+                  const utc = new Date(angeloneStatus.updated_at)
                   const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
                   const ist = new Date(istMs)
                   return ist.toLocaleString('en-IN')
@@ -747,6 +894,56 @@ export function SettingsPage() {
                   onClick={handleConnectZerodha}
                 >
                   {isConnecting ? 'Connecting…' : 'Connect Zerodha'}
+                </Button>
+              </Box>
+            </Box>
+          )}
+          {selectedBroker === 'angelone' && (
+            <Box
+              sx={{
+                flex: 1,
+                minWidth: 260,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+              }}
+            >
+              <Typography variant="subtitle2" color="text.secondary">
+                AngelOne connection
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                SmartAPI login requires your Client Code + Password/MPIN + TOTP/OTP.
+                This can differ from the web/desktop login flow. For security, you’ll
+                need to re-enter OTP/PIN when the session expires.
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <TextField
+                  size="small"
+                  label="client_code"
+                  value={angeloneClientCode}
+                  onChange={(e) => setAngeloneClientCode(e.target.value)}
+                />
+                <TextField
+                  size="small"
+                  label="password / MPIN"
+                  type="password"
+                  value={angelonePassword}
+                  onChange={(e) => setAngelonePassword(e.target.value)}
+                />
+                <TextField
+                  size="small"
+                  label="TOTP/OTP"
+                  value={angeloneTotp}
+                  onChange={(e) => setAngeloneTotp(e.target.value)}
+                  placeholder="Leave blank to be prompted"
+                />
+                <Button
+                  variant="contained"
+                  size="small"
+                  disabled={isConnectingAngelone}
+                  onClick={handleConnectAngelone}
+                >
+                  {isConnectingAngelone ? 'Connecting…' : 'Connect AngelOne'}
                 </Button>
               </Box>
             </Box>

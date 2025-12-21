@@ -5,6 +5,7 @@ from ..core.security import require_admin
 from . import (
     alerts_v3,
     analytics,
+    angelone,
     auth,
     brokers,
     groups,
@@ -88,6 +89,13 @@ router.include_router(
     prefix="/api/market",
     dependencies=[Depends(require_admin)],
     tags=["market"],
+)
+
+router.include_router(
+    angelone.router,
+    prefix="/api/angelone",
+    dependencies=[Depends(require_admin)],
+    tags=["angelone"],
 )
 
 router.include_router(

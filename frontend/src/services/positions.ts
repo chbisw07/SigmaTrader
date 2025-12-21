@@ -87,12 +87,14 @@ export async function fetchPositions(): Promise<Position[]> {
 }
 
 export async function fetchDailyPositions(params?: {
+  broker_name?: string
   start_date?: string
   end_date?: string
   symbol?: string
   include_zero?: boolean
 }): Promise<PositionSnapshot[]> {
   const url = new URL('/api/positions/daily', window.location.origin)
+  if (params?.broker_name) url.searchParams.set('broker_name', params.broker_name)
   if (params?.start_date) url.searchParams.set('start_date', params.start_date)
   if (params?.end_date) url.searchParams.set('end_date', params.end_date)
   if (params?.symbol) url.searchParams.set('symbol', params.symbol)

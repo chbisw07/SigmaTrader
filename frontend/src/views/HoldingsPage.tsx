@@ -39,6 +39,7 @@ import { resolvePrimaryPriceForHolding } from '../components/Trade/tradePricing'
 import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
 import { fetchHoldings, type Holding } from '../services/positions'
+import { fetchAngeloneStatus } from '../services/angelone'
 import {
   fetchHoldingsCorrelation,
   type HoldingsCorrelationResult,
@@ -103,6 +104,7 @@ export function HoldingsPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [universeId, setUniverseId] = useState<string>('holdings')
+  const [angeloneConnected, setAngeloneConnected] = useState(false)
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
   const [activeGroup, setActiveGroup] = useState<GroupDetail | null>(null)
   const [activeGroupDataset, setActiveGroupDataset] = useState<{
@@ -230,6 +232,30 @@ export function HoldingsPage() {
     }
   }, [location.search, universeId])
 
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const status = await fetchAngeloneStatus()
+        if (!active) return
+        setAngeloneConnected(Boolean(status.connected))
+      } catch {
+        if (!active) return
+        setAngeloneConnected(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (universeId === 'holdings:angelone') {
+      setTradeGtt(false)
+      setTradeBracketEnabled(false)
+    }
+  }, [universeId])
+
   const load = async () => {
     const requestId = ++loadRequestId.current
     try {
@@ -238,8 +264,9 @@ export function HoldingsPage() {
       // latest request completes.
       setActiveGroup(null)
       setActiveGroupDataset(null)
+      const holdingsBroker = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
       const [rawHoldings, groups] = await Promise.all([
-        fetchHoldings(),
+        fetchHoldings(holdingsBroker),
         listGroups().catch(() => [] as Group[]),
       ])
       if (requestId !== loadRequestId.current) return
@@ -418,7 +445,8 @@ export function HoldingsPage() {
       try {
         setCorrLoading(true)
         setCorrError(null)
-        const res = await fetchHoldingsCorrelation({ windowDays: 90 })
+        const brokerName = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+        const res = await fetchHoldingsCorrelation({ windowDays: 90, brokerName })
         if (!active) return
         setCorrSummary(res)
         const bySymbol: Record<
@@ -459,7 +487,7 @@ export function HoldingsPage() {
     return () => {
       active = false
     }
-  }, [])
+  }, [universeId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1429,11 +1457,12 @@ export function HoldingsPage() {
     }
 
     if (tradeExecutionMode === 'AUTO' && tradeExecutionTarget === 'LIVE') {
+      const tradeBroker = universeId === 'holdings:angelone' ? 'AngelOne' : 'Zerodha'
       const totalOrders = plans.length * (tradeBracketEnabled ? 2 : 1)
       const confirmed = window.confirm(
         `AUTO + LIVE will send ${totalOrders} order${
           totalOrders === 1 ? '' : 's'
-        } to Zerodha now. Continue?`,
+        } to ${tradeBroker} now. Continue?`,
       )
       if (!confirmed) return
     }
@@ -1449,6 +1478,7 @@ export function HoldingsPage() {
       for (const { holding, qty, price, bracketPrice } of plans) {
         try {
           const primary = await createManualOrder({
+            broker_name: universeId === 'holdings:angelone' ? 'angelone' : 'zerodha',
             symbol: holding.symbol,
             exchange: holding.exchange ?? 'NSE',
             side: tradeSide,
@@ -1481,6 +1511,7 @@ export function HoldingsPage() {
           if (tradeBracketEnabled && bracketPrice != null) {
             const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
             const bracket = await createManualOrder({
+              broker_name: universeId === 'holdings:angelone' ? 'angelone' : 'zerodha',
               symbol: holding.symbol,
               exchange: holding.exchange ?? 'NSE',
               side: bracketSide,
@@ -2254,7 +2285,9 @@ export function HoldingsPage() {
           ? activeGroup.description
             ? activeGroup.description
             : 'Symbols loaded from the selected group.'
-          : 'Live holdings fetched from Zerodha, including unrealized P&L when last price is available.'}
+          : universeId === 'holdings:angelone'
+            ? 'Live holdings fetched from AngelOne (SmartAPI), including unrealized P&L when last price is available.'
+            : 'Live holdings fetched from Zerodha, including unrealized P&L when last price is available.'}
       </Typography>
       {refreshError && (
         <Typography variant="caption" color="error" sx={{ mb: 1, display: 'block' }}>
@@ -2441,6 +2474,9 @@ export function HoldingsPage() {
                   sx={{ minWidth: 240 }}
                 >
                   <MenuItem value="holdings">Holdings (Zerodha)</MenuItem>
+                  {angeloneConnected && (
+                    <MenuItem value="holdings:angelone">Holdings (AngelOne)</MenuItem>
+                  )}
 	                  {availableGroups.map((g) => {
 	                    const kindLabel =
 	                      g.kind === 'WATCHLIST'
@@ -3681,7 +3717,9 @@ export function HoldingsPage() {
                   <Checkbox
                     size="small"
                     checked={tradeBracketEnabled}
+                    disabled={universeId === 'holdings:angelone'}
                     onChange={(e) => {
+                      if (universeId === 'holdings:angelone') return
                       const checked = e.target.checked
                       setTradeBracketEnabled(checked)
                       if (checked) {
@@ -3749,13 +3787,22 @@ export function HoldingsPage() {
                   </Typography>
                 </>
               )}
+              {universeId === 'holdings:angelone' && (
+                <Typography variant="caption" color="text.secondary">
+                  Bracket orders require GTT support (Zerodha-only in this version).
+                </Typography>
+              )}
             </Box>
             <FormControlLabel
               control={
                 <Checkbox
                   size="small"
                   checked={tradeGtt}
-                  onChange={(e) => setTradeGtt(e.target.checked)}
+                  disabled={universeId === 'holdings:angelone'}
+                  onChange={(e) => {
+                    if (universeId === 'holdings:angelone') return
+                    setTradeGtt(e.target.checked)
+                  }}
                 />
               }
               label="GTT (good-till-triggered) order"

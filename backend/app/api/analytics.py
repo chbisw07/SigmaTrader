@@ -1476,6 +1476,11 @@ def symbol_series(
     response_model=HoldingsCorrelationResult,
 )
 def holdings_correlation(
+    broker_name: str = Query(
+        "zerodha",
+        min_length=1,
+        description="Broker used to fetch live holdings (zerodha/angelone).",
+    ),
     window_days: int = Query(
         90,
         ge=30,
@@ -1524,7 +1529,12 @@ def holdings_correlation(
     # Lazy import to avoid circular imports at startup.
     from app.api.positions import list_holdings
 
-    holdings = list_holdings(db=db, settings=settings, user=user)
+    holdings = list_holdings(
+        broker_name=broker_name,
+        db=db,
+        settings=settings,
+        user=user,
+    )
 
     # Aggregate an approximate portfolio value per symbol so that we can
     # (optionally) exclude very small positions from the correlation view

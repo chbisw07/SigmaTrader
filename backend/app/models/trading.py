@@ -336,14 +336,19 @@ class Position(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "broker_name",
             "symbol",
             "exchange",
             "product",
-            name="ux_positions_symbol_exchange_product",
+            name="ux_positions_broker_symbol_exchange_product",
         ),
+        Index("ix_positions_broker_symbol", "broker_name", "symbol"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    broker_name: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="zerodha"
+    )
     symbol: Mapped[str] = mapped_column(String(128), nullable=False)
     exchange: Mapped[str] = mapped_column(String(32), nullable=False, default="NSE")
     product: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -360,17 +365,31 @@ class PositionSnapshot(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "broker_name",
             "as_of_date",
             "symbol",
             "exchange",
             "product",
-            name="ux_position_snapshots_date_symbol_exchange_product",
+            name="ux_position_snapshots_broker_date_symbol_exchange_product",
         ),
-        Index("ix_position_snapshots_date_symbol", "as_of_date", "symbol"),
-        Index("ix_position_snapshots_symbol_date", "symbol", "as_of_date"),
+        Index(
+            "ix_position_snapshots_broker_date_symbol",
+            "broker_name",
+            "as_of_date",
+            "symbol",
+        ),
+        Index(
+            "ix_position_snapshots_broker_symbol_date",
+            "broker_name",
+            "symbol",
+            "as_of_date",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    broker_name: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="zerodha"
+    )
     as_of_date: Mapped[date_type] = mapped_column(Date, nullable=False)
     captured_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC)

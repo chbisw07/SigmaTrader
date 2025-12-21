@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+import inspect
+import json
 from datetime import date, datetime
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_current_user
-from app.clients import ZerodhaClient
+from app.api.auth import get_current_user, get_current_user_optional
+from app.clients import AngelOneClient, AngelOneSession, ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection, Order, Position, PositionSnapshot, User
 from app.schemas.positions import HoldingRead, PositionRead, PositionSnapshotRead
+from app.services.broker_instruments import resolve_listing_for_broker_symbol
 from app.services.broker_secrets import get_broker_secret
 from app.services.market_data import ensure_instrument_from_holding_entry
-from app.services.positions_sync import sync_positions_from_zerodha
+from app.services.positions_sync import (
+    sync_positions_from_angelone,
+    sync_positions_from_zerodha,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -33,6 +39,8 @@ def _model_validate(schema_cls, obj):
 def _get_zerodha_client_for_positions(
     db: Session,
     settings: Settings,
+    *,
+    user_id: int | None = None,
 ) -> ZerodhaClient:
     """Return a Zerodha client for positions sync.
 
@@ -40,12 +48,10 @@ def _get_zerodha_client_for_positions(
     recently updated one so that the last-connected account is used.
     """
 
-    conn = (
-        db.query(BrokerConnection)
-        .filter(BrokerConnection.broker_name == "zerodha")
-        .order_by(BrokerConnection.updated_at.desc())
-        .first()
-    )
+    q = db.query(BrokerConnection).filter(BrokerConnection.broker_name == "zerodha")
+    if user_id is not None:
+        q = q.filter(BrokerConnection.user_id == user_id)
+    conn = q.order_by(BrokerConnection.updated_at.desc()).first()
     if conn is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -81,59 +87,145 @@ def _get_zerodha_client_for_positions(
     return ZerodhaClient(kite)
 
 
+def _get_angelone_client(
+    db: Session,
+    settings: Settings,
+    *,
+    user_id: int | None = None,
+) -> AngelOneClient:
+    q = db.query(BrokerConnection).filter(BrokerConnection.broker_name == "angelone")
+    if user_id is not None:
+        q = q.filter(BrokerConnection.user_id == user_id)
+    conn = q.order_by(BrokerConnection.updated_at.desc()).first()
+    if conn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AngelOne is not connected.",
+        )
+
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="angelone",
+        key="api_key",
+        user_id=conn.user_id,
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SmartAPI API key is not configured. "
+            "Please configure it in the broker settings.",
+        )
+
+    raw = decrypt_token(settings, conn.access_token_encrypted)
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"AngelOne session is invalid: {exc}",
+        ) from exc
+
+    jwt = str(parsed.get("jwt_token") or "")
+    if not jwt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AngelOne session is missing jwt_token. Please reconnect.",
+        )
+
+    session = AngelOneSession(
+        jwt_token=jwt,
+        refresh_token=str(parsed.get("refresh_token") or "") or None,
+        feed_token=str(parsed.get("feed_token") or "") or None,
+        client_code=str(parsed.get("client_code") or "") or None,
+    )
+
+    client = AngelOneClient(api_key=api_key, session=session)
+    client.broker_user_id = getattr(conn, "broker_user_id", None)  # type: ignore[attr-defined]
+    return client
+
+
 @router.post("/sync", response_model=dict)
 def sync_positions(
     broker_name: Annotated[str, Query(min_length=1)] = "zerodha",
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
 ) -> dict:
-    """Synchronize positions from Zerodha into the local DB cache."""
+    """Synchronize positions from a broker into the local DB cache."""
 
     broker = (broker_name or "").strip().lower()
-    if broker != "zerodha":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Positions sync not implemented for broker: {broker}",
+    if broker == "zerodha":
+        # Tests may monkeypatch `_get_zerodha_client_for_positions` with a
+        # 2-arg callable (db, settings) so we only pass user_id when supported.
+        try:
+            sig = inspect.signature(_get_zerodha_client_for_positions)
+            if "user_id" in sig.parameters:
+                client = _get_zerodha_client_for_positions(
+                    db,
+                    settings,
+                    user_id=user.id if user is not None else None,
+                )
+            else:
+                client = _get_zerodha_client_for_positions(db, settings)
+        except Exception:
+            client = _get_zerodha_client_for_positions(db, settings)
+        updated = sync_positions_from_zerodha(db, client)
+        return {"updated": updated}
+    if broker == "angelone":
+        client = _get_angelone_client(
+            db,
+            settings,
+            user_id=user.id if user is not None else None,
         )
+        updated = sync_positions_from_angelone(db, client)
+        return {"updated": updated}
 
-    client = _get_zerodha_client_for_positions(db, settings)
-    updated = sync_positions_from_zerodha(db, client)
-    return {"updated": updated}
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Positions sync not implemented for broker: {broker}",
+    )
 
 
 @router.get("/", response_model=List[PositionRead])
-def list_positions(db: Session = Depends(get_db)) -> List[Position]:
+def list_positions(
+    broker_name: Annotated[Optional[str], Query()] = None,
+    db: Session = Depends(get_db),
+) -> List[Position]:
     """Return cached positions from the local DB."""
 
-    return (
-        db.query(Position)
-        .order_by(
-            Position.symbol,
-            Position.exchange,
-            Position.product,
-        )  # type: ignore[arg-type]
-        .all()
-    )
+    q = db.query(Position)
+    if broker_name is not None:
+        broker = (broker_name or "").strip().lower()
+        q = q.filter(Position.broker_name == broker)
+    return q.order_by(
+        Position.symbol,
+        Position.exchange,
+        Position.product,
+    ).all()
 
 
 @router.get("/daily", response_model=List[PositionSnapshotRead])
 def list_daily_positions(
+    broker_name: Annotated[str, Query(min_length=1)] = "zerodha",
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     symbol: Optional[str] = None,
     include_zero: bool = True,
     db: Session = Depends(get_db),
 ) -> List[PositionSnapshotRead]:
-    """Return daily position snapshots captured from Zerodha positions.
+    """Return daily position snapshots captured from broker positions.
 
     If start/end are omitted, this defaults to the latest available date.
     """
 
-    q = db.query(PositionSnapshot)
+    broker = (broker_name or "").strip().lower()
+    q = db.query(PositionSnapshot).filter(PositionSnapshot.broker_name == broker)
 
     if start_date is None and end_date is None:
         latest = (
             db.query(PositionSnapshot.as_of_date)
+            .filter(PositionSnapshot.broker_name == broker)
             .order_by(PositionSnapshot.as_of_date.desc())
             .limit(1)
             .scalar()
@@ -265,7 +357,7 @@ def list_holdings(
     settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
 ) -> List[HoldingRead]:
-    """Return live holdings from Zerodha for the current user.
+    """Return live holdings from a broker for the current user.
 
     For now holdings are not cached in DB; they are fetched on-demand
     from Zerodha and projected into a simple schema that includes
@@ -273,6 +365,95 @@ def list_holdings(
     """
 
     broker = (broker_name or "").strip().lower()
+    if broker == "angelone":
+        client = _get_angelone_client(db, settings, user_id=user.id)
+        raw = client.list_holdings()
+
+        buy_orders: List[Order] = (
+            db.query(Order)
+            .filter(
+                Order.user_id == user.id,
+                Order.broker_name == "angelone",
+                Order.side == "BUY",
+                Order.status.in_(["EXECUTED", "PARTIALLY_EXECUTED"]),
+            )
+            .order_by(Order.created_at.desc())
+            .all()
+        )
+        last_buy_by_symbol: dict[str, datetime] = {}
+        for o in buy_orders:
+            if o.symbol not in last_buy_by_symbol:
+                last_buy_by_symbol[o.symbol] = o.created_at
+
+        holdings: List[HoldingRead] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+
+            broker_symbol = entry.get("tradingsymbol") or entry.get("symbol")
+            exchange = entry.get("exchange") or "NSE"
+            qty = (
+                entry.get("quantity") or entry.get("netqty") or entry.get("netQty") or 0
+            )
+            avg = (
+                entry.get("averageprice")
+                or entry.get("average_price")
+                or entry.get("avgprice")
+                or entry.get("avgPrice")
+                or 0
+            )
+            last = entry.get("ltp") or entry.get("last_price") or entry.get("lastPrice")
+
+            if not isinstance(broker_symbol, str) or not isinstance(exchange, str):
+                continue
+
+            exch_u = exchange.strip().upper()
+            broker_symbol_u = broker_symbol.strip().upper()
+            listing = resolve_listing_for_broker_symbol(
+                db,
+                broker_name="angelone",
+                exchange=exch_u,
+                broker_symbol=broker_symbol_u,
+            )
+            symbol_u = (
+                listing.symbol.strip().upper()
+                if listing is not None
+                else broker_symbol_u
+            )
+
+            try:
+                qty_f = float(qty)
+                avg_f = float(avg)
+                last_f = float(last) if last is not None else None
+            except (TypeError, ValueError):
+                continue
+
+            pnl = None
+            if last_f is not None:
+                pnl = (last_f - avg_f) * qty_f
+
+            total_pnl_percent: float | None = None
+            if pnl is not None and qty_f and avg_f:
+                cost = qty_f * avg_f
+                if cost:
+                    total_pnl_percent = (pnl / cost) * 100.0
+
+            holdings.append(
+                HoldingRead(
+                    symbol=symbol_u,
+                    quantity=qty_f,
+                    average_price=avg_f,
+                    exchange=exch_u,
+                    last_price=last_f,
+                    pnl=pnl,
+                    last_purchase_date=last_buy_by_symbol.get(symbol_u),
+                    total_pnl_percent=total_pnl_percent,
+                    today_pnl_percent=None,
+                )
+            )
+
+        return holdings
+
     if broker != "zerodha":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

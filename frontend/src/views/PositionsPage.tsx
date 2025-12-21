@@ -58,8 +58,9 @@ export function PositionsPage() {
       setLoading(true)
       const params =
         opts?.preferLatest && !startDate && !endDate && !symbolQuery
-          ? undefined
+          ? { broker_name: selectedBroker }
           : {
+              broker_name: selectedBroker,
               start_date: startDate || undefined,
               end_date: endDate || undefined,
               symbol: symbolQuery || undefined,

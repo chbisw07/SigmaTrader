@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from typing import Dict, List, Optional
+
+from sqlalchemy.orm import Session
+
+from app.clients import AngelOneClient
+from app.models import Order
+
+
+def _map_angelone_status(status: str) -> Optional[str]:
+    """Map SmartAPI order status strings to internal Order.status values."""
+
+    s = (status or "").strip().upper()
+    if not s:
+        return None
+
+    if s in {"COMPLETE", "COMPLETED", "TRADED", "EXECUTED"}:
+        return "EXECUTED"
+    if s in {"CANCELLED", "CANCELED"}:
+        return "CANCELLED"
+    if s == "REJECTED":
+        return "REJECTED"
+    if s in {
+        "OPEN",
+        "PENDING",
+        "TRIGGER PENDING",
+        "MODIFIED",
+        "SUBMITTED",
+        "CONFIRM",
+    }:
+        return "SENT"
+
+    return None
+
+
+def sync_order_statuses_angelone(
+    db: Session,
+    client: AngelOneClient,
+    *,
+    user_id: int | None = None,
+) -> int:
+    """Synchronize order statuses with AngelOne (SmartAPI) order book."""
+
+    book: List[Dict[str, object]] = client.list_orders()
+    by_id: Dict[str, Dict[str, object]] = {}
+    for entry in book:
+        if not isinstance(entry, dict):
+            continue
+        oid = entry.get("orderid") or entry.get("orderId") or entry.get("order_id")
+        if oid is not None:
+            by_id[str(oid)] = entry
+
+    if not by_id:
+        return 0
+
+    q = db.query(Order).filter(
+        Order.broker_name == "angelone",
+        Order.broker_order_id.isnot(None),
+    )
+    if user_id is not None:
+        q = q.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
+    db_orders: List[Order] = q.all()
+
+    updated = 0
+    for order in db_orders:
+        entry = by_id.get(order.broker_order_id or "")
+        if not entry:
+            continue
+
+        status_raw = entry.get("status")
+        if not isinstance(status_raw, str):
+            continue
+
+        new_status = _map_angelone_status(status_raw)
+        if new_status is None or new_status == order.status:
+            continue
+
+        order.status = new_status
+        if new_status == "REJECTED":
+            msg = (
+                entry.get("text")
+                or entry.get("statusmessage")
+                or entry.get("statusMessage")
+                or entry.get("message")
+            )
+            if isinstance(msg, str) and msg:
+                order.error_message = msg
+
+        db.add(order)
+        updated += 1
+
+    if updated:
+        db.commit()
+
+    return updated
+
+
+__all__ = ["sync_order_statuses_angelone"]

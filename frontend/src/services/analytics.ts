@@ -156,6 +156,7 @@ export async function fetchAnalyticsTrades(
 }
 
 export async function fetchHoldingsCorrelation(params?: {
+  brokerName?: string
   windowDays?: number
   minWeightFraction?: number
   clusterThreshold?: number
@@ -164,6 +165,9 @@ export async function fetchHoldingsCorrelation(params?: {
     '/api/analytics/holdings-correlation',
     window.location.origin,
   )
+  if (params?.brokerName) {
+    url.searchParams.set('broker_name', params.brokerName)
+  }
   if (params?.windowDays != null) {
     url.searchParams.set('window_days', String(params.windowDays))
   }

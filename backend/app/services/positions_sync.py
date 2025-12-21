@@ -5,8 +5,9 @@ from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
-from app.clients import ZerodhaClient
+from app.clients import AngelOneClient, ZerodhaClient
 from app.models import Position, PositionSnapshot
+from app.services.broker_instruments import resolve_listing_for_broker_symbol
 
 
 def _as_float(value: object, default: float | None = None) -> float | None:
@@ -50,15 +51,19 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
     if isinstance(net_raw, list):
         net = [entry for entry in net_raw if isinstance(entry, dict)]
 
-    # Clear existing positions for a simple cache refresh.
-    db.query(Position).delete()
+    broker_name = "zerodha"
+    # Clear existing positions for a simple cache refresh (scoped by broker).
+    db.query(Position).filter(Position.broker_name == broker_name).delete()
 
     updated = 0
     now = datetime.now(UTC)
     as_of = _as_of_date_ist(now)
 
-    # Replace any previously captured snapshot for this day.
-    db.query(PositionSnapshot).filter(PositionSnapshot.as_of_date == as_of).delete()
+    # Replace any previously captured snapshot for this day (scoped by broker).
+    db.query(PositionSnapshot).filter(
+        PositionSnapshot.broker_name == broker_name,
+        PositionSnapshot.as_of_date == as_of,
+    ).delete()
 
     # Best-effort: fetch holdings so we can attach cost-basis avg price for
     # delivery sells (CNC) where positions payload often lacks buy_price.
@@ -153,6 +158,7 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
             close_price = float(qp) if qp is not None else None
 
         position = Position(
+            broker_name=broker_name,
             symbol=symbol_u,
             exchange=exch_u,
             product=product,
@@ -164,6 +170,7 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
         db.add(position)
 
         snap = PositionSnapshot(
+            broker_name=broker_name,
             as_of_date=as_of,
             captured_at=now,
             symbol=symbol_u,
@@ -196,4 +203,144 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
     return updated
 
 
-__all__ = ["sync_positions_from_zerodha"]
+def sync_positions_from_angelone(db: Session, client: AngelOneClient) -> int:
+    """Fetch positions from AngelOne (SmartAPI) and cache them locally."""
+
+    broker_name = "angelone"
+
+    rows = client.list_positions()
+    if not rows:
+        db.query(Position).filter(Position.broker_name == broker_name).delete()
+        db.commit()
+        return 0
+
+    db.query(Position).filter(Position.broker_name == broker_name).delete()
+
+    updated = 0
+    now = datetime.now(UTC)
+    as_of = _as_of_date_ist(now)
+
+    db.query(PositionSnapshot).filter(
+        PositionSnapshot.broker_name == broker_name,
+        PositionSnapshot.as_of_date == as_of,
+    ).delete()
+
+    for entry in rows:
+        if not isinstance(entry, dict):
+            continue
+
+        sym_raw = (
+            entry.get("tradingsymbol") or entry.get("symbol") or entry.get("symbolname")
+        )
+        exch_raw = entry.get("exchange") or "NSE"
+        product_raw = (
+            entry.get("producttype") or entry.get("product") or entry.get("productType")
+        )
+
+        if (
+            not isinstance(sym_raw, str)
+            or not isinstance(exch_raw, str)
+            or not isinstance(product_raw, str)
+        ):
+            continue
+
+        broker_symbol_u = sym_raw.strip().upper()
+        exch_u = exch_raw.strip().upper()
+        product = product_raw.strip().upper()
+
+        listing = resolve_listing_for_broker_symbol(
+            db,
+            broker_name=broker_name,
+            exchange=exch_u,
+            broker_symbol=broker_symbol_u,
+        )
+        symbol_u = (
+            listing.symbol.strip().upper() if listing is not None else broker_symbol_u
+        )
+
+        qty_f = float(
+            _as_float(
+                entry.get("netqty") or entry.get("netQty") or entry.get("qty"),
+                0.0,
+            )
+            or 0.0
+        )
+        avg_price_f = float(
+            _as_float(
+                entry.get("avgnetprice")
+                or entry.get("avgNetPrice")
+                or entry.get("averageprice")
+                or entry.get("avg_price"),
+                0.0,
+            )
+            or 0.0
+        )
+        pnl_f = float(
+            _as_float(
+                entry.get("pnl") or entry.get("pnlvalue") or entry.get("pnlValue"),
+                0.0,
+            )
+            or 0.0
+        )
+
+        last_price = _as_float(
+            entry.get("ltp") or entry.get("last_price") or entry.get("lastPrice")
+        )
+        close_price = _as_float(
+            entry.get("close") or entry.get("close_price") or entry.get("closePrice")
+        )
+
+        position = Position(
+            broker_name=broker_name,
+            symbol=symbol_u,
+            exchange=exch_u,
+            product=product,
+            qty=qty_f,
+            avg_price=avg_price_f,
+            pnl=pnl_f,
+            last_updated=now,
+        )
+        db.add(position)
+
+        snap = PositionSnapshot(
+            broker_name=broker_name,
+            as_of_date=as_of,
+            captured_at=now,
+            symbol=symbol_u,
+            exchange=exch_u,
+            product=product,
+            qty=qty_f,
+            avg_price=avg_price_f,
+            pnl=pnl_f,
+            last_price=last_price,
+            close_price=close_price,
+            value=_as_float(entry.get("value")),
+            m2m=_as_float(entry.get("m2m")),
+            unrealised=_as_float(entry.get("unrealised")),
+            realised=_as_float(entry.get("realised")),
+            buy_qty=_as_float(entry.get("buyqty") or entry.get("buyQty")),
+            buy_avg_price=_as_float(
+                entry.get("buyavgprice") or entry.get("buyAvgPrice")
+            ),
+            sell_qty=_as_float(entry.get("sellqty") or entry.get("sellQty")),
+            sell_avg_price=_as_float(
+                entry.get("sellavgprice") or entry.get("sellAvgPrice")
+            ),
+            day_buy_qty=_as_float(entry.get("daybuyqty") or entry.get("dayBuyQty")),
+            day_buy_avg_price=_as_float(
+                entry.get("daybuyavgprice") or entry.get("dayBuyAvgPrice")
+            ),
+            day_sell_qty=_as_float(entry.get("daysellqty") or entry.get("daySellQty")),
+            day_sell_avg_price=_as_float(
+                entry.get("daysellavgprice") or entry.get("daySellAvgPrice")
+            ),
+            holding_qty=None,
+        )
+        db.add(snap)
+        updated += 1
+
+    db.commit()
+    return updated
+
+
+__all__ = ["sync_positions_from_zerodha", "sync_positions_from_angelone"]
