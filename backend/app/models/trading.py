@@ -196,7 +196,11 @@ class Order(Base):
     __table_args__ = (
         Index("ix_orders_strategy_status", "strategy_id", "status"),
         Index("ix_orders_symbol_time", "symbol", "created_at"),
-        Index("ix_orders_zerodha_order_id", "zerodha_order_id"),
+        Index(
+            "ix_orders_broker_name_order_id",
+            "broker_name",
+            "broker_order_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -233,6 +237,11 @@ class Order(Base):
     execution_target: Mapped[str] = mapped_column(
         String(16), nullable=False, default="LIVE"
     )
+
+    broker_name: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="zerodha"
+    )
+    broker_order_id: Mapped[Optional[str]] = mapped_column(String(64))
 
     zerodha_order_id: Mapped[Optional[str]] = mapped_column(String(64))
     broker_account_id: Mapped[Optional[str]] = mapped_column(String(64))

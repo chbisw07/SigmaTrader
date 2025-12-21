@@ -26,11 +26,14 @@ import {
   updateOrder,
   type Order,
 } from '../services/orders'
+import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import {
-  fetchZerodhaMargins,
-  fetchZerodhaLtp,
-  previewZerodhaOrder,
-} from '../services/zerodha'
+  fetchBrokerCapabilities,
+  fetchLtpForBroker,
+  fetchMarginsForBroker,
+  previewOrderForBroker,
+  type BrokerCapabilities,
+} from '../services/brokerRuntime'
 
 export function WaitingQueuePanel({
   embedded = false,
@@ -69,6 +72,14 @@ export function WaitingQueuePanel({
   const [bulkCancelling, setBulkCancelling] = useState(false)
   const [bulkExecuting, setBulkExecuting] = useState(false)
   const [loadedOnce, setLoadedOnce] = useState(false)
+  const [brokers, setBrokers] = useState<BrokerInfo[]>([])
+  const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
+  const [brokerCaps, setBrokerCaps] = useState<Record<string, BrokerCapabilities>>({})
+
+  const getCaps = (brokerName?: string | null): BrokerCapabilities | null => {
+    const name = (brokerName ?? selectedBroker ?? 'zerodha').toLowerCase()
+    return brokerCaps[name] ?? null
+  }
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -83,7 +94,7 @@ export function WaitingQueuePanel({
       if (!silent) {
         setLoading(true)
       }
-      const data = await fetchQueueOrders()
+      const data = await fetchQueueOrders(undefined, selectedBroker)
       setOrders(data)
       setSelectionModel((prev) =>
         prev.filter((id) => data.some((o) => o.id === id)),
@@ -102,8 +113,34 @@ export function WaitingQueuePanel({
     if (!active) return
     if (loadedOnce) return
     setLoadedOnce(true)
+    void (async () => {
+      try {
+        const [list, caps] = await Promise.all([
+          fetchBrokers(),
+          fetchBrokerCapabilities(),
+        ])
+        setBrokers(list)
+        const capsMap: Record<string, BrokerCapabilities> = {}
+        for (const item of caps) {
+          capsMap[item.name] = item.capabilities
+        }
+        setBrokerCaps(capsMap)
+        if (list.length > 0 && !list.some((b) => b.name === selectedBroker)) {
+          setSelectedBroker(list[0].name)
+        }
+      } catch {
+        // Ignore; the queue can still operate with defaults.
+      } finally {
+        void loadQueue()
+      }
+    })()
+  }, [active, loadedOnce, selectedBroker])
+
+  useEffect(() => {
+    if (!active || !loadedOnce) return
     void loadQueue()
-  }, [active, loadedOnce])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBroker])
 
   useEffect(() => {
     if (!active) return
@@ -111,14 +148,20 @@ export function WaitingQueuePanel({
       void loadQueue({ silent: true })
     }, 5000)
     return () => window.clearInterval(id)
-  }, [active])
+  }, [active, selectedBroker])
 
   useEffect(() => {
     const loadLtp = async () => {
       if (!editingOrder) return
       try {
         setLtpError(null)
-        const data = await fetchZerodhaLtp(
+        const brokerName = (editingOrder.broker_name ?? selectedBroker ?? 'zerodha')
+        const caps = getCaps(brokerName)
+        if (caps && !caps.supports_ltp) {
+          throw new Error(`LTP not available for ${brokerName}.`)
+        }
+        const data = await fetchLtpForBroker(
+          brokerName,
           editingOrder.symbol,
           editingOrder.exchange ?? 'NSE',
         )
@@ -133,7 +176,7 @@ export function WaitingQueuePanel({
     if (editingOrder && (editingOrder.order_type === 'SL' || editingOrder.order_type === 'SL-M')) {
       void loadLtp()
     }
-  }, [editingOrder])
+  }, [editingOrder, selectedBroker])
 
   useEffect(() => {
     if (!editingOrder || ltp == null) return
@@ -203,6 +246,12 @@ export function WaitingQueuePanel({
     setFundsLoading(true)
     setFundsError(null)
     try {
+      const brokerName = (editingOrder.broker_name ?? selectedBroker ?? 'zerodha')
+      const caps = getCaps(brokerName)
+      if (caps && (!caps.supports_margin_preview || !caps.supports_order_preview)) {
+        throw new Error(`Funds preview is not available for ${brokerName}.`)
+      }
+
       const qty = Number(editQty)
       if (!Number.isFinite(qty) || qty <= 0) {
         throw new Error('Enter a positive quantity to preview funds.')
@@ -228,8 +277,8 @@ export function WaitingQueuePanel({
         triggerPrice = tp
       }
 
-      const margins = await fetchZerodhaMargins()
-      const preview = await previewZerodhaOrder({
+      const margins = await fetchMarginsForBroker(brokerName)
+      const preview = await previewOrderForBroker(brokerName, {
         symbol: editingOrder.symbol,
         exchange: editingOrder.exchange ?? 'NSE',
         side: editSide,
@@ -397,7 +446,7 @@ export function WaitingQueuePanel({
     )
     if (!ids.length) return
     const ok = window.confirm(
-      `Execute ${ids.length} selected order${ids.length > 1 ? 's' : ''}? This will send them to Zerodha.`,
+      `Execute ${ids.length} selected order${ids.length > 1 ? 's' : ''}? This will send them to ${selectedBroker}.`,
     )
     if (!ok) return
 
@@ -444,6 +493,15 @@ export function WaitingQueuePanel({
       width: 190,
       valueFormatter: (value) =>
         typeof value === 'string' ? formatIst(value) : '',
+    },
+    {
+      field: 'broker_name',
+      headerName: 'Broker',
+      width: 120,
+      valueGetter: (_value, row) => {
+        const order = row as Order
+        return (order.broker_name ?? 'zerodha').toUpperCase()
+      },
     },
     {
       field: 'symbol',
@@ -591,6 +649,22 @@ export function WaitingQueuePanel({
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {brokers.length > 0 && (
+            <TextField
+              select
+              size="small"
+              label="Broker"
+              value={selectedBroker}
+              onChange={(e) => setSelectedBroker(e.target.value)}
+              sx={{ minWidth: 170 }}
+            >
+              {brokers.map((b) => (
+                <MenuItem key={b.name} value={b.name}>
+                  {b.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
           <Button
             variant="outlined"
             size="small"
@@ -834,9 +908,15 @@ export function WaitingQueuePanel({
                       }
                     }}
                     size="small"
+                    disabled={(() => {
+                      const brokerName =
+                        editingOrder?.broker_name ?? selectedBroker ?? 'zerodha'
+                      const caps = getCaps(brokerName)
+                      return caps ? !caps.supports_gtt : brokerName !== 'zerodha'
+                    })()}
                   />
                 }
-                label="Place as GTT at Zerodha"
+                label="Place as GTT (Zerodha only)"
               />
               <Box
                 sx={{
@@ -862,7 +942,15 @@ export function WaitingQueuePanel({
                     onClick={() => {
                       void refreshFundsPreview()
                     }}
-                    disabled={fundsLoading}
+                    disabled={(() => {
+                      if (fundsLoading) return true
+                      const brokerName =
+                        editingOrder?.broker_name ?? selectedBroker ?? 'zerodha'
+                      const caps = getCaps(brokerName)
+                      return caps
+                        ? !caps.supports_margin_preview || !caps.supports_order_preview
+                        : brokerName !== 'zerodha'
+                    })()}
                   >
                     {fundsLoading ? 'Checking…' : 'Recalculate'}
                   </Button>

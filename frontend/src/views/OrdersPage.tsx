@@ -3,10 +3,13 @@ import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import Paper from '@mui/material/Paper'
 import Typography from '@mui/material/Typography'
+import TextField from '@mui/material/TextField'
+import MenuItem from '@mui/material/MenuItem'
 import { useEffect, useState } from 'react'
 
 import { fetchOrdersHistory, type Order } from '../services/orders'
-import { syncZerodhaOrders } from '../services/zerodha'
+import { fetchBrokers, type BrokerInfo } from '../services/brokers'
+import { syncOrdersForBroker } from '../services/brokerRuntime'
 import {
   DataGrid,
   type GridColDef,
@@ -26,6 +29,8 @@ export function OrdersPanel({
   const [refreshing, setRefreshing] = useState(false)
   const [showSimulated, setShowSimulated] = useState<boolean>(true)
   const [loadedOnce, setLoadedOnce] = useState(false)
+  const [brokers, setBrokers] = useState<BrokerInfo[]>([])
+  const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -37,7 +42,7 @@ export function OrdersPanel({
   const loadOrders = async () => {
     try {
       setLoading(true)
-      const data = await fetchOrdersHistory()
+      const data = await fetchOrdersHistory({ brokerName: selectedBroker })
       setOrders(data)
       setError(null)
     } catch (err) {
@@ -51,18 +56,35 @@ export function OrdersPanel({
     if (!active) return
     if (loadedOnce) return
     setLoadedOnce(true)
+    void (async () => {
+      try {
+        const list = await fetchBrokers()
+        setBrokers(list)
+        if (list.length > 0 && !list.some((b) => b.name === selectedBroker)) {
+          setSelectedBroker(list[0].name)
+        }
+      } catch {
+        // Ignore broker list failures; page will still load using default.
+      }
+    })()
     void loadOrders()
-  }, [active, loadedOnce])
+  }, [active, loadedOnce, selectedBroker])
+
+  useEffect(() => {
+    if (!active || !loadedOnce) return
+    void loadOrders()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBroker])
 
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
-      await syncZerodhaOrders()
+      await syncOrdersForBroker(selectedBroker)
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Failed to sync orders from Zerodha',
+          : `Failed to sync orders from ${selectedBroker}`,
       )
     } finally {
       setRefreshing(false)
@@ -155,8 +177,18 @@ export function OrdersPanel({
       },
     },
     {
+      field: 'broker_name',
+      headerName: 'Broker',
+      width: 120,
+      valueGetter: (_value, row) => {
+        const order = row as Order
+        if (order.simulated || order.execution_target === 'PAPER') return 'PAPER'
+        return (order.broker_name ?? 'zerodha').toUpperCase()
+      },
+    },
+    {
       field: 'broker',
-      headerName: 'Broker ID',
+      headerName: 'Broker Order',
       flex: 1,
       minWidth: 180,
       valueGetter: (_value, row) => {
@@ -164,10 +196,12 @@ export function OrdersPanel({
         if (order.simulated) {
           return 'PAPER'
         }
+        const brokerOrderId =
+          order.broker_order_id ?? order.zerodha_order_id ?? '-'
         if (order.broker_account_id) {
-          return `${order.broker_account_id} / ${order.zerodha_order_id ?? '-'}`
+          return `${order.broker_account_id} / ${brokerOrderId}`
         }
-        return order.zerodha_order_id ?? '-'
+        return brokerOrderId
       },
     },
     {
@@ -202,13 +236,29 @@ export function OrdersPanel({
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Typography color="text.secondary">
-            Basic order history view. Use Refresh to sync latest status from Zerodha.
+            Basic order history view. Use Refresh to sync latest status from the selected broker.
           </Typography>
           <Typography variant="caption" color="text.secondary">
             PAPER orders are marked with simulated=true. Toggle visibility below.
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          {brokers.length > 0 && (
+            <TextField
+              select
+              size="small"
+              label="Broker"
+              value={selectedBroker}
+              onChange={(e) => setSelectedBroker(e.target.value)}
+              sx={{ minWidth: 170 }}
+            >
+              {brokers.map((b) => (
+                <MenuItem key={b.name} value={b.name}>
+                  {b.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <input
               type="checkbox"

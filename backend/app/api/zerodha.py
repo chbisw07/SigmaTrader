@@ -315,7 +315,7 @@ def sync_orders(
     kite = _get_kite_for_user(db, settings, user)
 
     client = ZerodhaClient(kite)
-    updated = sync_order_statuses(db, client)
+    updated = sync_order_statuses(db, client, user_id=user.id)
     return {"updated": updated}
 
 

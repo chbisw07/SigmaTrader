@@ -5,6 +5,7 @@ import FormControlLabel from '@mui/material/FormControlLabel'
 import Checkbox from '@mui/material/Checkbox'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
+import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
 import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mui/x-data-grid'
@@ -14,6 +15,7 @@ import {
   syncPositions,
   type PositionSnapshot,
 } from '../services/positions'
+import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 
 const formatIst = (iso: string): string =>
   new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
@@ -43,6 +45,8 @@ export function PositionsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [brokers, setBrokers] = useState<BrokerInfo[]>([])
+  const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
 
   const [startDate, setStartDate] = useState<string>(defaults.from)
   const [endDate, setEndDate] = useState<string>(defaults.to)
@@ -72,6 +76,17 @@ export function PositionsPage() {
   }
 
   useEffect(() => {
+    void (async () => {
+      try {
+        const list = await fetchBrokers()
+        setBrokers(list)
+        if (list.length > 0 && !list.some((b) => b.name === selectedBroker)) {
+          setSelectedBroker(list[0].name)
+        }
+      } catch {
+        // Ignore; page can still operate with defaults.
+      }
+    })()
     void load({ preferLatest: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -79,13 +94,13 @@ export function PositionsPage() {
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
-      await syncPositions()
+      await syncPositions(selectedBroker)
       await load({ preferLatest: true })
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Failed to sync positions from Zerodha',
+          : `Failed to sync positions from ${selectedBroker}`,
       )
     } finally {
       setRefreshing(false)
@@ -198,6 +213,22 @@ export function PositionsPage() {
           Daily position snapshots (from Zerodha positions). Refresh captures a new snapshot for today.
         </Typography>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          {brokers.length > 0 && (
+            <TextField
+              select
+              label="Broker"
+              size="small"
+              value={selectedBroker}
+              onChange={(e) => setSelectedBroker(e.target.value)}
+              sx={{ minWidth: 170 }}
+            >
+              {brokers.map((b) => (
+                <MenuItem key={b.name} value={b.name}>
+                  {b.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
           <TextField
             label="From"
             type="date"
@@ -245,7 +276,7 @@ export function PositionsPage() {
             onClick={handleRefresh}
             disabled={loading || refreshing}
           >
-            {refreshing ? 'Refreshing…' : 'Refresh from Zerodha'}
+            {refreshing ? 'Refreshing…' : `Refresh from ${selectedBroker}`}
           </Button>
         </Stack>
       </Box>

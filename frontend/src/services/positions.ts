@@ -56,16 +56,21 @@ export type Holding = {
   last_purchase_date?: string | null
   total_pnl_percent?: number | null
   today_pnl_percent?: number | null
+  broker_name?: string | null
 }
 
-export async function syncPositions(): Promise<{ updated: number }> {
-  const res = await fetch('/api/positions/sync', {
+export async function syncPositions(
+  brokerName = 'zerodha',
+): Promise<{ updated: number }> {
+  const url = new URL('/api/positions/sync', window.location.origin)
+  url.searchParams.set('broker_name', brokerName)
+  const res = await fetch(url.toString(), {
     method: 'POST',
   })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(
-      `Failed to sync positions from Zerodha (${res.status})${
+      `Failed to sync positions from ${brokerName} (${res.status})${
         body ? `: ${body}` : ''
       }`,
     )
@@ -105,8 +110,11 @@ export async function fetchDailyPositions(params?: {
   return (await res.json()) as PositionSnapshot[]
 }
 
-export async function fetchHoldings(): Promise<Holding[]> {
+export async function fetchHoldings(
+  brokerName = 'zerodha',
+): Promise<Holding[]> {
   const url = new URL('/api/positions/holdings', window.location.origin)
+  url.searchParams.set('broker_name', brokerName)
   // Add a cache-buster so that each refresh button press forces a fresh
   // request to the backend and, in turn, to Zerodha.
   url.searchParams.set('_ts', String(Date.now()))

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import inspect
 import logging
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user, get_current_user_optional
 from app.clients import ZerodhaClient
+from app.config_files import load_app_config
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
@@ -30,18 +32,36 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _get_zerodha_client(db: Session, settings: Settings) -> ZerodhaClient:
+def _ensure_supported_broker(broker_name: str) -> str:
+    broker = (broker_name or "").strip().lower()
+    try:
+        cfg = load_app_config()
+        supported = set(cfg.brokers)
+    except Exception:
+        # Tests and minimal deployments may not have config.json available.
+        supported = {"zerodha"}
+    if broker not in supported:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported broker: {broker}",
+        )
+    return broker
+
+
+def _get_zerodha_client(
+    db: Session,
+    settings: Settings,
+    user_id: int | None = None,
+) -> ZerodhaClient:
     """Construct a ZerodhaClient from stored broker connection.
 
     This function is defined separately to make it easy to monkeypatch in tests.
     """
 
-    conn = (
-        db.query(BrokerConnection)
-        .filter(BrokerConnection.broker_name == "zerodha")
-        .order_by(BrokerConnection.updated_at.desc())
-        .first()
-    )
+    q = db.query(BrokerConnection).filter(BrokerConnection.broker_name == "zerodha")
+    if user_id is not None:
+        q = q.filter(BrokerConnection.user_id == user_id)
+    conn = q.order_by(BrokerConnection.updated_at.desc()).first()
     if conn is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -77,10 +97,33 @@ def _get_zerodha_client(db: Session, settings: Settings) -> ZerodhaClient:
     return client
 
 
+def _get_broker_client(
+    db: Session,
+    settings: Settings,
+    broker_name: str,
+    user_id: int | None = None,
+) -> ZerodhaClient:
+    broker = _ensure_supported_broker(broker_name)
+    if broker == "zerodha":
+        # Tests may monkeypatch `_get_zerodha_client` with a 2-arg callable.
+        try:
+            sig = inspect.signature(_get_zerodha_client)
+            if "user_id" in sig.parameters:
+                return _get_zerodha_client(db, settings, user_id=user_id)
+        except Exception:
+            pass
+        return _get_zerodha_client(db, settings)
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Broker not implemented yet: {broker}",
+    )
+
+
 @router.get("/", response_model=List[OrderRead])
 def list_orders(
-    status: Optional[str] = Query(None),
-    strategy_id: Optional[int] = Query(None),
+    status: Annotated[Optional[str], Query()] = None,
+    strategy_id: Annotated[Optional[int], Query()] = None,
+    broker_name: Annotated[Optional[str], Query()] = None,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user_optional),
 ) -> List[Order]:
@@ -95,6 +138,9 @@ def list_orders(
         query = query.filter(Order.status == status)
     if strategy_id is not None:
         query = query.filter(Order.strategy_id == strategy_id)
+    if broker_name is not None:
+        broker = _ensure_supported_broker(broker_name)
+        query = query.filter(Order.broker_name == broker)
     return query.order_by(Order.created_at.desc()).all()
 
 
@@ -121,6 +167,14 @@ def create_manual_order(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Price must be non-negative.",
+        )
+
+    broker = _ensure_supported_broker(payload.broker_name)
+
+    if payload.gtt and broker != "zerodha":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GTT is only supported for Zerodha in this version.",
         )
 
     if payload.gtt and payload.order_type != "LIMIT":
@@ -161,6 +215,7 @@ def create_manual_order(
 
     order = Order(
         user_id=user.id,
+        broker_name=broker,
         alert_id=None,
         strategy_id=None,
         symbol=payload.symbol,
@@ -217,7 +272,8 @@ def create_manual_order(
 
 @router.get("/queue", response_model=List[OrderRead])
 def list_manual_queue(
-    strategy_id: Optional[int] = Query(None),
+    strategy_id: Annotated[Optional[int], Query()] = None,
+    broker_name: Annotated[Optional[str], Query()] = None,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user_optional),
 ) -> List[Order]:
@@ -234,6 +290,9 @@ def list_manual_queue(
         )
     if strategy_id is not None:
         query = query.filter(Order.strategy_id == strategy_id)
+    if broker_name is not None:
+        broker = _ensure_supported_broker(broker_name)
+        query = query.filter(Order.broker_name == broker)
     return query.order_by(Order.created_at.desc()).all()
 
 
@@ -385,7 +444,7 @@ def execute_order(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Order:
-    """Send a manual queue order to Zerodha for execution.
+    """Send a manual queue order to its configured broker for execution.
 
     For S05/G03 this is a best-effort call:
     - Requires the order to be in WAITING/MANUAL mode and not simulated.
@@ -513,7 +572,14 @@ def execute_order(
     else:
         tradingsymbol = symbol
 
-    client = _get_zerodha_client(db, settings)
+    broker_name = _ensure_supported_broker(getattr(order, "broker_name", "zerodha"))
+    if order.broker_name != broker_name:
+        order.broker_name = broker_name
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
+    client = _get_broker_client(db, settings, broker_name, user_id=order.user_id)
     broker_account_id = getattr(client, "broker_user_id", None)
     if broker_account_id:
         order.broker_account_id = broker_account_id
@@ -523,6 +589,11 @@ def execute_order(
     # for equity; more advanced patterns (OCO, SL GTT) can be layered
     # on later.
     if order.gtt:
+        if broker_name != "zerodha":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="GTT is only supported for Zerodha in this version.",
+            )
         if order.order_type != "LIMIT":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -602,6 +673,7 @@ def execute_order(
 
         trigger_id = str(gtt_result.get("trigger_id") or gtt_result.get("id") or "")
         if trigger_id:
+            order.broker_order_id = trigger_id
             order.zerodha_order_id = trigger_id
         order.status = "SENT"
         order.error_message = None
@@ -616,7 +688,8 @@ def execute_order(
             correlation_id=getattr(request.state, "correlation_id", None),
             details={
                 "order_id": order.id,
-                "zerodha_gtt_id": order.zerodha_order_id,
+                "broker_name": broker_name,
+                "broker_order_id": order.broker_order_id,
                 "symbol": order.symbol,
                 "side": order.side,
                 "qty": order.qty,
@@ -806,7 +879,9 @@ def execute_order(
             detail="Zerodha order placement failed.",
         )
 
-    order.zerodha_order_id = result.order_id
+    order.broker_order_id = result.order_id
+    if broker_name == "zerodha":
+        order.zerodha_order_id = result.order_id
     order.status = "SENT"
     order.error_message = None
     db.add(order)
@@ -816,17 +891,35 @@ def execute_order(
         db,
         level="INFO",
         category="order",
-        message="Order sent to Zerodha",
+        message=f"Order sent to {broker_name}",
         correlation_id=getattr(request.state, "correlation_id", None),
         details={
             "order_id": order.id,
-            "zerodha_order_id": order.zerodha_order_id,
+            "broker_name": broker_name,
+            "broker_order_id": order.broker_order_id,
             "symbol": order.symbol,
             "side": order.side,
             "qty": order.qty,
         },
     )
     return order
+
+
+@router.post("/sync", response_model=dict)
+def sync_orders(
+    broker_name: Annotated[str, Query(min_length=1)] = "zerodha",
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Synchronize local Order rows with broker order statuses."""
+
+    broker = _ensure_supported_broker(broker_name)
+    client = _get_broker_client(db, settings, broker, user_id=user.id)
+    from app.services.order_sync import sync_order_statuses
+
+    updated = sync_order_statuses(db, client, user_id=user.id)
+    return {"updated": updated}
 
 
 __all__ = ["router"]

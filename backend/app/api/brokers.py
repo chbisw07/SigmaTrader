@@ -36,6 +36,19 @@ class BrokerSecretUpdate(BaseModel):
     value: str
 
 
+class BrokerCapabilities(BaseModel):
+    supports_gtt: bool = False
+    supports_margin_preview: bool = False
+    supports_order_preview: bool = False
+    supports_ltp: bool = False
+
+
+class BrokerCapabilitiesRead(BaseModel):
+    name: str
+    label: str
+    capabilities: BrokerCapabilities
+
+
 def _get_supported_brokers() -> List[BrokerInfo]:
     cfg = load_app_config()
     labels: Dict[str, str] = {
@@ -52,6 +65,42 @@ def list_brokers() -> List[BrokerInfo]:
     """Return list of supported brokers/platforms."""
 
     return _get_supported_brokers()
+
+
+def _get_broker_capabilities(broker_name: str) -> BrokerCapabilities:
+    # Keep this simple and explicit; this becomes authoritative for the FE.
+    if broker_name == "zerodha":
+        return BrokerCapabilities(
+            supports_gtt=True,
+            supports_margin_preview=True,
+            supports_order_preview=True,
+            supports_ltp=True,
+        )
+    # Default: conservative "no" for unknown/new brokers until implemented.
+    return BrokerCapabilities()
+
+
+@router.get("/capabilities", response_model=List[BrokerCapabilitiesRead])
+def list_broker_capabilities(
+    user: User = Depends(get_current_user),
+) -> List[BrokerCapabilitiesRead]:
+    """Return broker capability matrix for the frontend.
+
+    This endpoint is intentionally user-authenticated because brokers
+    are a user-facing concept in the UI (even though capabilities are
+    not secret).
+    """
+
+    _ = user  # explicit auth dependency
+    brokers = _get_supported_brokers()
+    return [
+        BrokerCapabilitiesRead(
+            name=b.name,
+            label=b.label,
+            capabilities=_get_broker_capabilities(b.name),
+        )
+        for b in brokers
+    ]
 
 
 def _ensure_broker_exists(broker_name: str) -> None:

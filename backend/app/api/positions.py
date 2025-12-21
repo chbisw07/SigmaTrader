@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -83,10 +83,18 @@ def _get_zerodha_client_for_positions(
 
 @router.post("/sync", response_model=dict)
 def sync_positions(
+    broker_name: Annotated[str, Query(min_length=1)] = "zerodha",
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """Synchronize positions from Zerodha into the local DB cache."""
+
+    broker = (broker_name or "").strip().lower()
+    if broker != "zerodha":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Positions sync not implemented for broker: {broker}",
+        )
 
     client = _get_zerodha_client_for_positions(db, settings)
     updated = sync_positions_from_zerodha(db, client)
@@ -252,6 +260,7 @@ def list_daily_positions(
 
 @router.get("/holdings", response_model=List[HoldingRead])
 def list_holdings(
+    broker_name: Annotated[str, Query(min_length=1)] = "zerodha",
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
@@ -263,10 +272,17 @@ def list_holdings(
     quantity, average_price, last_price, and derived P&L when possible.
     """
 
+    broker = (broker_name or "").strip().lower()
+    if broker != "zerodha":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Holdings not implemented for broker: {broker}",
+        )
+
     conn = (
         db.query(BrokerConnection)
         .filter(
-            BrokerConnection.broker_name == "zerodha",
+            BrokerConnection.broker_name == broker,
             BrokerConnection.user_id == user.id,
         )
         .one_or_none()

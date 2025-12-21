@@ -24,12 +24,18 @@ def _map_zerodha_status(status: str) -> Optional[str]:
     return None
 
 
-def sync_order_statuses(db: Session, client: ZerodhaClient) -> int:
+def sync_order_statuses(
+    db: Session,
+    client: ZerodhaClient,
+    *,
+    user_id: int | None = None,
+) -> int:
     """Synchronize order statuses with Zerodha using the order book.
 
     This function:
     - Fetches the full Zerodha order book via `client.list_orders()`.
-    - Matches entries by `zerodha_order_id` against local `Order` rows.
+    - Matches entries by `broker_order_id` against local `Order` rows for
+      broker_name='zerodha'.
     - Updates `Order.status` and, for rejected orders, `error_message`.
 
     Returns:
@@ -48,11 +54,16 @@ def sync_order_statuses(db: Session, client: ZerodhaClient) -> int:
 
     updated = 0
 
-    db_orders: List[Order] = (
-        db.query(Order).filter(Order.zerodha_order_id.isnot(None)).all()
+    q = db.query(Order).filter(
+        Order.broker_name == "zerodha",
+        (Order.broker_order_id.isnot(None)) | (Order.zerodha_order_id.isnot(None)),
     )
+    if user_id is not None:
+        q = q.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
+    db_orders: List[Order] = q.all()
     for order in db_orders:
-        z_entry = by_id.get(order.zerodha_order_id or "")
+        lookup_id = order.broker_order_id or order.zerodha_order_id or ""
+        z_entry = by_id.get(lookup_id)
         if not z_entry:
             continue
 

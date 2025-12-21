@@ -28,6 +28,7 @@ class OrderRead(BaseModel):
     id: int
     alert_id: Optional[int]
     strategy_id: Optional[int]
+    broker_name: str = "zerodha"
     symbol: str
     exchange: Optional[str]
     side: str
@@ -44,6 +45,8 @@ class OrderRead(BaseModel):
     simulated: bool
     created_at: datetime
     updated_at: datetime
+    broker_order_id: Optional[str] = None
+    # Backward-compatible legacy field (deprecated).
     zerodha_order_id: Optional[str] = None
     broker_account_id: Optional[str] = None
     error_message: Optional[str] = None
@@ -80,6 +83,7 @@ class OrderUpdate(BaseModel):
 class ManualOrderCreate(BaseModel):
     """Payload for creating a new manual WAITING order."""
 
+    broker_name: str = "zerodha"
     symbol: str
     exchange: Optional[str] = None
     side: Literal["BUY", "SELL"]

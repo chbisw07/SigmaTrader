@@ -17,6 +17,7 @@ export type Order = {
   id: number
   alert_id?: number | null
   strategy_id?: number | null
+  broker_name?: string | null
   symbol: string
   exchange?: string | null
   side: string
@@ -33,12 +34,14 @@ export type Order = {
   simulated: boolean
   created_at: string
   updated_at: string
+  broker_order_id?: string | null
   zerodha_order_id?: string | null
   broker_account_id?: string | null
   error_message?: string | null
 }
 
 export async function createManualOrder(payload: {
+  broker_name?: string | null
   symbol: string
   exchange?: string | null
   side: 'BUY' | 'SELL'
@@ -67,10 +70,14 @@ export async function createManualOrder(payload: {
 
 export async function fetchQueueOrders(
   strategyId?: number,
+  brokerName?: string,
 ): Promise<Order[]> {
   const url = new URL('/api/orders/queue', window.location.origin)
   if (strategyId != null) {
     url.searchParams.set('strategy_id', String(strategyId))
+  }
+  if (brokerName) {
+    url.searchParams.set('broker_name', brokerName)
   }
   const res = await fetch(url.toString())
   if (!res.ok) {
@@ -134,6 +141,7 @@ export async function updateOrder(
 export async function fetchOrdersHistory(options?: {
   status?: string
   strategyId?: number
+  brokerName?: string
 }): Promise<Order[]> {
   const url = new URL('/api/orders/', window.location.origin)
   if (options?.status) {
@@ -141,6 +149,9 @@ export async function fetchOrdersHistory(options?: {
   }
   if (options?.strategyId != null) {
     url.searchParams.set('strategy_id', String(options.strategyId))
+  }
+  if (options?.brokerName) {
+    url.searchParams.set('broker_name', options.brokerName)
   }
   const res = await fetch(url.toString())
   if (!res.ok) {
