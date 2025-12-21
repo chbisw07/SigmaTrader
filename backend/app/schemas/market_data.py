@@ -14,4 +14,10 @@ class CandlePoint(BaseModel):
     volume: float
 
 
-__all__ = ["CandlePoint"]
+class MarketSymbol(BaseModel):
+    symbol: str
+    exchange: str
+    name: str | None = None
+
+
+__all__ = ["CandlePoint", "MarketSymbol"]

@@ -4,12 +4,14 @@ from datetime import UTC, datetime, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET
 from app.db.session import get_db
-from app.schemas.market_data import CandlePoint
+from app.models.market_data import MarketInstrument
+from app.schemas.market_data import CandlePoint, MarketSymbol
 from app.services.market_data import MarketDataError, Timeframe, load_series
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -81,6 +83,41 @@ def get_market_history(
             volume=row["volume"],
         )
         for row in rows
+    ]
+
+
+@router.get("/symbols", response_model=List[MarketSymbol])
+def search_market_symbols(
+    q: str = Query("", max_length=64),
+    exchange: str | None = Query(None),
+    limit: int = Query(30, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> List[MarketSymbol]:
+    query = (q or "").strip().upper()
+    exch = (exchange or "").strip().upper() if exchange else None
+    if exch and exch not in {"NSE", "BSE"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="exchange must be NSE or BSE",
+        )
+
+    stmt = db.query(MarketInstrument).filter(MarketInstrument.active.is_(True))
+    if exch:
+        stmt = stmt.filter(MarketInstrument.exchange == exch)
+
+    if query:
+        like = f"%{query}%"
+        stmt = stmt.filter(
+            or_(
+                MarketInstrument.symbol.ilike(like),
+                MarketInstrument.name.ilike(like),
+            ),
+        )
+
+    rows = stmt.order_by(MarketInstrument.symbol.asc()).limit(limit).all()
+
+    return [
+        MarketSymbol(symbol=r.symbol, exchange=r.exchange, name=r.name) for r in rows
     ]
 
 

@@ -14,6 +14,12 @@ export type MarketHistoryParams = {
   periodDays?: number
 }
 
+export type MarketSymbol = {
+  symbol: string
+  exchange: string
+  name?: string | null
+}
+
 export async function fetchMarketHistory(
   params: MarketHistoryParams,
 ): Promise<CandlePoint[]> {
@@ -39,3 +45,22 @@ export async function fetchMarketHistory(
   return (await res.json()) as CandlePoint[]
 }
 
+export async function searchMarketSymbols(params: {
+  q: string
+  exchange?: string
+  limit?: number
+}): Promise<MarketSymbol[]> {
+  const url = new URL('/api/market/symbols', window.location.origin)
+  url.searchParams.set('q', params.q)
+  if (params.exchange) url.searchParams.set('exchange', params.exchange)
+  if (params.limit != null) url.searchParams.set('limit', String(params.limit))
+
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to search symbols (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as MarketSymbol[]
+}

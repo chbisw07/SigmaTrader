@@ -27,6 +27,7 @@ import StepLabel from '@mui/material/StepLabel'
 import Stepper from '@mui/material/Stepper'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import Autocomplete from '@mui/material/Autocomplete'
 import {
   DataGrid,
   type GridColDef,
@@ -35,8 +36,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
 import { createManualOrder } from '../services/orders'
 import { fetchHoldings, type Holding } from '../services/positions'
+import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 import {
   addGroupMember,
   bulkAddGroupMembers,
@@ -209,7 +212,15 @@ function formatIstDateTime(value: unknown): string {
   // Stored timestamps are UTC-naive, so add the +5:30 offset before display.
   const istOffsetMs = 5.5 * 60 * 60 * 1000
   const ist = new Date(raw.getTime() + istOffsetMs)
-  return ist.toLocaleString()
+  return ist.toLocaleString('en-IN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  })
 }
 
 export function GroupsPage() {
@@ -236,6 +247,9 @@ export function GroupsPage() {
   const [newMemberSymbol, setNewMemberSymbol] = useState('')
   const [newMemberExchange, setNewMemberExchange] = useState('NSE')
   const [newMemberNotes, setNewMemberNotes] = useState('')
+  const [symbolOptions, setSymbolOptions] = useState<MarketSymbol[]>([])
+  const [symbolOptionsLoading, setSymbolOptionsLoading] = useState(false)
+  const [symbolOptionsError, setSymbolOptionsError] = useState<string | null>(null)
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkState, setBulkState] = useState<BulkAddState>(DEFAULT_BULK_ADD)
@@ -649,6 +663,44 @@ export function GroupsPage() {
     }
   }
 
+  useEffect(() => {
+    const q = newMemberSymbol.trim()
+    if (q.length < 1) {
+      setSymbolOptions([])
+      setSymbolOptionsError(null)
+      return
+    }
+    let active = true
+    setSymbolOptionsLoading(true)
+    setSymbolOptionsError(null)
+    const id = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await searchMarketSymbols({
+            q,
+            exchange: newMemberExchange.trim().toUpperCase(),
+            limit: 30,
+          })
+          if (!active) return
+          setSymbolOptions(res)
+        } catch (err) {
+          if (!active) return
+          setSymbolOptions([])
+          setSymbolOptionsError(
+            err instanceof Error ? err.message : 'Failed to search symbols',
+          )
+        } finally {
+          if (!active) return
+          setSymbolOptionsLoading(false)
+        }
+      })()
+    }, 200)
+    return () => {
+      active = false
+      window.clearTimeout(id)
+    }
+  }, [newMemberExchange, newMemberSymbol])
+
   const handleDeleteMember = async (member: GroupMember) => {
     if (!selectedGroupId) return
     const ok = window.confirm(`Remove ${member.symbol} from this group?`)
@@ -897,11 +949,20 @@ export function GroupsPage() {
   }
 
   const groupsColumns: GridColDef<Group>[] = [
+    {
+      field: 'index',
+      headerName: '#',
+      width: 50,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams<Group>) =>
+        getPaginatedRowNumber(params),
+    },
     { field: 'name', headerName: 'Name', flex: 1, minWidth: 200 },
     {
       field: 'kind',
       headerName: 'Kind',
-      width: 140,
+      width: 120,
       valueFormatter: (v) =>
         GROUP_KINDS.find((k) => k.value === v)?.label ?? String(v ?? ''),
     },
@@ -909,7 +970,7 @@ export function GroupsPage() {
     {
       field: 'updated_at',
       headerName: 'Updated',
-      width: 170,
+      width: 200,
       valueFormatter: (v) => formatIstDateTime(v),
     },
     {
@@ -948,6 +1009,15 @@ export function GroupsPage() {
 
   const membersColumns = useMemo((): GridColDef<GroupMember>[] => {
     const cols: GridColDef<GroupMember>[] = [
+      {
+        field: 'index',
+        headerName: '#',
+        width: 70,
+        sortable: false,
+        filterable: false,
+        renderCell: (params: GridRenderCellParams<GroupMember>) =>
+          getPaginatedRowNumber(params),
+      },
       { field: 'symbol', headerName: 'Symbol', width: 160 },
       { field: 'exchange', headerName: 'Exchange', width: 120 },
       {
@@ -1186,20 +1256,69 @@ export function GroupsPage() {
             <Divider sx={{ my: 2 }} />
 
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
-              <TextField
-                label="Symbol"
-                size="small"
-                value={newMemberSymbol}
-                onChange={(e) => setNewMemberSymbol(e.target.value)}
-                sx={{ width: { xs: '100%', md: 180 } }}
+              <Autocomplete<MarketSymbol, false, false, true>
+                freeSolo
+                clearOnBlur={false}
+                options={symbolOptions}
+                loading={symbolOptionsLoading}
+                value={
+                  symbolOptions.find(
+                    (o) =>
+                      o.symbol.toUpperCase() === newMemberSymbol.trim().toUpperCase()
+                      && o.exchange.toUpperCase() === newMemberExchange.trim().toUpperCase(),
+                  ) ?? null
+                }
+                onChange={(_e, value) => {
+                  if (typeof value === 'string') {
+                    setNewMemberSymbol(value.toUpperCase())
+                    return
+                  }
+                  if (value?.symbol) setNewMemberSymbol(value.symbol.toUpperCase())
+                }}
+                inputValue={newMemberSymbol}
+                onInputChange={(_e, value) => setNewMemberSymbol(value)}
+                getOptionLabel={(o) => (typeof o === 'string' ? o : o.symbol)}
+                isOptionEqualToValue={(a, b) =>
+                  typeof b === 'string'
+                    ? a.symbol === b
+                    : a.symbol === b.symbol && a.exchange === b.exchange
+                }
+                renderOption={(props, option) => (
+                  <li {...props} key={`${option.exchange}:${option.symbol}`}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                      <Typography variant="body2">
+                        {option.symbol} <Typography component="span" variant="caption" color="text.secondary">({option.exchange})</Typography>
+                      </Typography>
+                      {option.name ? (
+                        <Typography variant="caption" color="text.secondary">
+                          {option.name}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                  </li>
+                )}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Symbol"
+                    size="small"
+                    sx={{ width: { xs: '100%', md: 220 } }}
+                    helperText={symbolOptionsError ?? undefined}
+                    error={!!symbolOptionsError}
+                  />
+                )}
               />
               <TextField
                 label="Exchange"
                 size="small"
+                select
                 value={newMemberExchange}
                 onChange={(e) => setNewMemberExchange(e.target.value)}
                 sx={{ width: { xs: '100%', md: 120 } }}
-              />
+              >
+                <MenuItem value="NSE">NSE</MenuItem>
+                <MenuItem value="BSE">BSE</MenuItem>
+              </TextField>
               <TextField
                 label="Notes (optional)"
                 size="small"
