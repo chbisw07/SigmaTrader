@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.models import Group, GroupImport, GroupImportValue, GroupMember
-from app.services.market_data import resolve_market_instruments_bulk
+from app.services.market_data import resolve_listings_bulk
 
 _DISALLOWED_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -238,7 +238,7 @@ def import_watchlist_dataset(
         seen_pairs.add((sym, exch))
         normalized_rows.append((idx, sym, exch, row))
 
-    instruments = resolve_market_instruments_bulk(
+    listings = resolve_listings_bulk(
         db,
         settings,
         pairs=[(sym, exch) for _, sym, exch, _ in normalized_rows],
@@ -247,7 +247,7 @@ def import_watchlist_dataset(
 
     resolved_rows: list[tuple[str, str, dict[str, Any]]] = []
     for idx, sym, exch, row in normalized_rows:
-        if (sym, exch) not in instruments:
+        if (sym, exch) not in listings:
             skipped_symbols.append(
                 {
                     "row_index": idx,
@@ -259,7 +259,7 @@ def import_watchlist_dataset(
                     ),
                     "normalized_symbol": sym,
                     "normalized_exchange": exch,
-                    "reason": "Symbol does not resolve to a broker instrument.",
+                    "reason": "Symbol does not resolve to a canonical listing.",
                 }
             )
             continue

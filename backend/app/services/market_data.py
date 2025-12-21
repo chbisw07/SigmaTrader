@@ -8,11 +8,19 @@ from sqlalchemy import and_, func, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config_files import load_zerodha_symbol_map
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import IST_OFFSET
 from app.db.session import SessionLocal
-from app.models import BrokerConnection, Candle, MarketInstrument
+from app.models import (
+    BrokerConnection,
+    BrokerInstrument,
+    Candle,
+    Listing,
+    MarketInstrument,
+    Security,
+)
 from app.services.broker_secrets import get_broker_secret
 
 Timeframe = Literal["1m", "5m", "15m", "1h", "1d", "1mo", "1y"]
@@ -77,17 +85,42 @@ def ensure_instrument_from_holding_entry(
     token = entry.get("instrument_token")
     symbol = entry.get("tradingsymbol") or entry.get("symbol")
     exchange = entry.get("exchange") or default_exchange
+    isin = entry.get("isin") or entry.get("ISIN")
+    name = entry.get("name") or entry.get("company_name")
 
     if token is None or not isinstance(symbol, str) or not isinstance(exchange, str):
         return
 
     token_str = str(token)
     exchange_norm = exchange.upper()
+    symbol_norm = symbol.strip().upper()
+
+    listing = _get_or_create_listing(
+        db,
+        exchange=exchange_norm,
+        symbol=symbol_norm,
+        isin=(
+            str(isin).strip().upper()
+            if isinstance(isin, str) and isin.strip()
+            else None
+        ),
+        name=str(name).strip() if isinstance(name, str) and name.strip() else None,
+    )
+    _upsert_broker_instrument(
+        db,
+        broker_name="zerodha",
+        listing_id=listing.id,
+        exchange=exchange_norm,
+        broker_symbol=symbol_norm,
+        instrument_token=token_str,
+        isin=listing_isin(db, listing),
+        active=True,
+    )
 
     inst: MarketInstrument | None = (
         db.query(MarketInstrument)
         .filter(
-            MarketInstrument.symbol == symbol,
+            MarketInstrument.symbol == symbol_norm,
             MarketInstrument.exchange == exchange_norm,
         )
         .one_or_none()
@@ -95,7 +128,7 @@ def ensure_instrument_from_holding_entry(
 
     if inst is None:
         inst = MarketInstrument(
-            symbol=symbol,
+            symbol=symbol_norm,
             exchange=exchange_norm,
             instrument_token=token_str,
             active=True,
@@ -106,6 +139,157 @@ def ensure_instrument_from_holding_entry(
             inst.instrument_token = token_str
             inst.active = True
             db.add(inst)
+
+
+def listing_isin(db: Session, listing: Listing) -> str | None:
+    if listing.security_id is None:
+        return None
+    sec = db.get(Security, listing.security_id)
+    if sec is None:
+        return None
+    return sec.isin
+
+
+def _invert_zerodha_symbol_map() -> dict[str, dict[str, str]]:
+    raw = load_zerodha_symbol_map()
+    inv: dict[str, dict[str, str]] = {}
+    for exch, mapping in raw.items():
+        inner: dict[str, str] = {}
+        for tv_sym, broker_sym in mapping.items():
+            inner[str(broker_sym).upper()] = str(tv_sym).upper()
+        inv[str(exch).upper()] = inner
+    return inv
+
+
+def _map_app_symbol_to_zerodha_symbol(exchange: str, symbol: str) -> str:
+    raw = load_zerodha_symbol_map()
+    exch = exchange.upper()
+    sym = symbol.upper()
+    mapped = raw.get(exch, {}).get(sym)
+    return str(mapped).upper() if mapped else sym
+
+
+def _get_or_create_security(
+    db: Session,
+    *,
+    isin: str,
+    name: str | None = None,
+) -> Security:
+    isin_norm = isin.strip().upper()
+    sec: Security | None = (
+        db.query(Security).filter(Security.isin == isin_norm).one_or_none()
+    )
+    if sec is None:
+        sec = Security(isin=isin_norm, name=name, active=True)
+        db.add(sec)
+        db.flush()
+        return sec
+    updated = False
+    if name and not sec.name:
+        sec.name = name
+        updated = True
+    if not sec.active:
+        sec.active = True
+        updated = True
+    if updated:
+        db.add(sec)
+    return sec
+
+
+def _get_or_create_listing(
+    db: Session,
+    *,
+    exchange: str,
+    symbol: str,
+    isin: str | None = None,
+    name: str | None = None,
+) -> Listing:
+    exch = exchange.strip().upper()
+    sym = symbol.strip().upper()
+
+    listing: Listing | None = (
+        db.query(Listing)
+        .filter(Listing.exchange == exch, Listing.symbol == sym)
+        .one_or_none()
+    )
+    if listing is None:
+        listing = Listing(exchange=exch, symbol=sym, name=name, active=True)
+        db.add(listing)
+        db.flush()
+    updated = False
+    if name and not listing.name:
+        listing.name = name
+        updated = True
+
+    if isin:
+        sec = _get_or_create_security(db, isin=isin, name=name)
+        if listing.security_id != sec.id:
+            listing.security_id = sec.id
+            updated = True
+
+    if not listing.active:
+        listing.active = True
+        updated = True
+    if updated:
+        db.add(listing)
+    return listing
+
+
+def _upsert_broker_instrument(
+    db: Session,
+    *,
+    broker_name: str,
+    listing_id: int,
+    exchange: str,
+    broker_symbol: str,
+    instrument_token: str,
+    isin: str | None,
+    active: bool,
+) -> BrokerInstrument:
+    broker = broker_name.strip().lower()
+    token = instrument_token.strip()
+    exch = exchange.strip().upper()
+    bsym = broker_symbol.strip().upper()
+    bi: BrokerInstrument | None = (
+        db.query(BrokerInstrument)
+        .filter(
+            BrokerInstrument.broker_name == broker,
+            BrokerInstrument.instrument_token == token,
+        )
+        .one_or_none()
+    )
+    if bi is None:
+        bi = BrokerInstrument(
+            listing_id=listing_id,
+            broker_name=broker,
+            exchange=exch,
+            broker_symbol=bsym,
+            instrument_token=token,
+            isin=isin,
+            active=active,
+        )
+        db.add(bi)
+        return bi
+
+    updated = False
+    if bi.listing_id != listing_id:
+        bi.listing_id = listing_id
+        updated = True
+    if bi.exchange != exch:
+        bi.exchange = exch
+        updated = True
+    if bi.broker_symbol != bsym:
+        bi.broker_symbol = bsym
+        updated = True
+    if isin and not bi.isin:
+        bi.isin = isin
+        updated = True
+    if bi.active != active:
+        bi.active = active
+        updated = True
+    if updated:
+        db.add(bi)
+    return bi
 
 
 def _get_kite_client(db: Session, settings: Settings):
@@ -152,11 +336,43 @@ def _get_instrument_token(
     symbol: str,
     exchange: str,
 ) -> str:
+    canonical_broker = (
+        (getattr(settings, "canonical_market_data_broker", None) or "zerodha")
+        .strip()
+        .lower()
+    )
+    exch = exchange.upper()
+    sym = symbol.upper()
+
+    listing: Listing | None = (
+        db.query(Listing)
+        .filter(
+            Listing.exchange == exch,
+            Listing.symbol == sym,
+            Listing.active.is_(True),
+        )
+        .one_or_none()
+    )
+    if listing is not None:
+        bi: BrokerInstrument | None = (
+            db.query(BrokerInstrument)
+            .filter(
+                BrokerInstrument.broker_name == canonical_broker,
+                BrokerInstrument.listing_id == listing.id,
+                BrokerInstrument.active.is_(True),
+            )
+            .order_by(BrokerInstrument.updated_at.desc())
+            .first()
+        )
+        if bi is not None:
+            return bi.instrument_token
+
+    # Legacy fallback: cached market_instruments.
     inst: MarketInstrument | None = (
         db.query(MarketInstrument)
         .filter(
-            MarketInstrument.symbol == symbol,
-            MarketInstrument.exchange == exchange,
+            MarketInstrument.symbol == sym,
+            MarketInstrument.exchange == exch,
             MarketInstrument.active.is_(True),
         )
         .one_or_none()
@@ -177,18 +393,21 @@ def _get_instrument_token(
 
     token: str | None = None
     name: str | None = None
+    matched_row: dict | None = None
+    broker_symbol = _map_app_symbol_to_zerodha_symbol(exch, sym)
     for row in instruments:
         ts = row.get("tradingsymbol")
         exch = row.get("exchange")
         if (
             isinstance(ts, str)
-            and ts == symbol
+            and ts.upper() == broker_symbol
             and str(exch).upper() == exchange.upper()
         ):
             token_val = row.get("instrument_token")
             if token_val is not None:
                 token = str(token_val)
                 name = str(row.get("name") or "")
+                matched_row = row
                 break
 
     if token is None:
@@ -197,31 +416,46 @@ def _get_instrument_token(
             "and could not infer instrument_token from Kite instruments.",
         )
 
-    inst = MarketInstrument(
-        symbol=symbol,
+    isin_val = None
+    if matched_row is not None:
+        isin_raw = matched_row.get("isin")
+        if isinstance(isin_raw, str) and isin_raw.strip():
+            isin_val = isin_raw.strip().upper()
+
+    listing = _get_or_create_listing(
+        db,
         exchange=exchange.upper(),
+        symbol=sym,
+        isin=isin_val,
+        name=name if name else None,
+    )
+    _upsert_broker_instrument(
+        db,
+        broker_name=canonical_broker,
+        listing_id=listing.id,
+        exchange=exchange.upper(),
+        broker_symbol=broker_symbol,
         instrument_token=token,
-        name=name,
+        isin=listing_isin(db, listing),
         active=True,
     )
-    db.add(inst)
     db.commit()
     return token
 
 
-def resolve_market_instruments_bulk(
+def resolve_listings_bulk(
     db: Session,
     settings: Settings,
     *,
     pairs: list[tuple[str, str]],
     allow_kite_fallback: bool = True,
-) -> dict[tuple[str, str], MarketInstrument]:
-    """Resolve (symbol, exchange) pairs to MarketInstrument rows.
+) -> dict[tuple[str, str], Listing]:
+    """Resolve (symbol, exchange) pairs to canonical Listing rows.
 
     This is used by features such as group imports to enforce that every
-    symbol maps to a known broker instrument (NSE/BSE). When an instrument
-    is not present in the local cache, SigmaTrader can optionally fall back
-    to fetching Kite instruments once per exchange and upserting matches.
+    symbol maps to a canonical listing (and to a canonical market-data broker
+    instrument token for history loading). When missing, SigmaTrader can
+    optionally fall back to fetching the canonical broker instrument master.
     """
 
     if not pairs:
@@ -231,19 +465,66 @@ def resolve_market_instruments_bulk(
     unique_pairs = sorted(set(normalized))
 
     cached = (
-        db.query(MarketInstrument)
+        db.query(Listing)
         .filter(
             tuple_(
-                MarketInstrument.symbol,
-                MarketInstrument.exchange,
+                Listing.symbol,
+                Listing.exchange,
             ).in_(unique_pairs),
-            MarketInstrument.active.is_(True),
+            Listing.active.is_(True),
         )
         .all()
     )
-    out: dict[tuple[str, str], MarketInstrument] = {
+    out: dict[tuple[str, str], Listing] = {
         (inst.symbol, inst.exchange): inst for inst in cached
     }
+
+    # Compatibility: if listings are missing but legacy MarketInstrument cache
+    # has entries (common in tests/older DBs), promote them into canonical
+    # listings and broker_instruments without requiring Kite fetch.
+    missing_pairs = [
+        (sym, exch) for sym, exch in unique_pairs if (sym, exch) not in out
+    ]
+    if missing_pairs:
+        legacy = (
+            db.query(MarketInstrument)
+            .filter(
+                tuple_(
+                    MarketInstrument.symbol,
+                    MarketInstrument.exchange,
+                ).in_(missing_pairs),
+                MarketInstrument.active.is_(True),
+            )
+            .all()
+        )
+        inserted_any = False
+        for inst in legacy:
+            listing = _get_or_create_listing(
+                db,
+                exchange=inst.exchange,
+                symbol=inst.symbol,
+                isin=None,
+                name=inst.name,
+            )
+            _upsert_broker_instrument(
+                db,
+                broker_name=(
+                    getattr(settings, "canonical_market_data_broker", None) or "zerodha"
+                ),
+                listing_id=listing.id,
+                exchange=inst.exchange,
+                broker_symbol=inst.symbol,
+                instrument_token=inst.instrument_token,
+                isin=listing_isin(db, listing),
+                active=True,
+            )
+            out[(inst.symbol, inst.exchange)] = listing
+            inserted_any = True
+        if inserted_any:
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
 
     if not allow_kite_fallback:
         return out
@@ -263,6 +544,8 @@ def resolve_market_instruments_bulk(
         # If broker is not connected, just return cached instruments.
         return out
 
+    inverse_map = _invert_zerodha_symbol_map()
+
     inserted_any = False
     for exch, want in missing_by_exchange.items():
         if not want:
@@ -273,35 +556,53 @@ def resolve_market_instruments_bulk(
             continue
 
         # Match by tradingsymbol for the desired exchange.
-        found: dict[str, tuple[str, str | None]] = {}
+        found: dict[str, dict] = {}
         for row in instruments:
             ts = row.get("tradingsymbol")
             if not isinstance(ts, str):
                 continue
-            if ts not in want:
+            canonical_sym = inverse_map.get(exch.upper(), {}).get(
+                ts.upper(),
+                ts.upper(),
+            )
+            if canonical_sym not in want:
                 continue
             token_val = row.get("instrument_token")
             if token_val is None:
                 continue
-            token = str(token_val)
-            name = row.get("name")
-            found[ts] = (token, str(name) if name else None)
+            found[canonical_sym] = row
             if len(found) == len(want):
                 break
 
-        for sym, (token, name) in found.items():
+        for sym, row in found.items():
             existing = out.get((sym, exch))
             if existing is not None:
                 continue
-            inst = MarketInstrument(
-                symbol=sym,
+            isin = row.get("isin")
+            listing = _get_or_create_listing(
+                db,
                 exchange=exch,
-                instrument_token=token,
-                name=name,
+                symbol=sym,
+                isin=(
+                    str(isin).strip().upper()
+                    if isinstance(isin, str) and isin.strip()
+                    else None
+                ),
+                name=str(row.get("name") or "").strip() or None,
+            )
+            _upsert_broker_instrument(
+                db,
+                broker_name=(
+                    getattr(settings, "canonical_market_data_broker", None) or "zerodha"
+                ),
+                listing_id=listing.id,
+                exchange=exch,
+                broker_symbol=str(row.get("tradingsymbol") or sym).strip().upper(),
+                instrument_token=str(row.get("instrument_token")),
+                isin=listing_isin(db, listing),
                 active=True,
             )
-            db.add(inst)
-            out[(sym, exch)] = inst
+            out[(sym, exch)] = listing
             inserted_any = True
 
     if inserted_any:
@@ -311,6 +612,35 @@ def resolve_market_instruments_bulk(
             db.rollback()
             # Best-effort only; ignore race/uniqueness and continue.
 
+    return out
+
+
+def resolve_market_instruments_bulk(
+    db: Session,
+    settings: Settings,
+    *,
+    pairs: list[tuple[str, str]],
+    allow_kite_fallback: bool = True,
+) -> dict[tuple[str, str], MarketInstrument]:
+    """Legacy wrapper kept for compatibility."""
+
+    listings = resolve_listings_bulk(
+        db,
+        settings,
+        pairs=pairs,
+        allow_kite_fallback=allow_kite_fallback,
+    )
+    out: dict[tuple[str, str], MarketInstrument] = {}
+    for (sym, exch), listing in listings.items():
+        token = _get_instrument_token(db, settings, symbol=sym, exchange=exch)
+        inst = MarketInstrument(
+            symbol=listing.symbol,
+            exchange=listing.exchange,
+            instrument_token=str(token),
+            name=listing.name,
+            active=True,
+        )
+        out[(sym, exch)] = inst
     return out
 
 
@@ -678,11 +1008,24 @@ def _sync_all_instruments_once() -> None:
         now = _now_ist_naive()
         max_age = now - timedelta(days=365 * MAX_HISTORY_YEARS)
 
-        instruments: List[MarketInstrument] = (
-            db.query(MarketInstrument).filter(MarketInstrument.active.is_(True)).all()
+        canonical_broker = (
+            (getattr(settings, "canonical_market_data_broker", None) or "zerodha")
+            .strip()
+            .lower()
+        )
+        listings: list[Listing] = (
+            db.query(Listing)
+            .join(BrokerInstrument, BrokerInstrument.listing_id == Listing.id)
+            .filter(
+                Listing.active.is_(True),
+                BrokerInstrument.active.is_(True),
+                BrokerInstrument.broker_name == canonical_broker,
+            )
+            .distinct()
+            .all()
         )
 
-        for inst in instruments:
+        for inst in listings:
             for base_tf in ("1m", "1d"):
                 latest_ts: datetime | None = (
                     db.query(func.max(Candle.ts))

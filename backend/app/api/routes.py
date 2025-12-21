@@ -8,6 +8,7 @@ from . import (
     auth,
     brokers,
     groups,
+    instruments,
     market_data,
     orders,
     paper,
@@ -87,6 +88,13 @@ router.include_router(
     prefix="/api/market",
     dependencies=[Depends(require_admin)],
     tags=["market"],
+)
+
+router.include_router(
+    instruments.router,
+    prefix="/api/instruments",
+    dependencies=[Depends(require_admin)],
+    tags=["instruments"],
 )
 
 if get_settings().enable_legacy_alerts:

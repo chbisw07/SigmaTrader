@@ -10,13 +10,46 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET
 from app.db.session import get_db
-from app.models.market_data import MarketInstrument
+from app.models import Listing
 from app.schemas.market_data import CandlePoint, MarketSymbol
-from app.services.market_data import MarketDataError, Timeframe, load_series
+from app.services.market_data import (
+    MarketDataError,
+    Timeframe,
+    _get_kite_client,
+    load_series,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
 router = APIRouter()
+
+
+@router.get("/status", response_model=dict)
+def market_data_status(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Return status of the canonical market-data provider (v1: Zerodha)."""
+
+    canonical = (
+        (getattr(settings, "canonical_market_data_broker", None) or "zerodha")
+        .strip()
+        .lower()
+    )
+    if canonical != "zerodha":
+        return {
+            "canonical_broker": canonical,
+            "available": False,
+            "error": "Unsupported canonical broker.",
+        }
+
+    try:
+        kite = _get_kite_client(db, settings)
+        # Ensure token is valid; profile is the simplest validation.
+        _ = kite.profile()
+        return {"canonical_broker": canonical, "available": True}
+    except Exception as exc:
+        return {"canonical_broker": canonical, "available": False, "error": str(exc)}
 
 
 @router.get("/history", response_model=List[CandlePoint])
@@ -101,20 +134,20 @@ def search_market_symbols(
             detail="exchange must be NSE or BSE",
         )
 
-    stmt = db.query(MarketInstrument).filter(MarketInstrument.active.is_(True))
+    stmt = db.query(Listing).filter(Listing.active.is_(True))
     if exch:
-        stmt = stmt.filter(MarketInstrument.exchange == exch)
+        stmt = stmt.filter(Listing.exchange == exch)
 
     if query:
         like = f"%{query}%"
         stmt = stmt.filter(
             or_(
-                MarketInstrument.symbol.ilike(like),
-                MarketInstrument.name.ilike(like),
+                Listing.symbol.ilike(like),
+                Listing.name.ilike(like),
             ),
         )
 
-    rows = stmt.order_by(MarketInstrument.symbol.asc()).limit(limit).all()
+    rows = stmt.order_by(Listing.symbol.asc()).limit(limit).all()
 
     return [
         MarketSymbol(symbol=r.symbol, exchange=r.exchange, name=r.name) for r in rows

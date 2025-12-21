@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     admin_password: str | None = None
     enable_legacy_alerts: bool = False
     screener_sync_limit: int = 1000
+    canonical_market_data_broker: str = "zerodha"
+    instrument_master_sync_interval_hours: int = 24
+    smartapi_instrument_master_url: str = (
+        "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+    )
     # DSL profile controls the allowed function surface when compiling new
     # expressions ("recommended" is intentionally small; "extended" keeps all
     # experimental functions).

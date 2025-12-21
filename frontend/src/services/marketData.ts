@@ -20,6 +20,12 @@ export type MarketSymbol = {
   name?: string | null
 }
 
+export type MarketDataStatus = {
+  canonical_broker: string
+  available: boolean
+  error?: string | null
+}
+
 export async function fetchMarketHistory(
   params: MarketHistoryParams,
 ): Promise<CandlePoint[]> {
@@ -63,4 +69,15 @@ export async function searchMarketSymbols(params: {
     )
   }
   return (await res.json()) as MarketSymbol[]
+}
+
+export async function fetchMarketDataStatus(): Promise<MarketDataStatus> {
+  const res = await fetch('/api/market/status')
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to load market data status (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as MarketDataStatus
 }

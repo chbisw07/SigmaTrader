@@ -44,6 +44,7 @@ import {
   type BrokerInfo,
   type BrokerSecret,
 } from '../services/brokers'
+import { fetchMarketDataStatus, type MarketDataStatus } from '../services/marketData'
 import { recordAppLog } from '../services/logs'
 
 export function SettingsPage() {
@@ -60,6 +61,7 @@ export function SettingsPage() {
 
   const [brokerStatus, setBrokerStatus] = useState<ZerodhaStatus | null>(null)
   const [brokerError, setBrokerError] = useState<string | null>(null)
+  const [marketStatus, setMarketStatus] = useState<MarketDataStatus | null>(null)
   const [requestToken, setRequestToken] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [updatingStrategyId, setUpdatingStrategyId] = useState<number | null>(null)
@@ -139,9 +141,13 @@ export function SettingsPage() {
     let active = true
     const loadStatus = async () => {
       try {
-        const status = await fetchZerodhaStatus()
+        const [status, mdStatus] = await Promise.all([
+          fetchZerodhaStatus(),
+          fetchMarketDataStatus().catch(() => null),
+        ])
         if (!active) return
         setBrokerStatus(status)
+        if (mdStatus) setMarketStatus(mdStatus)
         setBrokerError(null)
       } catch (err) {
         if (!active) return
@@ -640,6 +646,17 @@ export function SettingsPage() {
                       : 'Zerodha: Not connected'
                   }
                   color={brokerStatus?.connected ? 'success' : 'default'}
+                />
+              )}
+              {marketStatus && marketStatus.canonical_broker === 'zerodha' && (
+                <Chip
+                  size="small"
+                  label={
+                    marketStatus.available
+                      ? 'Market data: Available'
+                      : 'Market data: Unavailable'
+                  }
+                  color={marketStatus.available ? 'success' : 'warning'}
                 />
               )}
             </Box>
