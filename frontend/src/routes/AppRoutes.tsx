@@ -1,8 +1,7 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 
 import { DashboardPage } from '../views/DashboardPage'
-import { QueuePage } from '../views/QueuePage'
-import { OrdersPage } from '../views/OrdersPage'
+import { QueueManagementPage } from '../views/QueueManagementPage'
 import { AnalyticsPage } from '../views/AnalyticsPage'
 import { SettingsPage } from '../views/SettingsPage'
 import { PositionsPage } from '../views/PositionsPage'
@@ -17,8 +16,11 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<DashboardPage />} />
-      <Route path="/queue" element={<QueuePage />} />
-      <Route path="/orders" element={<OrdersPage />} />
+      <Route path="/queue" element={<QueueManagementPage />} />
+      <Route
+        path="/orders"
+        element={<Navigate to="/queue?tab=orders" replace />}
+      />
       <Route path="/positions" element={<PositionsPage />} />
       <Route path="/holdings" element={<HoldingsPage />} />
       <Route path="/screener" element={<ScreenerPage />} />

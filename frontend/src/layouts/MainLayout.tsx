@@ -21,7 +21,6 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
 import DashboardIcon from '@mui/icons-material/Dashboard'
 import ListAltIcon from '@mui/icons-material/ListAlt'
-import ReceiptLongIcon from '@mui/icons-material/ReceiptLong'
 import MenuIcon from '@mui/icons-material/Menu'
 import SettingsIcon from '@mui/icons-material/Settings'
 import ShowChartIcon from '@mui/icons-material/ShowChart'
@@ -56,7 +55,6 @@ const mainNavItems: NavItem[] = [
   { label: 'Dashboard', to: '/', icon: <DashboardIcon /> },
   { label: 'Holdings', to: '/holdings', icon: <AccountBalanceWalletIcon /> },
   { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
-  { label: 'Orders', to: '/orders', icon: <ReceiptLongIcon /> },
   { label: 'Queue', to: '/queue', icon: <ListAltIcon /> },
   { label: 'Groups', to: '/groups', icon: <ViewListIcon /> },
   { label: 'Screener', to: '/screener', icon: <ManageSearchIcon /> },

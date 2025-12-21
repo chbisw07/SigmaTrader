@@ -32,7 +32,13 @@ import {
   previewZerodhaOrder,
 } from '../services/zerodha'
 
-export function QueuePage() {
+export function WaitingQueuePanel({
+  embedded = false,
+  active = true,
+}: {
+  embedded?: boolean
+  active?: boolean
+}) {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -62,6 +68,7 @@ export function QueuePage() {
   const [selectionModel, setSelectionModel] = useState<GridRowSelectionModel>([])
   const [bulkCancelling, setBulkCancelling] = useState(false)
   const [bulkExecuting, setBulkExecuting] = useState(false)
+  const [loadedOnce, setLoadedOnce] = useState(false)
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -92,15 +99,19 @@ export function QueuePage() {
   }
 
   useEffect(() => {
+    if (!active) return
+    if (loadedOnce) return
+    setLoadedOnce(true)
     void loadQueue()
-  }, [])
+  }, [active, loadedOnce])
 
   useEffect(() => {
+    if (!active) return
     const id = window.setInterval(() => {
       void loadQueue({ silent: true })
     }, 5000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [active])
 
   useEffect(() => {
     const loadLtp = async () => {
@@ -559,14 +570,16 @@ export function QueuePage() {
           alignItems: 'baseline',
           justifyContent: 'space-between',
           gap: 2,
-          mb: 2,
+          mb: embedded ? 1.5 : 2,
           flexWrap: 'wrap',
         }}
       >
         <Box>
-          <Typography variant="h4" gutterBottom>
-            Waiting Queue
-          </Typography>
+          {!embedded && (
+            <Typography variant="h4" gutterBottom>
+              Waiting Queue
+            </Typography>
+          )}
           <Typography color="text.secondary">
             Manual review queue for orders in WAITING state. You can edit,
             execute, or cancel pending orders before they are sent to the
@@ -632,24 +645,29 @@ export function QueuePage() {
         </Typography>
       )}
 
-	      {loading ? (
-	        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-	          <CircularProgress size={20} />
-	          <Typography variant="body2">
-	            Loading queue...
-          </Typography>
+      {loading ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={20} />
+          <Typography variant="body2">Loading queue...</Typography>
         </Box>
       ) : error ? (
         <Typography variant="body2" color="error">
           {error}
         </Typography>
       ) : (
-        <Paper sx={{ width: '100%', mt: 2 }}>
+        <Paper
+          sx={{
+            width: '100%',
+            mt: 2,
+            // In tabbed mode, keep the panel height stable to avoid flicker/layout jumps.
+            height: embedded ? '65vh' : undefined,
+          }}
+        >
           <DataGrid
             rows={orders}
             columns={columns}
             getRowId={(row) => row.id}
-            autoHeight
+            {...(embedded ? {} : { autoHeight: true })}
             checkboxSelection
             rowSelectionModel={selectionModel}
             onRowSelectionModelChange={(newSelection) => {
@@ -657,6 +675,7 @@ export function QueuePage() {
             }}
             disableRowSelectionOnClick
             density="compact"
+            sx={embedded ? { height: '100%' } : undefined}
             initialState={{
               sorting: {
                 sortModel: [{ field: 'created_at', sort: 'desc' }],
@@ -885,4 +904,8 @@ export function QueuePage() {
       </Dialog>
     </Box>
   )
+}
+
+export function QueuePage() {
+  return <WaitingQueuePanel />
 }

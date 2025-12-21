@@ -13,12 +13,19 @@ import {
   type GridRenderCellParams,
 } from '@mui/x-data-grid'
 
-export function OrdersPage() {
+export function OrdersPanel({
+  embedded = false,
+  active = true,
+}: {
+  embedded?: boolean
+  active?: boolean
+}) {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [showSimulated, setShowSimulated] = useState<boolean>(true)
+  const [loadedOnce, setLoadedOnce] = useState(false)
 
   const formatIst = (iso: string): string => {
     const utc = new Date(iso)
@@ -41,8 +48,11 @@ export function OrdersPage() {
   }
 
   useEffect(() => {
+    if (!active) return
+    if (loadedOnce) return
+    setLoadedOnce(true)
     void loadOrders()
-  }, [])
+  }, [active, loadedOnce])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -175,15 +185,17 @@ export function OrdersPage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Orders
-      </Typography>
+      {!embedded && (
+        <Typography variant="h4" gutterBottom>
+          Orders
+        </Typography>
+      )}
       <Box
         sx={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          mb: 3,
+          mb: embedded ? 1.5 : 3,
           flexWrap: 'wrap',
           gap: 1,
         }}
@@ -239,4 +251,8 @@ export function OrdersPage() {
       )}
     </Box>
   )
+}
+
+export function OrdersPage() {
+  return <OrdersPanel />
 }
