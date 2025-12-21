@@ -29,6 +29,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
+import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
 import {
   clampQtyToMax,
   shouldClampSellToHoldingsQty,
@@ -1799,7 +1800,7 @@ export function HoldingsPage() {
       sortable: false,
       filterable: false,
       renderCell: (params: GridRenderCellParams) =>
-        params.api.getRowIndexRelativeToVisibleRows(params.id) + 1,
+        getPaginatedRowNumber(params),
     },
     {
       field: 'symbol',
