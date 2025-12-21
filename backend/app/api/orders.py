@@ -437,12 +437,12 @@ def edit_order(
     return order
 
 
-@router.post("/{order_id}/execute", response_model=OrderRead)
-def execute_order(
+def execute_order_internal(
     order_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+    *,
+    db: Session,
+    settings: Settings,
+    correlation_id: str | None = None,
 ) -> Order:
     """Send a manual queue order to its configured broker for execution.
 
@@ -482,7 +482,7 @@ def execute_order(
             "Order rejected by risk engine",
             extra={
                 "extra": {
-                    "correlation_id": getattr(request.state, "correlation_id", None),
+                    "correlation_id": correlation_id,
                     "order_id": order.id,
                     "reason": risk.reason,
                 }
@@ -493,7 +493,7 @@ def execute_order(
             level="WARNING",
             category="risk",
             message="Order rejected by risk engine",
-            correlation_id=getattr(request.state, "correlation_id", None),
+            correlation_id=correlation_id,
             details={"order_id": order.id, "reason": risk.reason},
         )
         raise HTTPException(
@@ -544,7 +544,7 @@ def execute_order(
                 level="WARNING",
                 category="paper",
                 message="Paper order rejected: market closed",
-                correlation_id=getattr(request.state, "correlation_id", None),
+                correlation_id=correlation_id,
                 details={
                     "order_id": order.id,
                     "symbol": order.symbol,
@@ -560,7 +560,7 @@ def execute_order(
             db,
             settings,
             order,
-            correlation_id=getattr(request.state, "correlation_id", None),
+            correlation_id=correlation_id,
         )
 
     symbol = order.symbol
@@ -621,11 +621,7 @@ def execute_order(
                 "Failed to fetch LTP for GTT placement",
                 extra={
                     "extra": {
-                        "correlation_id": getattr(
-                            request.state,
-                            "correlation_id",
-                            None,
-                        ),
+                        "correlation_id": correlation_id,
                         "symbol": symbol,
                         "error": str(exc),
                     }
@@ -658,9 +654,7 @@ def execute_order(
                 "Zerodha GTT placement failed",
                 extra={
                     "extra": {
-                        "correlation_id": getattr(
-                            request.state, "correlation_id", None
-                        ),
+                        "correlation_id": correlation_id,
                         "order_id": order.id,
                         "error": message,
                     }
@@ -685,7 +679,7 @@ def execute_order(
             level="INFO",
             category="order",
             message="GTT created at Zerodha",
-            correlation_id=getattr(request.state, "correlation_id", None),
+            correlation_id=correlation_id,
             details={
                 "order_id": order.id,
                 "broker_name": broker_name,
@@ -723,11 +717,7 @@ def execute_order(
                 "Failed to fetch LTP for stop-loss validation",
                 extra={
                     "extra": {
-                        "correlation_id": getattr(
-                            request.state,
-                            "correlation_id",
-                            None,
-                        ),
+                        "correlation_id": correlation_id,
                         "symbol": symbol,
                         "error": str(exc),
                     }
@@ -813,9 +803,7 @@ def execute_order(
                 "Order failed with regular variety; retrying as AMO",
                 extra={
                     "extra": {
-                        "correlation_id": getattr(
-                            request.state, "correlation_id", None
-                        ),
+                        "correlation_id": correlation_id,
                         "order_id": order.id,
                         "error": message,
                     }
@@ -833,9 +821,7 @@ def execute_order(
                     "Zerodha AMO order placement failed",
                     extra={
                         "extra": {
-                            "correlation_id": getattr(
-                                request.state, "correlation_id", None
-                            ),
+                            "correlation_id": correlation_id,
                             "order_id": order.id,
                             "error": str(exc_amo),
                         }
@@ -855,9 +841,7 @@ def execute_order(
                 "Zerodha order placement failed",
                 extra={
                     "extra": {
-                        "correlation_id": getattr(
-                            request.state, "correlation_id", None
-                        ),
+                        "correlation_id": correlation_id,
                         "order_id": order.id,
                         "error": message,
                     }
@@ -892,7 +876,7 @@ def execute_order(
         level="INFO",
         category="order",
         message=f"Order sent to {broker_name}",
-        correlation_id=getattr(request.state, "correlation_id", None),
+        correlation_id=correlation_id,
         details={
             "order_id": order.id,
             "broker_name": broker_name,
@@ -903,6 +887,22 @@ def execute_order(
         },
     )
     return order
+
+
+@router.post("/{order_id}/execute", response_model=OrderRead)
+def execute_order(
+    order_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Order:
+    correlation_id = getattr(request.state, "correlation_id", None)
+    return execute_order_internal(
+        order_id,
+        db=db,
+        settings=settings,
+        correlation_id=correlation_id,
+    )
 
 
 @router.post("/sync", response_model=dict)

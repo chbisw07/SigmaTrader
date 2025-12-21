@@ -35,8 +35,12 @@ class AlertVariableDef(BaseModel):
 
 class AlertDefinitionCreate(BaseModel):
     name: str = Field(..., min_length=1)
+    broker_name: str = Field(default="zerodha", min_length=1)
     target_kind: str = Field(..., min_length=1)
-    target_ref: str = Field(..., min_length=1)
+    # Legacy/compat: for SYMBOL/GROUP callers may still send target_ref.
+    target_ref: Optional[str] = None
+    # First-class target symbol for SYMBOL alerts (preferred).
+    symbol: Optional[str] = None
     exchange: Optional[str] = None
 
     action_type: AlertActionType = "ALERT_ONLY"
@@ -55,8 +59,10 @@ class AlertDefinitionCreate(BaseModel):
 
 class AlertDefinitionUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1)
+    broker_name: Optional[str] = Field(default=None, min_length=1)
     target_kind: Optional[str] = None
     target_ref: Optional[str] = None
+    symbol: Optional[str] = None
     exchange: Optional[str] = None
 
     action_type: Optional[AlertActionType] = None
@@ -76,8 +82,10 @@ class AlertDefinitionUpdate(BaseModel):
 class AlertDefinitionRead(BaseModel):
     id: int
     name: str
+    broker_name: str
     target_kind: str
     target_ref: str
+    symbol: Optional[str] = None
     exchange: Optional[str] = None
 
     action_type: AlertActionType = "ALERT_ONLY"
@@ -160,8 +168,10 @@ class AlertEventRead(BaseModel):
 
 
 class AlertV3TestRequest(BaseModel):
+    broker_name: str = Field(default="zerodha", min_length=1)
     target_kind: str = Field(..., min_length=1)
-    target_ref: str = Field(..., min_length=1)
+    target_ref: Optional[str] = None
+    symbol: Optional[str] = None
     exchange: Optional[str] = None
 
     evaluation_cadence: Optional[str] = None

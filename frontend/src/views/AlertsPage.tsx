@@ -31,6 +31,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { DslHelpDialog } from '../components/DslHelpDialog'
 import { DslEditor } from '../components/DslEditor'
+import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import {
   createAlertDefinition,
   createCustomIndicator,
@@ -142,7 +143,7 @@ export function AlertsPage() {
 	  )
 	}
 
-	function AlertsV3Tab({
+function AlertsV3Tab({
 	  openAlertId,
 	  onAlertOpened,
 	  createDefaults,
@@ -156,6 +157,7 @@ export function AlertsPage() {
   const [rows, setRows] = useState<AlertDefinition[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<AlertDefinition | null>(null)
   const [activeCreateDefaults, setActiveCreateDefaults] = useState<{
@@ -179,6 +181,17 @@ export function AlertsPage() {
 
   useEffect(() => {
     void refresh()
+  }, [])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await fetchBrokers()
+        setBrokers(list)
+      } catch {
+        // ignore
+      }
+    })()
   }, [])
 
   useEffect(() => {
@@ -219,6 +232,12 @@ export function AlertsPage() {
     return formatDateTimeIst(value)
   }
 
+  const brokerLabelByName = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const b of brokers) m.set(b.name, b.label)
+    return m
+  }, [brokers])
+
   const columns: GridColDef[] = [
     { field: 'name', headerName: 'Name', flex: 1, minWidth: 220 },
     {
@@ -226,9 +245,12 @@ export function AlertsPage() {
       headerName: 'Target',
       width: 220,
       valueGetter: (_v, row) => {
-        if (row.target_kind === 'HOLDINGS') return 'Holdings (Zerodha)'
-        if (row.target_kind === 'GROUP') return `Group: ${row.target_ref}`
-        return `${row.target_ref} / ${(row.exchange ?? 'NSE').toString()}`
+        const brokerLabel =
+          brokerLabelByName.get(row.broker_name) ?? row.broker_name
+        if (row.target_kind === 'HOLDINGS') return `Holdings (${brokerLabel})`
+        if (row.target_kind === 'GROUP') return `Group: ${row.target_ref} (${brokerLabel})`
+        const sym = row.symbol ?? row.target_ref
+        return `${sym} / ${(row.exchange ?? 'NSE').toString()} (${brokerLabel})`
       },
     },
     {
@@ -301,7 +323,7 @@ export function AlertsPage() {
   return (
     <Box>
       <Typography color="text.secondary" sx={{ mb: 2 }}>
-        Indicator-first alerts over universes. These alerts emit events only (no auto trade execution).
+        Indicator-first alerts over universes. Alerts can emit events and optionally place broker-bound orders.
       </Typography>
       {error && (
         <Typography variant="body2" color="error" sx={{ mb: 1 }}>
@@ -342,6 +364,7 @@ export function AlertsPage() {
       <AlertV3EditorDialog
         open={editorOpen}
         alert={editing}
+        brokers={brokers}
         onClose={() => {
           setEditorOpen(false)
           setActiveCreateDefaults(null)
@@ -356,6 +379,7 @@ export function AlertsPage() {
 type AlertV3EditorDialogProps = {
   open: boolean
   alert: AlertDefinition | null
+  brokers: BrokerInfo[]
   onClose: () => void
   onSaved: () => void
   createDefaults?: { targetKind: 'SYMBOL'; targetRef: string; exchange: string } | null
@@ -364,6 +388,7 @@ type AlertV3EditorDialogProps = {
 function AlertV3EditorDialog({
   open,
   alert,
+  brokers,
   onClose,
   onSaved,
   createDefaults,
@@ -407,10 +432,11 @@ function AlertV3EditorDialog({
 
   const [helpOpen, setHelpOpen] = useState(false)
   const [name, setName] = useState('')
+  const [brokerName, setBrokerName] = useState<string>('zerodha')
   const [targetKind, setTargetKind] = useState<'SYMBOL' | 'HOLDINGS' | 'GROUP'>(
     'HOLDINGS',
   )
-  const [targetRef, setTargetRef] = useState('ZERODHA')
+  const [targetRef, setTargetRef] = useState('')
   const [exchange, setExchange] = useState('NSE')
   const [actionType, setActionType] = useState<'ALERT_ONLY' | 'BUY' | 'SELL'>(
     'ALERT_ONLY',
@@ -469,13 +495,14 @@ function AlertV3EditorDialog({
     setError(null)
     if (!alert) {
       setName('')
+      setBrokerName(brokers[0]?.name ?? 'zerodha')
       if (createDefaults?.targetKind === 'SYMBOL' && createDefaults.targetRef) {
         setTargetKind('SYMBOL')
         setTargetRef(createDefaults.targetRef)
         setExchange(createDefaults.exchange || 'NSE')
       } else {
         setTargetKind('HOLDINGS')
-        setTargetRef('ZERODHA')
+        setTargetRef('')
         setExchange('NSE')
       }
       setActionType('ALERT_ONLY')
@@ -507,8 +534,15 @@ function AlertV3EditorDialog({
       return
     }
     setName(alert.name)
+    setBrokerName(alert.broker_name ?? brokers[0]?.name ?? 'zerodha')
     setTargetKind(alert.target_kind as any)
-    setTargetRef(alert.target_ref)
+    if (alert.target_kind === 'SYMBOL') {
+      setTargetRef((alert.symbol ?? alert.target_ref).toString())
+    } else if (alert.target_kind === 'GROUP') {
+      setTargetRef(alert.target_ref)
+    } else {
+      setTargetRef('')
+    }
     setExchange((alert.exchange ?? 'NSE').toString())
     setActionType(
       alert.action_type === 'BUY' || alert.action_type === 'SELL'
@@ -560,7 +594,7 @@ function AlertV3EditorDialog({
     setConditionTab(1)
     setConditionJoin('AND')
     setConditionRows([{ lhs: '', op: '>', rhs: '' }])
-  }, [open, alert])
+  }, [open, alert, brokers, createDefaults])
 
   useEffect(() => {
     if (actionType === 'ALERT_ONLY') setActionTab(0)
@@ -693,13 +727,10 @@ function AlertV3EditorDialog({
             }
       const payloadBase: AlertDefinitionCreate = {
         name: name.trim() || 'Untitled alert',
+        broker_name: brokerName,
         target_kind: targetKind,
-        target_ref:
-          targetKind === 'HOLDINGS'
-            ? 'ZERODHA'
-            : targetKind === 'SYMBOL'
-              ? targetRef.trim().toUpperCase()
-              : targetRef,
+        target_ref: targetKind === 'GROUP' ? targetRef : null,
+        symbol: targetKind === 'SYMBOL' ? targetRef.trim().toUpperCase() : null,
         exchange: targetKind === 'SYMBOL' ? exchange : null,
         action_type: actionType,
         action_params: actionParams,
@@ -760,6 +791,24 @@ function AlertV3EditorDialog({
         />
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
           <TextField
+            label="Broker"
+            select
+            size="small"
+            value={brokerName}
+            onChange={(e) => setBrokerName(e.target.value)}
+            sx={{ minWidth: 200 }}
+          >
+            {brokers.length > 0 ? (
+              brokers.map((b) => (
+                <MenuItem key={b.name} value={b.name}>
+                  {b.label}
+                </MenuItem>
+              ))
+            ) : (
+              <MenuItem value="zerodha">Zerodha (Kite)</MenuItem>
+            )}
+          </TextField>
+          <TextField
             label="Target kind"
             select
             size="small"
@@ -767,13 +816,11 @@ function AlertV3EditorDialog({
             onChange={(e) => {
               const v = e.target.value as any
               setTargetKind(v)
-              if (v === 'HOLDINGS') {
-                setTargetRef('ZERODHA')
-              }
+              if (v === 'HOLDINGS') setTargetRef('')
             }}
             sx={{ minWidth: 220 }}
           >
-            <MenuItem value="HOLDINGS">Holdings (Zerodha)</MenuItem>
+            <MenuItem value="HOLDINGS">Holdings</MenuItem>
             <MenuItem value="GROUP">Group</MenuItem>
             <MenuItem value="SYMBOL">Single symbol</MenuItem>
           </TextField>

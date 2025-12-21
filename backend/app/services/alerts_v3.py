@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -103,12 +103,14 @@ def _iter_alert_symbols(
 ) -> Iterable[Tuple[str, str]]:
     kind = (alert.target_kind or "").upper()
     ref = (alert.target_ref or "").strip()
+    sym = (getattr(alert, "symbol", None) or "").strip()
     exchange = (alert.exchange or "NSE").upper()
 
     if kind == "SYMBOL":
-        if not ref:
+        symbol_value = (sym or ref).strip().upper()
+        if not symbol_value:
             return
-        yield ref.upper(), exchange
+        yield symbol_value, exchange
         return
 
     if kind == "GROUP":
@@ -137,7 +139,12 @@ def _iter_alert_symbols(
         try:
             from app.api.positions import list_holdings
 
-            holdings = list_holdings(db=db, settings=settings, user=user)
+            holdings = list_holdings(
+                broker_name=getattr(alert, "broker_name", "zerodha"),
+                db=db,
+                settings=settings,
+                user=user,
+            )
         except Exception:
             return
         for h in holdings:
@@ -219,7 +226,7 @@ def evaluate_alerts_v3_once() -> None:
         # Cache custom indicators per user.
         custom_by_user: Dict[int, CustomIndicatorMap] = {}
         users_by_id: Dict[int, User] = {}
-        holdings_by_user: Dict[int, Dict[str, HoldingRead]] = {}
+        holdings_by_user: Dict[tuple[int, str], Dict[str, HoldingRead]] = {}
 
         for alert in alerts:
             try:
@@ -276,21 +283,29 @@ def evaluate_alerts_v3_once() -> None:
                     )
 
                 holdings_map = None
+                holdings_broker = (
+                    (getattr(alert, "broker_name", "zerodha") or "zerodha")
+                    .strip()
+                    .lower()
+                )
                 if (
                     alert.target_kind or ""
                 ).upper() == "HOLDINGS" or _needs_holdings_snapshot(cond_ast):
-                    holdings_map = holdings_by_user.get(user.id)
+                    holdings_map = holdings_by_user.get((user.id, holdings_broker))
                     if holdings_map is None:
                         try:
                             from app.api.positions import list_holdings
 
                             holdings = list_holdings(
-                                db=db, settings=settings, user=user
+                                broker_name=holdings_broker,
+                                db=db,
+                                settings=settings,
+                                user=user,
                             )
                             holdings_map = {h.symbol.upper(): h for h in holdings}
                         except Exception:
                             holdings_map = {}
-                        holdings_by_user[user.id] = holdings_map
+                        holdings_by_user[(user.id, holdings_broker)] = holdings_map
 
                 any_triggered = False
                 for symbol, exchange in _iter_alert_symbols(
@@ -333,6 +348,21 @@ def evaluate_alerts_v3_once() -> None:
                         bar_time=bar_time,
                     )
                     db.add(event)
+                    db.flush()
+
+                    if (alert.action_type or "ALERT_ONLY").upper() in {"BUY", "SELL"}:
+                        try:
+                            order_id = _create_order_for_alert_match(
+                                db,
+                                settings,
+                                alert=alert,
+                                symbol=symbol,
+                                exchange=exchange,
+                                holding=holding,
+                            )
+                            event.reason = f"{event.reason}; Order queued: {order_id}"
+                        except Exception as exc:
+                            event.reason = f"{event.reason}; Action failed: {exc}"
                     any_triggered = True
 
                 alert.last_evaluated_at = now
@@ -344,6 +374,147 @@ def evaluate_alerts_v3_once() -> None:
                 continue
 
         db.commit()
+
+
+def _parse_action_params(alert: AlertDefinition) -> dict[str, Any]:
+    raw = getattr(alert, "action_params_json", "") or "{}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _create_order_for_alert_match(
+    db: Session,
+    settings: Settings,
+    *,
+    alert: AlertDefinition,
+    symbol: str,
+    exchange: str,
+    holding: HoldingRead | None,
+) -> int:
+    from app.models import Order
+
+    params = _parse_action_params(alert)
+
+    broker_name = (
+        str(
+            params.get("broker_name")
+            or getattr(alert, "broker_name", "zerodha")
+            or "zerodha"
+        )
+        .strip()
+        .lower()
+    )
+    mode = str(params.get("mode") or "MANUAL").strip().upper()
+    if mode not in {"MANUAL", "AUTO"}:
+        mode = "MANUAL"
+    execution_target = str(params.get("execution_target") or "LIVE").strip().upper()
+    if execution_target not in {"LIVE", "PAPER"}:
+        execution_target = "LIVE"
+
+    side = (alert.action_type or "").strip().upper()
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("Unsupported action_type for order creation.")
+
+    size_mode = str(params.get("size_mode") or "QTY").strip().upper()
+    qty: float | None = None
+    if size_mode == "QTY":
+        qty = _as_float(params.get("qty"))
+    elif size_mode == "PCT_POSITION":
+        pct = _as_float(params.get("pct_position"))
+        if pct is not None and holding is not None:
+            qty = float(holding.quantity) * pct / 100.0
+    elif size_mode == "AMOUNT":
+        amount = _as_float(params.get("amount"))
+        price_ref: float | None = None
+        if holding is not None and holding.last_price is not None:
+            price_ref = _as_float(holding.last_price)
+        if price_ref is None:
+            try:
+                from app.services.indicator_alerts import _load_candles_for_rule
+
+                candles = _load_candles_for_rule(
+                    db,
+                    settings,
+                    symbol=symbol,
+                    exchange=exchange,
+                    timeframe="1d",
+                    allow_fetch=True,
+                )
+                if candles:
+                    price_ref = _as_float(candles[-1].get("close"))
+            except Exception:
+                price_ref = None
+        if amount is not None and price_ref and price_ref > 0:
+            qty = float(int(amount / price_ref))
+
+    if qty is None or qty <= 0:
+        raise ValueError("Action has no valid quantity to place an order.")
+
+    order_type = str(params.get("order_type") or "MARKET").strip().upper()
+    if order_type not in {"MARKET", "LIMIT", "SL", "SL-M"}:
+        order_type = "MARKET"
+
+    product = str(params.get("product") or "CNC").strip().upper()
+    if product not in {"CNC", "MIS"}:
+        product = "CNC"
+
+    price = _as_float(params.get("price"))
+    trigger_price = _as_float(params.get("trigger_price"))
+    gtt = bool(params.get("gtt") or False)
+
+    order = Order(
+        user_id=alert.user_id,
+        symbol=symbol,
+        exchange=exchange,
+        side=side,
+        qty=qty,
+        price=price,
+        order_type=order_type,
+        trigger_price=trigger_price,
+        product=product,
+        gtt=gtt,
+        status="WAITING",
+        mode=mode,
+        execution_target=execution_target,
+        simulated=False,
+        broker_name=broker_name,
+    )
+    db.add(order)
+    db.flush()
+
+    if mode == "AUTO":
+        try:
+            from app.api.orders import execute_order_internal
+
+            execute_order_internal(
+                order.id,
+                db=db,
+                settings=settings,
+                correlation_id=None,
+            )
+            db.refresh(order)
+        except Exception:
+            # Keep the order visible in history with a clear failure state.
+            db.refresh(order)
+            if order.status == "WAITING":
+                order.status = "FAILED"
+                order.error_message = "AUTO execution failed."
+                db.add(order)
+                db.flush()
+
+    return int(order.id)
 
 
 def _alerts_v3_loop() -> None:  # pragma: no cover - background loop

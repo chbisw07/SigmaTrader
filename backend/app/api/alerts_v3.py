@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.config_files import load_app_config
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import (
@@ -128,6 +129,57 @@ def _action_params_to_json(
     return action, json.dumps(dumped, default=str)
 
 
+def _ensure_supported_broker_name(raw: str | None) -> str:
+    broker = (raw or "zerodha").strip().lower()
+    cfg = load_app_config()
+    if broker not in set(cfg.brokers):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported broker: {broker}",
+        )
+    return broker
+
+
+def _normalize_targeting(
+    *,
+    broker_name: str | None,
+    target_kind: str,
+    target_ref: str | None,
+    symbol: str | None,
+    exchange: str | None,
+) -> tuple[str, str, str, Optional[str], Optional[str]]:
+    broker = _ensure_supported_broker_name(broker_name)
+    kind = (target_kind or "").strip().upper()
+
+    if kind == "SYMBOL":
+        sym = (symbol or target_ref or "").strip().upper()
+        if not sym:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="symbol is required for target_kind=SYMBOL.",
+            )
+        exch = (exchange or "NSE").strip().upper() or "NSE"
+        # Keep target_ref in sync for backward compatibility.
+        return broker, kind, sym, sym, exch
+
+    if kind == "GROUP":
+        ref = (target_ref or "").strip()
+        if not ref:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="target_ref is required for target_kind=GROUP.",
+            )
+        return broker, kind, ref, None, None
+
+    if kind == "HOLDINGS":
+        return broker, kind, "HOLDINGS", None, None
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Unsupported target_kind: {kind}",
+    )
+
+
 def _alert_to_read(alert: AlertDefinition) -> AlertDefinitionRead:
     vars_raw = _variables_from_json(alert.variables_json or "[]")
     variables = [AlertVariableDef(**v) for v in vars_raw if isinstance(v, dict)]
@@ -139,8 +191,10 @@ def _alert_to_read(alert: AlertDefinition) -> AlertDefinitionRead:
     return AlertDefinitionRead(
         id=alert.id,
         name=alert.name,
+        broker_name=getattr(alert, "broker_name", "zerodha"),
         target_kind=alert.target_kind,
         target_ref=alert.target_ref,
+        symbol=getattr(alert, "symbol", None),
         exchange=alert.exchange,
         action_type=action_type,
         action_params=action_params,
@@ -200,18 +254,22 @@ def _iter_target_symbols(
     settings: Settings,
     *,
     user: User,
+    broker_name: str,
     target_kind: str,
     target_ref: str,
+    symbol: str | None,
     exchange: str,
 ) -> Iterable[Tuple[str, str]]:
     kind = (target_kind or "").upper()
     ref = (target_ref or "").strip()
+    sym = (symbol or "").strip()
     exch = (exchange or "NSE").upper()
 
     if kind == "SYMBOL":
-        if not ref:
+        symbol_value = (sym or ref).strip().upper()
+        if not symbol_value:
             return
-        yield ref.upper(), exch
+        yield symbol_value, exch
         return
 
     if kind == "GROUP":
@@ -239,7 +297,12 @@ def _iter_target_symbols(
         try:
             from app.api.positions import list_holdings
 
-            holdings = list_holdings(db=db, settings=settings, user=user)
+            holdings = list_holdings(
+                broker_name=broker_name,
+                db=db,
+                settings=settings,
+                user=user,
+            )
         except Exception:
             return
         for h in holdings:
@@ -315,12 +378,21 @@ def create_alert_definition(
         payload.action_type,
         payload.action_params,
     )
+    broker, kind, ref, sym, exch = _normalize_targeting(
+        broker_name=payload.broker_name,
+        target_kind=payload.target_kind,
+        target_ref=payload.target_ref,
+        symbol=payload.symbol,
+        exchange=payload.exchange,
+    )
     alert = AlertDefinition(
         user_id=user.id,
         name=payload.name,
-        target_kind=payload.target_kind,
-        target_ref=payload.target_ref,
-        exchange=(payload.exchange or None),
+        broker_name=broker,
+        target_kind=kind,
+        target_ref=ref,
+        symbol=sym,
+        exchange=(exch or None),
         action_type=action_type,
         action_params_json=action_params_json,
         evaluation_cadence=(payload.evaluation_cadence or "").strip(),
@@ -367,11 +439,42 @@ def update_alert_definition(
 ) -> AlertDefinitionRead:
     alert = _get_alert_or_404(db, user.id, alert_id)
 
+    if payload.name is not None:
+        alert.name = payload.name
+
+    # Normalize targeting as a coherent set (broker+target_kind+symbol/ref+exchange).
+    effective_broker = (
+        payload.broker_name
+        if payload.broker_name is not None
+        else getattr(alert, "broker_name", "zerodha")
+    )
+    effective_kind = (
+        payload.target_kind if payload.target_kind is not None else alert.target_kind
+    )
+    effective_ref = (
+        payload.target_ref if payload.target_ref is not None else alert.target_ref
+    )
+    effective_symbol = (
+        payload.symbol if payload.symbol is not None else getattr(alert, "symbol", None)
+    )
+    effective_exchange = (
+        payload.exchange if payload.exchange is not None else alert.exchange
+    )
+
+    broker, kind, ref, sym, exch = _normalize_targeting(
+        broker_name=effective_broker,
+        target_kind=effective_kind,
+        target_ref=effective_ref,
+        symbol=effective_symbol,
+        exchange=effective_exchange,
+    )
+    alert.broker_name = broker
+    alert.target_kind = kind
+    alert.target_ref = ref
+    alert.symbol = sym
+    alert.exchange = exch
+
     for field in (
-        "name",
-        "target_kind",
-        "target_ref",
-        "exchange",
         "action_type",
         "evaluation_cadence",
         "condition_dsl",
@@ -598,25 +701,39 @@ def test_alert_expression_api(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
 
+    broker, kind, ref, sym, exch = _normalize_targeting(
+        broker_name=payload.broker_name,
+        target_kind=payload.target_kind,
+        target_ref=payload.target_ref,
+        symbol=payload.symbol,
+        exchange=payload.exchange,
+    )
+
     holdings_map: dict[str, HoldingRead] | None = None
-    if payload.target_kind.upper() == "HOLDINGS" or _needs_holdings_snapshot(expr_ast):
+    if kind == "HOLDINGS" or _needs_holdings_snapshot(expr_ast):
         try:
             from app.api.positions import list_holdings
 
-            holdings = list_holdings(db=db, settings=settings, user=user)
+            holdings = list_holdings(
+                broker_name=broker,
+                db=db,
+                settings=settings,
+                user=user,
+            )
             holdings_map = {h.symbol.upper(): h for h in holdings}
         except Exception:
             holdings_map = {}
 
-    exch = (payload.exchange or "NSE").upper()
     results: list[AlertV3TestResult] = []
     for symbol, exchange in _iter_target_symbols(
         db,
         settings,
         user=user,
-        target_kind=payload.target_kind,
-        target_ref=payload.target_ref,
-        exchange=exch,
+        broker_name=broker,
+        target_kind=kind,
+        target_ref=ref,
+        symbol=sym,
+        exchange=(exch or "NSE"),
     ):
         if len(results) >= limit:
             break

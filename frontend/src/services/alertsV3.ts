@@ -8,8 +8,10 @@ export type AlertVariableDef = {
 export type AlertDefinition = {
   id: number
   name: string
+  broker_name: string
   target_kind: string
   target_ref: string
+  symbol?: string | null
   exchange?: string | null
   action_type: 'ALERT_ONLY' | 'BUY' | 'SELL'
   action_params: Record<string, unknown>
@@ -27,16 +29,23 @@ export type AlertDefinition = {
   updated_at?: string | null
 }
 
-export type AlertDefinitionCreate = Omit<
-  AlertDefinition,
-  | 'id'
-  | 'evaluation_cadence'
-  | 'last_evaluated_at'
-  | 'last_triggered_at'
-  | 'created_at'
-  | 'updated_at'
-> & {
+export type AlertDefinitionCreate = {
+  name: string
+  broker_name?: string
+  target_kind: string
+  target_ref?: string | null
+  symbol?: string | null
+  exchange?: string | null
+  action_type: 'ALERT_ONLY' | 'BUY' | 'SELL'
+  action_params: Record<string, unknown>
   evaluation_cadence?: string | null
+  variables: AlertVariableDef[]
+  condition_dsl: string
+  trigger_mode: 'ONCE' | 'ONCE_PER_BAR' | 'EVERY_TIME'
+  throttle_seconds?: number | null
+  only_market_hours: boolean
+  expires_at?: string | null
+  enabled: boolean
 }
 
 export type AlertDefinitionUpdate = Partial<AlertDefinitionCreate>
@@ -68,8 +77,10 @@ export type AlertEvent = {
 }
 
 export type AlertV3TestRequest = {
+  broker_name?: string
   target_kind: string
-  target_ref: string
+  target_ref?: string | null
+  symbol?: string | null
   exchange?: string | null
   evaluation_cadence?: string | null
   variables: AlertVariableDef[]

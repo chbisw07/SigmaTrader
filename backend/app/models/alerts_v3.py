@@ -37,7 +37,11 @@ class AlertDefinition(Base):
         ),
         Index("ix_alert_definitions_user_enabled", "user_id", "enabled"),
         Index(
-            "ix_alert_definitions_user_target", "user_id", "target_kind", "target_ref"
+            "ix_alert_definitions_user_broker_target",
+            "user_id",
+            "broker_name",
+            "target_kind",
+            "target_ref",
         ),
     )
 
@@ -50,14 +54,22 @@ class AlertDefinition(Base):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
+    # Broker context for this alert:
+    # - Used for HOLDINGS target selection (broker-specific holdings).
+    # - Used as the default execution broker for BUY/SELL action templates.
+    broker_name: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="zerodha"
+    )
+
     # Targeting
     # - SYMBOL: target_ref is the symbol (exchange optional)
-    # - HOLDINGS: target_ref is 'ZERODHA' (reserved) for now
+    # - HOLDINGS: target_ref is 'HOLDINGS'
     # - GROUP: target_ref is group_id (string)
     target_kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default="SYMBOL"
     )
     target_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    symbol: Mapped[Optional[str]] = mapped_column(String(128))
     exchange: Mapped[Optional[str]] = mapped_column(String(32))
 
     # Evaluation cadence for this alert (e.g. 1m/5m/1h/1d).
