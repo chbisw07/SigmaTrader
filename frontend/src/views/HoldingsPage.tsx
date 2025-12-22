@@ -72,6 +72,7 @@ type HoldingIndicators = {
   volumeVsAvg20d?: number
   maxPnlPct?: number
   drawdownFromPeakPct?: number
+  dd6mPct?: number
   week52Low?: number
   week52High?: number
   gapPct?: number
@@ -2266,11 +2267,11 @@ export function HoldingsPage() {
     },
     {
       field: 'drawdownFromPeakPct',
-      headerName: 'Drawdown from peak %',
+      headerName: 'DD (6M)',
       type: 'number',
-      width: 180,
+      width: 120,
       valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.drawdownFromPeakPct ?? null,
+        (row as HoldingRow).indicators?.dd6mPct ?? null,
       valueFormatter: (value) =>
         value != null ? `${Number(value).toFixed(2)}%` : '-',
       cellClassName: (params: GridCellParams) =>
@@ -5639,6 +5640,17 @@ function computeHoldingIndicators(
   const low52 = w52.map((p) => p.low).filter((v) => Number.isFinite(v))
   if (high52.length) indicators.week52High = Math.max(...high52)
   if (low52.length) indicators.week52Low = Math.min(...low52)
+
+  // DD (6M) = drawdown from trailing 6-month peak close (approx. 126 trading days).
+  // Uses close (not high) to avoid intraday wick noise.
+  const w6m = points.length > 126 ? points.slice(-126) : points
+  const close6m = w6m.map((p) => p.close).filter((v) => Number.isFinite(v))
+  if (close6m.length) {
+    const peak = Math.max(...close6m)
+    if (Number.isFinite(peak) && peak > 0 && Number.isFinite(lastClose) && lastClose > 0) {
+      indicators.dd6mPct = ((lastClose / peak) - 1) * 100
+    }
+  }
 
   // Gap % = (open - yesterday_close) / yesterday_close
   if (points.length >= 2) {

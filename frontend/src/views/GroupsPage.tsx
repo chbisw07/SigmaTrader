@@ -297,6 +297,10 @@ export function GroupsPage() {
   const [importSymbolColumn, setImportSymbolColumn] = useState<string>('')
   const [importExchangeColumn, setImportExchangeColumn] = useState<string>('')
   const [importDefaultExchange, setImportDefaultExchange] = useState('NSE')
+  const [importGroupKind, setImportGroupKind] = useState<GroupKind>('WATCHLIST')
+  const [importRefQtyColumn, setImportRefQtyColumn] = useState<string>('')
+  const [importTargetWeightColumn, setImportTargetWeightColumn] = useState<string>('')
+  const [importRefPriceColumn, setImportRefPriceColumn] = useState<string>('')
   const [importStripPrefix, setImportStripPrefix] = useState(true)
   const [importStripSpecial, setImportStripSpecial] = useState(true)
   const [importSelectedColumns, setImportSelectedColumns] = useState<string[]>([])
@@ -466,6 +470,10 @@ export function GroupsPage() {
     setImportSymbolColumn('')
     setImportExchangeColumn('')
     setImportDefaultExchange('NSE')
+    setImportGroupKind('WATCHLIST')
+    setImportRefQtyColumn('')
+    setImportTargetWeightColumn('')
+    setImportRefPriceColumn('')
     setImportStripPrefix(true)
     setImportStripSpecial(true)
     setImportSelectedColumns([])
@@ -520,6 +528,43 @@ export function GroupsPage() {
     }
   }
 
+  const isPortfolioImport =
+    importGroupKind === 'MODEL_PORTFOLIO' || importGroupKind === 'PORTFOLIO'
+
+  useEffect(() => {
+    if (!isPortfolioImport || !importHeaders.length) return
+
+    const findByLabel = (pat: RegExp) =>
+      importHeaders.find((h) => pat.test(importHeaderLabels[h] ?? h)) ?? ''
+
+    const suggestedRefQty =
+      importRefQtyColumn || findByLabel(/\b(shares|qty|quantity)\b/i)
+    const suggestedTargetWeight =
+      importTargetWeightColumn ||
+      findByLabel(/\b(weight|weightage|target\s*weight)\b/i)
+    const suggestedRefPrice =
+      importRefPriceColumn ||
+      findByLabel(/\b(avg\s*buy|buy\s*price|ref\s*price|avg.*price)\b/i)
+
+    if (suggestedRefQty !== importRefQtyColumn) setImportRefQtyColumn(suggestedRefQty)
+    if (suggestedTargetWeight !== importTargetWeightColumn) {
+      setImportTargetWeightColumn(suggestedTargetWeight)
+    }
+    if (suggestedRefPrice !== importRefPriceColumn) setImportRefPriceColumn(suggestedRefPrice)
+
+    const reserved = new Set([suggestedRefQty, suggestedTargetWeight, suggestedRefPrice].filter(Boolean))
+    if (reserved.size) {
+      setImportSelectedColumns((prev) => prev.filter((c) => !reserved.has(c)))
+    }
+  }, [
+    importHeaderLabels,
+    importHeaders,
+    importRefPriceColumn,
+    importRefQtyColumn,
+    importTargetWeightColumn,
+    isPortfolioImport,
+  ])
+
   const submitImportWatchlist = async () => {
     const name = importGroupName.trim()
     if (!name) {
@@ -550,15 +595,27 @@ export function GroupsPage() {
     try {
       setImportBusy(true)
       setImportError(null)
+      const reservedColumns = new Set<string>([
+        importSymbolColumn,
+        importExchangeColumn,
+        ...(isPortfolioImport ? [importRefQtyColumn, importTargetWeightColumn, importRefPriceColumn] : []),
+      ].filter(Boolean))
+      const selectedColumns = importSelectedColumns.filter((c) => !reservedColumns.has(c))
+
       const res = await importWatchlistCsv({
         group_name: name,
+        group_kind: importGroupKind === 'WATCHLIST' ? undefined : importGroupKind,
         group_description: importGroupDescription.trim() || null,
         source: 'TRADINGVIEW',
         original_filename: importFileName,
         symbol_column: importSymbolColumn,
         exchange_column: importExchangeColumn || null,
         default_exchange: importDefaultExchange.trim() || 'NSE',
-        selected_columns: importSelectedColumns,
+        reference_qty_column: isPortfolioImport ? importRefQtyColumn || null : null,
+        reference_price_column: isPortfolioImport ? importRefPriceColumn || null : null,
+        target_weight_column: isPortfolioImport ? importTargetWeightColumn || null : null,
+        target_weight_units: 'AUTO',
+        selected_columns: selectedColumns,
         header_labels: importHeaderLabels,
         rows: importRows,
         strip_exchange_prefix: importStripPrefix,
@@ -1427,7 +1484,7 @@ export function GroupsPage() {
         fullWidth
         maxWidth="md"
       >
-        <DialogTitle>Import watchlist (CSV)</DialogTitle>
+        <DialogTitle>Import group (CSV)</DialogTitle>
         <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Stepper activeStep={importStep}>
             <Step>
@@ -1492,6 +1549,22 @@ export function GroupsPage() {
                 fullWidth
               />
 
+              <FormControl fullWidth>
+                <InputLabel id="import-group-kind-label">Group kind</InputLabel>
+                <Select
+                  labelId="import-group-kind-label"
+                  label="Group kind"
+                  value={importGroupKind}
+                  onChange={(e) => setImportGroupKind(e.target.value as GroupKind)}
+                >
+                  {GROUP_KINDS.filter((k) => k.value !== 'HOLDINGS_VIEW').map((k) => (
+                    <MenuItem key={k.value} value={k.value}>
+                      {k.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
                 <FormControl fullWidth>
                   <InputLabel>Symbol column</InputLabel>
@@ -1534,6 +1607,77 @@ export function GroupsPage() {
                 />
               </Stack>
 
+              {isPortfolioImport && (
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
+                  <FormControl fullWidth>
+                    <InputLabel id="import-ref-qty-label">Ref qty column</InputLabel>
+                    <Select
+                      labelId="import-ref-qty-label"
+                      label="Ref qty column"
+                      value={importRefQtyColumn}
+                      onChange={(e) => {
+                        const next = String(e.target.value)
+                        setImportRefQtyColumn(next)
+                        if (next) {
+                          setImportSelectedColumns((prev) => prev.filter((c) => c !== next))
+                        }
+                      }}
+                    >
+                      <MenuItem value="">(none)</MenuItem>
+                      {importHeaders.map((h) => (
+                        <MenuItem key={h} value={h}>
+                          {importHeaderLabels[h] ?? h}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <FormControl fullWidth>
+                    <InputLabel id="import-target-weight-label">Target weight column</InputLabel>
+                    <Select
+                      labelId="import-target-weight-label"
+                      label="Target weight column"
+                      value={importTargetWeightColumn}
+                      onChange={(e) => {
+                        const next = String(e.target.value)
+                        setImportTargetWeightColumn(next)
+                        if (next) {
+                          setImportSelectedColumns((prev) => prev.filter((c) => c !== next))
+                        }
+                      }}
+                    >
+                      <MenuItem value="">(none)</MenuItem>
+                      {importHeaders.map((h) => (
+                        <MenuItem key={h} value={h}>
+                          {importHeaderLabels[h] ?? h}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <FormControl fullWidth>
+                    <InputLabel id="import-ref-price-label">Ref price column</InputLabel>
+                    <Select
+                      labelId="import-ref-price-label"
+                      label="Ref price column"
+                      value={importRefPriceColumn}
+                      onChange={(e) => {
+                        const next = String(e.target.value)
+                        setImportRefPriceColumn(next)
+                        if (next) {
+                          setImportSelectedColumns((prev) => prev.filter((c) => c !== next))
+                        }
+                      }}
+                    >
+                      <MenuItem value="">(none)</MenuItem>
+                      {importHeaders.map((h) => (
+                        <MenuItem key={h} value={h}>
+                          {importHeaderLabels[h] ?? h}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Stack>
+              )}
+
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
                 <FormControlLabel
                   control={
@@ -1571,6 +1715,11 @@ export function GroupsPage() {
                     .map((h) => {
                       const label = importHeaderLabels[h] ?? h
                       const reason = disallowedColumnReason(label)
+                      const reservedByMapping =
+                        isPortfolioImport &&
+                        (h === importRefQtyColumn ||
+                          h === importTargetWeightColumn ||
+                          h === importRefPriceColumn)
                       const checked = importSelectedColumns.includes(h)
                       return (
                         <FormControlLabel
@@ -1578,7 +1727,7 @@ export function GroupsPage() {
                           control={
                             <Checkbox
                               checked={checked}
-                              disabled={reason != null}
+                              disabled={reason != null || reservedByMapping}
                               onChange={(e) => {
                                 const nextChecked = e.target.checked
                                 setImportSelectedColumns((current) => {
@@ -1588,7 +1737,13 @@ export function GroupsPage() {
                               }}
                             />
                           }
-                          label={reason ? `${label} (blocked)` : label}
+                          label={
+                            reservedByMapping
+                              ? `${label} (mapped)`
+                              : reason
+                                ? `${label} (blocked)`
+                                : label
+                          }
                         />
                       )
                     })}
@@ -1596,6 +1751,11 @@ export function GroupsPage() {
                 <Typography variant="caption" color="text.secondary">
                   Price/volume/performance/indicator/ratio-like fields are blocked because SigmaTrader computes them internally from candles.
                 </Typography>
+                {isPortfolioImport && (
+                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                    Ref qty / target weight / ref price mappings are applied to portfolio members and are not imported as dataset columns.
+                  </Typography>
+                )}
               </Box>
 
               <Divider />

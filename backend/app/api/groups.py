@@ -113,6 +113,9 @@ def import_watchlist(
         )
 
     existing = _get_group_by_name(db, name=group_name, user=user)
+    requested_kind = (
+        payload.group_kind if _field_is_set(payload, "group_kind") else None
+    )
     group: Group
     if existing is not None:
         if payload.conflict_mode == "ERROR":
@@ -126,11 +129,13 @@ def import_watchlist(
             existing = None
         elif payload.conflict_mode == "REPLACE_DATASET":
             group = existing
+            if requested_kind is not None and group.kind != requested_kind:
+                group.kind = requested_kind
     if existing is None:
         group = Group(
             owner_id=user.id if user is not None else None,
             name=group_name,
-            kind="WATCHLIST",
+            kind=requested_kind or "WATCHLIST",
             description=(payload.group_description or None),
         )
         db.add(group)
@@ -154,6 +159,10 @@ def import_watchlist(
             symbol_column=payload.symbol_column,
             exchange_column=payload.exchange_column,
             default_exchange=payload.default_exchange,
+            reference_qty_column=payload.reference_qty_column,
+            reference_price_column=payload.reference_price_column,
+            target_weight_column=payload.target_weight_column,
+            target_weight_units=payload.target_weight_units,
             selected_columns=payload.selected_columns,
             header_labels=payload.header_labels,
             rows=payload.rows,

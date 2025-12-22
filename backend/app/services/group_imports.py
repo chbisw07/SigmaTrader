@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.models import Group, GroupImport, GroupImportValue, GroupMember
+from app.schemas.group_imports import TargetWeightUnits
 from app.services.market_data import resolve_listings_bulk
 
 _DISALLOWED_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -135,6 +136,10 @@ def import_watchlist_dataset(
     symbol_column: str,
     exchange_column: str | None,
     default_exchange: str,
+    reference_qty_column: str | None,
+    reference_price_column: str | None,
+    target_weight_column: str | None,
+    target_weight_units: TargetWeightUnits,
     selected_columns: list[str],
     header_labels: dict[str, str],
     rows: list[dict[str, Any]],
@@ -153,11 +158,25 @@ def import_watchlist_dataset(
         raise ValueError("Symbol column not found in rows.")
     if exchange_column and exchange_column not in rows[0]:
         raise ValueError("Exchange column not found in rows.")
+    if reference_qty_column and reference_qty_column not in rows[0]:
+        raise ValueError("Ref qty column not found in rows.")
+    if reference_price_column and reference_price_column not in rows[0]:
+        raise ValueError("Ref price column not found in rows.")
+    if target_weight_column and target_weight_column not in rows[0]:
+        raise ValueError("Target weight column not found in rows.")
+
+    reserved_headers = {
+        symbol_column,
+        exchange_column,
+        reference_qty_column,
+        reference_price_column,
+        target_weight_column,
+    }
 
     # Decide final imported columns after applying restrictions.
     imported_headers: list[str] = []
     for header in selected_columns:
-        if header == symbol_column or header == exchange_column:
+        if header in reserved_headers:
             continue
         label = header_labels.get(header) or header
         allowed, reason = is_import_column_allowed(label)
@@ -292,9 +311,82 @@ def import_watchlist_dataset(
     if replace_members:
         db.query(GroupMember).filter(GroupMember.group_id == group.id).delete()
 
+    def _parse_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            val = float(value)
+            return val if val == val else None  # NaN check
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+            cleaned = (
+                s.replace(",", "")
+                .replace("₹", "")
+                .replace("Rs.", "")
+                .replace("rs.", "")
+            ).strip()
+            cleaned = cleaned.replace("%", "").strip()
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+        try:
+            return float(str(value))
+        except Exception:
+            return None
+
+    def _parse_int(value: Any) -> int | None:
+        val = _parse_float(value)
+        if val is None:
+            return None
+        if val < 0:
+            return None
+        if float(int(val)) != val:
+            return None
+        return int(val)
+
+    def _parse_weight_fraction(value: Any) -> float | None:
+        val = _parse_float(value)
+        if val is None:
+            return None
+        if target_weight_units == "PCT":
+            val = val / 100.0
+        elif target_weight_units == "AUTO" and val > 1.0:
+            val = val / 100.0
+
+        if val < 0.0 or val > 1.0:
+            return None
+        return val
+
     members: list[GroupMember] = []
-    for sym, exch, _ in resolved_rows:
-        members.append(GroupMember(group_id=group.id, symbol=sym, exchange=exch))
+    for sym, exch, row in resolved_rows:
+        reference_qty = (
+            _parse_int(row.get(reference_qty_column)) if reference_qty_column else None
+        )
+        reference_price = (
+            _parse_float(row.get(reference_price_column))
+            if reference_price_column
+            else None
+        )
+        if reference_price is not None and reference_price <= 0.0:
+            reference_price = None
+        target_weight = (
+            _parse_weight_fraction(row.get(target_weight_column))
+            if target_weight_column
+            else None
+        )
+        members.append(
+            GroupMember(
+                group_id=group.id,
+                symbol=sym,
+                exchange=exch,
+                target_weight=target_weight,
+                reference_qty=reference_qty,
+                reference_price=reference_price,
+            )
+        )
     db.add_all(members)
 
     # Upsert dataset: ensure a single record per group.
@@ -326,6 +418,12 @@ def import_watchlist_dataset(
         "strip_exchange_prefix": strip_exchange_prefix,
         "strip_special_chars": strip_special_chars,
         "selected_headers": [header_labels.get(h) or h for h in imported_headers],
+        "member_field_mapping": {
+            "reference_qty_column": reference_qty_column,
+            "reference_price_column": reference_price_column,
+            "target_weight_column": target_weight_column,
+            "target_weight_units": target_weight_units,
+        },
     }
     existing.schema_json = json.dumps(schema, ensure_ascii=False)
     existing.symbol_mapping_json = json.dumps(symbol_mapping, ensure_ascii=False)

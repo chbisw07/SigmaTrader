@@ -6,9 +6,11 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.pydantic_compat import PYDANTIC_V2, ConfigDict
+from app.schemas.groups import GroupKind
 
 ImportColumnType = Literal["string", "number", "boolean", "date", "datetime"]
 ImportConflictMode = Literal["ERROR", "REPLACE_DATASET", "REPLACE_GROUP"]
+TargetWeightUnits = Literal["AUTO", "PCT", "FRACTION"]
 
 
 class GroupImportColumn(BaseModel):
@@ -58,6 +60,7 @@ class SkippedSymbol(BaseModel):
 
 class GroupImportWatchlistRequest(BaseModel):
     group_name: str = Field(..., max_length=255)
+    group_kind: GroupKind = "WATCHLIST"
     group_description: Optional[str] = None
     source: str = "TRADINGVIEW"
     original_filename: Optional[str] = None
@@ -65,6 +68,11 @@ class GroupImportWatchlistRequest(BaseModel):
     symbol_column: str
     exchange_column: Optional[str] = None
     default_exchange: str = "NSE"
+
+    reference_qty_column: Optional[str] = None
+    reference_price_column: Optional[str] = None
+    target_weight_column: Optional[str] = None
+    target_weight_units: TargetWeightUnits = "AUTO"
 
     selected_columns: List[str] = []
     header_labels: Dict[str, str] = {}
@@ -92,6 +100,7 @@ class GroupImportWatchlistResponse(BaseModel):
 __all__ = [
     "ImportColumnType",
     "ImportConflictMode",
+    "TargetWeightUnits",
     "GroupImportColumn",
     "GroupImportDatasetRead",
     "GroupImportDatasetValuesRead",

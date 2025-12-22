@@ -179,12 +179,17 @@ export async function fetchGroup(groupId: number): Promise<GroupDetail> {
 
 export async function importWatchlistCsv(payload: {
   group_name: string
+  group_kind?: 'WATCHLIST' | 'MODEL_PORTFOLIO' | 'PORTFOLIO'
   group_description?: string | null
   source?: string
   original_filename?: string | null
   symbol_column: string
   exchange_column?: string | null
   default_exchange?: string
+  reference_qty_column?: string | null
+  reference_price_column?: string | null
+  target_weight_column?: string | null
+  target_weight_units?: 'AUTO' | 'PCT' | 'FRACTION'
   selected_columns: string[]
   header_labels?: Record<string, string>
   rows: Array<Record<string, unknown>>

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
-from app.models import MarketInstrument
+from app.models import Group, GroupMember, MarketInstrument
 
 client = TestClient(app)
 
@@ -136,3 +136,70 @@ def test_import_watchlist_conflict_mode_replace_dataset() -> None:
     values = items[0]["values"]
     # Column key is slugified from label ("sector").
     assert values.get("sector") == "Two"
+
+
+def test_import_portfolio_maps_ref_fields_into_group_members() -> None:
+    payload = {
+        "group_name": "tv-portfolio",
+        "group_kind": "PORTFOLIO",
+        "symbol_column": "Symbol",
+        "exchange_column": None,
+        "default_exchange": "NSE",
+        "reference_qty_column": "Shares",
+        "reference_price_column": "Avg Buy Price (Rs.)",
+        "target_weight_column": "Weightage",
+        "target_weight_units": "AUTO",
+        "selected_columns": ["Sector", "Shares", "Avg Buy Price (Rs.)", "Weightage"],
+        "header_labels": {
+            "Symbol": "Symbol",
+            "Sector": "Sector",
+            "Shares": "Shares",
+            "Avg Buy Price (Rs.)": "Avg Buy Price (Rs.)",
+            "Weightage": "Weightage",
+        },
+        "rows": [
+            {
+                "Symbol": "ACUTAAS",
+                "Sector": "Pharma",
+                "Shares": "10",
+                "Avg Buy Price (Rs.)": "100.5",
+                "Weightage": "25",
+            },
+            {
+                "Symbol": "BHEL",
+                "Sector": "Industrials",
+                "Shares": "5",
+                "Avg Buy Price (Rs.)": "200",
+                "Weightage": "75",
+            },
+        ],
+        "allow_kite_fallback": False,
+        "conflict_mode": "ERROR",
+        "replace_members": True,
+    }
+    res = client.post("/api/groups/import/watchlist", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["imported_members"] == 2
+    assert data["imported_columns"] == 1
+
+    group_id = data["group_id"]
+    with SessionLocal() as db:
+        group = db.query(Group).filter(Group.id == group_id).one()
+        assert group.kind == "PORTFOLIO"
+        members = (
+            db.query(GroupMember)
+            .filter(GroupMember.group_id == group_id)
+            .order_by(GroupMember.symbol.asc())
+            .all()
+        )
+        assert [(m.symbol, m.exchange) for m in members] == [
+            ("ACUTAAS", "NSE"),
+            ("BHEL", "NSE"),
+        ]
+        assert members[0].reference_qty == 10
+        assert members[0].reference_price == 100.5
+        assert members[0].target_weight == 0.25
+        assert members[1].reference_qty == 5
+        assert members[1].reference_price == 200.0
+        assert members[1].target_weight == 0.75
