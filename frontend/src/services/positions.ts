@@ -123,7 +123,10 @@ export async function fetchHoldings(
 
   const res = await fetch(url.toString(), { cache: 'no-store' })
   if (!res.ok) {
-    throw new Error(`Failed to load holdings (${res.status})`)
+    const body = await res.text()
+    throw new Error(
+      `Failed to load holdings (${res.status})${body ? `: ${body}` : ''}`,
+    )
   }
   return (await res.json()) as Holding[]
 }

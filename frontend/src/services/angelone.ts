@@ -7,7 +7,9 @@ export type AngeloneStatus = {
 }
 
 export async function fetchAngeloneStatus(): Promise<AngeloneStatus> {
-  const res = await fetch('/api/angelone/status')
+  const url = new URL('/api/angelone/status', window.location.origin)
+  url.searchParams.set('_ts', String(Date.now()))
+  const res = await fetch(url.toString(), { cache: 'no-store' })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(

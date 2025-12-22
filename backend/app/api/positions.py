@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -277,6 +277,10 @@ def list_daily_positions(
     for r in rows:
         # Derived: remaining qty == net qty for the snapshot.
         item = _model_validate(PositionSnapshotRead, r)
+        # SQLite stores naive datetimes; interpret captured_at as UTC to ensure
+        # clients can render in their local timezone (e.g. IST).
+        if item.captured_at.tzinfo is None:
+            item.captured_at = item.captured_at.replace(tzinfo=UTC)
 
         product = (r.product or "").upper()
 
@@ -284,7 +288,8 @@ def list_daily_positions(
             remaining = float(r.holding_qty)
         else:
             remaining = float(r.qty)
-            if product == "CNC" and remaining < 0:
+            # Delivery products cannot be short.
+            if product in {"CNC", "DELIVERY"} and remaining < 0:
                 remaining = 0.0
         item.remaining_qty = remaining
 
@@ -314,6 +319,12 @@ def list_daily_positions(
             traded_qty = day_sell_qty or sell_qty or abs(float(r.qty))
         elif order_type == "BOTH":
             traded_qty = (day_buy_qty or buy_qty) + (day_sell_qty or sell_qty)
+        elif order_type == "FLAT":
+            # Some brokers (notably AngelOne) return intraday buy/sell details
+            # without day_* fields even when net qty is 0. Use buy/sell qty as
+            # a best-effort proxy so derived metrics don't appear blank.
+            if buy_qty or sell_qty:
+                traded_qty = max(buy_qty, sell_qty)
         item.traded_qty = float(traded_qty or 0.0)
 
         avg_buy = _first_price(r.buy_avg_price, r.day_buy_avg_price)
@@ -351,6 +362,53 @@ def list_daily_positions(
         item.pnl_pct = pnl_pct
         item.today_pnl = today_pnl
         item.today_pnl_pct = today_pnl_pct
+        # Fallbacks: if we could not derive numbers (common for FLAT positions),
+        # use broker-provided pnl/m2m so the UI doesn't show empty cells.
+        broker_pnl = float(r.pnl or 0.0)
+        if item.pnl_value is None:
+            item.pnl_value = broker_pnl
+
+        if item.today_pnl is None:
+            item.today_pnl = (
+                float(r.m2m)
+                if r.m2m is not None and float(r.m2m) != 0.0
+                else broker_pnl
+            )
+
+        def _pct_from_notional(
+            pnl: float | None,
+            *,
+            qty_base: float | None,
+            price_base: float | None,
+        ) -> float | None:
+            if pnl is None:
+                return None
+            if qty_base is None or qty_base <= 0:
+                return None
+            if price_base is None or price_base <= 0:
+                return None
+            notional = qty_base * price_base
+            if notional <= 0:
+                return None
+            return (pnl / notional) * 100.0
+
+        qty_base = (
+            abs(remaining)
+            if remaining
+            else (item.traded_qty if item.traded_qty else None)
+        )
+        price_base = (
+            avg_buy or (float(r.avg_price) if r.avg_price else None) or avg_sell
+        )
+
+        if item.pnl_pct is None:
+            item.pnl_pct = _pct_from_notional(
+                item.pnl_value, qty_base=qty_base, price_base=price_base
+            )
+        if item.today_pnl_pct is None:
+            item.today_pnl_pct = _pct_from_notional(
+                item.today_pnl, qty_base=qty_base, price_base=price_base
+            )
 
         out.append(item)
     return out

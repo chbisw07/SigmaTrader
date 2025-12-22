@@ -92,6 +92,15 @@ export function PositionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    // When switching brokers, immediately clear the previous broker's rows so
+    // the grid doesn't look "stuck" on the old broker while the request runs.
+    setPositions([])
+    setError(null)
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBroker])
+
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
@@ -211,7 +220,7 @@ export function PositionsPage() {
         }}
       >
         <Typography color="text.secondary">
-          Daily position snapshots (from Zerodha positions). Refresh captures a new snapshot for today.
+          Daily position snapshots (from broker positions). Refresh captures a new snapshot for today.
         </Typography>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {brokers.length > 0 && (

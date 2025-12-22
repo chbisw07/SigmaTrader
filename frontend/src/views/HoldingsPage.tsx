@@ -266,7 +266,7 @@ export function HoldingsPage() {
     )
     navigate('/holdings', { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [angeloneConnected, angeloneStatusLoaded, universeId])
+  }, [angeloneConnected, angeloneStatusLoaded, loading, universeId])
 
   useEffect(() => {
     if (universeId === 'holdings:angelone') {
@@ -289,15 +289,39 @@ export function HoldingsPage() {
     const requestId = ++loadRequestId.current
     try {
       setLoading(true)
+      setError(null)
+      setCorrError(null)
       // Clear any stale labels immediately; rows will repopulate once the
       // latest request completes.
       setActiveGroup(null)
       setActiveGroupDataset(null)
       const holdingsBroker = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
-      const [rawHoldings, groups] = await Promise.all([
-        fetchHoldings(holdingsBroker),
-        listGroups().catch(() => [] as Group[]),
-      ])
+      const groupsPromise = listGroups().catch(() => [] as Group[])
+      let rawHoldings: Holding[] = []
+      try {
+        rawHoldings = await fetchHoldings(holdingsBroker)
+      } catch (err) {
+        if (holdingsBroker === 'angelone') {
+          // When switching brokers, the AngelOne session may have expired.
+          // Refresh broker status once and retry holdings to avoid a confusing
+          // transient error that often resolves immediately after a manual refresh.
+          try {
+            const status = await fetchAngeloneStatus()
+            if (requestId !== loadRequestId.current) throw err
+            setAngeloneConnected(Boolean(status.connected))
+            if (status.connected) {
+              rawHoldings = await fetchHoldings('angelone')
+            } else {
+              throw err
+            }
+          } catch {
+            throw err
+          }
+        } else {
+          throw err
+        }
+      }
+      const groups = await groupsPromise
       if (requestId !== loadRequestId.current) return
       setAvailableGroups(groups)
 
@@ -485,6 +509,7 @@ export function HoldingsPage() {
     let active = true
     const loadCorrelation = async () => {
       try {
+        if (loading) return
         setCorrLoading(true)
         setCorrError(null)
         const brokerName = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
