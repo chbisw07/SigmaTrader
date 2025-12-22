@@ -283,6 +283,7 @@ export function GroupsPage() {
   const [allocationBusy, setAllocationBusy] = useState(false)
 
   // Import watchlist (CSV) wizard state
+  type ImportGroupKind = Exclude<GroupKind, 'HOLDINGS_VIEW'>
   const [importOpen, setImportOpen] = useState(false)
   const [importStep, setImportStep] = useState(0)
   const [importFileName, setImportFileName] = useState<string | null>(null)
@@ -297,7 +298,8 @@ export function GroupsPage() {
   const [importSymbolColumn, setImportSymbolColumn] = useState<string>('')
   const [importExchangeColumn, setImportExchangeColumn] = useState<string>('')
   const [importDefaultExchange, setImportDefaultExchange] = useState('NSE')
-  const [importGroupKind, setImportGroupKind] = useState<GroupKind>('WATCHLIST')
+  const [importGroupKind, setImportGroupKind] =
+    useState<ImportGroupKind>('WATCHLIST')
   const [importRefQtyColumn, setImportRefQtyColumn] = useState<string>('')
   const [importTargetWeightColumn, setImportTargetWeightColumn] = useState<string>('')
   const [importRefPriceColumn, setImportRefPriceColumn] = useState<string>('')
@@ -1555,7 +1557,9 @@ export function GroupsPage() {
                   labelId="import-group-kind-label"
                   label="Group kind"
                   value={importGroupKind}
-                  onChange={(e) => setImportGroupKind(e.target.value as GroupKind)}
+                  onChange={(e) =>
+                    setImportGroupKind(e.target.value as ImportGroupKind)
+                  }
                 >
                   {GROUP_KINDS.filter((k) => k.value !== 'HOLDINGS_VIEW').map((k) => (
                     <MenuItem key={k.value} value={k.value}>

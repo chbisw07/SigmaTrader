@@ -47,10 +47,8 @@ import {
 } from '../services/angelone'
 import {
   fetchBrokerSecrets,
-  fetchBrokers,
   updateBrokerSecret,
   deleteBrokerSecret,
-  type BrokerInfo,
   type BrokerSecret,
 } from '../services/brokers'
 import { fetchMarketDataStatus, type MarketDataStatus } from '../services/marketData'
@@ -380,7 +378,6 @@ export function SettingsPage() {
     'ALLOWED',
   )
 
-  const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
   const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
 
@@ -470,33 +467,6 @@ export function SettingsPage() {
     }
   }, [])
 
-  useEffect(() => {
-    let active = true
-
-    const loadBrokers = async () => {
-      try {
-        const brokerList = await fetchBrokers()
-        if (!active) return
-        setBrokers(brokerList)
-      } catch (err) {
-        if (!active) return
-        const msg =
-          err instanceof Error
-            ? err.message
-            : 'Failed to load broker configuration'
-        setZerodhaError(msg)
-        setAngeloneError(msg)
-        recordAppLog('ERROR', msg)
-      }
-    }
-
-    void loadBrokers()
-
-    return () => {
-      active = false
-    }
-  }, [])
-
   const handleOpenZerodhaLogin = async () => {
     try {
       const url = await fetchZerodhaLoginUrl()
@@ -504,7 +474,7 @@ export function SettingsPage() {
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'Failed to open Zerodha login'
-      setBrokerError(msg)
+      setZerodhaError(msg)
       recordAppLog('ERROR', msg)
     }
   }

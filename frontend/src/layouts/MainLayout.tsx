@@ -17,6 +17,8 @@ import MenuItem from '@mui/material/MenuItem'
 import Stack from '@mui/material/Stack'
 import Toolbar from '@mui/material/Toolbar'
 import Typography from '@mui/material/Typography'
+
+import { MoonPhaseHeader } from '../components/MoonPhaseHeader'
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
 import DashboardIcon from '@mui/icons-material/Dashboard'
@@ -200,8 +202,8 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
           zIndex: (theme) => theme.zIndex.drawer + 1,
         }}
       >
-        <Toolbar sx={{ justifyContent: 'space-between' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Toolbar sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 220 }}>
             <IconButton
               color="inherit"
               aria-label="open drawer"
@@ -229,6 +231,17 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
             <Typography variant="h6" noWrap component="div">
               SigmaTrader
             </Typography>
+          </Box>
+          <Box
+            sx={{
+              flex: 1,
+              display: { xs: 'none', sm: 'flex' },
+              justifyContent: 'center',
+              minWidth: 0,
+              px: 1,
+            }}
+          >
+            <MoonPhaseHeader />
           </Box>
           <Stack direction="row" spacing={2} alignItems="center">
             <Chip

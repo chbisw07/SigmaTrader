@@ -1081,7 +1081,7 @@ export function HoldingsPage() {
     return null
   }
 
-  const recalcFromQty = (qtyStr: string, side: 'BUY' | 'SELL') => {
+  const recalcFromQty = (qtyStr: string) => {
     const holding = tradeHolding
     const price = getSizingPrice(holding)
     const positionValue = getPositionValue(holding, price)
@@ -1307,7 +1307,7 @@ export function HoldingsPage() {
     setTradeSizeMode('QTY')
     // Seed derived fields based on a single-share (or capped) quantity.
     if (defaultQty > 0) {
-      recalcFromQty(String(defaultQty), side)
+      recalcFromQty(String(defaultQty))
     } else {
       setTradeAmount('')
       setTradePctEquity('')
@@ -3411,7 +3411,7 @@ export function HoldingsPage() {
                             : 'QTY'
                   setTradeSizeMode(mode)
                   if (mode === 'QTY') {
-                    recalcFromQty(tradeQty, tradeSide)
+                    recalcFromQty(tradeQty)
                   } else if (mode === 'AMOUNT') {
                     recalcFromAmount(tradeAmount, tradeSide)
                   } else if (mode === 'PCT_POSITION') {
@@ -3459,7 +3459,7 @@ export function HoldingsPage() {
                 if (isBulkTrade) return
                 setTradeSizeMode('QTY')
                 setTradeQty(value)
-                recalcFromQty(value, tradeSide)
+                recalcFromQty(value)
               }}
               fullWidth
               size="small"
