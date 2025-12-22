@@ -236,12 +236,17 @@ class AngelOneClient:
             "ordertype": ordertype,
             "producttype": producttype,
             "duration": "DAY",
-            "quantity": int(quantity),
+            # SmartAPI examples pass strings for numerics; accept both but keep
+            # ours consistent with the reference implementation.
+            "quantity": str(int(quantity)),
+            # SmartAPI expects these keys even for regular orders.
+            "squareoff": "0",
+            "stoploss": "0",
         }
-        if price is not None:
-            payload["price"] = float(price)
-        if triggerprice is not None:
-            payload["triggerprice"] = float(triggerprice)
+        payload["price"] = "0" if price is None else str(float(price))
+        payload["triggerprice"] = (
+            "0" if triggerprice is None else str(float(triggerprice))
+        )
 
         data = self._request(
             "POST",

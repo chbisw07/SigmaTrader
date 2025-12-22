@@ -25,6 +25,7 @@ from app.schemas.orders import (
 )
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
+from app.services.instruments_sync import sync_smartapi_instrument_master
 from app.services.paper_trading import submit_paper_order
 from app.services.risk import evaluate_order_risk
 from app.services.system_events import record_system_event
@@ -692,6 +693,20 @@ def execute_order_internal(
             symbol=tradingsymbol.strip().upper(),
         )
         if resolved is None:
+            # Best-effort: the SmartAPI scrip master is public; sync once so
+            # newly-traded symbols can be resolved without manual intervention.
+            try:
+                sync_smartapi_instrument_master(db, settings)
+            except Exception:
+                # Fall through to the original error below.
+                pass
+            resolved = resolve_broker_symbol_and_token(
+                db,
+                broker_name="angelone",
+                exchange=exchange_u,
+                symbol=tradingsymbol.strip().upper(),
+            )
+        if resolved is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
@@ -958,12 +973,23 @@ def execute_order_internal(
             "SL-M": "STOPLOSS_MARKET",
         }
         smart_order_type = ordertype_map.get(order.order_type.upper(), "MARKET")
-        producttype = (order.product or "CNC").strip().upper()
-        if producttype not in {"CNC", "MIS"}:
-            producttype = "CNC"
+        # SmartAPI product types differ from Zerodha naming.
+        # Map internal product labels to SmartAPI equivalents.
+        product_raw = (order.product or "CNC").strip().upper()
+        product_map = {
+            "CNC": "DELIVERY",
+            "MIS": "INTRADAY",
+            "NRML": "MARGIN",
+        }
+        producttype = product_map.get(product_raw, "DELIVERY")
 
         price: float | None = None
-        if order.order_type in {"LIMIT", "SL"} and order.price is not None:
+        if order.order_type in {"LIMIT", "SL"}:
+            if order.price is None or order.price <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Price must be positive for LIMIT/SL orders.",
+                )
             price = float(order.price)
         trigger_price: float | None = None
         if order.order_type in {"SL", "SL-M"} and order.trigger_price is not None:

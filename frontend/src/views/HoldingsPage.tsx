@@ -106,6 +106,9 @@ export function HoldingsPage() {
   const [universeId, setUniverseId] = useState<string>('holdings')
   const [angeloneConnected, setAngeloneConnected] = useState(false)
   const [angeloneStatusLoaded, setAngeloneStatusLoaded] = useState(false)
+  const [tradeBrokerName, setTradeBrokerName] = useState<'zerodha' | 'angelone'>(
+    'zerodha',
+  )
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
   const [activeGroup, setActiveGroup] = useState<GroupDetail | null>(null)
   const [activeGroupDataset, setActiveGroupDataset] = useState<{
@@ -264,6 +267,23 @@ export function HoldingsPage() {
     navigate('/holdings', { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [angeloneConnected, angeloneStatusLoaded, universeId])
+
+  useEffect(() => {
+    if (universeId === 'holdings:angelone') {
+      setTradeBrokerName('angelone')
+      return
+    }
+    if (universeId === 'holdings') {
+      setTradeBrokerName('zerodha')
+      return
+    }
+  }, [universeId])
+
+  useEffect(() => {
+    if (tradeBrokerName === 'angelone' && angeloneStatusLoaded && !angeloneConnected) {
+      setTradeBrokerName('zerodha')
+    }
+  }, [angeloneConnected, angeloneStatusLoaded, tradeBrokerName])
 
   const load = async () => {
     const requestId = ++loadRequestId.current
@@ -701,6 +721,8 @@ export function HoldingsPage() {
     side: tradeSide,
     product: tradeProduct,
   })
+  const clampSellToHoldingsQtyEffective =
+    clampSellToHoldingsQty && universeId.startsWith('holdings')
 
   useEffect(() => {
     if (!isBulkTrade) return
@@ -768,7 +790,7 @@ export function HoldingsPage() {
         continue
       }
       let qty = Math.floor(baseShare / price)
-      if (clampSellToHoldingsQty && h.quantity != null) {
+      if (clampSellToHoldingsQtyEffective && h.quantity != null) {
         const maxQty = Math.floor(Number(h.quantity))
         if (Number.isFinite(maxQty) && maxQty >= 0 && qty > maxQty) {
           qty = maxQty
@@ -792,7 +814,7 @@ export function HoldingsPage() {
         const price = prices[h.symbol]
         if (!price || !Number.isFinite(price) || price <= 0) continue
         let extraQty = Math.floor(extraShare / price)
-        if (clampSellToHoldingsQty && h.quantity != null) {
+        if (clampSellToHoldingsQtyEffective && h.quantity != null) {
           const maxQty = Math.floor(Number(h.quantity))
           if (Number.isFinite(maxQty) && maxQty >= 0) {
             const already = finalAmounts[h.symbol] ?? 0
@@ -945,7 +967,7 @@ export function HoldingsPage() {
   const getDefaultBulkQtyForHolding = (holding: HoldingRow): number => {
     let qty = Math.floor(Number(tradeQty))
     if (!Number.isFinite(qty) || qty <= 0) qty = 1
-    if (!clampSellToHoldingsQty || holding.quantity == null) return qty
+    if (!clampSellToHoldingsQtyEffective || holding.quantity == null) return qty
     const maxQty = Math.floor(Number(holding.quantity))
     if (!Number.isFinite(maxQty) || maxQty <= 0) return 0
     return clampQtyToMax(qty, maxQty)
@@ -953,7 +975,7 @@ export function HoldingsPage() {
 
   const computeQtyForHolding = (holding: HoldingRow): number | null => {
     const clampSellQty = (qty: number): number => {
-      if (!clampSellToHoldingsQty || holding.quantity == null) return qty
+      if (!clampSellToHoldingsQtyEffective || holding.quantity == null) return qty
       const maxQty = Math.floor(Number(holding.quantity))
       if (!Number.isFinite(maxQty) || maxQty <= 0) return 0
       return clampQtyToMax(qty, maxQty)
@@ -1052,7 +1074,7 @@ export function HoldingsPage() {
     }
 
     let qty = rawQty
-    if (side === 'SELL' && tradeProduct === 'CNC' && holding?.quantity != null) {
+    if (clampSellToHoldingsQtyEffective && holding?.quantity != null) {
       const maxQty = Math.floor(Number(holding.quantity))
       if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
         qty = clampQtyToMax(qty, maxQty)
@@ -1185,7 +1207,7 @@ export function HoldingsPage() {
     const targetNotional = (rawPct / 100) * total
     let qty = Math.floor(targetNotional / price)
 
-    if (clampSellToHoldingsQty && holding?.quantity != null) {
+    if (clampSellToHoldingsQtyEffective && holding?.quantity != null) {
       const maxQty = Math.floor(Number(holding.quantity))
       if (Number.isFinite(maxQty) && maxQty > 0 && qty > maxQty) {
         qty = maxQty
@@ -1229,6 +1251,9 @@ export function HoldingsPage() {
     setTradeGtt(false)
     setTradeExecutionMode('MANUAL')
     setTradeExecutionTarget('LIVE')
+    if (!universeId.startsWith('group:')) {
+      setTradeBrokerName(universeId === 'holdings:angelone' ? 'angelone' : 'zerodha')
+    }
     setTradeError(null)
     setTradeOpen(true)
   }
@@ -1269,6 +1294,9 @@ export function HoldingsPage() {
     setTradeGtt(false)
     setTradeExecutionMode('MANUAL')
     setTradeExecutionTarget('LIVE')
+    if (!universeId.startsWith('group:')) {
+      setTradeBrokerName(universeId === 'holdings:angelone' ? 'angelone' : 'zerodha')
+    }
     setTradeError(null)
     setTradeOpen(true)
   }
@@ -1483,8 +1511,8 @@ export function HoldingsPage() {
     }
 
     if (tradeExecutionMode === 'AUTO' && tradeExecutionTarget === 'LIVE') {
-      const tradeBroker = universeId === 'holdings:angelone' ? 'AngelOne' : 'Zerodha'
-      const isAngelOne = universeId === 'holdings:angelone'
+      const tradeBroker = tradeBrokerName === 'angelone' ? 'AngelOne' : 'Zerodha'
+      const isAngelOne = tradeBrokerName === 'angelone'
       const brokerActionsPerSymbol =
         (!tradeGtt ? 1 : isAngelOne ? 0 : 1) + (tradeBracketEnabled ? (isAngelOne ? 0 : 1) : 0)
       const localConditionalPerSymbol =
@@ -1519,7 +1547,7 @@ export function HoldingsPage() {
       for (const { holding, qty, price, bracketPrice } of plans) {
         try {
           const primary = await createManualOrder({
-            broker_name: universeId === 'holdings:angelone' ? 'angelone' : 'zerodha',
+            broker_name: tradeBrokerName,
             symbol: holding.symbol,
             exchange: holding.exchange ?? 'NSE',
             side: tradeSide,
@@ -1556,7 +1584,7 @@ export function HoldingsPage() {
           if (tradeBracketEnabled && bracketPrice != null) {
             const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
             const bracket = await createManualOrder({
-              broker_name: universeId === 'holdings:angelone' ? 'angelone' : 'zerodha',
+              broker_name: tradeBrokerName,
               symbol: holding.symbol,
               exchange: holding.exchange ?? 'NSE',
               side: bracketSide,
@@ -1791,7 +1819,7 @@ export function HoldingsPage() {
     }
 
     const maxQty =
-      clampSellToHoldingsQty && holding?.quantity != null
+      clampSellToHoldingsQtyEffective && holding?.quantity != null
         ? Math.floor(Number(holding.quantity))
         : null
 
@@ -3216,19 +3244,35 @@ export function HoldingsPage() {
       )}
 
       <Dialog open={tradeOpen} onClose={closeTradeDialog} fullWidth maxWidth="sm">
-        <DialogTitle>
-          {isBulkTrade
-            ? tradeSide === 'BUY'
-              ? 'Bulk buy from holdings'
-              : 'Bulk sell from holdings'
-	            : tradeSide === 'BUY'
-	              ? 'Buy from holdings'
-	              : 'Sell from holdings'}
-	        </DialogTitle>
-	        <DialogContent sx={{ pt: 2 }}>
-	          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-	            <Typography variant="subtitle1">
-	              {isBulkTrade
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 2,
+          }}
+        >
+          <span>
+            {isBulkTrade
+              ? tradeSide === 'BUY'
+                ? 'Bulk buy from holdings'
+                : 'Bulk sell from holdings'
+              : tradeSide === 'BUY'
+                ? 'Buy from holdings'
+                : 'Sell from holdings'}
+          </span>
+          <Chip
+            size="small"
+            variant="outlined"
+            label={`Broker: ${
+              tradeBrokerName === 'angelone' ? 'AngelOne (SmartAPI)' : 'Zerodha (Kite)'
+            }`}
+          />
+        </DialogTitle>
+		        <DialogContent sx={{ pt: 2 }}>
+		          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+		            <Typography variant="subtitle1">
+		              {isBulkTrade
 	                ? `${bulkTradeHoldings.length} selected holdings`
 	                : tradeSymbol}
 	            </Typography>
@@ -3259,7 +3303,29 @@ export function HoldingsPage() {
                 alignItems: 'center',
                 justifyContent: 'space-between',
               }}
-            >
+	            >
+	              <TextField
+	                label="Destination broker"
+	                select
+	                size="small"
+	                value={tradeBrokerName}
+	                onChange={(e) => {
+	                  const next = e.target.value === 'angelone' ? 'angelone' : 'zerodha'
+                  setTradeBrokerName(next)
+                }}
+                sx={{ minWidth: 220 }}
+                disabled={universeId === 'holdings' || universeId === 'holdings:angelone'}
+                helperText={
+                  universeId === 'holdings' || universeId === 'holdings:angelone'
+                    ? 'Broker is fixed for holdings universes.'
+                    : 'Orders will be created for this broker.'
+                }
+              >
+                <MenuItem value="zerodha">Zerodha (Kite)</MenuItem>
+                <MenuItem value="angelone" disabled={angeloneStatusLoaded && !angeloneConnected}>
+                  AngelOne (SmartAPI)
+                </MenuItem>
+              </TextField>
               <TextField
                 label="Submit mode"
                 select
@@ -3758,7 +3824,7 @@ export function HoldingsPage() {
                 gap: 1,
               }}
             >
-              <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" color="text.secondary">
                 Bracket / follow-up conditional
               </Typography>
               <FormControlLabel
@@ -3802,7 +3868,7 @@ export function HoldingsPage() {
                 }
                 label={
                   (() => {
-                    const isAngelOne = universeId === 'holdings:angelone'
+                    const isAngelOne = tradeBrokerName === 'angelone'
                     const suffix = isAngelOne ? 'conditional' : 'GTT'
                     return tradeSide === 'BUY'
                       ? `Add profit-target SELL ${suffix}`
@@ -3824,12 +3890,12 @@ export function HoldingsPage() {
                     {(() => {
                       const p = getBracketPreviewPrice()
                       if (p == null) {
-                        return 'Bracket GTT price will be shown here when price and MTP are valid.'
+                        return 'Follow-up order price will be shown here when price and MTP are valid.'
                       }
                       const base = getEffectivePrimaryPrice()
                       const sideLabel =
                         (() => {
-                          const isAngelOne = universeId === 'holdings:angelone'
+                          const isAngelOne = tradeBrokerName === 'angelone'
                           const suffix = isAngelOne ? 'conditional' : 'GTT'
                           return tradeSide === 'BUY'
                             ? `SELL ${suffix} target`
@@ -3856,7 +3922,7 @@ export function HoldingsPage() {
                 />
               }
               label={
-                universeId === 'holdings:angelone'
+                tradeBrokerName === 'angelone'
                   ? 'Conditional order (SigmaTrader-managed)'
                   : 'GTT (good-till-triggered) order'
               }
@@ -4054,13 +4120,13 @@ export function HoldingsPage() {
                         ? defaultQty
                         : 1
                     const next: Record<string, string> = {}
-                    for (const h of bulkTradeHoldings) {
-                      let qty = base
-                      if (clampSellToHoldingsQty && h.quantity != null) {
-                        const maxQty = Math.floor(Number(h.quantity))
-                        if (Number.isFinite(maxQty)) {
-                          qty = maxQty <= 0 ? 0 : Math.min(qty, maxQty)
-                        }
+	                    for (const h of bulkTradeHoldings) {
+	                      let qty = base
+	                      if (clampSellToHoldingsQtyEffective && h.quantity != null) {
+	                        const maxQty = Math.floor(Number(h.quantity))
+	                        if (Number.isFinite(maxQty)) {
+	                          qty = maxQty <= 0 ? 0 : Math.min(qty, maxQty)
+	                        }
                       }
                       next[h.symbol] = String(qty)
                     }
@@ -4108,13 +4174,13 @@ export function HoldingsPage() {
                         } else if (!Number.isFinite(raw)) {
                           nextQty = getDefaultBulkQtyForHolding(h)
                         } else {
-                          nextQty = Math.floor(raw)
-                          if (!Number.isFinite(nextQty) || nextQty < 0) nextQty = 0
-                          if (clampSellToHoldingsQty && h.quantity != null) {
-                            const maxQty = Math.floor(Number(h.quantity))
-                            if (Number.isFinite(maxQty)) {
-                              nextQty = maxQty <= 0 ? 0 : Math.min(nextQty, maxQty)
-                            }
+	                          nextQty = Math.floor(raw)
+	                          if (!Number.isFinite(nextQty) || nextQty < 0) nextQty = 0
+	                          if (clampSellToHoldingsQtyEffective && h.quantity != null) {
+	                            const maxQty = Math.floor(Number(h.quantity))
+	                            if (Number.isFinite(maxQty)) {
+	                              nextQty = maxQty <= 0 ? 0 : Math.min(nextQty, maxQty)
+	                            }
                           }
                         }
                         setBulkQtyOverrides((prev) => ({

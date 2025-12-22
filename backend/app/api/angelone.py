@@ -15,6 +15,7 @@ from app.db.session import get_db
 from app.models import BrokerConnection, User
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
+from app.services.instruments_sync import sync_smartapi_instrument_master
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -258,6 +259,19 @@ def angelone_ltp(
         exchange=exch_u,
         symbol=sym_u,
     )
+    if resolved is None:
+        # Best-effort: sync public scrip master so users can fetch LTP without
+        # manually running instrument sync.
+        try:
+            sync_smartapi_instrument_master(db, settings)
+        except Exception:
+            pass
+        resolved = resolve_broker_symbol_and_token(
+            db,
+            broker_name="angelone",
+            exchange=exch_u,
+            symbol=sym_u,
+        )
     if resolved is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

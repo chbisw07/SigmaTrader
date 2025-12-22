@@ -24,6 +24,23 @@ _scheduler_started = False
 _stop_event = Event()
 
 
+def _canonicalize_smartapi_symbol(symbol: str) -> str:
+    """Return canonical app symbol for a SmartAPI broker symbol.
+
+    SmartAPI often encodes the NSE series as a suffix (e.g. "RPOWER-EQ"). Our
+    canonical universe uses plain symbols ("RPOWER"), so strip common series
+    suffixes for NSE/BSE equities.
+    """
+
+    sym = (symbol or "").strip().upper()
+    if "-" not in sym:
+        return sym
+    base, suffix = sym.rsplit("-", 1)
+    if base and suffix in {"EQ", "BE", "BZ", "BL"}:
+        return base
+    return sym
+
+
 def _iter_zerodha_instruments(
     db: Session,
     settings: Settings,
@@ -156,7 +173,7 @@ def sync_smartapi_instrument_master(
         if not broker_symbol or token is None:
             continue
 
-        canonical_symbol = broker_symbol.strip().upper()
+        canonical_symbol = _canonicalize_smartapi_symbol(broker_symbol)
 
         # If we already have a canonical listing for this ISIN+exchange (e.g.
         # from Zerodha), prefer that symbol to keep groups broker-agnostic.
@@ -252,4 +269,5 @@ __all__ = [
     "schedule_instrument_master_sync",
     "sync_zerodha_instrument_master",
     "sync_smartapi_instrument_master",
+    "_canonicalize_smartapi_symbol",
 ]
