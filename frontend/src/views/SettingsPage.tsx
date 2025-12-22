@@ -56,6 +56,292 @@ import {
 import { fetchMarketDataStatus, type MarketDataStatus } from '../services/marketData'
 import { recordAppLog } from '../services/logs'
 
+function BrokerSecretsTable({
+  brokerName,
+}: {
+  brokerName: string
+}) {
+  const [secrets, setSecrets] = useState<BrokerSecret[]>([])
+  const [newSecretKey, setNewSecretKey] = useState('')
+  const [newSecretValue, setNewSecretValue] = useState('')
+  const [secretVisibility, setSecretVisibility] = useState<Record<string, boolean>>({})
+  const [isSavingSecret, setIsSavingSecret] = useState(false)
+  const [editingSecrets, setEditingSecrets] = useState<Record<string, boolean>>({})
+  const [editedKeys, setEditedKeys] = useState<Record<string, string>>({})
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      if (!brokerName) return
+      try {
+        const res = await fetchBrokerSecrets(brokerName)
+        if (!active) return
+        setSecrets(res)
+        setError(null)
+      } catch (err) {
+        if (!active) return
+        setError(err instanceof Error ? err.message : 'Failed to load broker secrets')
+      }
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [brokerName])
+
+  const handleChangeSecretValue = (key: string, value: string) => {
+    setSecrets((prev) => prev.map((s) => (s.key === key ? { ...s, value } : s)))
+  }
+
+  const handleChangeSecretKey = (originalKey: string, newKey: string) => {
+    setEditedKeys((prev) => ({ ...prev, [originalKey]: newKey }))
+  }
+
+  const toggleSecretVisibility = (key: string) => {
+    setSecretVisibility((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const handleSaveExistingSecret = async (key: string) => {
+    const secret = secrets.find((s) => s.key === key)
+    if (!brokerName || !secret) return
+
+    const newKey = editedKeys[key]?.trim() || secret.key
+
+    setIsSavingSecret(true)
+    try {
+      const updated = await updateBrokerSecret(brokerName, newKey, secret.value)
+
+      if (newKey !== secret.key) {
+        try {
+          await deleteBrokerSecret(brokerName, secret.key)
+        } catch {
+          // ignore
+        }
+      }
+
+      setSecrets((prev) => {
+        const withoutOld = prev.filter((s) => s.key !== secret.key)
+        const mapped = withoutOld.map((s) => (s.key === updated.key ? updated : s))
+        return mapped.some((s) => s.key === updated.key) ? mapped : [...mapped, updated]
+      })
+      setEditingSecrets((prev) => ({ ...prev, [key]: false }))
+      setEditedKeys((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      setError(null)
+      recordAppLog('INFO', `Updated broker secret for ${brokerName}/${updated.key}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to update broker secret'
+      setError(msg)
+      recordAppLog('ERROR', msg)
+    } finally {
+      setIsSavingSecret(false)
+    }
+  }
+
+  const handleAddSecret = async () => {
+    const key = newSecretKey.trim()
+    const value = newSecretValue
+    if (!brokerName || !key) {
+      setError('Please provide a key name for the secret.')
+      return
+    }
+
+    setIsSavingSecret(true)
+    try {
+      const created = await updateBrokerSecret(brokerName, key, value)
+      setSecrets((prev) => {
+        const existing = prev.find((s) => s.key === created.key)
+        if (existing) return prev.map((s) => (s.key === created.key ? created : s))
+        return [...prev, created]
+      })
+      setNewSecretKey('')
+      setNewSecretValue('')
+      setEditingSecrets((prev) => ({ ...prev, [created.key]: false }))
+      setError(null)
+      recordAppLog('INFO', `Saved broker secret for ${brokerName}/${created.key}`)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save broker secret'
+      setError(msg)
+      recordAppLog('ERROR', msg)
+    } finally {
+      setIsSavingSecret(false)
+    }
+  }
+
+  return (
+    <>
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Key</TableCell>
+            <TableCell>Value</TableCell>
+            <TableCell align="right">Actions</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {secrets.map((s) => (
+            <TableRow key={s.key}>
+              <TableCell sx={{ width: '35%' }}>
+                <TextField
+                  size="small"
+                  value={editingSecrets[s.key] ? editedKeys[s.key] ?? s.key : s.key}
+                  fullWidth
+                  disabled={!editingSecrets[s.key]}
+                  onChange={(e) => handleChangeSecretKey(s.key, e.target.value)}
+                />
+              </TableCell>
+              <TableCell sx={{ width: '45%' }}>
+                <TextField
+                  size="small"
+                  type={secretVisibility[s.key] ? 'text' : 'password'}
+                  value={s.value}
+                  onChange={(e) => handleChangeSecretValue(s.key, e.target.value)}
+                  fullWidth
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          aria-label="toggle secret visibility"
+                          onClick={() => toggleSecretVisibility(s.key)}
+                          edge="end"
+                        >
+                          {secretVisibility[s.key] ? 'Hide' : 'Show'}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
+                />
+              </TableCell>
+              <TableCell align="right">
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => void handleSaveExistingSecret(s.key)}
+                  disabled={isSavingSecret}
+                >
+                  Save
+                </Button>
+                <Button
+                  size="small"
+                  variant="text"
+                  sx={{ ml: 1 }}
+                  onClick={() =>
+                    setEditingSecrets((prev) => ({
+                      ...prev,
+                      [s.key]: !prev[s.key],
+                    }))
+                  }
+                >
+                  {editingSecrets[s.key] ? 'Cancel' : 'Edit'}
+                </Button>
+                <Button
+                  size="small"
+                  color="error"
+                  variant="text"
+                  sx={{ ml: 1 }}
+                  onClick={async () => {
+                    try {
+                      await deleteBrokerSecret(brokerName, s.key)
+                      setSecrets((prev) => prev.filter((x) => x.key !== s.key))
+                      setEditingSecrets((prev) => {
+                        const next = { ...prev }
+                        delete next[s.key]
+                        return next
+                      })
+                      setEditedKeys((prev) => {
+                        const next = { ...prev }
+                        delete next[s.key]
+                        return next
+                      })
+                      setError(null)
+                      recordAppLog('INFO', `Deleted broker secret for ${brokerName}/${s.key}`)
+                    } catch (err) {
+                      const msg =
+                        err instanceof Error ? err.message : 'Failed to delete broker secret'
+                      setError(msg)
+                      recordAppLog('ERROR', msg)
+                    }
+                  }}
+                >
+                  Delete
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+          <TableRow>
+            <TableCell>
+              <TextField
+                size="small"
+                placeholder="api_key"
+                value={newSecretKey}
+                onChange={(e) => setNewSecretKey(e.target.value)}
+                fullWidth
+              />
+            </TableCell>
+            <TableCell>
+              <TextField
+                size="small"
+                type={secretVisibility.__new ? 'text' : 'password'}
+                value={newSecretValue}
+                onChange={(e) => setNewSecretValue(e.target.value)}
+                fullWidth
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        size="small"
+                        aria-label="toggle secret visibility"
+                        onClick={() =>
+                          setSecretVisibility((prev) => ({
+                            ...prev,
+                            __new: !prev.__new,
+                          }))
+                        }
+                        edge="end"
+                      >
+                        {secretVisibility.__new ? 'Hide' : 'Show'}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </TableCell>
+            <TableCell align="right">
+              <Button
+                size="small"
+                variant="contained"
+                onClick={() => void handleAddSecret()}
+                disabled={isSavingSecret}
+              >
+                Add
+              </Button>
+            </TableCell>
+          </TableRow>
+          {secrets.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={3}>
+                <Typography variant="body2" color="text.secondary">
+                  No secrets configured yet for this broker.
+                </Typography>
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      {error && (
+        <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+          {error}
+        </Typography>
+      )}
+    </>
+  )
+}
+
 export function SettingsPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -70,7 +356,8 @@ export function SettingsPage() {
 
   const [brokerStatus, setBrokerStatus] = useState<ZerodhaStatus | null>(null)
   const [angeloneStatus, setAngeloneStatus] = useState<AngeloneStatus | null>(null)
-  const [brokerError, setBrokerError] = useState<string | null>(null)
+  const [zerodhaError, setZerodhaError] = useState<string | null>(null)
+  const [angeloneError, setAngeloneError] = useState<string | null>(null)
   const [marketStatus, setMarketStatus] = useState<MarketDataStatus | null>(null)
   const [requestToken, setRequestToken] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
@@ -94,22 +381,8 @@ export function SettingsPage() {
   )
 
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
-  const [selectedBroker, setSelectedBroker] = useState<string>('')
-  const [brokerSecrets, setBrokerSecrets] = useState<BrokerSecret[]>([])
-  const [newSecretKey, setNewSecretKey] = useState('')
-  const [newSecretValue, setNewSecretValue] = useState('')
-  const [secretVisibility, setSecretVisibility] = useState<Record<string, boolean>>({})
-  const [isSavingSecret, setIsSavingSecret] = useState(false)
-  const [editingSecrets, setEditingSecrets] = useState<Record<string, boolean>>({})
-  const [editedKeys, setEditedKeys] = useState<Record<string, string>>({})
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
   const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
-
-  const selectedBrokerApiKey = brokerSecrets.find((s) =>
-    ['api_key', 'KITE_API_KEY', 'ZERODHA_API_KEY', 'SMARTAPI_API_KEY', 'ANGELONE_API_KEY'].includes(
-      s.key,
-    ),
-  )?.value
 
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get('tab')
@@ -163,21 +436,32 @@ export function SettingsPage() {
     let active = true
     const loadStatus = async () => {
       try {
-        const [status, aoStatus, mdStatus] = await Promise.all([
+        const [z, ao, md] = await Promise.allSettled([
           fetchZerodhaStatus(),
-          fetchAngeloneStatus().catch(() => null),
-          fetchMarketDataStatus().catch(() => null),
+          fetchAngeloneStatus(),
+          fetchMarketDataStatus(),
         ])
         if (!active) return
-        setBrokerStatus(status)
-        setAngeloneStatus(aoStatus)
-        if (mdStatus) setMarketStatus(mdStatus)
-        setBrokerError(null)
+        if (z.status === 'fulfilled') {
+          setBrokerStatus(z.value)
+          setZerodhaError(null)
+        } else {
+          setBrokerStatus(null)
+          setZerodhaError('Failed to load Zerodha status.')
+        }
+        if (ao.status === 'fulfilled') {
+          setAngeloneStatus(ao.value)
+          setAngeloneError(null)
+        } else {
+          setAngeloneStatus(null)
+          setAngeloneError('Failed to load AngelOne status.')
+        }
+        if (md.status === 'fulfilled') setMarketStatus(md.value)
       } catch (err) {
         if (!active) return
-        setBrokerError(
-          err instanceof Error ? err.message : 'Failed to load broker status',
-        )
+        const msg = err instanceof Error ? err.message : 'Failed to load broker status'
+        setZerodhaError(msg)
+        setAngeloneError(msg)
       }
     }
     void loadStatus()
@@ -189,35 +473,24 @@ export function SettingsPage() {
   useEffect(() => {
     let active = true
 
-    const loadBrokersAndSecrets = async () => {
+    const loadBrokers = async () => {
       try {
         const brokerList = await fetchBrokers()
         if (!active) return
         setBrokers(brokerList)
-
-        if (brokerList.length === 0) {
-          setSelectedBroker('')
-          setBrokerSecrets([])
-          return
-        }
-
-        const initial = brokerList[0].name
-        setSelectedBroker(initial)
-        const secrets = await fetchBrokerSecrets(initial)
-        if (!active) return
-        setBrokerSecrets(secrets)
       } catch (err) {
         if (!active) return
         const msg =
           err instanceof Error
             ? err.message
             : 'Failed to load broker configuration'
-        setBrokerError(msg)
+        setZerodhaError(msg)
+        setAngeloneError(msg)
         recordAppLog('ERROR', msg)
       }
     }
 
-    void loadBrokersAndSecrets()
+    void loadBrokers()
 
     return () => {
       active = false
@@ -238,7 +511,7 @@ export function SettingsPage() {
 
   const handleConnectZerodha = async () => {
     if (!requestToken.trim()) {
-      setBrokerError('Please paste the request_token from Zerodha.')
+      setZerodhaError('Please paste the request_token from Zerodha.')
       return
     }
     setIsConnecting(true)
@@ -246,13 +519,13 @@ export function SettingsPage() {
       await connectZerodha(requestToken.trim())
       const status = await fetchZerodhaStatus()
       setBrokerStatus(status)
-      setBrokerError(null)
+      setZerodhaError(null)
     } catch (err) {
       const msg =
         err instanceof Error
           ? err.message
           : 'Failed to complete Zerodha connect'
-      setBrokerError(msg)
+      setZerodhaError(msg)
       recordAppLog('ERROR', msg)
     } finally {
       setIsConnecting(false)
@@ -261,11 +534,11 @@ export function SettingsPage() {
 
   const handleConnectAngelone = async () => {
     if (!angeloneClientCode.trim()) {
-      setBrokerError('Please enter AngelOne client code.')
+      setAngeloneError('Please enter AngelOne client code.')
       return
     }
     if (!angelonePassword) {
-      setBrokerError('Please enter AngelOne password.')
+      setAngeloneError('Please enter AngelOne password.')
       return
     }
     if (!angeloneTotp.trim()) {
@@ -286,136 +559,14 @@ export function SettingsPage() {
       })
       const status = await fetchAngeloneStatus()
       setAngeloneStatus(status)
-      setBrokerError(null)
+      setAngeloneError(null)
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'Failed to complete AngelOne connect'
-      setBrokerError(msg)
+      setAngeloneError(msg)
       recordAppLog('ERROR', msg)
     } finally {
       setIsConnectingAngelone(false)
-    }
-  }
-
-  const handleSelectBroker = async (name: string) => {
-    setSelectedBroker(name)
-    if (!name) {
-      setBrokerSecrets([])
-      return
-    }
-    try {
-      const secrets = await fetchBrokerSecrets(name)
-      setBrokerSecrets(secrets)
-      setBrokerError(null)
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Failed to load broker secrets'
-      setBrokerError(msg)
-      recordAppLog('ERROR', msg)
-    }
-  }
-
-  const handleChangeSecretValue = (key: string, value: string) => {
-    setBrokerSecrets((prev) =>
-      prev.map((s) => (s.key === key ? { ...s, value } : s)),
-    )
-  }
-
-  const handleChangeSecretKey = (originalKey: string, newKey: string) => {
-    setEditedKeys((prev) => ({ ...prev, [originalKey]: newKey }))
-  }
-
-  const toggleSecretVisibility = (key: string) => {
-    setSecretVisibility((prev) => ({ ...prev, [key]: !prev[key] }))
-  }
-
-  const handleSaveExistingSecret = async (key: string) => {
-    const secret = brokerSecrets.find((s) => s.key === key)
-    if (!selectedBroker || !secret) return
-
-    const newKey = editedKeys[key]?.trim() || secret.key
-
-    setIsSavingSecret(true)
-    try {
-      const updated = await updateBrokerSecret(selectedBroker, newKey, secret.value)
-
-      if (newKey !== secret.key) {
-        // Clean up the old key entry if it was renamed.
-        try {
-          await deleteBrokerSecret(selectedBroker, secret.key)
-        } catch {
-          // Non-critical; ignore failures when deleting the old key.
-        }
-      }
-
-      setBrokerSecrets((prev) =>
-        prev
-          .filter((s) => s.key !== secret.key)
-          .map((s) => (s.key === updated.key ? updated : s))
-          .concat(
-            prev.some((s) => s.key === updated.key) ? [] : [updated],
-          ),
-      )
-      setEditingSecrets((prev) => ({ ...prev, [key]: false }))
-      setEditedKeys((prev) => {
-        const next = { ...prev }
-        delete next[key]
-        return next
-      })
-      setBrokerError(null)
-      recordAppLog(
-        'INFO',
-        `Updated broker secret for ${selectedBroker}/${updated.key}`,
-      )
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Failed to update broker secret'
-      setBrokerError(msg)
-      recordAppLog('ERROR', msg)
-    } finally {
-      setIsSavingSecret(false)
-    }
-  }
-
-  const handleAddSecret = async () => {
-    const key = newSecretKey.trim()
-    const value = newSecretValue
-    if (!selectedBroker || !key) {
-      setBrokerError('Please provide a key name for the secret.')
-      return
-    }
-
-    setIsSavingSecret(true)
-    try {
-      const created = await updateBrokerSecret(selectedBroker, key, value)
-      setBrokerSecrets((prev) => {
-        const existing = prev.find((s) => s.key === created.key)
-        if (existing) {
-          return prev.map((s) => (s.key === created.key ? created : s))
-        }
-        return [...prev, created]
-      })
-      setNewSecretKey('')
-      setNewSecretValue('')
-      setEditingSecrets((prev) => ({ ...prev, [created.key]: false }))
-      setBrokerError(null)
-      recordAppLog(
-        'INFO',
-        `Saved broker secret for ${selectedBroker}/${created.key}`,
-      )
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Failed to save broker secret'
-      setBrokerError(msg)
-      recordAppLog('ERROR', msg)
-    } finally {
-      setIsSavingSecret(false)
     }
   }
 
@@ -690,444 +841,162 @@ export function SettingsPage() {
       </Paper>
 
       {activeTab === 'broker' && (
-      <Paper sx={{ mb: 3, p: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          Broker Settings
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Select your broker, connect your account where applicable, and manage API keys
-          and secrets. Settings are scoped to the logged-in SigmaTrader user.
-        </Typography>
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', md: 'row' },
-            gap: 3,
-            alignItems: { xs: 'flex-start', md: 'flex-start' },
-            mb: 2,
-          }}
-        >
-          <Box sx={{ flex: 1, minWidth: 260 }}>
-            <Box
-              sx={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 2,
-                alignItems: 'center',
-                mb: 1.5,
-              }}
-            >
-              <TextField
-                select
-                label="Broker"
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
+          <Typography variant="h6">Broker Settings</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Connect brokers and manage API keys/secrets. Brokers are active simultaneously.
+          </Typography>
+
+          <Paper sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mb: 1.5 }}>
+              <Typography variant="subtitle1" sx={{ flex: 1, minWidth: 220 }}>
+                Zerodha (Kite)
+              </Typography>
+              <Chip
                 size="small"
-                sx={{ minWidth: 200 }}
-                value={selectedBroker}
-                onChange={(e) => void handleSelectBroker(e.target.value)}
-              >
-                {brokers.map((b) => (
-                  <MenuItem key={b.name} value={b.name}>
-                    {b.label}
-                  </MenuItem>
-                ))}
-                {brokers.length === 0 && (
-                  <MenuItem value="" disabled>
-                    No brokers configured
-                  </MenuItem>
-                )}
-              </TextField>
-              {selectedBroker === 'zerodha' && (
-                <Chip
-                  size="small"
-                  label={
-                    brokerStatus?.connected
-                      ? 'Zerodha: Connected'
-                      : 'Zerodha: Not connected'
-                  }
-                  color={brokerStatus?.connected ? 'success' : 'default'}
-                />
-              )}
-              {selectedBroker === 'zerodha'
-                && selectedBrokerApiKey
-                && selectedBrokerApiKey.trim().length > 0
-                && selectedBrokerApiKey.trim().length !== 16 && (
-                  <Chip
-                    size="small"
-                    label="Zerodha api_key looks invalid"
-                    color="warning"
-                  />
-                )}
-              {selectedBroker === 'angelone' && (
-                <Chip
-                  size="small"
-                  label={
-                    angeloneStatus?.connected
-                      ? 'AngelOne: Connected'
-                      : 'AngelOne: Not connected'
-                  }
-                  color={angeloneStatus?.connected ? 'success' : 'default'}
-                />
-              )}
+                label={brokerStatus?.connected ? 'Zerodha: Connected' : 'Zerodha: Not connected'}
+                color={brokerStatus?.connected ? 'success' : 'default'}
+              />
               {marketStatus && marketStatus.canonical_broker === 'zerodha' && (
                 <Chip
                   size="small"
-                  label={
-                    marketStatus.available
-                      ? 'Market data: Available'
-                      : 'Market data: Unavailable'
-                  }
+                  label={marketStatus.available ? 'Market data: Available' : 'Market data: Unavailable'}
                   color={marketStatus.available ? 'success' : 'warning'}
                 />
               )}
             </Box>
-            {selectedBroker === 'zerodha' && brokerStatus?.connected && brokerStatus.user_id && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: 'block' }}
-              >
+
+            {brokerStatus?.connected && brokerStatus.user_id && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                 Zerodha user:{' '}
                 {brokerStatus.user_name
                   ? `${brokerStatus.user_name} (${brokerStatus.user_id})`
                   : brokerStatus.user_id}
               </Typography>
             )}
-            {selectedBroker === 'angelone' && angeloneStatus?.connected && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: 'block' }}
+
+            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+              Zerodha connection
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Open the Zerodha login page, complete login, then paste the <code>request_token</code>.
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+              <Button variant="outlined" size="small" onClick={handleOpenZerodhaLogin}>
+                Open Zerodha Login
+              </Button>
+              <TextField
+                size="small"
+                label="request_token"
+                type={requestTokenVisible ? 'text' : 'password'}
+                value={requestToken}
+                onChange={(e) => setRequestToken(e.target.value)}
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        size="small"
+                        aria-label="toggle request token visibility"
+                        onClick={() => setRequestTokenVisible((prev) => !prev)}
+                        edge="end"
+                      >
+                        {requestTokenVisible ? 'Hide' : 'Show'}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
+              />
+              <Button
+                variant="contained"
+                size="small"
+                disabled={isConnecting}
+                onClick={handleConnectZerodha}
               >
+                {isConnecting ? 'Connecting…' : 'Connect Zerodha'}
+              </Button>
+            </Box>
+
+            <BrokerSecretsTable brokerName="zerodha" />
+            {zerodhaError && (
+              <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+                {zerodhaError}
+              </Typography>
+            )}
+          </Paper>
+
+          <Paper sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', mb: 1.5 }}>
+              <Typography variant="subtitle1" sx={{ flex: 1, minWidth: 220 }}>
+                AngelOne (SmartAPI)
+              </Typography>
+              <Chip
+                size="small"
+                label={angeloneStatus?.connected ? 'AngelOne: Connected' : 'AngelOne: Not connected'}
+                color={angeloneStatus?.connected ? 'success' : 'default'}
+              />
+              {marketStatus && marketStatus.canonical_broker === 'zerodha' && (
+                <Chip
+                  size="small"
+                  label={marketStatus.available ? 'Market data: Available' : 'Market data: Unavailable'}
+                  color={marketStatus.available ? 'success' : 'warning'}
+                />
+              )}
+            </Box>
+
+            {angeloneStatus?.connected && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                 AngelOne user:{' '}
                 {angeloneStatus.name && angeloneStatus.client_code
                   ? `${angeloneStatus.name} (${angeloneStatus.client_code})`
                   : angeloneStatus.client_code ?? 'Connected'}
               </Typography>
             )}
-            {selectedBroker === 'zerodha' && brokerStatus?.updated_at && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: 'block' }}
-              >
-                Last updated{' '}
-                {(() => {
-                  const utc = new Date(brokerStatus.updated_at)
-                  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
-                  const ist = new Date(istMs)
-                  return ist.toLocaleString('en-IN')
-                })()}
-              </Typography>
-            )}
-            {selectedBroker === 'angelone' && angeloneStatus?.updated_at && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: 'block' }}
-              >
-                Last updated{' '}
-                {(() => {
-                  const utc = new Date(angeloneStatus.updated_at)
-                  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
-                  const ist = new Date(istMs)
-                  return ist.toLocaleString('en-IN')
-                })()}
-              </Typography>
-            )}
-          </Box>
 
-          {selectedBroker === 'zerodha' && (
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 260,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-              }}
-            >
-              <Typography variant="subtitle2" color="text.secondary">
-                Zerodha connection
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Open the Zerodha login page, complete login, then paste the{' '}
-                <code>request_token</code> you receive here to connect this SigmaTrader
-                user.
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={handleOpenZerodhaLogin}
-                >
-                  Open Zerodha Login
-                </Button>
-              </Box>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <TextField
-                  size="small"
-                  label="request_token"
-                  type={requestTokenVisible ? 'text' : 'password'}
-                  value={requestToken}
-                  onChange={(e) => setRequestToken(e.target.value)}
-                  InputProps={{
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        <IconButton
-                          size="small"
-                          aria-label="toggle request token visibility"
-                          onClick={() =>
-                            setRequestTokenVisible((prev) => !prev)
-                          }
-                          edge="end"
-                        >
-                          {requestTokenVisible ? 'Hide' : 'Show'}
-                        </IconButton>
-                      </InputAdornment>
-                    ),
-                  }}
-                />
-                <Button
-                  variant="contained"
-                  size="small"
-                  disabled={isConnecting}
-                  onClick={handleConnectZerodha}
-                >
-                  {isConnecting ? 'Connecting…' : 'Connect Zerodha'}
-                </Button>
-              </Box>
+            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+              AngelOne connection
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              SmartAPI login requires Client Code + Password/MPIN + TOTP/OTP. You’ll need to re-enter OTP/PIN when the session expires.
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+              <TextField
+                size="small"
+                label="client_code"
+                value={angeloneClientCode}
+                onChange={(e) => setAngeloneClientCode(e.target.value)}
+              />
+              <TextField
+                size="small"
+                label="password / MPIN"
+                type="password"
+                value={angelonePassword}
+                onChange={(e) => setAngelonePassword(e.target.value)}
+              />
+              <TextField
+                size="small"
+                label="TOTP/OTP"
+                value={angeloneTotp}
+                onChange={(e) => setAngeloneTotp(e.target.value)}
+                placeholder="Leave blank to be prompted"
+              />
+              <Button
+                variant="contained"
+                size="small"
+                disabled={isConnectingAngelone}
+                onClick={handleConnectAngelone}
+              >
+                {isConnectingAngelone ? 'Connecting…' : 'Connect AngelOne'}
+              </Button>
             </Box>
-          )}
-          {selectedBroker === 'angelone' && (
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 260,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-              }}
-            >
-              <Typography variant="subtitle2" color="text.secondary">
-                AngelOne connection
+
+            <BrokerSecretsTable brokerName="angelone" />
+            {angeloneError && (
+              <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+                {angeloneError}
               </Typography>
-              <Typography variant="body2" color="text.secondary">
-                SmartAPI login requires your Client Code + Password/MPIN + TOTP/OTP.
-                This can differ from the web/desktop login flow. For security, you’ll
-                need to re-enter OTP/PIN when the session expires.
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <TextField
-                  size="small"
-                  label="client_code"
-                  value={angeloneClientCode}
-                  onChange={(e) => setAngeloneClientCode(e.target.value)}
-                />
-                <TextField
-                  size="small"
-                  label="password / MPIN"
-                  type="password"
-                  value={angelonePassword}
-                  onChange={(e) => setAngelonePassword(e.target.value)}
-                />
-                <TextField
-                  size="small"
-                  label="TOTP/OTP"
-                  value={angeloneTotp}
-                  onChange={(e) => setAngeloneTotp(e.target.value)}
-                  placeholder="Leave blank to be prompted"
-                />
-                <Button
-                  variant="contained"
-                  size="small"
-                  disabled={isConnectingAngelone}
-                  onClick={handleConnectAngelone}
-                >
-                  {isConnectingAngelone ? 'Connecting…' : 'Connect AngelOne'}
-                </Button>
-              </Box>
-            </Box>
-          )}
+            )}
+          </Paper>
         </Box>
-        {selectedBroker && (
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Key</TableCell>
-                <TableCell>Value</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {brokerSecrets.map((s) => (
-                <TableRow key={s.key}>
-                  <TableCell sx={{ width: '35%' }}>
-                    <TextField
-                      size="small"
-                      value={editingSecrets[s.key] ? editedKeys[s.key] ?? s.key : s.key}
-                      fullWidth
-                      disabled={!editingSecrets[s.key]}
-                      onChange={(e) =>
-                        handleChangeSecretKey(s.key, e.target.value)
-                      }
-                    />
-                  </TableCell>
-                  <TableCell sx={{ width: '45%' }}>
-                    <TextField
-                      size="small"
-                      type={secretVisibility[s.key] ? 'text' : 'password'}
-                      value={s.value}
-                      onChange={(e) =>
-                        handleChangeSecretValue(s.key, e.target.value)
-                      }
-                      fullWidth
-                      InputProps={{
-                        endAdornment: (
-                          <InputAdornment position="end">
-                            <IconButton
-                              size="small"
-                              aria-label="toggle secret visibility"
-                              onClick={() => toggleSecretVisibility(s.key)}
-                              edge="end"
-                            >
-                              {secretVisibility[s.key] ? 'Hide' : 'Show'}
-                            </IconButton>
-                          </InputAdornment>
-                        ),
-                      }}
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => void handleSaveExistingSecret(s.key)}
-                      disabled={isSavingSecret}
-                    >
-                      Save
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="text"
-                      sx={{ ml: 1 }}
-                      onClick={() =>
-                        setEditingSecrets((prev) => ({
-                          ...prev,
-                          [s.key]: !prev[s.key],
-                        }))
-                      }
-                    >
-                      {editingSecrets[s.key] ? 'Cancel' : 'Edit'}
-                    </Button>
-                    <Button
-                      size="small"
-                      color="error"
-                      variant="text"
-                      sx={{ ml: 1 }}
-                      onClick={async () => {
-                        if (!selectedBroker) return
-                        try {
-                          await deleteBrokerSecret(selectedBroker, s.key)
-                          setBrokerSecrets((prev) =>
-                            prev.filter((x) => x.key !== s.key),
-                          )
-                          setEditingSecrets((prev) => {
-                            const next = { ...prev }
-                            delete next[s.key]
-                            return next
-                          })
-                          setEditedKeys((prev) => {
-                            const next = { ...prev }
-                            delete next[s.key]
-                            return next
-                          })
-                          setBrokerError(null)
-                          recordAppLog(
-                            'INFO',
-                            `Deleted broker secret for ${selectedBroker}/${s.key}`,
-                          )
-                        } catch (err) {
-                          const msg =
-                            err instanceof Error
-                              ? err.message
-                              : 'Failed to delete broker secret'
-                          setBrokerError(msg)
-                          recordAppLog('ERROR', msg)
-                        }
-                      }}
-                    >
-                      Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              <TableRow>
-                <TableCell>
-                  <TextField
-                    size="small"
-                    placeholder="api_key"
-                    value={newSecretKey}
-                    onChange={(e) => setNewSecretKey(e.target.value)}
-                    fullWidth
-                  />
-                </TableCell>
-                <TableCell>
-                  <TextField
-                    size="small"
-                    type={secretVisibility.__new ? 'text' : 'password'}
-                    value={newSecretValue}
-                    onChange={(e) => setNewSecretValue(e.target.value)}
-                    fullWidth
-                    InputProps={{
-                      endAdornment: (
-                        <InputAdornment position="end">
-                          <IconButton
-                            size="small"
-                            aria-label="toggle secret visibility"
-                            onClick={() =>
-                              setSecretVisibility((prev) => ({
-                                ...prev,
-                                __new: !prev.__new,
-                              }))
-                            }
-                            edge="end"
-                          >
-                            {secretVisibility.__new ? 'Hide' : 'Show'}
-                          </IconButton>
-                        </InputAdornment>
-                      ),
-                    }}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <Button
-                    size="small"
-                    variant="contained"
-                    onClick={() => void handleAddSecret()}
-                    disabled={isSavingSecret}
-                  >
-                    Add
-                  </Button>
-                </TableCell>
-              </TableRow>
-              {brokerSecrets.length === 0 && !newSecretKey && !newSecretValue && (
-                <TableRow>
-                  <TableCell colSpan={3}>
-                    <Typography variant="body2" color="text.secondary">
-                      No secrets configured yet for this broker.
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        )}
-        {brokerError && (
-          <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
-            {brokerError}
-          </Typography>
-        )}
-      </Paper>
       )}
 
       {activeTab !== 'broker' && loading ? (

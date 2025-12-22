@@ -16,6 +16,7 @@ from .db.session import SessionLocal
 from .services.alerts_v3 import schedule_alerts_v3
 from .services.instruments_sync import schedule_instrument_master_sync
 from .services.market_data import schedule_market_data_sync
+from .services.synthetic_gtt import schedule_synthetic_gtt
 from .services.users import ensure_default_admin
 
 settings = get_settings()
@@ -95,6 +96,7 @@ async def _lifespan(_app: FastAPI):
 
             schedule_indicator_alerts()
         schedule_alerts_v3()
+        schedule_synthetic_gtt()
     yield
     # Shutdown: nothing special yet (thread is daemonised).
 

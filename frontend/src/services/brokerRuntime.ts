@@ -7,9 +7,11 @@ import {
   type ZerodhaMargins,
   type ZerodhaLtp,
 } from './zerodha'
+import { fetchAngeloneLtp, type AngeloneLtp } from './angelone'
 
 export type BrokerCapabilities = {
   supports_gtt: boolean
+  supports_conditional_orders: boolean
   supports_margin_preview: boolean
   supports_order_preview: boolean
   supports_ltp: boolean
@@ -70,10 +72,12 @@ export async function fetchLtpForBroker(
   brokerName: string,
   symbol: string,
   exchange: string,
-): Promise<ZerodhaLtp> {
+): Promise<ZerodhaLtp | AngeloneLtp> {
   if (brokerName === 'zerodha') {
     return fetchZerodhaLtp(symbol, exchange)
   }
+  if (brokerName === 'angelone') {
+    return fetchAngeloneLtp(symbol, exchange)
+  }
   throw new Error(`LTP not implemented for broker: ${brokerName}`)
 }
-

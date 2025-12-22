@@ -285,6 +285,7 @@ def _compute_pearson_corr(xs: Sequence[float], ys: Sequence[float]) -> Optional[
 
 class BasketIndexRequest(BaseModel):
     include_holdings: bool = True
+    holdings_brokers: List[str] = []
     group_ids: List[int] = []
     range: str = "6m"  # 1d/1w/1m/3m/6m/ytd/1y/2y
     base: float = 100.0
@@ -510,24 +511,42 @@ def basket_indices(
     holdings_members: list[tuple[str, str]] = []
     group_members: list[tuple[str, str]] = []
     if payload.include_holdings:
+        brokers = [b.strip().lower() for b in (payload.holdings_brokers or []) if b]
+        if not brokers:
+            brokers = ["zerodha"]
         try:
             from app.api.positions import list_holdings
 
-            holdings = list_holdings(db=db, settings=settings, user=user)
+            for broker in brokers:
+                try:
+                    holdings = list_holdings(
+                        broker_name=broker,
+                        db=db,
+                        settings=settings,
+                        user=user,
+                    )
+                except Exception:
+                    holdings = []
+                members: list[tuple[str, str]] = []
+                for h in holdings:
+                    if not h.symbol or not h.quantity or h.quantity <= 0:
+                        continue
+                    sym, exch = _normalize_symbol_exchange(
+                        h.symbol, getattr(h, "exchange", None)
+                    )
+                    if not sym:
+                        continue
+                    members.append((sym, exch))
+                holdings_members.extend(members)
+                if broker == "zerodha":
+                    label = "Holdings (Zerodha)"
+                elif broker == "angelone":
+                    label = "Holdings (AngelOne)"
+                else:
+                    label = f"Holdings ({broker})"
+                universes.append((f"holdings:{broker}", label, members))
         except Exception:
-            holdings = []
-        members = []
-        for h in holdings:
-            if not h.symbol or not h.quantity or h.quantity <= 0:
-                continue
-            sym, exch = _normalize_symbol_exchange(
-                h.symbol, getattr(h, "exchange", None)
-            )
-            if not sym:
-                continue
-            members.append((sym, exch))
-        holdings_members = members[:]
-        universes.append(("holdings", "Holdings (Zerodha)", members))
+            pass
 
     if payload.group_ids:
         groups: List[Group] = (
@@ -659,6 +678,7 @@ def basket_indices(
 
 class HydrateUniverseRequest(BaseModel):
     include_holdings: bool = True
+    holdings_brokers: List[str] = []
     group_ids: List[int] = []
     range: str = "6m"  # 1d/1w/1m/3m/6m/ytd/1y/2y
     timeframe: str = "1d"
@@ -703,16 +723,28 @@ def hydrate_history(
     if payload.include_holdings:
         from app.api.positions import list_holdings
 
-        holdings = list_holdings(db=db, settings=settings, user=user)
-        for h in holdings:
-            if not h.symbol or not h.quantity or h.quantity <= 0:
-                continue
-            sym, exch = _normalize_symbol_exchange(
-                h.symbol, getattr(h, "exchange", None)
-            )
-            if not sym:
-                continue
-            members.append((sym, exch))
+        brokers = [b.strip().lower() for b in (payload.holdings_brokers or []) if b]
+        if not brokers:
+            brokers = ["zerodha"]
+        for broker in brokers:
+            try:
+                holdings = list_holdings(
+                    broker_name=broker,
+                    db=db,
+                    settings=settings,
+                    user=user,
+                )
+            except Exception:
+                holdings = []
+            for h in holdings:
+                if not h.symbol or not h.quantity or h.quantity <= 0:
+                    continue
+                sym, exch = _normalize_symbol_exchange(
+                    h.symbol, getattr(h, "exchange", None)
+                )
+                if not sym:
+                    continue
+                members.append((sym, exch))
 
     if payload.group_ids:
         groups: List[Group] = (
@@ -1529,12 +1561,20 @@ def holdings_correlation(
     # Lazy import to avoid circular imports at startup.
     from app.api.positions import list_holdings
 
-    holdings = list_holdings(
-        broker_name=broker_name,
-        db=db,
-        settings=settings,
-        user=user,
-    )
+    try:
+        holdings = list_holdings(
+            broker_name=broker_name,
+            db=db,
+            settings=settings,
+            user=user,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to load holdings for correlation: {exc}",
+        ) from exc
 
     # Aggregate an approximate portfolio value per symbol so that we can
     # (optionally) exclude very small positions from the correlation view

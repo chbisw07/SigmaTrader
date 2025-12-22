@@ -28,6 +28,12 @@ export type Order = {
   order_type: string
   product: string
   gtt: boolean
+  synthetic_gtt?: boolean
+  trigger_operator?: string | null
+  armed_at?: string | null
+  last_checked_at?: string | null
+  last_seen_price?: number | null
+  triggered_at?: string | null
   status: OrderStatus
   mode: string
   execution_target?: ExecutionTarget

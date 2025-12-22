@@ -38,6 +38,7 @@ class BrokerSecretUpdate(BaseModel):
 
 class BrokerCapabilities(BaseModel):
     supports_gtt: bool = False
+    supports_conditional_orders: bool = False
     supports_margin_preview: bool = False
     supports_order_preview: bool = False
     supports_ltp: bool = False
@@ -73,6 +74,7 @@ def _get_broker_capabilities(broker_name: str) -> BrokerCapabilities:
     if broker_name == "zerodha":
         return BrokerCapabilities(
             supports_gtt=True,
+            supports_conditional_orders=True,
             supports_margin_preview=True,
             supports_order_preview=True,
             supports_ltp=True,
@@ -80,6 +82,7 @@ def _get_broker_capabilities(broker_name: str) -> BrokerCapabilities:
     if broker_name == "angelone":
         return BrokerCapabilities(
             supports_gtt=False,
+            supports_conditional_orders=True,
             supports_margin_preview=False,
             supports_order_preview=False,
             supports_ltp=True,

@@ -13,6 +13,7 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection, User
+from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -24,6 +25,71 @@ class AngelOneConnectRequest(BaseModel):
     client_code: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
     totp: str = Field(..., min_length=1)
+
+
+class LtpResponse(BaseModel):
+    ltp: float
+
+
+def _get_angelone_client(
+    db: Session,
+    settings: Settings,
+    *,
+    user: User,
+) -> AngelOneClient:
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.broker_name == "angelone",
+            BrokerConnection.user_id == user.id,
+        )
+        .one_or_none()
+    )
+    if conn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AngelOne is not connected.",
+        )
+
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="angelone",
+        key="api_key",
+        user_id=user.id,
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "SmartAPI API key is not configured. "
+                "Please add api_key in broker settings."
+            ),
+        )
+
+    raw = decrypt_token(settings, conn.access_token_encrypted)
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"AngelOne session is invalid: {exc}",
+        ) from exc
+
+    jwt = str(parsed.get("jwt_token") or "")
+    if not jwt:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="AngelOne session is missing jwt_token. Please reconnect.",
+        )
+
+    session = AngelOneSession(
+        jwt_token=jwt,
+        refresh_token=str(parsed.get("refresh_token") or "") or None,
+        feed_token=str(parsed.get("feed_token") or "") or None,
+        client_code=str(parsed.get("client_code") or "") or None,
+    )
+    return AngelOneClient(api_key=api_key, session=session)
 
 
 @router.post("/connect")
@@ -168,6 +234,54 @@ def angelone_status(
         }
     except Exception as exc:
         return {"connected": False, "updated_at": updated_at, "error": str(exc)}
+
+
+@router.get("/ltp", response_model=LtpResponse)
+def angelone_ltp(
+    symbol: str,
+    exchange: str = "NSE",
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User = Depends(get_current_user),
+) -> LtpResponse:
+    exch_u = (exchange or "NSE").strip().upper()
+    sym_u = (symbol or "").strip().upper()
+    if not sym_u:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="symbol is required.",
+        )
+
+    resolved = resolve_broker_symbol_and_token(
+        db,
+        broker_name="angelone",
+        exchange=exch_u,
+        symbol=sym_u,
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"AngelOne instrument mapping not found for {exch_u}:{sym_u}. "
+                "Please run Instruments → Sync for AngelOne."
+            ),
+        )
+    broker_symbol, token = resolved
+    client = _get_angelone_client(db, settings, user=user)
+    try:
+        ltp = float(
+            client.get_ltp(
+                exchange=exch_u,
+                tradingsymbol=broker_symbol,
+                symboltoken=token,
+            )
+        )
+    except Exception as exc:  # pragma: no cover - broker/network
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AngelOne LTP fetch failed: {exc}",
+        ) from exc
+    return LtpResponse(ltp=ltp)
 
 
 __all__ = ["router"]

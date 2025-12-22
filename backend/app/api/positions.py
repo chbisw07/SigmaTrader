@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user, get_current_user_optional
-from app.clients import AngelOneClient, AngelOneSession, ZerodhaClient
+from app.clients import (
+    AngelOneAuthError,
+    AngelOneClient,
+    AngelOneHttpError,
+    AngelOneSession,
+    ZerodhaClient,
+)
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
@@ -367,7 +373,26 @@ def list_holdings(
     broker = (broker_name or "").strip().lower()
     if broker == "angelone":
         client = _get_angelone_client(db, settings, user_id=user.id)
-        raw = client.list_holdings()
+        try:
+            raw = client.list_holdings()
+        except AngelOneAuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "AngelOne session is invalid or expired. "
+                    "Please reconnect AngelOne."
+                ),
+            ) from exc
+        except AngelOneHttpError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AngelOne holdings fetch failed: {exc}",
+            ) from exc
+        except Exception as exc:  # pragma: no cover - defensive
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"AngelOne holdings fetch failed: {exc}",
+            ) from exc
 
         buy_orders: List[Order] = (
             db.query(Order)

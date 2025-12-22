@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -32,6 +33,10 @@ from app.services.system_events import record_system_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
 
 
 def _ensure_supported_broker(broker_name: str) -> str:
@@ -231,16 +236,15 @@ def create_manual_order(
 
     broker = _ensure_supported_broker(payload.broker_name)
 
-    if payload.gtt and broker != "zerodha":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="GTT is only supported for Zerodha in this version.",
-        )
-
     if payload.gtt and payload.order_type != "LIMIT":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="GTT is supported only for LIMIT orders.",
+        )
+    if payload.gtt and (payload.price is None or payload.price <= 0):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Price must be positive for GTT LIMIT orders.",
         )
 
     # Basic validation for stop-loss semantics so that obviously
@@ -273,6 +277,17 @@ def create_manual_order(
             detail="Trigger price must be positive when provided.",
         )
 
+    trigger_price = payload.trigger_price
+    # For GTT / conditional orders, default trigger to the limit price when
+    # not provided so that the condition is well-defined.
+    if payload.gtt and (trigger_price is None or trigger_price <= 0) and payload.price:
+        trigger_price = float(payload.price)
+
+    synthetic_gtt = bool(payload.gtt and broker != "zerodha")
+    armed_at = None
+    if synthetic_gtt and payload.mode == "AUTO":
+        armed_at = _now_utc()
+
     order = Order(
         user_id=user.id,
         broker_name=broker,
@@ -283,11 +298,13 @@ def create_manual_order(
         side=payload.side,
         qty=payload.qty,
         price=payload.price,
-        trigger_price=payload.trigger_price,
+        trigger_price=trigger_price,
         trigger_percent=None,
         order_type=payload.order_type,
         product=payload.product,
         gtt=payload.gtt,
+        synthetic_gtt=synthetic_gtt,
+        armed_at=armed_at,
         status="WAITING",
         mode=payload.mode,
         execution_target=payload.execution_target,
@@ -298,7 +315,13 @@ def create_manual_order(
     db.commit()
     db.refresh(order)
 
-    if payload.mode == "AUTO":
+    # AUTO semantics:
+    # - Non-GTT orders: execute immediately.
+    # - Zerodha GTT: place the broker-side GTT immediately.
+    # - Synthetic (non-Zerodha) conditional orders: "AUTO" arms the condition,
+    #   but does not send an order to the broker until triggered.
+    should_auto_execute = payload.mode == "AUTO" and not synthetic_gtt
+    if should_auto_execute:
         try:
             execute_order(
                 order_id=order.id,
@@ -486,6 +509,17 @@ def edit_order(
 
     if payload.gtt is not None:
         order.gtt = payload.gtt
+        if not order.gtt:
+            order.synthetic_gtt = False
+            order.trigger_operator = None
+            order.armed_at = None
+            order.last_checked_at = None
+            order.last_seen_price = None
+            order.triggered_at = None
+        else:
+            raw = getattr(order, "broker_name", "zerodha")
+            broker_name = _ensure_supported_broker(raw)
+            order.synthetic_gtt = broker_name != "zerodha"
         updated = True
 
     if not updated:
@@ -516,7 +550,10 @@ def execute_order_internal(
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    if order.status != "WAITING" or order.simulated:
+    allowed_status = {"WAITING"}
+    if order.synthetic_gtt:
+        allowed_status = {"WAITING", "SENDING"}
+    if order.status not in allowed_status or order.simulated:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only non-simulated WAITING orders can be executed.",
@@ -665,11 +702,77 @@ def execute_order_internal(
             )
         broker_tradingsymbol, angelone_token = resolved
 
-    # Handle GTT orders by creating a Zerodha GTT instead of a
+    # Synthetic GTT (SigmaTrader-managed conditional):
+    # - In WAITING: "execute" means "arm" the condition (no broker call).
+    # - In SENDING: order has been triggered by the scheduler; proceed to
+    #   place a regular order at the destination broker.
+    if order.gtt and order.synthetic_gtt and order.status == "WAITING":
+        if order.order_type != "LIMIT":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Conditional orders are supported only for LIMIT order_type.",
+            )
+        if order.price is None or order.price <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Price must be positive for conditional LIMIT orders.",
+            )
+        if order.trigger_price is None or order.trigger_price <= 0:
+            order.trigger_price = float(order.price)
+
+        # Best-effort: derive trigger operator relative to current LTP when
+        # arming so that the condition is deterministic.
+        if not order.trigger_operator:
+            try:
+                if broker_name == "angelone":
+                    if angelone_token is None:
+                        raise RuntimeError("Missing AngelOne symbol token.")
+                    ltp = client.get_ltp(  # type: ignore[call-arg]
+                        exchange=exchange_u,
+                        tradingsymbol=broker_tradingsymbol,
+                        symboltoken=angelone_token,
+                    )
+                else:
+                    ltp = client.get_ltp(  # type: ignore[call-arg]
+                        exchange=exchange,
+                        tradingsymbol=tradingsymbol,
+                    )
+                trigger = float(order.trigger_price)
+                order.trigger_operator = ">=" if trigger >= float(ltp) else "<="
+            except Exception:
+                # If we can't fetch LTP now, we'll derive operator on the first
+                # scheduler check.
+                order.trigger_operator = None
+
+        if order.armed_at is None:
+            order.armed_at = _now_utc()
+        order.error_message = None
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        record_system_event(
+            db,
+            level="INFO",
+            category="order",
+            message="Conditional order armed (SigmaTrader-managed)",
+            correlation_id=correlation_id,
+            details={
+                "order_id": order.id,
+                "broker_name": broker_name,
+                "symbol": order.symbol,
+                "side": order.side,
+                "qty": order.qty,
+                "trigger_price": order.trigger_price,
+                "price": order.price,
+            },
+        )
+        return order
+
+    # Handle broker-native GTT orders by creating a Zerodha GTT instead of a
     # regular/AMO order. We currently support single-leg LIMIT GTTs
     # for equity; more advanced patterns (OCO, SL GTT) can be layered
     # on later.
-    if order.gtt:
+    if order.gtt and not order.synthetic_gtt:
         if broker_name != "zerodha":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

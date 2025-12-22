@@ -23,6 +23,9 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import { DslHelpDialog } from '../components/DslHelpDialog'
 import { listGroupMembers, listGroups, type Group } from '../services/groups'
 import { fetchHoldings, type Holding } from '../services/positions'
+import { fetchBrokerCapabilities } from '../services/brokerRuntime'
+import { fetchZerodhaStatus } from '../services/zerodha'
+import { fetchAngeloneStatus } from '../services/angelone'
 import {
   fetchBasketIndices,
   fetchSymbolSeries,
@@ -109,6 +112,7 @@ const DASHBOARD_SETTINGS_KEY = 'st_dashboard_settings_v1'
 
 type DashboardSettingsV1 = {
   includeHoldings?: boolean
+  holdingsBrokers?: string[]
   groupIds?: number[]
   range?: string
   symbolRange?: string
@@ -464,6 +468,17 @@ export function DashboardPage() {
       ? initialSettings.includeHoldings
       : true,
   )
+  const [holdingsBrokers, setHoldingsBrokers] = useState<string[]>(() => {
+    const raw = initialSettings.holdingsBrokers
+    if (Array.isArray(raw)) {
+      return raw.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
+    }
+    return []
+  })
+  const [brokerOptions, setBrokerOptions] = useState<Array<{ name: string; label: string }>>(
+    [],
+  )
+  const [connectedBrokers, setConnectedBrokers] = useState<Record<string, boolean>>({})
   const [selectedGroups, setSelectedGroups] = useState<Group[]>([])
   const [range, setRange] = useState<any>(() => initialSettings.range ?? '6m')
 
@@ -551,6 +566,51 @@ export function DashboardPage() {
     }
   }, [])
 
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const caps = await fetchBrokerCapabilities()
+        if (!active) return
+        setBrokerOptions(caps.map((c) => ({ name: c.name, label: c.label })))
+      } catch {
+        if (!active) return
+        setBrokerOptions([
+          { name: 'zerodha', label: 'Zerodha (Kite)' },
+          { name: 'angelone', label: 'AngelOne (SmartAPI)' },
+        ])
+      }
+
+      try {
+        const [z, a] = await Promise.allSettled([fetchZerodhaStatus(), fetchAngeloneStatus()])
+        if (!active) return
+        setConnectedBrokers({
+          zerodha: z.status === 'fulfilled' ? Boolean(z.value.connected) : false,
+          angelone: a.status === 'fulfilled' ? Boolean(a.value.connected) : false,
+        })
+      } catch {
+        if (!active) return
+        setConnectedBrokers({})
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!includeHoldings) return
+    if (holdingsBrokers.length > 0) return
+    const connected = Object.entries(connectedBrokers)
+      .filter(([, ok]) => ok)
+      .map(([name]) => name)
+    if (connected.length > 0) {
+      setHoldingsBrokers(connected)
+    } else {
+      setHoldingsBrokers(['zerodha'])
+    }
+  }, [connectedBrokers, holdingsBrokers.length, includeHoldings])
+
   const [settingsHydrated, setSettingsHydrated] = useState(false)
   useEffect(() => {
     if (settingsHydrated) return
@@ -603,8 +663,13 @@ export function DashboardPage() {
 	    setError(null)
 	    try {
 	      const sortedGroupIds = [...groupIds].sort((a, b) => a - b)
+        const sortedHoldingsBrokers = [...holdingsBrokers]
+          .map((b) => b.trim().toLowerCase())
+          .filter(Boolean)
+          .sort()
 	      const res = await fetchBasketIndices({
 	        include_holdings: includeHoldings,
+          holdings_brokers: includeHoldings ? sortedHoldingsBrokers : [],
 	        group_ids: sortedGroupIds,
 	        range,
 	        base: 100,
@@ -617,6 +682,7 @@ export function DashboardPage() {
 	          const cache = {
 	            config: {
 	              include_holdings: includeHoldings,
+                holdings_brokers: sortedHoldingsBrokers,
 	              range,
 	              group_ids: sortedGroupIds,
 	            },
@@ -642,8 +708,13 @@ export function DashboardPage() {
     setHydratingUniverse(true)
     setHydrateError(null)
     try {
+      const sortedHoldingsBrokers = [...holdingsBrokers]
+        .map((b) => b.trim().toLowerCase())
+        .filter(Boolean)
+        .sort()
       const res = await hydrateHistory({
         include_holdings: includeHoldings,
+        holdings_brokers: includeHoldings ? sortedHoldingsBrokers : [],
         group_ids: groupIds,
         range,
         timeframe: '1d',
@@ -676,12 +747,21 @@ export function DashboardPage() {
 
 	    const init = async () => {
 	      const sortedGroupIds = [...groupIds].sort((a, b) => a - b)
+        const sortedHoldingsBrokers = [...holdingsBrokers]
+          .map((b) => b.trim().toLowerCase())
+          .filter(Boolean)
+          .sort()
 	      if (typeof window !== 'undefined') {
 	        try {
 	          const raw = window.localStorage.getItem(INDICES_CACHE_KEY)
 	          if (raw) {
 	            const parsed = JSON.parse(raw) as {
-	              config?: { include_holdings?: boolean; range?: any; group_ids?: number[] }
+	              config?: {
+                  include_holdings?: boolean
+                  holdings_brokers?: string[]
+                  range?: any
+                  group_ids?: number[]
+                }
 	              response?: BasketIndexResponse
 	              refreshed_at?: string
 	            }
@@ -693,11 +773,22 @@ export function DashboardPage() {
 	              Array.isArray(cfg.group_ids)
 	            ) {
 	              const cachedIds = cfg.group_ids.slice().sort((a, b) => a - b)
+                const cachedBrokers = Array.isArray(cfg.holdings_brokers)
+                  ? cfg.holdings_brokers.slice().map((b) => String(b)).sort()
+                  : []
+                const sameBrokers =
+                  cachedBrokers.length === sortedHoldingsBrokers.length &&
+                  cachedBrokers.every((v, idx) => v === sortedHoldingsBrokers[idx])
 	              const sameLength = cachedIds.length === sortedGroupIds.length
 	              const sameIds =
 	                sameLength &&
 	                cachedIds.every((v, idx) => v === sortedGroupIds[idx])
-	              if (sameIds && cfg.include_holdings === includeHoldings && parsed.response) {
+	              if (
+                  sameIds &&
+                  cfg.include_holdings === includeHoldings &&
+                  sameBrokers &&
+                  parsed.response
+                ) {
 	                setData(parsed.response)
 	                setLastRefreshedAt(parsed.refreshed_at ?? null)
 	                return
@@ -712,7 +803,7 @@ export function DashboardPage() {
 	    }
 	    void init()
       indicesInitDoneRef.current = true
-	  }, [includeHoldings, range, selectedGroups, settingsHydrated])
+	  }, [includeHoldings, holdingsBrokers, range, selectedGroups, settingsHydrated])
 
   useEffect(() => {
     const groupIds =
@@ -726,6 +817,7 @@ export function DashboardPage() {
 
     saveDashboardSettings({
       includeHoldings,
+      holdingsBrokers,
       groupIds,
       range: String(range ?? ''),
       symbolRange: String(symbolRange ?? ''),
@@ -737,6 +829,7 @@ export function DashboardPage() {
   }, [
     chartType,
     includeHoldings,
+    holdingsBrokers,
     indicatorRows,
     range,
     selectedGroups,
@@ -800,13 +893,18 @@ export function DashboardPage() {
       try {
         const members: Array<{ symbol: string; exchange: string }> = []
         if (includeHoldings) {
-          const holdings: Holding[] = await fetchHoldings()
-          for (const h of holdings) {
-            if (!h.symbol || !h.quantity || h.quantity <= 0) continue
-            members.push({
-              symbol: h.symbol.toUpperCase(),
-              exchange: (h.exchange || 'NSE').toUpperCase(),
-            })
+          const brokers = holdingsBrokers.length > 0 ? holdingsBrokers : ['zerodha']
+          const results = await Promise.allSettled(brokers.map((b) => fetchHoldings(b)))
+          for (const res of results) {
+            if (res.status !== 'fulfilled') continue
+            const holdings: Holding[] = res.value
+            for (const h of holdings) {
+              if (!h.symbol || !h.quantity || h.quantity <= 0) continue
+              members.push({
+                symbol: h.symbol.toUpperCase(),
+                exchange: (h.exchange || 'NSE').toUpperCase(),
+              })
+            }
           }
         }
 
@@ -1093,8 +1191,50 @@ export function DashboardPage() {
                       onChange={(e) => setIncludeHoldings(e.target.checked)}
                     />
                   }
-                  label="Include Holdings (Zerodha)"
+                  label="Include Holdings"
                 />
+                {includeHoldings && (
+                  <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+                    {(brokerOptions.length ? brokerOptions : [
+                      { name: 'zerodha', label: 'Zerodha (Kite)' },
+                      { name: 'angelone', label: 'AngelOne (SmartAPI)' },
+                    ])
+                      .filter((b) => {
+                        const ok = connectedBrokers[b.name]
+                        return ok == null ? true : ok
+                      })
+                      .map((b) => {
+                        const checked = holdingsBrokers.includes(b.name)
+                        const disableUncheckLast = checked && holdingsBrokers.length <= 1
+                        const shortLabel = b.name === 'zerodha' ? 'Zerodha' : b.name === 'angelone' ? 'AngelOne' : b.label
+                        return (
+                          <FormControlLabel
+                            key={`holdings_${b.name}`}
+                            sx={{ mr: 0 }}
+                            control={
+                              <Checkbox
+                                size="small"
+                                checked={checked}
+                                disabled={disableUncheckLast}
+                                onChange={(e) => {
+                                  const nextChecked = e.target.checked
+                                  setHoldingsBrokers((prev) => {
+                                    const norm = b.name.trim().toLowerCase()
+                                    const set = new Set(prev.map((x) => x.trim().toLowerCase()).filter(Boolean))
+                                    if (nextChecked) set.add(norm)
+                                    else set.delete(norm)
+                                    const out = Array.from(set)
+                                    return out.length ? out : prev
+                                  })
+                                }}
+                              />
+                            }
+                            label={shortLabel}
+                          />
+                        )
+                      })}
+                  </Stack>
+                )}
                 <TextField
                   label="Range"
                   select

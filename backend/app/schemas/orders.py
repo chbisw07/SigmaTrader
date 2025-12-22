@@ -39,6 +39,12 @@ class OrderRead(BaseModel):
     order_type: str
     product: str
     gtt: bool
+    synthetic_gtt: bool = False
+    trigger_operator: Optional[str] = None
+    armed_at: Optional[datetime] = None
+    last_checked_at: Optional[datetime] = None
+    last_seen_price: Optional[float] = None
+    triggered_at: Optional[datetime] = None
     status: AllowedOrderStatus
     mode: str
     execution_target: ExecutionTarget = "LIVE"

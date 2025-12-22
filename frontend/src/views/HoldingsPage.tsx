@@ -105,6 +105,7 @@ export function HoldingsPage() {
 
   const [universeId, setUniverseId] = useState<string>('holdings')
   const [angeloneConnected, setAngeloneConnected] = useState(false)
+  const [angeloneStatusLoaded, setAngeloneStatusLoaded] = useState(false)
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
   const [activeGroup, setActiveGroup] = useState<GroupDetail | null>(null)
   const [activeGroupDataset, setActiveGroupDataset] = useState<{
@@ -242,6 +243,9 @@ export function HoldingsPage() {
       } catch {
         if (!active) return
         setAngeloneConnected(false)
+      } finally {
+        if (!active) return
+        setAngeloneStatusLoaded(true)
       }
     })()
     return () => {
@@ -250,11 +254,16 @@ export function HoldingsPage() {
   }, [])
 
   useEffect(() => {
-    if (universeId === 'holdings:angelone') {
-      setTradeGtt(false)
-      setTradeBracketEnabled(false)
-    }
-  }, [universeId])
+    if (!angeloneStatusLoaded) return
+    if (universeId !== 'holdings:angelone') return
+    if (angeloneConnected) return
+    setUniverseId('holdings')
+    setError(
+      'AngelOne is not connected. Please reconnect from Settings → Broker settings.',
+    )
+    navigate('/holdings', { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [angeloneConnected, angeloneStatusLoaded, universeId])
 
   const load = async () => {
     const requestId = ++loadRequestId.current
@@ -425,7 +434,20 @@ export function HoldingsPage() {
       )
     } catch (err) {
       if (requestId !== loadRequestId.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load holdings')
+      const msg = err instanceof Error ? err.message : String(err ?? '')
+      if (
+        universeId === 'holdings:angelone'
+        && msg.toLowerCase().includes('reconnect angelone')
+      ) {
+        setAngeloneConnected(false)
+        setUniverseId('holdings')
+        setError(
+          'AngelOne session is invalid or expired. Please reconnect from Settings.',
+        )
+        navigate('/holdings', { replace: true })
+        return
+      }
+      setError(msg || 'Failed to load holdings')
     } finally {
       if (requestId === loadRequestId.current) setLoading(false)
     }
@@ -446,6 +468,10 @@ export function HoldingsPage() {
         setCorrLoading(true)
         setCorrError(null)
         const brokerName = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+        if (brokerName === 'angelone' && angeloneStatusLoaded && !angeloneConnected) {
+          setCorrSummary(null)
+          return
+        }
         const res = await fetchHoldingsCorrelation({ windowDays: 90, brokerName })
         if (!active) return
         setCorrSummary(res)
@@ -487,7 +513,7 @@ export function HoldingsPage() {
     return () => {
       active = false
     }
-  }, [universeId])
+  }, [angeloneConnected, angeloneStatusLoaded, universeId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1458,12 +1484,27 @@ export function HoldingsPage() {
 
     if (tradeExecutionMode === 'AUTO' && tradeExecutionTarget === 'LIVE') {
       const tradeBroker = universeId === 'holdings:angelone' ? 'AngelOne' : 'Zerodha'
-      const totalOrders = plans.length * (tradeBracketEnabled ? 2 : 1)
-      const confirmed = window.confirm(
-        `AUTO + LIVE will send ${totalOrders} order${
-          totalOrders === 1 ? '' : 's'
-        } to ${tradeBroker} now. Continue?`,
-      )
+      const isAngelOne = universeId === 'holdings:angelone'
+      const brokerActionsPerSymbol =
+        (!tradeGtt ? 1 : isAngelOne ? 0 : 1) + (tradeBracketEnabled ? (isAngelOne ? 0 : 1) : 0)
+      const localConditionalPerSymbol =
+        (tradeGtt && isAngelOne ? 1 : 0) + (tradeBracketEnabled && isAngelOne ? 1 : 0)
+      const totalBrokerActions = plans.length * brokerActionsPerSymbol
+      const totalConditional = plans.length * localConditionalPerSymbol
+      const confirmed =
+        totalBrokerActions === 0
+          ? true
+          : window.confirm(
+              `AUTO + LIVE will send ${totalBrokerActions} order${
+                totalBrokerActions === 1 ? '' : 's'
+              } to ${tradeBroker} now${
+                totalConditional > 0
+                  ? ` and arm ${totalConditional} SigmaTrader-managed conditional order${
+                      totalConditional === 1 ? '' : 's'
+                    }.`
+                  : '.'
+              } Continue?`,
+            )
       if (!confirmed) return
     }
 
@@ -1500,11 +1541,15 @@ export function HoldingsPage() {
               || primary.status === 'REJECTED'
               || primary.status === 'REJECTED_RISK'
             ) {
-              throw new Error(
-                primary.error_message
-                  ? `${holding.symbol}: ${primary.error_message}`
-                  : `${holding.symbol}: order was not accepted (${primary.status}).`,
-              )
+              const isConditional =
+                primary.gtt && primary.synthetic_gtt && primary.status === 'WAITING'
+              if (!isConditional) {
+                throw new Error(
+                  primary.error_message
+                    ? `${holding.symbol}: ${primary.error_message}`
+                    : `${holding.symbol}: order was not accepted (${primary.status}).`,
+                )
+              }
             }
           }
 
@@ -1532,11 +1577,15 @@ export function HoldingsPage() {
                 || bracket.status === 'REJECTED'
                 || bracket.status === 'REJECTED_RISK'
               ) {
-                throw new Error(
-                  bracket.error_message
-                    ? `${holding.symbol}: ${bracket.error_message}`
-                    : `${holding.symbol}: bracket order was not accepted (${bracket.status}).`,
-                )
+                const isConditional =
+                  bracket.gtt && bracket.synthetic_gtt && bracket.status === 'WAITING'
+                if (!isConditional) {
+                  throw new Error(
+                    bracket.error_message
+                      ? `${holding.symbol}: ${bracket.error_message}`
+                      : `${holding.symbol}: bracket order was not accepted (${bracket.status}).`,
+                  )
+                }
               }
             }
           }
@@ -3710,16 +3759,14 @@ export function HoldingsPage() {
               }}
             >
               <Typography variant="caption" color="text.secondary">
-                Bracket / follow-up GTT
+                Bracket / follow-up conditional
               </Typography>
               <FormControlLabel
                 control={
                   <Checkbox
                     size="small"
                     checked={tradeBracketEnabled}
-                    disabled={universeId === 'holdings:angelone'}
                     onChange={(e) => {
-                      if (universeId === 'holdings:angelone') return
                       const checked = e.target.checked
                       setTradeBracketEnabled(checked)
                       if (checked) {
@@ -3754,9 +3801,13 @@ export function HoldingsPage() {
                   />
                 }
                 label={
-                  tradeSide === 'BUY'
-                    ? 'Add profit-target SELL GTT'
-                    : 'Add re-entry BUY GTT'
+                  (() => {
+                    const isAngelOne = universeId === 'holdings:angelone'
+                    const suffix = isAngelOne ? 'conditional' : 'GTT'
+                    return tradeSide === 'BUY'
+                      ? `Add profit-target SELL ${suffix}`
+                      : `Add re-entry BUY ${suffix}`
+                  })()
                 }
               />
               {tradeBracketEnabled && (
@@ -3777,7 +3828,13 @@ export function HoldingsPage() {
                       }
                       const base = getEffectivePrimaryPrice()
                       const sideLabel =
-                        tradeSide === 'BUY' ? 'SELL GTT target' : 'BUY GTT re-entry'
+                        (() => {
+                          const isAngelOne = universeId === 'holdings:angelone'
+                          const suffix = isAngelOne ? 'conditional' : 'GTT'
+                          return tradeSide === 'BUY'
+                            ? `SELL ${suffix} target`
+                            : `BUY ${suffix} re-entry`
+                        })()
                       if (base != null && base > 0) {
                         const eff = ((p / base) - 1) * 100
                         return `${sideLabel}: ₹${p.toFixed(2)} (≈ ${eff.toFixed(2)}% from primary price).`
@@ -3787,25 +3844,22 @@ export function HoldingsPage() {
                   </Typography>
                 </>
               )}
-              {universeId === 'holdings:angelone' && (
-                <Typography variant="caption" color="text.secondary">
-                  Bracket orders require GTT support (Zerodha-only in this version).
-                </Typography>
-              )}
             </Box>
             <FormControlLabel
               control={
                 <Checkbox
                   size="small"
                   checked={tradeGtt}
-                  disabled={universeId === 'holdings:angelone'}
                   onChange={(e) => {
-                    if (universeId === 'holdings:angelone') return
                     setTradeGtt(e.target.checked)
                   }}
                 />
               }
-              label="GTT (good-till-triggered) order"
+              label={
+                universeId === 'holdings:angelone'
+                  ? 'Conditional order (SigmaTrader-managed)'
+                  : 'GTT (good-till-triggered) order'
+              }
             />
             {tradeError && (
               <Typography variant="body2" color="error">

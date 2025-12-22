@@ -399,9 +399,13 @@ export function WaitingQueuePanel({
     try {
       setSuccessMessage(null)
       const updated = await executeOrder(orderId)
-      setOrders((prev) =>
-        prev.filter((o) => o.id !== updated.id),
-      )
+      if (updated.gtt && updated.synthetic_gtt && updated.status === 'WAITING') {
+        setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)))
+        setSuccessMessage('Conditional order armed.')
+      } else {
+        setOrders((prev) => prev.filter((o) => o.id !== updated.id))
+        setSuccessMessage('Order executed.')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to execute order')
     } finally {
@@ -542,7 +546,8 @@ export function WaitingQueuePanel({
       valueFormatter: (value, row) => {
         const order = row as Order
         const base = String(value ?? order.order_type ?? '')
-        return order.gtt ? `${base} (GTT)` : base
+        if (!order.gtt) return base
+        return order.synthetic_gtt ? `${base} (COND)` : `${base} (GTT)`
       },
     },
     {
@@ -556,7 +561,15 @@ export function WaitingQueuePanel({
       width: 170,
       valueFormatter: (value, row) => {
         const order = row as Order
-        const base = String(value ?? order.status ?? '')
+        let base = String(value ?? order.status ?? '')
+        if (
+          order.gtt &&
+          order.synthetic_gtt &&
+          base === 'WAITING' &&
+          order.armed_at
+        ) {
+          base = 'WAITING (ARMED)'
+        }
         return order.execution_target === 'PAPER' ? `${base} (PAPER)` : base
       },
     },
@@ -571,9 +584,13 @@ export function WaitingQueuePanel({
     },
     {
       field: 'gtt',
-      headerName: 'GTT',
+      headerName: 'Cond',
       width: 80,
-      valueFormatter: (value) => (value ? 'Yes' : 'No'),
+      valueFormatter: (_value, row) => {
+        const order = row as Order
+        if (!order.gtt) return 'No'
+        return order.synthetic_gtt ? 'Sigma' : 'GTT'
+      },
     },
     {
       field: 'actions',
@@ -912,11 +929,24 @@ export function WaitingQueuePanel({
                       const brokerName =
                         editingOrder?.broker_name ?? selectedBroker ?? 'zerodha'
                       const caps = getCaps(brokerName)
-                      return caps ? !caps.supports_gtt : brokerName !== 'zerodha'
+                      const supported = caps
+                        ? caps.supports_gtt || caps.supports_conditional_orders
+                        : brokerName === 'zerodha'
+                      return !supported
                     })()}
                   />
                 }
-                label="Place as GTT (Zerodha only)"
+                label={
+                  (() => {
+                    const brokerName =
+                      editingOrder?.broker_name ?? selectedBroker ?? 'zerodha'
+                    const caps = getCaps(brokerName)
+                    if (caps?.supports_gtt || brokerName === 'zerodha') {
+                      return 'Place as GTT (broker-managed)'
+                    }
+                    return 'Place as conditional order (SigmaTrader-managed)'
+                  })()
+                }
               />
               <Box
                 sx={{

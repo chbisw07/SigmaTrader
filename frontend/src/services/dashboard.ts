@@ -2,6 +2,7 @@ type BasketRange = '1d' | '1w' | '1m' | '3m' | '6m' | 'ytd' | '1y' | '2y'
 
 export type BasketIndexRequest = {
   include_holdings: boolean
+  holdings_brokers?: string[]
   group_ids: number[]
   range: BasketRange
   base?: number
@@ -109,6 +110,7 @@ export async function fetchSymbolSeries(
 
 export type HydrateHistoryRequest = {
   include_holdings: boolean
+  holdings_brokers?: string[]
   group_ids: number[]
   range: BasketRange
   timeframe?: SymbolTimeframe

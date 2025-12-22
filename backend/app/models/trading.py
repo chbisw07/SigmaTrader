@@ -196,6 +196,7 @@ class Order(Base):
     __table_args__ = (
         Index("ix_orders_strategy_status", "strategy_id", "status"),
         Index("ix_orders_symbol_time", "symbol", "created_at"),
+        Index("ix_orders_synthetic_status", "synthetic_gtt", "status"),
         Index(
             "ix_orders_broker_name_order_id",
             "broker_name",
@@ -231,6 +232,12 @@ class Order(Base):
     trigger_percent: Mapped[Optional[float]] = mapped_column(Float)
     product: Mapped[str] = mapped_column(String(16), nullable=False, default="MIS")
     gtt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    synthetic_gtt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    trigger_operator: Mapped[Optional[str]] = mapped_column(String(2))
+    armed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_seen_price: Mapped[Optional[float]] = mapped_column(Float)
+    triggered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="WAITING")
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")

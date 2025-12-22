@@ -35,3 +35,23 @@ export async function connectAngelone(payload: {
   }
 }
 
+export type AngeloneLtp = {
+  ltp: number
+}
+
+export async function fetchAngeloneLtp(
+  symbol: string,
+  exchange: string,
+): Promise<AngeloneLtp> {
+  const url = new URL('/api/angelone/ltp', window.location.origin)
+  url.searchParams.set('symbol', symbol)
+  url.searchParams.set('exchange', exchange)
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to fetch AngelOne LTP (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as AngeloneLtp
+}

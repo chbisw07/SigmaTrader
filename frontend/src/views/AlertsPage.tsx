@@ -1751,7 +1751,9 @@ function AlertV3EditorDialog({
                   helperText={
                     tradeOrderType === 'SL' || tradeOrderType === 'SL-M'
                       ? 'Required for SL / SL-M orders.'
-                      : 'Optional trigger for GTT orders; defaults to limit price when left blank.'
+                      : brokerName === 'zerodha'
+                        ? 'Optional trigger for GTT orders; defaults to limit price when left blank.'
+                        : 'Optional trigger for conditional orders; defaults to limit price when left blank.'
                   }
                 />
               )}
@@ -1784,7 +1786,7 @@ function AlertV3EditorDialog({
                 }}
               >
                 <Typography variant="caption" color="text.secondary">
-                  Bracket / follow-up GTT
+                  Bracket / follow-up conditional
                 </Typography>
                 <FormControlLabel
                   control={
@@ -1795,9 +1797,12 @@ function AlertV3EditorDialog({
                     />
                   }
                   label={
-                    actionType === 'BUY'
-                      ? 'Add profit-target SELL GTT'
-                      : 'Add re-entry BUY GTT'
+                    (() => {
+                      const suffix = brokerName === 'zerodha' ? 'GTT' : 'conditional'
+                      return actionType === 'BUY'
+                        ? `Add profit-target SELL ${suffix}`
+                        : `Add re-entry BUY ${suffix}`
+                    })()
                   }
                 />
                 {tradeBracketEnabled && (
@@ -1822,11 +1827,15 @@ function AlertV3EditorDialog({
                     disabled={tradeOrderType !== 'LIMIT'}
                   />
                 }
-                label="GTT (good-till-triggered) order"
+                label={
+                  brokerName === 'zerodha'
+                    ? 'GTT (good-till-triggered) order'
+                    : 'Conditional order (SigmaTrader-managed)'
+                }
               />
               {tradeOrderType !== 'LIMIT' && (
                 <Typography variant="caption" color="text.secondary">
-                  GTT is available only for LIMIT orders.
+                  Conditional/GTT is available only for LIMIT orders.
                 </Typography>
               )}
             </Box>
