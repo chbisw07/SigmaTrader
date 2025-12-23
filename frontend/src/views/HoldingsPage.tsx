@@ -1,6 +1,5 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import CircularProgress from '@mui/material/CircularProgress'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -102,6 +101,8 @@ export function HoldingsPage() {
   const location = useLocation()
   const [holdings, setHoldings] = useState<HoldingRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [universeId, setUniverseId] = useState<string>('holdings')
@@ -200,6 +201,17 @@ export function HoldingsPage() {
 
   const [portfolioValue, setPortfolioValue] = useState<number | null>(null)
   const loadRequestId = useRef(0)
+  const refreshRequestId = useRef(0)
+  const refreshingRef = useRef(false)
+  const holdingsRef = useRef<HoldingRow[]>([])
+
+  useEffect(() => {
+    refreshingRef.current = refreshing
+  }, [refreshing])
+
+  useEffect(() => {
+    holdingsRef.current = holdings
+  }, [holdings])
 
   const [, setCorrSummary] =
     useState<HoldingsCorrelationResult | null>(null)
@@ -494,7 +506,118 @@ export function HoldingsPage() {
       }
       setError(msg || 'Failed to load holdings')
     } finally {
-      if (requestId === loadRequestId.current) setLoading(false)
+      if (requestId === loadRequestId.current) {
+        setLoading(false)
+        setHasLoadedOnce(true)
+      }
+    }
+  }
+
+  const refreshHoldingsInPlace = async (mode: 'auto' | 'manual' = 'auto') => {
+    if (refreshingRef.current) return
+    const requestId = ++refreshRequestId.current
+    const holdingsBroker = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+    if (holdingsBroker === 'angelone' && angeloneStatusLoaded && !angeloneConnected) {
+      return
+    }
+    try {
+      setRefreshing(true)
+      let rawHoldings: Holding[] = []
+      try {
+        rawHoldings = await fetchHoldings(holdingsBroker)
+      } catch (err) {
+        if (holdingsBroker === 'angelone') {
+          try {
+            const status = await fetchAngeloneStatus()
+            if (requestId !== refreshRequestId.current) throw err
+            setAngeloneConnected(Boolean(status.connected))
+            if (status.connected) {
+              rawHoldings = await fetchHoldings('angelone')
+            } else {
+              throw err
+            }
+          } catch {
+            throw err
+          }
+        } else {
+          throw err
+        }
+      }
+
+      if (requestId !== refreshRequestId.current) return
+
+      const holdingsRows: HoldingRow[] = rawHoldings.map((h) => ({ ...h }))
+      const bySymbol = new Map<string, HoldingRow>(
+        holdingsRows.map((h) => [h.symbol, h]),
+      )
+
+      // Update portfolio value estimate.
+      let total = 0
+      const rowsForValue =
+        universeId.startsWith('holdings') ? holdingsRows : holdingsRef.current
+      for (const h of rowsForValue) {
+        const next = bySymbol.get(h.symbol) ?? h
+        const qty =
+          next.quantity != null && Number.isFinite(Number(next.quantity))
+            ? Number(next.quantity)
+            : 0
+        const priceCandidate =
+          next.last_price != null
+            ? Number(next.last_price)
+            : next.average_price != null
+              ? Number(next.average_price)
+              : 0
+        if (
+          Number.isFinite(qty)
+          && qty > 0
+          && Number.isFinite(priceCandidate)
+          && priceCandidate > 0
+        ) {
+          total += qty * priceCandidate
+        }
+      }
+      setPortfolioValue(total > 0 ? total : null)
+
+      if (universeId === 'holdings' || universeId === 'holdings:angelone') {
+        // Merge refreshed broker fields into existing rows so that any
+        // enriched/derived fields (history, indicators, group labels, etc.)
+        // remain populated without flicker.
+        setHoldings((prev) => {
+          const prevBySymbol = new Map(prev.map((h) => [h.symbol, h]))
+          return holdingsRows.map((fresh) => {
+            const existing = prevBySymbol.get(fresh.symbol)
+            return existing ? { ...existing, ...fresh } : fresh
+          })
+        })
+        setRowSelectionModel((prev) =>
+          prev.filter((id) => holdingsRows.some((row) => row.symbol === id)),
+        )
+        void refreshGroupMemberships(
+          holdingsRows.map((row) => row.symbol).filter(Boolean),
+        )
+        if (mode === 'manual') {
+          void enrichHoldingsWithHistory(holdingsRows)
+        }
+      } else {
+        // Group/universe views: keep the row set stable and only patch values in-place.
+        setHoldings((prev) =>
+          prev.map((row) => {
+            const next = bySymbol.get(row.symbol)
+            return next ? { ...row, ...next } : row
+          }),
+        )
+        if (mode === 'manual') {
+          void enrichHoldingsWithHistory(holdingsRef.current)
+        }
+      }
+
+      setError(null)
+    } catch (err) {
+      if (requestId !== refreshRequestId.current) return
+      const msg = err instanceof Error ? err.message : String(err ?? '')
+      setError(msg || 'Failed to refresh holdings')
+    } finally {
+      if (requestId === refreshRequestId.current) setRefreshing(false)
     }
   }
 
@@ -720,7 +843,8 @@ export function HoldingsPage() {
     const intervalMs = totalSeconds * 1000
 
     const id = window.setInterval(() => {
-      void load()
+      if (!hasLoadedOnce) return
+      void refreshHoldingsInPlace('auto')
     }, intervalMs)
 
     return () => {
@@ -732,6 +856,10 @@ export function HoldingsPage() {
     refreshHours,
     refreshMinutes,
     refreshSeconds,
+    hasLoadedOnce,
+    universeId,
+    angeloneConnected,
+    angeloneStatusLoaded,
   ])
 
   const filteredRows: HoldingRow[] = holdings
@@ -2690,7 +2818,11 @@ export function HoldingsPage() {
               size="small"
               variant="outlined"
               onClick={() => {
-                void load()
+                if (!hasLoadedOnce) {
+                  void load()
+                  return
+                }
+                void refreshHoldingsInPlace('manual')
               }}
             >
               Refresh now
@@ -3206,68 +3338,68 @@ export function HoldingsPage() {
         </Select>
       </Box> */}
 
-      {loading ? (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CircularProgress size={20} />
-          <Typography variant="body2">Loading holdings...</Typography>
-        </Box>
-      ) : error ? (
-        <Typography variant="body2" color="error">
+      {error && (
+        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
           {error}
         </Typography>
-      ) : (
-        <UniverseGrid
-          rows={filteredRows}
-          columns={columns}
-          getRowId={(row) => row.symbol}
-          checkboxSelection
-          rowSelectionModel={rowSelectionModel}
-          onRowSelectionModelChange={(newSelection) => {
-            setRowSelectionModel(newSelection)
-          }}
-          density="compact"
-          columnVisibilityModel={columnVisibilityModel}
-          onColumnVisibilityModelChange={(model) => {
-            setColumnVisibilityModel(model)
-            try {
-              const key =
-                viewMode === 'risk'
-                  ? 'st_holdings_column_visibility_risk_v1'
-                  : 'st_holdings_column_visibility_default_v1'
-              window.localStorage.setItem(
-                key,
-                JSON.stringify(model),
-              )
-            } catch {
-              // Ignore persistence errors.
-            }
-          }}
-          disableRowSelectionOnClick
-          sx={{
-            '& .pnl-negative': {
-              color: 'error.main',
-            },
-          }}
-          slots={{ toolbar: GridToolbar }}
-          slotProps={{
-            toolbar: {
-              showQuickFilter: true,
-              quickFilterProps: { debounceMs: 300 },
-            },
-            filterPanel: {
-              // Combine multiple filter rows using AND semantics.
-              logicOperators: [GridLogicOperator.And],
-            },
-          }}
-          initialState={{
-            pagination: { paginationModel: { pageSize: 25 } },
-          }}
-          pageSizeOptions={[25, 50, 100]}
-          localeText={{
-            noRowsLabel: 'No holdings found.',
-          }}
-        />
       )}
+      {refreshing && !loading && (
+        <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+          Refreshing…
+        </Typography>
+      )}
+      <UniverseGrid
+        rows={filteredRows}
+        columns={columns}
+        getRowId={(row) => row.symbol}
+        loading={loading || refreshing}
+        checkboxSelection
+        rowSelectionModel={rowSelectionModel}
+        onRowSelectionModelChange={(newSelection) => {
+          setRowSelectionModel(newSelection)
+        }}
+        density="compact"
+        columnVisibilityModel={columnVisibilityModel}
+        onColumnVisibilityModelChange={(model) => {
+          setColumnVisibilityModel(model)
+          try {
+            const key =
+              viewMode === 'risk'
+                ? 'st_holdings_column_visibility_risk_v1'
+                : 'st_holdings_column_visibility_default_v1'
+            window.localStorage.setItem(
+              key,
+              JSON.stringify(model),
+            )
+          } catch {
+            // Ignore persistence errors.
+          }
+        }}
+        disableRowSelectionOnClick
+        sx={{
+          '& .pnl-negative': {
+            color: 'error.main',
+          },
+        }}
+        slots={{ toolbar: GridToolbar }}
+        slotProps={{
+          toolbar: {
+            showQuickFilter: true,
+            quickFilterProps: { debounceMs: 300 },
+          },
+          filterPanel: {
+            // Combine multiple filter rows using AND semantics.
+            logicOperators: [GridLogicOperator.And],
+          },
+        }}
+        initialState={{
+          pagination: { paginationModel: { pageSize: 25 } },
+        }}
+        pageSizeOptions={[25, 50, 100]}
+        localeText={{
+          noRowsLabel: 'No holdings found.',
+        }}
+      />
 
       <Dialog open={tradeOpen} onClose={closeTradeDialog} fullWidth maxWidth="sm">
         <DialogTitle
