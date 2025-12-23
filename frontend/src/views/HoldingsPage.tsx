@@ -15,6 +15,8 @@ import FormControlLabel from '@mui/material/FormControlLabel'
 import Checkbox from '@mui/material/Checkbox'
 import Switch from '@mui/material/Switch'
 import Chip from '@mui/material/Chip'
+import Tab from '@mui/material/Tab'
+import Tabs from '@mui/material/Tabs'
 import {
   GridToolbar,
   type GridColDef,
@@ -52,6 +54,7 @@ import {
   fetchGroupDataset,
   fetchGroupDatasetValues,
   fetchGroupMemberships,
+  listGroupMembers,
   listGroups,
   type Group,
   type GroupDetail,
@@ -176,10 +179,15 @@ export function HoldingsPage() {
   const [bulkAmountManual, setBulkAmountManual] = useState(false)
   const [bulkAmountBudget, setBulkAmountBudget] = useState<string>('')
   const [groupCreateOpen, setGroupCreateOpen] = useState(false)
+  const [groupSelectionMode, setGroupSelectionMode] = useState<
+    'create' | 'add'
+  >('create')
   const [groupCreateName, setGroupCreateName] = useState('')
   const [groupCreateKind, setGroupCreateKind] = useState<GroupKind>('WATCHLIST')
+  const [groupTargetId, setGroupTargetId] = useState<string>('')
   const [groupCreateSubmitting, setGroupCreateSubmitting] = useState(false)
   const [groupCreateError, setGroupCreateError] = useState<string | null>(null)
+  const [groupCreateInfo, setGroupCreateInfo] = useState<string | null>(null)
 
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
@@ -1481,6 +1489,7 @@ export function HoldingsPage() {
 
     setGroupCreateSubmitting(true)
     setGroupCreateError(null)
+    setGroupCreateInfo(null)
     try {
       const group = await createGroup({
         name,
@@ -1503,11 +1512,84 @@ export function HoldingsPage() {
       setGroupCreateOpen(false)
       setGroupCreateName('')
       setGroupCreateKind('WATCHLIST')
+      setGroupTargetId('')
       void refreshGroupMemberships(selected.map((h) => h.symbol))
       navigate(`/groups?${new URLSearchParams({ group: group.name }).toString()}`)
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Failed to create group.'
+      setGroupCreateError(message)
+    } finally {
+      setGroupCreateSubmitting(false)
+    }
+  }
+
+  const addSelectionToExistingGroup = async () => {
+    if (groupCreateSubmitting) return
+    const targetId = Number(groupTargetId)
+    if (!Number.isFinite(targetId) || targetId <= 0) {
+      setGroupCreateError('Select a target group.')
+      return
+    }
+
+    const target = availableGroups.find((g) => g.id === targetId)
+    if (!target) {
+      setGroupCreateError('Selected group not found. Refresh and try again.')
+      return
+    }
+
+    const selected = holdings.filter((h) => rowSelectionModel.includes(h.symbol))
+    if (!selected.length) {
+      setGroupCreateError('Select at least one row to add to a group.')
+      return
+    }
+
+    setGroupCreateSubmitting(true)
+    setGroupCreateError(null)
+    setGroupCreateInfo(null)
+    try {
+      const existing = await listGroupMembers(targetId)
+      const existingSet = new Set(
+        existing.map((m) => `${m.symbol}::${m.exchange ?? ''}`),
+      )
+
+      const payloadAll = selected.map((h) => ({
+        symbol: h.symbol,
+        exchange: h.exchange ?? 'NSE',
+        ...(target.kind === 'MODEL_PORTFOLIO' || target.kind === 'PORTFOLIO'
+          ? {
+              reference_qty:
+                h.quantity != null && Number.isFinite(Number(h.quantity)) && Number(h.quantity) > 0
+                  ? Math.floor(Number(h.quantity))
+                  : 1,
+              reference_price:
+                h.average_price != null
+                && Number.isFinite(Number(h.average_price))
+                && Number(h.average_price) > 0
+                  ? Number(h.average_price)
+                  : getDisplayPrice(h),
+            }
+          : {}),
+      }))
+
+      const payload = payloadAll.filter(
+        (m) => !existingSet.has(`${m.symbol}::${m.exchange ?? ''}`),
+      )
+      const skipped = payloadAll.length - payload.length
+
+      if (payload.length) {
+        await bulkAddGroupMembers(targetId, payload)
+      }
+
+      setGroupCreateInfo(
+        payload.length
+          ? `Added ${payload.length} symbol(s) to "${target.name}".${skipped ? ` Skipped ${skipped} already present.` : ''}`
+          : `All selected symbols are already present in "${target.name}".`,
+      )
+      void refreshGroupMemberships(selected.map((h) => h.symbol))
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to add to group.'
       setGroupCreateError(message)
     } finally {
       setGroupCreateSubmitting(false)
@@ -2801,11 +2883,14 @@ export function HoldingsPage() {
                 variant="outlined"
                 onClick={() => {
                   setGroupCreateError(null)
+                  setGroupCreateInfo(null)
+                  setGroupSelectionMode('create')
+                  setGroupTargetId('')
                   setGroupCreateOpen(true)
                 }}
                 disabled={rowSelectionModel.length === 0}
               >
-                Create group
+                Group
               </Button>
 	            <Button
 	              size="small"
@@ -4120,39 +4205,94 @@ export function HoldingsPage() {
           fullWidth
           maxWidth="sm"
         >
-          <DialogTitle>Create group from selected rows</DialogTitle>
+          <DialogTitle>Group selected symbols</DialogTitle>
           <DialogContent sx={{ pt: 2 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Creates a new group using the currently selected holdings (works
-              with filters/screener).
+              Create a new group from the selected holdings or add them to an existing group.
             </Typography>
+            <Tabs
+              value={groupSelectionMode}
+              onChange={(_e, value) => {
+                if (groupCreateSubmitting) return
+                setGroupSelectionMode(value as 'create' | 'add')
+                setGroupCreateError(null)
+                setGroupCreateInfo(null)
+              }}
+              sx={{ mb: 2 }}
+            >
+              <Tab value="create" label="Create new" />
+              <Tab value="add" label="Add to existing" />
+            </Tabs>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <TextField
-                label="Group name"
-                value={groupCreateName}
-                onChange={(e) => setGroupCreateName(e.target.value)}
-                size="small"
-                autoFocus
-                fullWidth
-              />
-              <TextField
-                label="Kind"
-                select
-                value={groupCreateKind}
-                onChange={(e) =>
-                  setGroupCreateKind(e.target.value as GroupKind)
-                }
-                size="small"
-                fullWidth
-              >
-                <MenuItem value="WATCHLIST">Watchlist</MenuItem>
-                <MenuItem value="MODEL_PORTFOLIO">Basket</MenuItem>
-                <MenuItem value="PORTFOLIO">Portfolio</MenuItem>
-                <MenuItem value="HOLDINGS_VIEW">Holdings view</MenuItem>
-              </TextField>
+              {groupSelectionMode === 'create' ? (
+                <>
+                  <TextField
+                    label="Group name"
+                    value={groupCreateName}
+                    onChange={(e) => setGroupCreateName(e.target.value)}
+                    size="small"
+                    autoFocus
+                    fullWidth
+                  />
+                  <TextField
+                    label="Kind"
+                    select
+                    value={groupCreateKind}
+                    onChange={(e) =>
+                      setGroupCreateKind(e.target.value as GroupKind)
+                    }
+                    size="small"
+                    fullWidth
+                  >
+                    <MenuItem value="WATCHLIST">Watchlist</MenuItem>
+                    <MenuItem value="MODEL_PORTFOLIO">Basket</MenuItem>
+                    <MenuItem value="PORTFOLIO">Portfolio</MenuItem>
+                    <MenuItem value="HOLDINGS_VIEW">Holdings view</MenuItem>
+                  </TextField>
+                  {(groupCreateKind === 'MODEL_PORTFOLIO'
+                    || groupCreateKind === 'PORTFOLIO') && (
+                    <Typography variant="caption" color="text.secondary">
+                      For portfolio/basket groups, new members will be added with reference qty and reference price from current holdings.
+                    </Typography>
+                  )}
+                </>
+              ) : (
+                <>
+                  <TextField
+                    label="Target group"
+                    select
+                    value={groupTargetId}
+                    onChange={(e) => setGroupTargetId(String(e.target.value))}
+                    size="small"
+                    fullWidth
+                  >
+                    <MenuItem value="">Select a group…</MenuItem>
+                    {availableGroups
+                      .filter((g) => g.kind !== 'HOLDINGS_VIEW')
+                      .sort((a, b) => a.name.localeCompare(b.name))
+                      .map((g) => (
+                        <MenuItem key={g.id} value={String(g.id)}>
+                          {g.name} ({g.kind === 'MODEL_PORTFOLIO'
+                            ? 'Basket'
+                            : g.kind === 'PORTFOLIO'
+                              ? 'Portfolio'
+                              : 'Watchlist'})
+                        </MenuItem>
+                      ))}
+                  </TextField>
+                  <Typography variant="caption" color="text.secondary">
+                    Existing members are skipped automatically to avoid errors.
+                  </Typography>
+                </>
+              )}
               {groupCreateError && (
                 <Typography variant="body2" color="error">
                   {groupCreateError}
+                </Typography>
+              )}
+              {groupCreateInfo && (
+                <Typography variant="body2" color="success.main">
+                  {groupCreateInfo}
                 </Typography>
               )}
             </Box>
@@ -4165,11 +4305,21 @@ export function HoldingsPage() {
               Cancel
             </Button>
             <Button
-              onClick={() => void createGroupFromSelection()}
+              onClick={() =>
+                void (groupSelectionMode === 'create'
+                  ? createGroupFromSelection()
+                  : addSelectionToExistingGroup())
+              }
               disabled={groupCreateSubmitting}
               variant="contained"
             >
-              {groupCreateSubmitting ? 'Creating…' : 'Create group'}
+              {groupCreateSubmitting
+                ? groupSelectionMode === 'create'
+                  ? 'Creating…'
+                  : 'Adding…'
+                : groupSelectionMode === 'create'
+                  ? 'Create group'
+                  : 'Add to group'}
             </Button>
           </DialogActions>
         </Dialog>
