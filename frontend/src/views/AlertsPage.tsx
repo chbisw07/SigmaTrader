@@ -32,6 +32,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { DslHelpDialog } from '../components/DslHelpDialog'
 import { DslEditor } from '../components/DslEditor'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
+import { listGroups, type Group } from '../services/groups'
+import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 import {
   createAlertDefinition,
   createCustomIndicator,
@@ -158,6 +160,7 @@ function AlertsV3Tab({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
+  const [groups, setGroups] = useState<Group[]>([])
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<AlertDefinition | null>(null)
   const [activeCreateDefaults, setActiveCreateDefaults] = useState<{
@@ -188,6 +191,17 @@ function AlertsV3Tab({
       try {
         const list = await fetchBrokers()
         setBrokers(list)
+      } catch {
+        // ignore
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await listGroups()
+        setGroups(res)
       } catch {
         // ignore
       }
@@ -238,6 +252,14 @@ function AlertsV3Tab({
     return m
   }, [brokers])
 
+  const groupLabelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const g of groups) {
+      m.set(String(g.id), g.name)
+    }
+    return m
+  }, [groups])
+
   const columns: GridColDef[] = [
     { field: 'name', headerName: 'Name', flex: 1, minWidth: 220 },
     {
@@ -248,7 +270,10 @@ function AlertsV3Tab({
         const brokerLabel =
           brokerLabelByName.get(row.broker_name) ?? row.broker_name
         if (row.target_kind === 'HOLDINGS') return `Holdings (${brokerLabel})`
-        if (row.target_kind === 'GROUP') return `Group: ${row.target_ref} (${brokerLabel})`
+        if (row.target_kind === 'GROUP') {
+          const label = groupLabelById.get(String(row.target_ref)) ?? row.target_ref
+          return `Group: ${label} (${brokerLabel})`
+        }
         const sym = row.symbol ?? row.target_ref
         return `${sym} / ${(row.exchange ?? 'NSE').toString()} (${brokerLabel})`
       },
@@ -365,6 +390,7 @@ function AlertsV3Tab({
         open={editorOpen}
         alert={editing}
         brokers={brokers}
+        groups={groups}
         onClose={() => {
           setEditorOpen(false)
           setActiveCreateDefaults(null)
@@ -380,6 +406,7 @@ type AlertV3EditorDialogProps = {
   open: boolean
   alert: AlertDefinition | null
   brokers: BrokerInfo[]
+  groups: Group[]
   onClose: () => void
   onSaved: () => void
   createDefaults?: { targetKind: 'SYMBOL'; targetRef: string; exchange: string } | null
@@ -389,6 +416,7 @@ function AlertV3EditorDialog({
   open,
   alert,
   brokers,
+  groups,
   onClose,
   onSaved,
   createDefaults,
@@ -438,6 +466,9 @@ function AlertV3EditorDialog({
   )
   const [targetRef, setTargetRef] = useState('')
   const [exchange, setExchange] = useState('NSE')
+  const [symbolOptions, setSymbolOptions] = useState<MarketSymbol[]>([])
+  const [symbolOptionsLoading, setSymbolOptionsLoading] = useState(false)
+  const [symbolOptionsError, setSymbolOptionsError] = useState<string | null>(null)
   const [actionType, setActionType] = useState<'ALERT_ONLY' | 'BUY' | 'SELL'>(
     'ALERT_ONLY',
   )
@@ -489,6 +520,54 @@ function AlertV3EditorDialog({
   } = useCustomIndicators({
     enabled: open,
   })
+
+  useEffect(() => {
+    if (!open) return
+    if (targetKind !== 'SYMBOL') {
+      setSymbolOptions([])
+      setSymbolOptionsLoading(false)
+      setSymbolOptionsError(null)
+      return
+    }
+    const q = targetRef.trim()
+    if (q.length < 1) {
+      setSymbolOptions([])
+      setSymbolOptionsError(null)
+      return
+    }
+    const exchangeFilter = /^(NSE|BSE)$/i.test(exchange.trim())
+      ? exchange.trim().toUpperCase()
+      : undefined
+    let active = true
+    setSymbolOptionsLoading(true)
+    setSymbolOptionsError(null)
+    const id = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await searchMarketSymbols({
+            q,
+            exchange: exchangeFilter,
+            limit: 30,
+          })
+          if (!active) return
+          setSymbolOptions(res)
+        } catch (err) {
+          if (!active) return
+          setSymbolOptions([])
+          setSymbolOptionsError(
+            err instanceof Error ? err.message : 'Failed to search symbols',
+          )
+        } finally {
+          if (!active) return
+          setSymbolOptionsLoading(false)
+        }
+      })()
+    }, 200)
+    return () => {
+      active = false
+      window.clearTimeout(id)
+    }
+  }, [exchange, open, targetKind, targetRef])
 
   useEffect(() => {
     if (!open) return
@@ -826,12 +905,62 @@ function AlertV3EditorDialog({
           </TextField>
           {targetKind === 'SYMBOL' && (
             <>
-              <TextField
-                label="Symbol"
-                size="small"
-                value={targetRef}
-                onChange={(e) => setTargetRef(e.target.value)}
-                sx={{ minWidth: 220 }}
+              <Autocomplete
+                options={symbolOptions}
+                loading={symbolOptionsLoading}
+                freeSolo
+                value={
+                  symbolOptions.find(
+                    (o) =>
+                      o.symbol.toUpperCase() === targetRef.trim().toUpperCase()
+                      && o.exchange.toUpperCase() === exchange.trim().toUpperCase(),
+                  )
+                    ?? (targetRef.trim() ? targetRef.trim().toUpperCase() : null)
+                }
+                onChange={(_e, value) => {
+                  if (typeof value === 'string') {
+                    setTargetRef(value.toUpperCase())
+                    return
+                  }
+                  if (value) {
+                    setTargetRef(value.symbol.toUpperCase())
+                    setExchange(value.exchange.toUpperCase())
+                  } else {
+                    setTargetRef('')
+                  }
+                }}
+                onInputChange={(_e, value) => setTargetRef(value.toUpperCase())}
+                getOptionLabel={(o) => {
+                  if (typeof o === 'string') return o
+                  return `${o.symbol} (${o.exchange})`
+                }}
+                isOptionEqualToValue={(a, b) => {
+                  if (typeof b === 'string') return a.symbol === b
+                  return a.symbol === b.symbol && a.exchange === b.exchange
+                }}
+                renderOption={(props, option) => (
+                  <li {...props}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                      <Typography variant="body2">
+                        {option.symbol} ({option.exchange})
+                      </Typography>
+                      {option.name ? (
+                        <Typography variant="caption" color="text.secondary">
+                          {option.name}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                  </li>
+                )}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Symbol"
+                    size="small"
+                    sx={{ minWidth: 260 }}
+                    helperText={symbolOptionsError ?? 'Start typing to search symbols.'}
+                  />
+                )}
               />
               <TextField
                 label="Exchange"
@@ -843,13 +972,35 @@ function AlertV3EditorDialog({
             </>
           )}
           {targetKind === 'GROUP' && (
-            <TextField
-              label="Group ID"
-              size="small"
-              value={targetRef}
-              onChange={(e) => setTargetRef(e.target.value)}
-              helperText="Use numeric group id (for now)."
-              sx={{ minWidth: 220 }}
+            <Autocomplete
+              options={groups}
+              value={
+                groups.find((g) => String(g.id) === String(targetRef).trim()) ?? null
+              }
+              onChange={(_e, value) => setTargetRef(value ? String(value.id) : '')}
+              getOptionLabel={(o) => `${o.name} (#${o.id})`}
+              isOptionEqualToValue={(a, b) => a.id === b.id}
+              renderOption={(props, option) => (
+                <li {...props}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                    <Typography variant="body2">
+                      {option.name} (#{option.id})
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {option.kind} • {option.member_count} members
+                    </Typography>
+                  </Box>
+                </li>
+              )}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="Group"
+                  size="small"
+                  sx={{ minWidth: 320 }}
+                  helperText="Pick an existing group."
+                />
+              )}
             />
           )}
           <TextField
