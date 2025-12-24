@@ -123,31 +123,49 @@ def load_tags(raw: str) -> List[str]:
 
 
 def dump_regimes(regimes: List[str]) -> str:
-    cleaned = [r.strip().upper() for r in regimes if (r or "").strip()]
-    allowed = {"BULL", "SIDEWAYS", "BEAR"}
-    return _json_dump([r for r in cleaned if r in allowed])
+    """Serialize strategy regimes.
 
+    Regimes are free-form in v1 (e.g., BULL/BEAR/SIDEWAYS, SWING_TRADING,
+    DAY_TRADING). We normalize by uppercasing and converting whitespace to
+    underscores so UI/search stays consistent.
+    """
 
-def load_regimes(raw: str) -> List[str]:
-    data = _json_load(raw, [])
-    if not isinstance(data, list):
-        return []
-    allowed = {"BULL", "SIDEWAYS", "BEAR"}
-    out = []
-    for item in data:
-        if isinstance(item, str):
-            r = item.strip().upper()
-            if r in allowed:
-                out.append(r)
-    # de-dupe
-    seen = set()
-    deduped = []
-    for r in out:
+    import re
+
+    cleaned = [
+        re.sub(r"\s+", "_", r.strip().upper()) for r in regimes if (r or "").strip()
+    ]
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in cleaned:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", r):
+            continue
         if r in seen:
             continue
         seen.add(r)
-        deduped.append(r)
-    return deduped
+        out.append(r)
+    return _json_dump(out)
+
+
+def load_regimes(raw: str) -> List[str]:
+    import re
+
+    data = _json_load(raw, [])
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, str):
+            continue
+        r = re.sub(r"\s+", "_", item.strip().upper())
+        if not r or not re.fullmatch(r"[A-Z][A-Z0-9_]*", r):
+            continue
+        if r in seen:
+            continue
+        seen.add(r)
+        out.append(r)
+    return out
 
 
 def _walk(expr: ExprNode) -> Iterable[ExprNode]:

@@ -6,17 +6,21 @@ import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import FormControlLabel from '@mui/material/FormControlLabel'
+import IconButton from '@mui/material/IconButton'
+import Autocomplete from '@mui/material/Autocomplete'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import Switch from '@mui/material/Switch'
 import TextField from '@mui/material/TextField'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import {
   DataGrid,
   type GridColDef,
   type GridRenderCellParams,
 } from '@mui/x-data-grid'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import { useEffect, useMemo, useState } from 'react'
 
 import type { AlertVariableDef } from '../services/alertsV3'
@@ -37,6 +41,22 @@ import {
   type SignalStrategyScope,
   type SignalStrategyVersion,
 } from '../services/signalStrategies'
+import { SignalStrategyHelpDialog } from '../components/SignalStrategyHelpDialog'
+
+const DEFAULT_REGIME_OPTIONS: string[] = [
+  'BULL',
+  'SIDEWAYS',
+  'BEAR',
+  'DAY_TRADING',
+  'SWING_TRADING',
+]
+
+function normalizeRegime(raw: string): string {
+  return (raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+}
 
 function downloadJson(filename: string, data: unknown): void {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -361,13 +381,16 @@ function StrategyCreateDialog({
   open,
   onClose,
   onCreated,
+  regimeOptions,
 }: {
   open: boolean
   onClose: () => void
   onCreated: () => void
+  regimeOptions: string[]
 }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   const [name, setName] = useState('')
   const [scope, setScope] = useState<SignalStrategyScope>('USER')
@@ -385,6 +408,7 @@ function StrategyCreateDialog({
     if (!open) return
     setSaving(false)
     setError(null)
+    setHelpOpen(false)
     setName('')
     setScope('USER')
     setDescription('')
@@ -417,7 +441,16 @@ function StrategyCreateDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle>Create strategy (DSL V3)</DialogTitle>
+      <DialogTitle>
+        <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Typography variant="inherit">Create strategy (DSL V3)</Typography>
+          <Tooltip title="Help">
+            <IconButton onClick={() => setHelpOpen(true)} size="small">
+              <HelpOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      </DialogTitle>
       <DialogContent dividers>
         <Stack spacing={2}>
           {error && <Typography color="error">{error}</Typography>}
@@ -454,21 +487,22 @@ function StrategyCreateDialog({
               onChange={(e) => setTags(e.target.value)}
               fullWidth
             />
-            <TextField
-              label="Regimes"
-              select
-              SelectProps={{ multiple: true }}
+            <Autocomplete
+              multiple
+              freeSolo
+              options={regimeOptions}
               value={regimes}
-              onChange={(e) => {
-                const v = e.target.value
-                setRegimes(Array.isArray(v) ? (v as SignalStrategyRegime[]) : [])
+              onChange={(_e, value) => {
+                const cleaned = (value ?? [])
+                  .map((v) => normalizeRegime(String(v)))
+                  .filter(Boolean)
+                setRegimes(Array.from(new Set(cleaned)))
               }}
-              sx={{ width: 220 }}
-            >
-              <MenuItem value="BULL">BULL</MenuItem>
-              <MenuItem value="SIDEWAYS">SIDEWAYS</MenuItem>
-              <MenuItem value="BEAR">BEAR</MenuItem>
-            </TextField>
+              renderInput={(params) => (
+                <TextField {...params} label="Regimes" placeholder="BULL, SWING_TRADING…" />
+              )}
+              sx={{ width: 320 }}
+            />
           </Stack>
 
           <StrategyVersionEditor draft={versionDraft} onChange={setVersionDraft} />
@@ -480,6 +514,7 @@ function StrategyCreateDialog({
           {saving ? 'Saving…' : 'Create'}
         </Button>
       </DialogActions>
+      <SignalStrategyHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
     </Dialog>
   )
 }
@@ -489,11 +524,13 @@ function StrategyMetadataDialog({
   strategy,
   onClose,
   onUpdated,
+  regimeOptions,
 }: {
   open: boolean
   strategy: SignalStrategy | null
   onClose: () => void
   onUpdated: () => void
+  regimeOptions: string[]
 }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -573,20 +610,21 @@ function StrategyMetadataDialog({
             onChange={(e) => setTags(e.target.value)}
             fullWidth
           />
-          <TextField
-            label="Regimes"
-            select
-            SelectProps={{ multiple: true }}
+          <Autocomplete
+            multiple
+            freeSolo
+            options={regimeOptions}
             value={regimes}
-            onChange={(e) => {
-              const v = e.target.value
-              setRegimes(Array.isArray(v) ? (v as SignalStrategyRegime[]) : [])
+            onChange={(_e, value) => {
+              const cleaned = (value ?? [])
+                .map((v) => normalizeRegime(String(v)))
+                .filter(Boolean)
+              setRegimes(Array.from(new Set(cleaned)))
             }}
-          >
-            <MenuItem value="BULL">BULL</MenuItem>
-            <MenuItem value="SIDEWAYS">SIDEWAYS</MenuItem>
-            <MenuItem value="BEAR">BEAR</MenuItem>
-          </TextField>
+            renderInput={(params) => (
+              <TextField {...params} label="Regimes" placeholder="BULL, DAY_TRADING…" />
+            )}
+          />
         </Stack>
       </DialogContent>
       <DialogActions>
@@ -783,6 +821,18 @@ export function SignalStrategiesTab({ onError }: { onError?: (msg: string) => vo
     void refresh()
   }, [])
 
+  const regimeOptions = useMemo<string[]>(() => {
+    const seen = new Set<string>()
+    for (const r of DEFAULT_REGIME_OPTIONS) seen.add(normalizeRegime(r))
+    for (const s of rows) {
+      for (const r of s.regimes ?? []) {
+        const cleaned = normalizeRegime(String(r))
+        if (cleaned) seen.add(cleaned)
+      }
+    }
+    return Array.from(seen).sort((a, b) => a.localeCompare(b))
+  }, [rows])
+
   const columns = useMemo<Array<GridColDef<SignalStrategy>>>(() => {
     return [
       { field: 'id', headerName: 'ID', width: 80 },
@@ -939,7 +989,12 @@ export function SignalStrategiesTab({ onError }: { onError?: (msg: string) => vo
         />
       </Paper>
 
-      <StrategyCreateDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={refresh} />
+      <StrategyCreateDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={refresh}
+        regimeOptions={regimeOptions}
+      />
       <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={refresh} />
 
       <StrategyMetadataDialog
@@ -947,6 +1002,7 @@ export function SignalStrategiesTab({ onError }: { onError?: (msg: string) => vo
         strategy={editingMeta}
         onClose={() => setMetaOpen(false)}
         onUpdated={refresh}
+        regimeOptions={regimeOptions}
       />
       <StrategyNewVersionDialog
         open={newVersionOpen}

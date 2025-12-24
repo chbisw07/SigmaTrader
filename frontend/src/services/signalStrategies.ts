@@ -1,6 +1,6 @@
 export type SignalStrategyScope = 'USER' | 'GLOBAL'
 export type SignalStrategyOutputKind = 'SIGNAL' | 'OVERLAY'
-export type SignalStrategyRegime = 'BULL' | 'SIDEWAYS' | 'BEAR'
+export type SignalStrategyRegime = string
 export type SignalStrategyParamType = 'number' | 'string' | 'bool' | 'enum' | 'timeframe'
 
 export type SignalStrategyInputDef = {
@@ -200,4 +200,3 @@ export async function importSignalStrategy(payload: {
   }
   return (await res.json()) as SignalStrategy
 }
-

@@ -10,7 +10,9 @@ from app.schemas.alerts_v3 import AlertVariableDef
 
 SignalStrategyScope = Literal["USER", "GLOBAL"]
 SignalStrategyOutputKind = Literal["SIGNAL", "OVERLAY"]
-SignalStrategyRegime = Literal["BULL", "SIDEWAYS", "BEAR"]
+# Free-form strategy regimes (stored uppercased). Common values include:
+# BULL, BEAR, SIDEWAYS, SWING_TRADING, DAY_TRADING.
+SignalStrategyRegime = str
 SignalStrategyParamType = Literal["number", "string", "bool", "enum", "timeframe"]
 
 

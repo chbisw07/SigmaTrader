@@ -1288,24 +1288,24 @@ export function DashboardPage() {
     if (!indicatorData) return []
     const ts = indicatorData.ts || []
     const series = indicatorData.series || {}
-    const colorFor = (kind: string) => {
-      const k = kind.toUpperCase()
-      if (k === 'SMA') return theme.palette.warning.main
-      if (k === 'EMA') return theme.palette.info.main
-      if (k === 'RSI') return theme.palette.secondary.main
-      if (k === 'VWAP') return theme.palette.success.main
-      return theme.palette.text.secondary
-    }
+    const palette = [
+      theme.palette.warning.main,
+      theme.palette.success.main,
+      theme.palette.info.main,
+      theme.palette.secondary.main,
+      theme.palette.error.main,
+      theme.palette.primary.light,
+    ]
     const plotted = indicatorRows.filter((r) => r.enabled && r.plot === 'price')
     return plotted
-      .map((r) => {
+      .map((r, idx) => {
         const name = String(r.name || '').trim()
         if (!name) return null
         const values = series[name] || series[name.toUpperCase()] || null
         if (!values) return null
         return {
           name,
-          color: colorFor(String(r.kind || '')),
+          color: palette[idx % palette.length]!,
           points: ts.map((t, i) => ({ ts: t, value: values[i] ?? null })),
         }
       })
@@ -1757,6 +1757,10 @@ export function DashboardPage() {
                       {indicatorRows.map((row, idx) => {
                         const params = (row.params ?? {}) as Record<string, any>
                         const kind = String(row.kind || 'SMA').toUpperCase()
+                        const swatchColor =
+                          chartOverlays.find(
+                            (o) => o.name.toUpperCase() === String(row.name || '').trim().toUpperCase(),
+                          )?.color ?? null
                         const needsSourceOrPrice = ['SMA', 'EMA', 'RSI', 'STDDEV', 'RET', 'OBV', 'VWAP'].includes(kind)
                         const needsLength = ['SMA', 'EMA', 'RSI', 'STDDEV', 'ATR'].includes(kind)
                         const showTimeframe = kind !== 'CUSTOM'
@@ -1784,6 +1788,18 @@ export function DashboardPage() {
                                 />
                               }
                               label=""
+                            />
+                            <Box
+                              aria-label="Indicator color"
+                              sx={{
+                                width: 12,
+                                height: 12,
+                                borderRadius: '50%',
+                                border: `1px solid ${theme.palette.divider}`,
+                                backgroundColor: swatchColor ?? 'transparent',
+                                alignSelf: { xs: 'flex-start', md: 'center' },
+                                mt: { xs: 0.5, md: 0 },
+                              }}
                             />
                             <TextField
                               label="Name"
