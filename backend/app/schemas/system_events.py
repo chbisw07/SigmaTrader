@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.pydantic_compat import PYDANTIC_V2, ConfigDict
 
@@ -26,3 +26,23 @@ class SystemEventRead(BaseModel):
 
 
 __all__ = ["SystemEventRead"]
+
+
+class SystemEventsCleanupRequest(BaseModel):
+    max_days: int = Field(default=7, ge=0)
+    dry_run: bool = False
+
+    def max_days_delta(self) -> timedelta:
+        return timedelta(days=int(self.max_days))
+
+
+class SystemEventsCleanupResponse(BaseModel):
+    deleted: int
+    remaining: int
+
+
+__all__ = [
+    "SystemEventRead",
+    "SystemEventsCleanupRequest",
+    "SystemEventsCleanupResponse",
+]

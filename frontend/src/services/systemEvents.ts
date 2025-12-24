@@ -28,3 +28,17 @@ export async function fetchSystemEvents(
   return (await res.json()) as SystemEvent[]
 }
 
+export async function cleanupSystemEvents(payload: {
+  max_days: number
+  dry_run?: boolean
+}): Promise<{ deleted: number; remaining: number }> {
+  const res = await fetch('/api/system-events/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to cleanup system events (${res.status})`)
+  }
+  return (await res.json()) as { deleted: number; remaining: number }
+}
