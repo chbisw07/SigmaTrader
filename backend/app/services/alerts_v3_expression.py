@@ -1006,9 +1006,13 @@ def _as_number(value: SeriesValue) -> Tuple[Optional[float], Optional[float]]:
     return value.now, value.prev
 
 
-def _coerce_tf(value: ExprNode) -> str:
+def _coerce_tf(value: ExprNode, *, params: Dict[str, Any]) -> str:
     if isinstance(value, IdentNode):
-        return value.name.strip().strip('"').strip("'")
+        raw = value.name.strip()
+        key = raw.strip().upper()
+        if key in params and isinstance(params[key], str):
+            return str(params[key]).strip().strip('"').strip("'")
+        return raw.strip().strip('"').strip("'")
     if isinstance(value, NumberNode):
         # allow 1d tokenization as NUMBER+IDENT at higher parser; not here
         return str(int(value.value))
@@ -1020,6 +1024,7 @@ def _eval_series(
     *,
     cache: CandleCache,
     tf_hint: str,
+    params: Dict[str, Any],
 ) -> Tuple[list[float], Optional[datetime]]:
     """Evaluate a series-producing expression into a numeric series.
 
@@ -1035,6 +1040,12 @@ def _eval_series(
     def _len_from(n: ExprNode) -> int:
         if isinstance(n, NumberNode):
             return int(n.value)
+        if isinstance(n, IdentNode):
+            key = n.name.strip().upper()
+            v = params.get(key)
+            if isinstance(v, (int, float)) and int(v) > 0:
+                return int(v)
+            raise IndicatorAlertError(f"Length parameter '{n.name}' must be numeric")
         raise IndicatorAlertError("Length must be a numeric constant")
 
     def _float_from(n: ExprNode) -> float:
@@ -1071,12 +1082,16 @@ def _eval_series(
         raise IndicatorAlertError(f"Unsupported series identifier '{node.name}'")
 
     if isinstance(node, UnaryNode):
-        series, bar_time = _eval_series(node.child, cache=cache, tf_hint=tf_hint)
+        series, bar_time = _eval_series(
+            node.child, cache=cache, tf_hint=tf_hint, params=params
+        )
         return _unary_series(series, node.op), bar_time
 
     if isinstance(node, BinaryNode):
-        left, lt = _eval_series(node.left, cache=cache, tf_hint=tf_hint)
-        right, rt = _eval_series(node.right, cache=cache, tf_hint=tf_hint)
+        left, lt = _eval_series(node.left, cache=cache, tf_hint=tf_hint, params=params)
+        right, rt = _eval_series(
+            node.right, cache=cache, tf_hint=tf_hint, params=params
+        )
         return _binop_series(left, right, node.op), (lt or rt)
 
     if isinstance(node, CallNode):
@@ -1085,16 +1100,16 @@ def _eval_series(
         if fn in {"OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"}:
             if len(node.args) != 1:
                 raise IndicatorAlertError(f"{fn} expects (timeframe)")
-            tf = _coerce_tf(node.args[0]).lower()
+            tf = _coerce_tf(node.args[0], params=params).lower()
             return cache.series(tf, fn.lower())
 
         if fn == "PRICE":
             if len(node.args) == 1:
-                tf = _coerce_tf(node.args[0]).lower()
+                tf = _coerce_tf(node.args[0], params=params).lower()
                 return cache.series(tf, "close")
             if len(node.args) == 2:
-                source = _coerce_tf(node.args[0]).lower()
-                tf = _coerce_tf(node.args[1]).lower()
+                source = _coerce_tf(node.args[0], params=params).lower()
+                tf = _coerce_tf(node.args[1], params=params).lower()
                 if source not in {"open", "high", "low", "close"}:
                     raise IndicatorAlertError(
                         "PRICE source must be open/high/low/close"
@@ -1108,8 +1123,14 @@ def _eval_series(
             if len(node.args) not in {2, 3}:
                 raise IndicatorAlertError(f"{fn} expects (series, length, timeframe?)")
             length = _len_from(node.args[1])
-            tf = _coerce_tf(node.args[2]).lower() if len(node.args) == 3 else tf_hint
-            src, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            tf = (
+                _coerce_tf(node.args[2], params=params).lower()
+                if len(node.args) == 3
+                else tf_hint
+            )
+            src, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf, params=params
+            )
             if fn == "SMA":
                 return _sma_series(src, length), bar_time
             if fn == "EMA":
@@ -1156,15 +1177,17 @@ def _eval_series(
         if fn == "RET":
             if len(node.args) != 2:
                 raise IndicatorAlertError("RET expects (source, timeframe)")
-            tf = _coerce_tf(node.args[1]).lower()
-            src, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            tf = _coerce_tf(node.args[1], params=params).lower()
+            src, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf, params=params
+            )
             return _ret_series(src), bar_time
 
         if fn == "ATR":
             if len(node.args) != 2:
                 raise IndicatorAlertError("ATR expects (length, timeframe)")
             length = _len_from(node.args[0])
-            tf = _coerce_tf(node.args[1]).lower()
+            tf = _coerce_tf(node.args[1], params=params).lower()
             highs, bar_time = cache.series(tf, "high")
             lows, _ = cache.series(tf, "low")
             closes, _ = cache.series(tf, "close")
@@ -1173,25 +1196,33 @@ def _eval_series(
         if fn == "OBV":
             if len(node.args) != 3:
                 raise IndicatorAlertError("OBV expects (close, volume, timeframe)")
-            tf = _coerce_tf(node.args[2]).lower()
-            closes, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
-            vols, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf)
+            tf = _coerce_tf(node.args[2], params=params).lower()
+            closes, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf, params=params
+            )
+            vols, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf, params=params)
             return _obv_series(closes, vols), bar_time
 
         if fn == "VWAP":
             if len(node.args) != 3:
                 raise IndicatorAlertError("VWAP expects (price, volume, timeframe)")
-            tf = _coerce_tf(node.args[2]).lower()
+            tf = _coerce_tf(node.args[2], params=params).lower()
             candles = cache.candles(tf)
-            prices, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
-            vols, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf)
+            prices, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf, params=params
+            )
+            vols, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf, params=params)
             return _vwap_series(candles=candles, prices=prices, volumes=vols), bar_time
 
         if fn in {"CROSSOVER", "CROSSUNDER", "CROSSING_ABOVE", "CROSSING_BELOW"}:
             if len(node.args) != 2:
                 raise IndicatorAlertError(f"{fn} expects (a, b)")
-            a, bt = _eval_series(node.args[0], cache=cache, tf_hint=tf_hint)
-            b, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf_hint)
+            a, bt = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf_hint, params=params
+            )
+            b, _ = _eval_series(
+                node.args[1], cache=cache, tf_hint=tf_hint, params=params
+            )
             aa, bb = _align_series(a, b)
             out = [0.0] * len(aa)
             is_up = fn in {"CROSSOVER", "CROSSING_ABOVE"}
@@ -1216,7 +1247,7 @@ def _eval_numeric(
     settings: Settings,
     cache: CandleCache,
     holding: HoldingRead | None,
-    params: Dict[str, SeriesValue],
+    params: Dict[str, Any],
     custom_indicators: Dict[str, Tuple[List[str], ExprNode]],
     allow_fetch: bool,
 ) -> SeriesValue:
@@ -1225,9 +1256,21 @@ def _eval_numeric(
 
     if isinstance(node, IdentNode):
         name = node.name.upper()
-        # Parameter reference (custom indicators)
+        # Parameter reference (strategies/custom indicators)
         if name in params:
-            return params[name]
+            v = params[name]
+            if isinstance(v, SeriesValue):
+                return v
+            if isinstance(v, bool):
+                n = 1.0 if v else 0.0
+                return SeriesValue(n, n, None)
+            if isinstance(v, (int, float)):
+                n = float(v)
+                return SeriesValue(n, n, None)
+            raise IndicatorAlertError(
+                f"Parameter '{node.name}' is not numeric; "
+                "cannot use in numeric context."
+            )
         # Metric reference
         if name in _ALLOWED_METRICS:
             now, prev, bar_time = compute_metric(
@@ -1332,13 +1375,17 @@ def _eval_numeric(
 
         # Built-ins
         if name in {"OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"}:
-            series, bar_time = _eval_series(node, cache=cache, tf_hint="1d")
+            series, bar_time = _eval_series(
+                node, cache=cache, tf_hint="1d", params=params
+            )
             now = series[-1] if series else None
             prev = series[-2] if len(series) >= 2 else None
             return SeriesValue(now, prev, bar_time)
 
         if name == "PRICE":
-            series, bar_time = _eval_series(node, cache=cache, tf_hint="1d")
+            series, bar_time = _eval_series(
+                node, cache=cache, tf_hint="1d", params=params
+            )
             now = series[-1] if series else None
             prev = series[-2] if len(series) >= 2 else None
             return SeriesValue(now, prev, bar_time)
@@ -1346,8 +1393,10 @@ def _eval_numeric(
         if name == "RET":
             if len(node.args) != 2:
                 raise IndicatorAlertError("RET expects (source, timeframe)")
-            tf = _coerce_tf(node.args[1]).lower()
-            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            tf = _coerce_tf(node.args[1], params=params).lower()
+            series, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf, params=params
+            )
             v = _ret(series)
             v.bar_time = bar_time
             return v
@@ -1355,7 +1404,9 @@ def _eval_numeric(
         if name in {"OBV", "VWAP"}:
             # Compute from full series; works for both latest-only and per-bar
             # (in-memory) caches.
-            series, bar_time = _eval_series(node, cache=cache, tf_hint="1d")
+            series, bar_time = _eval_series(
+                node, cache=cache, tf_hint="1d", params=params
+            )
             now = series[-1] if series else None
             prev = series[-2] if len(series) >= 2 else None
             return SeriesValue(_as_optional(now), _as_optional(prev), bar_time)
@@ -1376,8 +1427,14 @@ def _eval_numeric(
                 allow_fetch=allow_fetch,
             )
             length = int(length_val.now) if length_val.now is not None else 0
-            tf = _coerce_tf(node.args[2]).lower() if len(node.args) == 3 else "1d"
-            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint=tf)
+            tf = (
+                _coerce_tf(node.args[2], params=params).lower()
+                if len(node.args) == 3
+                else "1d"
+            )
+            series, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf, params=params
+            )
             if name == "SMA":
                 v = _sma(series, length)
             elif name == "EMA":
@@ -1405,7 +1462,9 @@ def _eval_numeric(
                 allow_fetch=allow_fetch,
             )
             bars = int(bars_val.now) if bars_val.now is not None else -1
-            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            series, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint="1d", params=params
+            )
             v = _lag(series, bars)
             v.bar_time = bar_time
             return v
@@ -1424,7 +1483,9 @@ def _eval_numeric(
                 allow_fetch=allow_fetch,
             )
             length = int(length_val.now) if length_val.now is not None else 0
-            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            series, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint="1d", params=params
+            )
             v = _roc(series, length)
             v.bar_time = bar_time
             return v
@@ -1443,7 +1504,9 @@ def _eval_numeric(
                 allow_fetch=allow_fetch,
             )
             length = int(length_val.now) if length_val.now is not None else 0
-            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            series, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint="1d", params=params
+            )
             v = _z_score(series, length)
             v.bar_time = bar_time
             return v
@@ -1473,7 +1536,9 @@ def _eval_numeric(
             )
             length = int(length_val.now) if length_val.now is not None else 0
             mult = float(mult_val.now) if mult_val.now is not None else 0.0
-            series, bar_time = _eval_series(node.args[0], cache=cache, tf_hint="1d")
+            series, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint="1d", params=params
+            )
             v = _bollinger(series, length, mult)
             v.bar_time = bar_time
             return v
@@ -1492,7 +1557,7 @@ def _eval_numeric(
                 allow_fetch=allow_fetch,
             )
             length = int(length_val.now) if length_val.now is not None else 0
-            tf = _coerce_tf(node.args[1]).lower()
+            tf = _coerce_tf(node.args[1], params=params).lower()
             highs, bar_time = cache.series(tf, "high")
             lows, _ = cache.series(tf, "low")
             closes, _ = cache.series(tf, "close")
@@ -1650,6 +1715,7 @@ def eval_condition(
     symbol: str,
     exchange: str,
     holding: HoldingRead | None = None,
+    params: Optional[Dict[str, Any]] = None,
     custom_indicators: Dict[str, Tuple[List[str], ExprNode]],
     allow_fetch: bool = True,
 ) -> Tuple[bool, Dict[str, float], Optional[datetime]]:
@@ -1660,6 +1726,7 @@ def eval_condition(
 
     cache = CandleCache(db, settings, symbol, exchange, allow_fetch=allow_fetch)
     snapshot: Dict[str, float] = {}
+    p = {str(k).strip().upper(): v for k, v in (params or {}).items() if str(k).strip()}
 
     def _bool(n: ExprNode) -> bool:
         if isinstance(n, LogicalNode):
@@ -1678,7 +1745,7 @@ def eval_condition(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -1688,7 +1755,7 @@ def eval_condition(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -1718,7 +1785,7 @@ def eval_condition(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -1728,7 +1795,7 @@ def eval_condition(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -1769,7 +1836,7 @@ def eval_condition(
             settings=settings,
             cache=cache,
             holding=holding,
-            params={},
+            params=p,
             custom_indicators=custom_indicators,
             allow_fetch=allow_fetch,
         )

@@ -50,6 +50,12 @@ class AlertDefinitionCreate(BaseModel):
     variables: List[AlertVariableDef] = Field(default_factory=list)
     condition_dsl: str = Field(..., min_length=1)
 
+    # Optional saved strategy linkage (SignalStrategyVersion) that the UI can
+    # use to populate variables/condition and pin the alert to a version.
+    signal_strategy_version_id: Optional[int] = None
+    signal_strategy_output: Optional[str] = None
+    signal_strategy_params: Dict[str, Any] = Field(default_factory=dict)
+
     trigger_mode: str = Field(default="ONCE_PER_BAR")
     throttle_seconds: Optional[int] = Field(default=None, ge=1)
     only_market_hours: bool = False
@@ -71,6 +77,10 @@ class AlertDefinitionUpdate(BaseModel):
     evaluation_cadence: Optional[str] = None
     variables: Optional[List[AlertVariableDef]] = None
     condition_dsl: Optional[str] = None
+
+    signal_strategy_version_id: Optional[int] = None
+    signal_strategy_output: Optional[str] = None
+    signal_strategy_params: Optional[Dict[str, Any]] = None
 
     trigger_mode: Optional[str] = None
     throttle_seconds: Optional[int] = Field(default=None, ge=1)
@@ -94,6 +104,10 @@ class AlertDefinitionRead(BaseModel):
     evaluation_cadence: str
     variables: List[AlertVariableDef] = Field(default_factory=list)
     condition_dsl: str
+
+    signal_strategy_version_id: Optional[int] = None
+    signal_strategy_output: Optional[str] = None
+    signal_strategy_params: Dict[str, Any] = Field(default_factory=dict)
 
     trigger_mode: str
     throttle_seconds: Optional[int] = None

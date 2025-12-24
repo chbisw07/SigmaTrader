@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -897,6 +897,7 @@ class SymbolIndicatorsRequest(BaseModel):
     timeframe: str = "1d"
     hydrate_mode: str = "auto"  # none|auto|force
     variables: List[AlertVariableDef] = []
+    params: Dict[str, Any] = {}
 
 
 class SymbolIndicatorsResponse(BaseModel):
@@ -1001,6 +1002,9 @@ def symbol_indicators(
         name_map[v.name.strip().upper()] = v.name.strip()
 
     cache = _InMemoryCandleCache(symbol=sym, exchange=exch, candles=candles)
+    params = (
+        payload.params if isinstance(getattr(payload, "params", None), dict) else {}
+    )
     ts = [c["ts"].date().isoformat() for c in candles if c.get("ts")]
     n = len(ts)
 
@@ -1019,7 +1023,7 @@ def symbol_indicators(
                     settings=settings,
                     cache=cache,  # type: ignore[arg-type]
                     holding=None,
-                    params={},
+                    params=params,
                     custom_indicators=custom_indicators,
                     allow_fetch=False,
                 )
@@ -1053,6 +1057,7 @@ class SymbolSignalsRequest(BaseModel):
     hydrate_mode: str = "auto"  # none|auto|force
     variables: List[AlertVariableDef] = []
     condition_dsl: str
+    params: Dict[str, Any] = {}
 
 
 class SymbolSignalsResponse(BaseModel):
@@ -1170,6 +1175,9 @@ def symbol_signals(
 
     markers: list[SignalMarker] = []
     errors: list[str] = []
+    params = (
+        payload.params if isinstance(getattr(payload, "params", None), dict) else {}
+    )
 
     def _bool(n: ExprNode) -> bool:
         if isinstance(n, LogicalNode):
@@ -1188,7 +1196,7 @@ def symbol_signals(
                 settings=settings,
                 cache=cache,  # type: ignore[arg-type]
                 holding=None,
-                params={},
+                params=params,
                 custom_indicators=custom_indicators,
                 allow_fetch=False,
             )
@@ -1198,7 +1206,7 @@ def symbol_signals(
                 settings=settings,
                 cache=cache,  # type: ignore[arg-type]
                 holding=None,
-                params={},
+                params=params,
                 custom_indicators=custom_indicators,
                 allow_fetch=False,
             )
@@ -1226,7 +1234,7 @@ def symbol_signals(
                 settings=settings,
                 cache=cache,  # type: ignore[arg-type]
                 holding=None,
-                params={},
+                params=params,
                 custom_indicators=custom_indicators,
                 allow_fetch=False,
             )
@@ -1236,7 +1244,7 @@ def symbol_signals(
                 settings=settings,
                 cache=cache,  # type: ignore[arg-type]
                 holding=None,
-                params={},
+                params=params,
                 custom_indicators=custom_indicators,
                 allow_fetch=False,
             )
@@ -1274,7 +1282,7 @@ def symbol_signals(
             settings=settings,
             cache=cache,  # type: ignore[arg-type]
             holding=None,
-            params={},
+            params=params,
             custom_indicators=custom_indicators,
             allow_fetch=False,
         )

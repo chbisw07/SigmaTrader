@@ -12,6 +12,7 @@ import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
+import Switch from '@mui/material/Switch'
 import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
@@ -45,6 +46,12 @@ import {
   type ScreenerRow,
   type ScreenerRun,
 } from '../services/screenerV3'
+import {
+  listSignalStrategies,
+  listSignalStrategyVersions,
+  type SignalStrategy,
+  type SignalStrategyVersion,
+} from '../services/signalStrategies'
 
 type ConditionRow = { lhs: string; op: string; rhs: string }
 
@@ -202,6 +209,17 @@ export function ScreenerPage() {
   const [helpOpen, setHelpOpen] = useState(false)
   const [evaluationCadence, setEvaluationCadence] = useState<string>('')
 
+  // Saved strategy (optional)
+  const [useSavedStrategy, setUseSavedStrategy] = useState(false)
+  const [strategies, setStrategies] = useState<SignalStrategy[]>([])
+  const [strategiesLoading, setStrategiesLoading] = useState(false)
+  const [strategiesError, setStrategiesError] = useState<string | null>(null)
+  const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(null)
+  const [strategyVersions, setStrategyVersions] = useState<SignalStrategyVersion[]>([])
+  const [selectedStrategyVersionId, setSelectedStrategyVersionId] = useState<number | null>(null)
+  const [selectedStrategyOutput, setSelectedStrategyOutput] = useState<string | null>(null)
+  const [strategyParams, setStrategyParams] = useState<Record<string, unknown>>({})
+
   const [run, setRun] = useState<ScreenerRun | null>(null)
   const [runLoading, setRunLoading] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
@@ -293,6 +311,56 @@ export function ScreenerPage() {
 
   const inlineDsl = useMemo(() => splitInlineDslVariables(conditionDsl), [conditionDsl])
 
+  const activeStrategyVersion = useMemo(() => {
+    if (selectedStrategyVersionId == null) return null
+    return strategyVersions.find((v) => v.id === selectedStrategyVersionId) ?? null
+  }, [selectedStrategyVersionId, strategyVersions])
+
+  useEffect(() => {
+    if (!useSavedStrategy) return
+    if (!activeStrategyVersion) return
+
+    setVariables(activeStrategyVersion.variables ?? [])
+    setConditionTab(1)
+
+    const signalOutputs = (activeStrategyVersion.outputs ?? []).filter(
+      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+    )
+    const defaultOutput = signalOutputs[0]?.name ?? null
+    if (!selectedStrategyOutput && defaultOutput) {
+      setSelectedStrategyOutput(defaultOutput)
+    }
+
+    setStrategyParams((prev) => {
+      const next: Record<string, unknown> = {}
+      for (const inp of activeStrategyVersion.inputs ?? []) {
+        if (!inp?.name) continue
+        if (inp.default != null) next[inp.name] = inp.default
+      }
+      for (const [k, v] of Object.entries(prev || {})) {
+        next[k] = v
+      }
+      return next
+    })
+  }, [activeStrategyVersion?.id, selectedStrategyOutput, useSavedStrategy])
+
+  useEffect(() => {
+    if (!useSavedStrategy) return
+    if (!activeStrategyVersion) return
+    const signalOutputs = (activeStrategyVersion.outputs ?? []).filter(
+      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+    )
+    const resolvedName =
+      signalOutputs.find((o) => o.name === selectedStrategyOutput)?.name ??
+      signalOutputs[0]?.name ??
+      null
+    const outDsl =
+      signalOutputs.find((o) => o.name === resolvedName)?.dsl ??
+      signalOutputs[0]?.dsl ??
+      ''
+    setConditionDsl(String(outDsl || ''))
+  }, [activeStrategyVersion?.id, selectedStrategyOutput, useSavedStrategy])
+
   const effectiveVariables = useMemo(() => {
     const fromInline = conditionTab === 1 ? inlineDsl.inlineVariables : []
     const fromUi = variables
@@ -329,10 +397,12 @@ export function ScreenerPage() {
   }
 
   const updateVar = (idx: number, next: AlertVariableDef) => {
+    if (useSavedStrategy) return
     setVariables((prev) => prev.map((v, i) => (i === idx ? next : v)))
   }
 
   const setVariableKind = (idx: number, kind: VariableKind) => {
+    if (useSavedStrategy) return
     setVariables((prev) =>
       prev.map((v, i) => {
         if (i !== idx) return v
@@ -408,6 +478,59 @@ export function ScreenerPage() {
   }, [])
 
   useEffect(() => {
+    let active = true
+    setStrategiesLoading(true)
+    setStrategiesError(null)
+    void (async () => {
+      try {
+        const res = await listSignalStrategies({ includeLatest: true, includeUsage: false })
+        if (!active) return
+        setStrategies(res)
+      } catch (err) {
+        if (!active) return
+        setStrategies([])
+        setStrategiesError(err instanceof Error ? err.message : 'Failed to load strategies')
+      } finally {
+        if (!active) return
+        setStrategiesLoading(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (selectedStrategyId == null) {
+      setStrategyVersions([])
+      return
+    }
+    let active = true
+    void (async () => {
+      try {
+        const res = await listSignalStrategyVersions(selectedStrategyId)
+        if (!active) return
+        setStrategyVersions(res)
+        if (res.length > 0) {
+          const desired = selectedStrategyVersionId
+          const exists = desired != null && res.some((v) => v.id === desired)
+          if (!exists) setSelectedStrategyVersionId(res[0]!.id)
+        }
+      } catch (err) {
+        if (!active) return
+        setStrategyVersions([])
+        setStrategiesError(
+          err instanceof Error ? err.message : 'Failed to load strategy versions',
+        )
+      }
+    })()
+    return () => {
+      active = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStrategyId])
+
+  useEffect(() => {
     if (!run || run.status !== 'RUNNING') return
     let active = true
     const tick = async () => {
@@ -452,6 +575,10 @@ export function ScreenerPage() {
       setRunError('Select Holdings and/or at least one group.')
       return
     }
+    if (useSavedStrategy && selectedStrategyVersionId == null) {
+      setRunError('Select a saved strategy (and version) first.')
+      return
+    }
 
     setRunLoading(true)
     setRunError(null)
@@ -462,6 +589,9 @@ export function ScreenerPage() {
         variables: effectiveVariables,
         condition_dsl: dsl,
         evaluation_cadence: evaluationCadence.trim() || null,
+        signal_strategy_version_id: useSavedStrategy ? selectedStrategyVersionId : null,
+        signal_strategy_output: useSavedStrategy ? selectedStrategyOutput : null,
+        signal_strategy_params: useSavedStrategy ? strategyParams : {},
       })
       setRun(res)
       if (res.status === 'DONE' && !res.rows) {
@@ -642,15 +772,176 @@ export function ScreenerPage() {
                   helperText="Leave blank to auto-pick from referenced timeframes."
                 />
               </Stack>
-            </Stack>
+	            </Stack>
 
-            <Box>
-              <Stack direction="row" spacing={1} sx={{ mb: 1, alignItems: 'center' }}>
-                <Typography variant="subtitle2">Variables</Typography>
-                <Button size="small" onClick={handleAddVariable}>
-                  Add variable
-                </Button>
-              </Stack>
+              <Box>
+                <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={useSavedStrategy}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setUseSavedStrategy(next)
+                          if (next) setConditionTab(1)
+                        }}
+                      />
+                    }
+                    label="Use saved strategy"
+                  />
+                  {strategiesError && (
+                    <Typography variant="caption" color="error">
+                      {strategiesError}
+                    </Typography>
+                  )}
+                </Stack>
+
+                {useSavedStrategy && (
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                      <Autocomplete
+                        options={strategies}
+                        value={
+                          strategies.find((s) => s.id === selectedStrategyId) ?? null
+                        }
+                        loading={strategiesLoading}
+                        onChange={(_e, v) => {
+                          setSelectedStrategyId(v?.id ?? null)
+                          setSelectedStrategyVersionId(null)
+                          setSelectedStrategyOutput(null)
+                          setStrategyParams({})
+                        }}
+                        getOptionLabel={(s) => `${s.name} (v${s.latest_version})`}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="Strategy"
+                            size="small"
+                            sx={{ minWidth: 360 }}
+                          />
+                        )}
+                      />
+
+                      <TextField
+                        label="Version"
+                        select
+                        size="small"
+                        value={selectedStrategyVersionId ?? ''}
+                        onChange={(e) => {
+                          const n = Number(e.target.value || '')
+                          setSelectedStrategyVersionId(Number.isFinite(n) ? n : null)
+                          setSelectedStrategyOutput(null)
+                        }}
+                        sx={{ minWidth: 120 }}
+                        disabled={selectedStrategyId == null || strategyVersions.length === 0}
+                      >
+                        {strategyVersions.map((v) => (
+                          <MenuItem key={v.id} value={v.id}>
+                            v{v.version}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+
+                      <TextField
+                        label="Signal output"
+                        select
+                        size="small"
+                        value={selectedStrategyOutput ?? ''}
+                        onChange={(e) => setSelectedStrategyOutput(e.target.value || null)}
+                        sx={{ minWidth: 180 }}
+                        disabled={
+                          !activeStrategyVersion ||
+                          (activeStrategyVersion.outputs ?? []).filter(
+                            (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+                          ).length === 0
+                        }
+                      >
+                        {(activeStrategyVersion?.outputs ?? [])
+                          .filter((o) => String(o.kind || '').toUpperCase() === 'SIGNAL')
+                          .map((o) => (
+                            <MenuItem key={o.name} value={o.name}>
+                              {o.name}
+                            </MenuItem>
+                          ))}
+                      </TextField>
+                    </Stack>
+
+                    {(activeStrategyVersion?.inputs ?? []).length > 0 && (
+                      <Box>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                          Strategy parameters
+                        </Typography>
+                        <Stack spacing={1}>
+                          {(activeStrategyVersion?.inputs ?? []).map((inp) => {
+                            const key = inp.name
+                            const raw = strategyParams[key]
+                            const val = raw == null ? '' : String(raw)
+                            const typ = inp.type
+                            const enumValues = Array.isArray(inp.enum_values) ? inp.enum_values : []
+                            return (
+                              <Stack key={key} direction="row" spacing={1} alignItems="center">
+                                <TextField
+                                  label={key}
+                                  size="small"
+                                  value={val}
+                                  onChange={(e) => {
+                                    const nextRaw = e.target.value
+                                    const nextVal =
+                                      typ === 'number'
+                                        ? (Number.isFinite(Number(nextRaw)) ? Number(nextRaw) : nextRaw)
+                                        : typ === 'bool'
+                                          ? nextRaw === 'true'
+                                          : nextRaw
+                                    setStrategyParams((prev) => ({ ...prev, [key]: nextVal }))
+                                  }}
+                                  select={typ === 'bool' || (typ === 'enum' && enumValues.length > 0)}
+                                  sx={{ minWidth: 220 }}
+                                >
+                                  {typ === 'bool' ? (
+                                    [
+                                      <MenuItem key="true" value="true">
+                                        true
+                                      </MenuItem>,
+                                      <MenuItem key="false" value="false">
+                                        false
+                                      </MenuItem>,
+                                    ]
+                                  ) : null}
+                                  {typ === 'enum' && enumValues.length > 0
+                                    ? enumValues.map((ev) => (
+                                        <MenuItem key={ev} value={ev}>
+                                          {ev}
+                                        </MenuItem>
+                                      ))
+                                    : null}
+                                </TextField>
+                                {inp.default != null && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    default: {String(inp.default)}
+                                  </Typography>
+                                )}
+                              </Stack>
+                            )
+                          })}
+                        </Stack>
+                      </Box>
+                    )}
+                  </Stack>
+                )}
+              </Box>
+
+	            <Box
+                sx={{
+                  pointerEvents: useSavedStrategy ? 'none' : 'auto',
+                  opacity: useSavedStrategy ? 0.7 : 1,
+                }}
+              >
+	              <Stack direction="row" spacing={1} sx={{ mb: 1, alignItems: 'center' }}>
+	                <Typography variant="subtitle2">Variables</Typography>
+	                <Button size="small" onClick={handleAddVariable}>
+	                  Add variable
+	                </Button>
+	              </Stack>
               {variables.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   Optional: define readable aliases like <code>RSI_1D_14</code> ={' '}
@@ -1115,14 +1406,17 @@ export function ScreenerPage() {
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
                 Condition
               </Typography>
-              <Tabs
-                value={conditionTab}
-                onChange={(_e, v) => setConditionTab(v)}
-                sx={{ mb: 1 }}
-              >
-                <Tab label="Builder" />
-                <Tab label="Advanced (DSL)" />
-              </Tabs>
+	              <Tabs
+	                value={conditionTab}
+	                onChange={(_e, v) => {
+	                  if (useSavedStrategy) return
+	                  setConditionTab(v)
+	                }}
+	                sx={{ mb: 1 }}
+	              >
+	                <Tab label="Builder" disabled={useSavedStrategy} />
+	                <Tab label="Advanced (DSL)" />
+	              </Tabs>
 
               {conditionTab === 0 ? (
                 <Stack spacing={1}>

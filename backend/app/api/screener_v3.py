@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 from app.api.auth import get_current_user
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.models import Group, GroupMember, ScreenerRun, User
+from app.models import (
+    Group,
+    GroupMember,
+    ScreenerRun,
+    SignalStrategy,
+    SignalStrategyVersion,
+    User,
+)
 from app.schemas.groups import GroupMemberCreate, GroupRead
 from app.schemas.screener_v3 import (
     ScreenerCreateGroupRequest,
@@ -17,11 +24,20 @@ from app.schemas.screener_v3 import (
     ScreenerRunRead,
     ScreenerRunRequest,
 )
+from app.services.indicator_alerts import IndicatorAlertError
 from app.services.screener_v3 import (
     create_screener_run,
     evaluate_screener_v3,
     resolve_screener_targets,
     start_screener_run_async,
+)
+from app.services.signal_strategies import (
+    load_inputs,
+    load_outputs,
+    load_variables,
+    materialize_params,
+    pick_default_signal_output,
+    pick_output,
 )
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -55,6 +71,13 @@ def _rows_from_json(raw: str) -> list[ScreenerRow]:
 
 def _run_to_read(run: ScreenerRun, *, include_rows: bool) -> ScreenerRunRead:
     rows = _rows_from_json(run.results_json) if include_rows else None
+    params: dict = {}
+    try:
+        parsed = json.loads(getattr(run, "signal_strategy_params_json", "") or "{}")
+        if isinstance(parsed, dict):
+            params = parsed
+    except Exception:
+        params = {}
     return ScreenerRunRead(
         id=run.id,
         status=run.status,
@@ -68,7 +91,26 @@ def _run_to_read(run: ScreenerRun, *, include_rows: bool) -> ScreenerRunRead:
         finished_at=run.finished_at,
         created_at=run.created_at,
         rows=rows,
+        signal_strategy_version_id=getattr(run, "signal_strategy_version_id", None),
+        signal_strategy_output=getattr(run, "signal_strategy_output", None),
+        signal_strategy_params=params,
     )
+
+
+def _get_strategy_version_or_404(
+    db: Session, *, user_id: int, version_id: int
+) -> SignalStrategyVersion:
+    v = db.get(SignalStrategyVersion, version_id)
+    if v is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    s = db.get(SignalStrategy, v.strategy_id)
+    if s is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if (
+        getattr(s, "scope", "USER") or "USER"
+    ).upper() == "USER" and s.owner_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return v
 
 
 @router.post("/run", response_model=ScreenerRunRead)
@@ -78,7 +120,35 @@ def run_screener(
     settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
 ) -> ScreenerRunRead:
+    variables = payload.variables
     text = (payload.condition_dsl or "").strip()
+    strategy_version_id = payload.signal_strategy_version_id
+    strategy_output = payload.signal_strategy_output
+    strategy_params_json = json.dumps(payload.signal_strategy_params or {}, default=str)
+    params = payload.signal_strategy_params or {}
+
+    if strategy_version_id is not None:
+        try:
+            v = _get_strategy_version_or_404(
+                db, user_id=user.id, version_id=int(strategy_version_id)
+            )
+            inputs = load_inputs(getattr(v, "inputs_json", "[]") or "[]")
+            variables = load_variables(getattr(v, "variables_json", "[]") or "[]")
+            outputs = load_outputs(getattr(v, "outputs_json", "[]") or "[]")
+            out = (
+                pick_output(outputs, name=strategy_output, require_kind="SIGNAL")
+                if strategy_output
+                else pick_default_signal_output(outputs)
+            )
+            params = materialize_params(inputs=inputs, overrides=params)
+            strategy_params_json = json.dumps(params, default=str)
+            strategy_output = out.name
+            text = (out.dsl or "").strip()
+        except IndicatorAlertError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+
     if not text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -97,10 +167,7 @@ def run_screener(
     # Persist a run record even for synchronous runs so the UI can re-open and
     # (optionally) create a group from matches using the same run_id.
     variables_json = json.dumps(
-        [
-            v.model_dump() if hasattr(v, "model_dump") else v.dict()
-            for v in payload.variables
-        ],
+        [v.model_dump() if hasattr(v, "model_dump") else v.dict() for v in variables],
         default=str,
     )
     run = create_screener_run(
@@ -112,6 +179,11 @@ def run_screener(
         condition_dsl=text,
         evaluation_cadence=(payload.evaluation_cadence or "").strip() or "1m",
         total_symbols=total,
+        signal_strategy_version_id=(
+            int(strategy_version_id) if strategy_version_id is not None else None
+        ),
+        signal_strategy_output=strategy_output,
+        signal_strategy_params_json=strategy_params_json,
     )
 
     # Hybrid execution: do a blocking run for small universes; async otherwise.
@@ -124,9 +196,10 @@ def run_screener(
                 user=user,
                 include_holdings=payload.include_holdings,
                 group_ids=payload.group_ids,
-                variables=payload.variables,
+                variables=variables,
                 condition_dsl=text,
                 evaluation_cadence=payload.evaluation_cadence,
+                params=params,
                 allow_fetch=False,
             )
         except Exception as exc:

@@ -55,6 +55,8 @@ def _run_migrations_if_needed() -> None:
             return
 
         cfg = Config(str(alembic_ini))
+        # Make migration execution independent of the process working directory.
+        cfg.set_main_option("script_location", str(backend_root / "alembic"))
         cfg.set_main_option("sqlalchemy.url", settings.database_url)
         command.upgrade(cfg, "head")
     except Exception:

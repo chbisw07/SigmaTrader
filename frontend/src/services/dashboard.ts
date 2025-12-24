@@ -153,6 +153,7 @@ export type SymbolIndicatorsRequest = {
   timeframe?: SymbolTimeframe
   hydrate_mode?: HydrateMode
   variables: AlertVariableDef[]
+  params?: Record<string, unknown>
 }
 
 export type SymbolIndicatorsResponse = {
@@ -190,6 +191,7 @@ export type SymbolSignalsRequest = {
   hydrate_mode?: HydrateMode
   variables: AlertVariableDef[]
   condition_dsl: string
+  params?: Record<string, unknown>
 }
 
 export type SignalMarker = {

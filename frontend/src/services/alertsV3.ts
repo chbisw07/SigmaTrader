@@ -18,6 +18,9 @@ export type AlertDefinition = {
   evaluation_cadence: string
   variables: AlertVariableDef[]
   condition_dsl: string
+  signal_strategy_version_id?: number | null
+  signal_strategy_output?: string | null
+  signal_strategy_params?: Record<string, unknown>
   trigger_mode: 'ONCE' | 'ONCE_PER_BAR' | 'EVERY_TIME'
   throttle_seconds?: number | null
   only_market_hours: boolean
@@ -41,6 +44,9 @@ export type AlertDefinitionCreate = {
   evaluation_cadence?: string | null
   variables: AlertVariableDef[]
   condition_dsl: string
+  signal_strategy_version_id?: number | null
+  signal_strategy_output?: string | null
+  signal_strategy_params?: Record<string, unknown>
   trigger_mode: 'ONCE' | 'ONCE_PER_BAR' | 'EVERY_TIME'
   throttle_seconds?: number | null
   only_market_hours: boolean

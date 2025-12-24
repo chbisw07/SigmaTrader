@@ -138,9 +138,11 @@ def _eval_condition_with_cache(
     cache: CandleCache,
     holding,
     custom_indicators: CustomIndicatorMap,
+    params: dict[str, object] | None = None,
     allow_fetch: bool,
 ) -> tuple[bool, bool, Optional[datetime]]:
     missing = False
+    p = {str(k).strip().upper(): v for k, v in (params or {}).items() if str(k).strip()}
 
     def _bool(n: ExprNode) -> bool:
         nonlocal missing
@@ -160,7 +162,7 @@ def _eval_condition_with_cache(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -170,7 +172,7 @@ def _eval_condition_with_cache(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -199,7 +201,7 @@ def _eval_condition_with_cache(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -209,7 +211,7 @@ def _eval_condition_with_cache(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom_indicators,
                 allow_fetch=allow_fetch,
             )
@@ -253,7 +255,7 @@ def _eval_condition_with_cache(
             settings=settings,
             cache=cache,
             holding=holding,
-            params={},
+            params=p,
             custom_indicators=custom_indicators,
             allow_fetch=allow_fetch,
         )
@@ -276,6 +278,7 @@ def evaluate_screener_v3(
     variables: list[AlertVariableDef],
     condition_dsl: str,
     evaluation_cadence: str | None,
+    params: dict[str, object] | None = None,
     allow_fetch: bool,
 ) -> tuple[list[ScreenerRow], str, dict[str, int]]:
     custom = compile_custom_indicators_for_user(
@@ -316,6 +319,7 @@ def evaluate_screener_v3(
     evaluated = 0
     matched_count = 0
     missing_count = 0
+    p = {str(k).strip().upper(): v for k, v in (params or {}).items() if str(k).strip()}
     for symbol, exchange in targets:
         evaluated += 1
         holding = holdings_map.get(symbol.upper())
@@ -334,6 +338,7 @@ def evaluate_screener_v3(
                 cache=cache,
                 holding=holding,
                 custom_indicators=custom,
+                params=p,
                 allow_fetch=allow_fetch,
             )
             last_price = None
@@ -349,7 +354,7 @@ def evaluate_screener_v3(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom,
                 allow_fetch=allow_fetch,
             ).now
@@ -363,7 +368,7 @@ def evaluate_screener_v3(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom,
                 allow_fetch=allow_fetch,
             ).now
@@ -373,7 +378,7 @@ def evaluate_screener_v3(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom,
                 allow_fetch=allow_fetch,
             ).now
@@ -383,7 +388,7 @@ def evaluate_screener_v3(
                 settings=settings,
                 cache=cache,
                 holding=holding,
-                params={},
+                params=p,
                 custom_indicators=custom,
                 allow_fetch=allow_fetch,
             ).now
@@ -396,7 +401,7 @@ def evaluate_screener_v3(
                     settings=settings,
                     cache=cache,
                     holding=holding,
-                    params={},
+                    params=p,
                     custom_indicators=custom,
                     allow_fetch=allow_fetch,
                 ).now
@@ -462,6 +467,9 @@ def create_screener_run(
     condition_dsl: str,
     evaluation_cadence: str,
     total_symbols: int,
+    signal_strategy_version_id: int | None = None,
+    signal_strategy_output: str | None = None,
+    signal_strategy_params_json: str = "{}",
 ) -> ScreenerRun:
     target = {"include_holdings": include_holdings, "group_ids": group_ids}
     run = ScreenerRun(
@@ -471,6 +479,9 @@ def create_screener_run(
         variables_json=variables_json,
         condition_dsl=condition_dsl,
         evaluation_cadence=evaluation_cadence,
+        signal_strategy_version_id=signal_strategy_version_id,
+        signal_strategy_output=signal_strategy_output,
+        signal_strategy_params_json=signal_strategy_params_json or "{}",
         total_symbols=total_symbols,
         evaluated_symbols=0,
         matched_symbols=0,
@@ -504,6 +515,15 @@ def _run_screener_in_thread(run_id: int) -> None:  # pragma: no cover
             group_ids = [int(x) for x in (target.get("group_ids") or [])]
             vars_raw = json.loads(run.variables_json or "[]")
             variables = [AlertVariableDef(**v) for v in vars_raw if isinstance(v, dict)]
+            params = {}
+            try:
+                parsed = json.loads(
+                    getattr(run, "signal_strategy_params_json", "") or "{}"
+                )
+                if isinstance(parsed, dict):
+                    params = parsed
+            except Exception:
+                params = {}
 
             rows, cadence, stats = evaluate_screener_v3(
                 db,
@@ -514,6 +534,7 @@ def _run_screener_in_thread(run_id: int) -> None:  # pragma: no cover
                 variables=variables,
                 condition_dsl=run.condition_dsl or "",
                 evaluation_cadence=run.evaluation_cadence,
+                params=params,
                 allow_fetch=False,
             )
             run.evaluation_cadence = cadence

@@ -16,6 +16,7 @@ from . import (
     positions,
     risk_settings,
     screener_v3,
+    signal_strategies,
     strategies,
     system_events,
     webhook,
@@ -127,6 +128,13 @@ router.include_router(
     prefix="/api/screener-v3",
     dependencies=[Depends(require_admin)],
     tags=["screener-v3"],
+)
+
+router.include_router(
+    signal_strategies.router,
+    prefix="/api/signal-strategies",
+    dependencies=[Depends(require_admin)],
+    tags=["signal-strategies"],
 )
 
 router.include_router(

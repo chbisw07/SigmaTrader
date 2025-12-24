@@ -16,6 +16,8 @@ from app.models import (
     CustomIndicator,
     Group,
     GroupMember,
+    SignalStrategy,
+    SignalStrategyVersion,
     User,
 )
 from app.schemas.alerts_v3 import (
@@ -51,6 +53,14 @@ from app.services.alerts_v3_expression import (
     eval_condition,
 )
 from app.services.indicator_alerts import IndicatorAlertError
+from app.services.signal_strategies import (
+    load_inputs,
+    load_outputs,
+    load_variables,
+    materialize_params,
+    pick_default_signal_output,
+    pick_output,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -188,6 +198,9 @@ def _alert_to_read(alert: AlertDefinition) -> AlertDefinitionRead:
         _action_params_from_json(getattr(alert, "action_params_json", "") or "{}"),
     )
     action_params = _action_params_from_json(action_params_json)
+    strategy_params = _action_params_from_json(
+        getattr(alert, "signal_strategy_params_json", "") or "{}"
+    )
     return AlertDefinitionRead(
         id=alert.id,
         name=alert.name,
@@ -201,6 +214,9 @@ def _alert_to_read(alert: AlertDefinition) -> AlertDefinitionRead:
         evaluation_cadence=alert.evaluation_cadence,
         variables=variables,
         condition_dsl=alert.condition_dsl,
+        signal_strategy_version_id=getattr(alert, "signal_strategy_version_id", None),
+        signal_strategy_output=getattr(alert, "signal_strategy_output", None),
+        signal_strategy_params=strategy_params,
         trigger_mode=alert.trigger_mode,
         throttle_seconds=alert.throttle_seconds,
         only_market_hours=alert.only_market_hours,
@@ -210,6 +226,51 @@ def _alert_to_read(alert: AlertDefinition) -> AlertDefinitionRead:
         last_triggered_at=alert.last_triggered_at,
         created_at=alert.created_at,
         updated_at=alert.updated_at,
+    )
+
+
+def _get_strategy_version_or_404(
+    db: Session, *, user_id: int, version_id: int
+) -> SignalStrategyVersion:
+    v = db.get(SignalStrategyVersion, version_id)
+    if v is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    s = db.get(SignalStrategy, v.strategy_id)
+    if s is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if (
+        getattr(s, "scope", "USER") or "USER"
+    ).upper() == "USER" and s.owner_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return v
+
+
+def _materialize_alert_from_signal_strategy(
+    db: Session,
+    *,
+    user_id: int,
+    version_id: int,
+    output_name: str | None,
+    overrides: dict[str, Any],
+) -> tuple[str, str, str, str]:
+    """Return (output_name, params_json, variables_json, condition_dsl)."""
+
+    v = _get_strategy_version_or_404(db, user_id=user_id, version_id=version_id)
+    inputs = load_inputs(getattr(v, "inputs_json", "[]") or "[]")
+    variables = load_variables(getattr(v, "variables_json", "[]") or "[]")
+    outputs = load_outputs(getattr(v, "outputs_json", "[]") or "[]")
+
+    if output_name:
+        out = pick_output(outputs, name=output_name, require_kind="SIGNAL")
+    else:
+        out = pick_default_signal_output(outputs)
+
+    params = materialize_params(inputs=inputs, overrides=overrides or {})
+    return (
+        out.name,
+        json.dumps(params, default=str),
+        _variables_to_json(variables),
+        (out.dsl or "").strip(),
     )
 
 
@@ -385,6 +446,35 @@ def create_alert_definition(
         symbol=payload.symbol,
         exchange=payload.exchange,
     )
+    variables_json = _variables_to_json(payload.variables)
+    condition_dsl = payload.condition_dsl
+    strategy_version_id: int | None = payload.signal_strategy_version_id
+    strategy_output: str | None = payload.signal_strategy_output
+    strategy_params_json = json.dumps(payload.signal_strategy_params or {}, default=str)
+
+    if strategy_version_id is not None:
+        try:
+            (
+                out_name,
+                params_json,
+                vars_json,
+                cond,
+            ) = _materialize_alert_from_signal_strategy(
+                db,
+                user_id=user.id,
+                version_id=strategy_version_id,
+                output_name=strategy_output,
+                overrides=payload.signal_strategy_params or {},
+            )
+        except IndicatorAlertError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        strategy_output = out_name
+        strategy_params_json = params_json
+        variables_json = vars_json
+        condition_dsl = cond
+
     alert = AlertDefinition(
         user_id=user.id,
         name=payload.name,
@@ -396,8 +486,11 @@ def create_alert_definition(
         action_type=action_type,
         action_params_json=action_params_json,
         evaluation_cadence=(payload.evaluation_cadence or "").strip(),
-        variables_json=_variables_to_json(payload.variables),
-        condition_dsl=payload.condition_dsl,
+        variables_json=variables_json,
+        condition_dsl=condition_dsl,
+        signal_strategy_version_id=strategy_version_id,
+        signal_strategy_output=strategy_output,
+        signal_strategy_params_json=strategy_params_json,
         trigger_mode=payload.trigger_mode,
         throttle_seconds=payload.throttle_seconds,
         only_market_hours=payload.only_market_hours,
@@ -438,6 +531,11 @@ def update_alert_definition(
     user: User = Depends(get_current_user),
 ) -> AlertDefinitionRead:
     alert = _get_alert_or_404(db, user.id, alert_id)
+    update_data = (
+        payload.model_dump(exclude_unset=True)  # type: ignore[attr-defined]
+        if hasattr(payload, "model_dump")
+        else payload.dict(exclude_unset=True)
+    )
 
     if payload.name is not None:
         alert.name = payload.name
@@ -493,6 +591,74 @@ def update_alert_definition(
 
     if payload.action_params is not None:
         alert.action_params_json = json.dumps(payload.action_params or {}, default=str)
+
+    # Saved strategy linkage (optional): when set, it also refreshes
+    # variables_json + condition_dsl from the strategy version/output.
+    if "signal_strategy_version_id" in update_data:
+        new_vid = update_data.get("signal_strategy_version_id")
+        if new_vid is None:
+            alert.signal_strategy_version_id = None
+            alert.signal_strategy_output = None
+            alert.signal_strategy_params_json = "{}"
+        else:
+            try:
+                (
+                    out_name,
+                    params_json,
+                    vars_json,
+                    cond,
+                ) = _materialize_alert_from_signal_strategy(
+                    db,
+                    user_id=user.id,
+                    version_id=int(new_vid),
+                    output_name=update_data.get("signal_strategy_output"),
+                    overrides=update_data.get("signal_strategy_params") or {},
+                )
+            except IndicatorAlertError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
+            alert.signal_strategy_version_id = int(new_vid)
+            alert.signal_strategy_output = out_name
+            alert.signal_strategy_params_json = params_json
+            alert.variables_json = vars_json
+            alert.condition_dsl = cond
+    elif (update_data.get("signal_strategy_output") is not None) or (
+        update_data.get("signal_strategy_params") is not None
+    ):
+        # Update output/params for an already-linked strategy.
+        if getattr(alert, "signal_strategy_version_id", None) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "signal_strategy_output/params provided without a linked strategy."
+                ),
+            )
+        try:
+            (
+                out_name,
+                params_json,
+                vars_json,
+                cond,
+            ) = _materialize_alert_from_signal_strategy(
+                db,
+                user_id=user.id,
+                version_id=int(alert.signal_strategy_version_id),
+                output_name=update_data.get("signal_strategy_output")
+                or getattr(alert, "signal_strategy_output", None),
+                overrides=update_data.get("signal_strategy_params")
+                or _action_params_from_json(
+                    getattr(alert, "signal_strategy_params_json", "") or "{}"
+                ),
+            )
+        except IndicatorAlertError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
+        alert.signal_strategy_output = out_name
+        alert.signal_strategy_params_json = params_json
+        alert.variables_json = vars_json
+        alert.condition_dsl = cond
 
     # Canonicalize action fields so older payloads and partial updates keep
     # consistent defaults.

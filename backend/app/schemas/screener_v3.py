@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,9 @@ class ScreenerRunRequest(BaseModel):
     variables: List[AlertVariableDef] = Field(default_factory=list)
     condition_dsl: str
     evaluation_cadence: Optional[str] = None
+    signal_strategy_version_id: Optional[int] = None
+    signal_strategy_output: Optional[str] = None
+    signal_strategy_params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ScreenerRow(BaseModel):
@@ -47,6 +50,10 @@ class ScreenerRunRead(BaseModel):
     created_at: datetime
 
     rows: Optional[List[ScreenerRow]] = None
+
+    signal_strategy_version_id: Optional[int] = None
+    signal_strategy_output: Optional[str] = None
+    signal_strategy_params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ScreenerCreateGroupRequest(BaseModel):

@@ -82,6 +82,18 @@ class AlertDefinition(Base):
     condition_dsl: Mapped[str] = mapped_column(Text, nullable=False)
     condition_ast_json: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Optional linkage to a saved SignalStrategyVersion (DSL v3) used to
+    # populate (variables_json + condition_dsl).
+    signal_strategy_version_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("signal_strategy_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    signal_strategy_output: Mapped[Optional[str]] = mapped_column(String(64))
+    signal_strategy_params_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}"
+    )
+
     # Action behavior (Phase B): optional trade template attached to the alert.
     action_type: Mapped[str] = mapped_column(
         String(16), nullable=False, default="ALERT_ONLY"

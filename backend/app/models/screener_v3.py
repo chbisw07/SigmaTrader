@@ -45,6 +45,15 @@ class ScreenerRun(Base):
     evaluation_cadence: Mapped[str] = mapped_column(
         String(8), nullable=False, default="1m"
     )
+    signal_strategy_version_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("signal_strategy_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    signal_strategy_output: Mapped[Optional[str]] = mapped_column(String(64))
+    signal_strategy_params_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}"
+    )
 
     # Progress + outcome
     total_symbols: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

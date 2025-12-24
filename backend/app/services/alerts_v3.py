@@ -308,6 +308,14 @@ def evaluate_alerts_v3_once() -> None:
                         holdings_by_user[(user.id, holdings_broker)] = holdings_map
 
                 any_triggered = False
+                params: dict[str, Any] = {}
+                raw_params = getattr(alert, "signal_strategy_params_json", "") or "{}"
+                try:
+                    parsed = json.loads(raw_params)
+                    if isinstance(parsed, dict):
+                        params = parsed
+                except Exception:
+                    params = {}
                 for symbol, exchange in _iter_alert_symbols(
                     db, settings, alert=alert, user=user
                 ):
@@ -324,6 +332,7 @@ def evaluate_alerts_v3_once() -> None:
                             symbol=symbol,
                             exchange=exchange,
                             holding=holding,
+                            params=params,
                             custom_indicators=custom,
                         )
                     except IndicatorAlertError:

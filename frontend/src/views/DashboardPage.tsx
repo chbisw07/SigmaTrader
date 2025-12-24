@@ -5,6 +5,10 @@ import AccordionDetails from '@mui/material/AccordionDetails'
 import AccordionSummary from '@mui/material/AccordionSummary'
 import Button from '@mui/material/Button'
 import Checkbox from '@mui/material/Checkbox'
+import Dialog from '@mui/material/Dialog'
+import DialogActions from '@mui/material/DialogActions'
+import DialogContent from '@mui/material/DialogContent'
+import DialogTitle from '@mui/material/DialogTitle'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
@@ -41,6 +45,12 @@ import {
 import { PriceChart, type PriceChartType } from '../components/PriceChart'
 import { DslEditor } from '../components/DslEditor'
 import { listCustomIndicators, type CustomIndicator } from '../services/alertsV3'
+import {
+  listSignalStrategies,
+  listSignalStrategyVersions,
+  type SignalStrategy,
+  type SignalStrategyVersion,
+} from '../services/signalStrategies'
 
 type RangeOption = { value: any; label: string; helper?: string }
 
@@ -125,6 +135,7 @@ type DashboardSettingsV1 = {
     }
   >
   signalDsl?: string
+  signalParams?: Record<string, unknown>
 }
 
 function loadDashboardSettings(): DashboardSettingsV1 {
@@ -531,13 +542,33 @@ export function DashboardPage() {
   const [indicatorLoading, setIndicatorLoading] = useState(false)
   const [indicatorError, setIndicatorError] = useState<string | null>(null)
 
-  const [signalDsl, setSignalDsl] = useState<string>(
-    () => initialSettings.signalDsl ?? '',
-  ) // boolean DSL
-  const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
-  const [signalLoading, setSignalLoading] = useState(false)
-  const [signalError, setSignalError] = useState<string | null>(null)
-  const [dslHelpOpen, setDslHelpOpen] = useState(false)
+	  const [signalDsl, setSignalDsl] = useState<string>(
+	    () => initialSettings.signalDsl ?? '',
+	  ) // boolean DSL
+	  const [signalParams, setSignalParams] = useState<Record<string, unknown>>(() => {
+	    const raw = (initialSettings as any).signalParams
+	    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+	      return raw as Record<string, unknown>
+	    }
+	    return {}
+	  })
+	  const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
+	  const [signalLoading, setSignalLoading] = useState(false)
+	  const [signalError, setSignalError] = useState<string | null>(null)
+	  const [dslHelpOpen, setDslHelpOpen] = useState(false)
+
+    // Saved strategy (optional) for dashboard signals/overlays
+    const [strategyDialogOpen, setStrategyDialogOpen] = useState(false)
+    const [strategyRows, setStrategyRows] = useState<SignalStrategy[]>([])
+    const [strategyLoading, setStrategyLoading] = useState(false)
+    const [strategyLoadError, setStrategyLoadError] = useState<string | null>(null)
+    const [strategyId, setStrategyId] = useState<number | null>(null)
+    const [strategyVersions, setStrategyVersions] = useState<SignalStrategyVersion[]>([])
+    const [strategyVersionId, setStrategyVersionId] = useState<number | null>(null)
+    const [strategySignalOutput, setStrategySignalOutput] = useState<string | null>(null)
+    const [strategyOverlayOutputs, setStrategyOverlayOutputs] = useState<string[]>([])
+    const [strategyParamDraft, setStrategyParamDraft] = useState<Record<string, unknown>>({})
+    const [strategyReplaceExisting, setStrategyReplaceExisting] = useState(true)
 
   const [customIndicators, setCustomIndicators] = useState<CustomIndicator[]>([])
   const [customIndicatorsLoading, setCustomIndicatorsLoading] = useState(false)
@@ -648,10 +679,79 @@ export function DashboardPage() {
     }
   }
 
-	  useEffect(() => {
-	    void refreshCustomIndicators()
-	    // eslint-disable-next-line react-hooks/exhaustive-deps
-	  }, [])
+		  useEffect(() => {
+		    void refreshCustomIndicators()
+		    // eslint-disable-next-line react-hooks/exhaustive-deps
+		  }, [])
+
+      useEffect(() => {
+        if (!strategyDialogOpen) return
+        setStrategyLoadError(null)
+        setStrategyId(null)
+        setStrategyVersions([])
+        setStrategyVersionId(null)
+        setStrategySignalOutput(null)
+        setStrategyOverlayOutputs([])
+        setStrategyParamDraft({})
+        setStrategyReplaceExisting(true)
+      }, [strategyDialogOpen])
+
+      useEffect(() => {
+        if (!strategyDialogOpen) return
+        let active = true
+        setStrategyLoading(true)
+        setStrategyLoadError(null)
+        void (async () => {
+          try {
+            const res = await listSignalStrategies({ includeLatest: true, includeUsage: false })
+            if (!active) return
+            setStrategyRows(res)
+          } catch (err) {
+            if (!active) return
+            setStrategyRows([])
+            setStrategyLoadError(
+              err instanceof Error ? err.message : 'Failed to load strategies',
+            )
+          } finally {
+            if (!active) return
+            setStrategyLoading(false)
+          }
+        })()
+        return () => {
+          active = false
+        }
+      }, [strategyDialogOpen])
+
+      useEffect(() => {
+        if (!strategyDialogOpen) return
+        if (strategyId == null) {
+          setStrategyVersions([])
+          return
+        }
+        let active = true
+        void (async () => {
+          try {
+            const res = await listSignalStrategyVersions(strategyId)
+            if (!active) return
+            setStrategyVersions(res)
+            if (res.length > 0) {
+              const desired = strategyVersionId
+              const exists = desired != null && res.some((v) => v.id === desired)
+              if (!exists) setStrategyVersionId(res[0]!.id)
+            }
+          } catch (err) {
+            if (!active) return
+            setStrategyVersions([])
+            setStrategyLoadError(
+              err instanceof Error ? err.message : 'Failed to load strategy versions',
+            )
+          }
+        })()
+        return () => {
+          active = false
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [strategyDialogOpen, strategyId])
 	
  	  const handleRefresh = async () => {
 	    const groupIds = selectedGroups.map((g) => g.id)
@@ -815,18 +915,19 @@ export function DashboardPage() {
 
     persistedGroupIdsRef.current = groupIds
 
-    saveDashboardSettings({
-      includeHoldings,
-      holdingsBrokers,
-      groupIds,
-      range: String(range ?? ''),
-      symbolRange: String(symbolRange ?? ''),
-      chartType,
-      selectedSymbol,
-      indicatorRows,
-      signalDsl,
-    })
-  }, [
+	    saveDashboardSettings({
+	      includeHoldings,
+	      holdingsBrokers,
+	      groupIds,
+	      range: String(range ?? ''),
+	      symbolRange: String(symbolRange ?? ''),
+	      chartType,
+	      selectedSymbol,
+	      indicatorRows,
+	      signalDsl,
+	      signalParams,
+	    })
+	  }, [
     chartType,
     includeHoldings,
     holdingsBrokers,
@@ -835,9 +936,10 @@ export function DashboardPage() {
     selectedGroups,
     selectedSymbol,
     settingsHydrated,
-    signalDsl,
-    symbolRange,
-  ])
+	    signalDsl,
+	    signalParams,
+	    symbolRange,
+	  ])
 
   const palette = [
     '#2563eb',
@@ -1012,18 +1114,69 @@ export function DashboardPage() {
       }))
   }, [indicatorRows])
 
+  const activeSavedStrategyVersion = useMemo(() => {
+    if (strategyVersionId == null) return null
+    return strategyVersions.find((v) => v.id === strategyVersionId) ?? null
+  }, [strategyVersionId, strategyVersions])
+
+  useEffect(() => {
+    if (!strategyDialogOpen) return
+    if (!activeSavedStrategyVersion) return
+
+    const signalOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
+      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+    )
+    const overlayOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
+      (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
+    )
+    const defaultSignal = signalOutputs[0]?.name ?? null
+    if (!strategySignalOutput && defaultSignal) setStrategySignalOutput(defaultSignal)
+
+    setStrategyOverlayOutputs((prev) => {
+      if (prev.length > 0) return prev
+      return overlayOutputs.map((o) => o.name)
+    })
+
+    setStrategyParamDraft((prev) => {
+      const next: Record<string, unknown> = {}
+      for (const inp of activeSavedStrategyVersion.inputs ?? []) {
+        if (!inp?.name) continue
+        if (inp.default != null) next[inp.name] = inp.default
+      }
+      for (const [k, v] of Object.entries(prev || {})) next[k] = v
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSavedStrategyVersion?.id, strategyDialogOpen])
+
+  useEffect(() => {
+    if (!strategyDialogOpen) return
+    if (!activeSavedStrategyVersion) return
+    const signalOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
+      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+    )
+    const resolvedName =
+      signalOutputs.find((o) => o.name === strategySignalOutput)?.name ??
+      signalOutputs[0]?.name ??
+      null
+    if (resolvedName && resolvedName !== strategySignalOutput) {
+      setStrategySignalOutput(resolvedName)
+    }
+  }, [activeSavedStrategyVersion?.id, strategyDialogOpen, strategySignalOutput])
+
   const applyIndicators = async () => {
     if (!selectedSymbol) return
     setIndicatorLoading(true)
     setIndicatorError(null)
     try {
-      const res = await fetchSymbolIndicators({
-        symbol: selectedSymbol.label,
-        range: symbolRange,
-        timeframe: '1d',
-        hydrate_mode: 'auto',
-        variables: enabledVariables,
-      })
+	      const res = await fetchSymbolIndicators({
+	        symbol: selectedSymbol.label,
+	        range: symbolRange,
+	        timeframe: '1d',
+	        hydrate_mode: 'auto',
+	        variables: enabledVariables,
+	        params: signalParams,
+	      })
       setIndicatorData(res)
       const keys = Object.keys(res.errors || {})
       if (keys.length > 0) {
@@ -1052,14 +1205,15 @@ export function DashboardPage() {
     setSignalLoading(true)
     setSignalError(null)
     try {
-      const res = await fetchSymbolSignals({
-        symbol: selectedSymbol.label,
-        range: symbolRange,
-        timeframe: '1d',
-        hydrate_mode: 'auto',
-        variables: enabledVariables,
-        condition_dsl: signalDsl,
-      })
+	      const res = await fetchSymbolSignals({
+	        symbol: selectedSymbol.label,
+	        range: symbolRange,
+	        timeframe: '1d',
+	        hydrate_mode: 'auto',
+	        variables: enabledVariables,
+	        condition_dsl: signalDsl,
+	        params: signalParams,
+	      })
       setSignalMarkers(res.markers || [])
       if (res.errors?.length) setSignalError(res.errors[0]!)
     } catch (err) {
@@ -1068,6 +1222,43 @@ export function DashboardPage() {
     } finally {
       setSignalLoading(false)
     }
+  }
+
+  const applySavedStrategy = () => {
+    if (!activeSavedStrategyVersion) return
+    const signalOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
+      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+    )
+    const overlayOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
+      (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
+    )
+    const signalDslText =
+      signalOutputs.find((o) => o.name === strategySignalOutput)?.dsl ??
+      signalOutputs[0]?.dsl ??
+      ''
+
+    const vars: IndicatorRow[] = (activeSavedStrategyVersion.variables ?? []).map((v) => ({
+      ...v,
+      enabled: true,
+      plot: 'hidden',
+    }))
+    const overlays: IndicatorRow[] = overlayOutputs.map((o) => ({
+      name: o.name,
+      dsl: o.dsl,
+      kind: null,
+      params: null,
+      enabled: strategyOverlayOutputs.includes(o.name),
+      plot: 'price',
+    }))
+
+    setIndicatorRows((prev) => (strategyReplaceExisting ? [...vars, ...overlays] : [...prev, ...vars, ...overlays]))
+    setSignalDsl(String(signalDslText || ''))
+    setSignalParams(strategyParamDraft || {})
+    setSignalMarkers([])
+    setSignalError(null)
+    setIndicatorData(null)
+    setIndicatorError(null)
+    setStrategyDialogOpen(false)
   }
 
   const perf = useMemo(() => {
@@ -1823,13 +2014,20 @@ export function DashboardPage() {
                       }))}
                       onCtrlEnter={() => void runSignals()}
                     />
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <Button
-                        size="small"
-                        variant="contained"
-                        onClick={() => void runSignals()}
-                        disabled={signalLoading}
-                      >
+	                    <Stack direction="row" spacing={1} alignItems="center">
+	                      <Button
+	                        size="small"
+	                        variant="outlined"
+	                        onClick={() => setStrategyDialogOpen(true)}
+	                      >
+	                        Load strategy
+	                      </Button>
+	                      <Button
+	                        size="small"
+	                        variant="contained"
+	                        onClick={() => void runSignals()}
+	                        disabled={signalLoading}
+	                      >
                         {signalLoading ? 'Running…' : 'Run'}
                       </Button>
                       <Button
@@ -1861,13 +2059,199 @@ export function DashboardPage() {
                 </AccordionDetails>
               </Accordion>
             </Stack>
-          </Paper>
+	          </Paper>
 
-          <DslHelpDialog
-            open={dslHelpOpen}
-            onClose={() => setDslHelpOpen(false)}
-            context="dashboard"
-          />
+            <Dialog
+              open={strategyDialogOpen}
+              onClose={() => setStrategyDialogOpen(false)}
+              maxWidth="md"
+              fullWidth
+            >
+              <DialogTitle>Apply saved strategy</DialogTitle>
+              <DialogContent dividers>
+                <Stack spacing={2}>
+                  {strategyLoadError && (
+                    <Typography color="error">{strategyLoadError}</Typography>
+                  )}
+
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={strategyReplaceExisting}
+                        onChange={(e) => setStrategyReplaceExisting(e.target.checked)}
+                      />
+                    }
+                    label="Replace existing indicators/signals"
+                  />
+
+                  <Autocomplete
+                    options={strategyRows}
+                    loading={strategyLoading}
+                    value={strategyRows.find((s) => s.id === strategyId) ?? null}
+                    onChange={(_e, v) => {
+                      setStrategyId(v?.id ?? null)
+                      setStrategyVersionId(null)
+                      setStrategySignalOutput(null)
+                      setStrategyOverlayOutputs([])
+                      setStrategyParamDraft({})
+                    }}
+                    getOptionLabel={(s) => `${s.name} (v${s.latest_version})`}
+                    renderInput={(params) => (
+                      <TextField {...params} label="Strategy" />
+                    )}
+                  />
+
+                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                    <TextField
+                      label="Version"
+                      select
+                      size="small"
+                      value={strategyVersionId ?? ''}
+                      onChange={(e) => {
+                        const n = Number(e.target.value || '')
+                        setStrategyVersionId(Number.isFinite(n) ? n : null)
+                        setStrategySignalOutput(null)
+                        setStrategyOverlayOutputs([])
+                        setStrategyParamDraft({})
+                      }}
+                      sx={{ minWidth: 120 }}
+                      disabled={strategyId == null || strategyVersions.length === 0}
+                    >
+                      {strategyVersions.map((v) => (
+                        <MenuItem key={v.id} value={v.id}>
+                          v{v.version}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+
+                    <TextField
+                      label="Signal output"
+                      select
+                      size="small"
+                      value={strategySignalOutput ?? ''}
+                      onChange={(e) => setStrategySignalOutput(e.target.value || null)}
+                      sx={{ minWidth: 180 }}
+                      disabled={!activeSavedStrategyVersion}
+                    >
+                      {(activeSavedStrategyVersion?.outputs ?? [])
+                        .filter(
+                          (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+                        )
+                        .map((o) => (
+                          <MenuItem key={o.name} value={o.name}>
+                            {o.name}
+                          </MenuItem>
+                        ))}
+                    </TextField>
+
+                    <TextField
+                      label="Overlay outputs"
+                      select
+                      size="small"
+                      SelectProps={{ multiple: true }}
+                      value={strategyOverlayOutputs}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        setStrategyOverlayOutputs(Array.isArray(v) ? (v as string[]) : [])
+                      }}
+                      sx={{ minWidth: 240, flex: 1 }}
+                      disabled={!activeSavedStrategyVersion}
+                    >
+                      {(activeSavedStrategyVersion?.outputs ?? [])
+                        .filter(
+                          (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
+                        )
+                        .map((o) => (
+                          <MenuItem key={o.name} value={o.name}>
+                            {o.name}
+                          </MenuItem>
+                        ))}
+                    </TextField>
+                  </Stack>
+
+                  {(activeSavedStrategyVersion?.inputs ?? []).length > 0 && (
+                    <Box>
+                      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                        Parameters
+                      </Typography>
+                      <Stack spacing={1}>
+                        {(activeSavedStrategyVersion?.inputs ?? []).map((inp) => {
+                          const key = inp.name
+                          const raw = strategyParamDraft[key]
+                          const val = raw == null ? '' : String(raw)
+                          const typ = inp.type
+                          const enumValues = Array.isArray(inp.enum_values)
+                            ? inp.enum_values
+                            : []
+                          return (
+                            <Stack key={key} direction="row" spacing={1} alignItems="center">
+                              <TextField
+                                label={key}
+                                size="small"
+                                value={val}
+                                onChange={(e) => {
+                                  const nextRaw = e.target.value
+                                  const nextVal =
+                                    typ === 'number'
+                                      ? (Number.isFinite(Number(nextRaw)) ? Number(nextRaw) : nextRaw)
+                                      : typ === 'bool'
+                                        ? nextRaw === 'true'
+                                        : nextRaw
+                                  setStrategyParamDraft((prev) => ({ ...prev, [key]: nextVal }))
+                                }}
+                                select={
+                                  typ === 'bool' || (typ === 'enum' && enumValues.length > 0)
+                                }
+                                sx={{ minWidth: 220 }}
+                              >
+                                {typ === 'bool' ? (
+                                  [
+                                    <MenuItem key="true" value="true">
+                                      true
+                                    </MenuItem>,
+                                    <MenuItem key="false" value="false">
+                                      false
+                                    </MenuItem>,
+                                  ]
+                                ) : null}
+                                {typ === 'enum' && enumValues.length > 0
+                                  ? enumValues.map((ev) => (
+                                      <MenuItem key={ev} value={ev}>
+                                        {ev}
+                                      </MenuItem>
+                                    ))
+                                  : null}
+                              </TextField>
+                              {inp.default != null && (
+                                <Typography variant="caption" color="text.secondary">
+                                  default: {String(inp.default)}
+                                </Typography>
+                              )}
+                            </Stack>
+                          )
+                        })}
+                      </Stack>
+                    </Box>
+                  )}
+                </Stack>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setStrategyDialogOpen(false)}>Cancel</Button>
+                <Button
+                  variant="contained"
+                  onClick={applySavedStrategy}
+                  disabled={!activeSavedStrategyVersion}
+                >
+                  Apply
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+	          <DslHelpDialog
+	            open={dslHelpOpen}
+	            onClose={() => setDslHelpOpen(false)}
+	            context="dashboard"
+	          />
       </Box>
     </Box>
   )

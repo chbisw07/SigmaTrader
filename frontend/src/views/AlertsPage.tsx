@@ -16,6 +16,7 @@ import RadioGroup from '@mui/material/RadioGroup'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import Switch from '@mui/material/Switch'
+import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
@@ -55,6 +56,14 @@ import {
 } from '../services/alertsV3'
 import { ALERT_V3_METRICS, ALERT_V3_SOURCES, ALERT_V3_TIMEFRAMES } from '../services/alertsV3Constants'
 import { useCustomIndicators } from '../hooks/useCustomIndicators'
+import {
+  getSignalStrategyVersion,
+  listSignalStrategies,
+  listSignalStrategyVersions,
+  type SignalStrategy,
+  type SignalStrategyVersion,
+} from '../services/signalStrategies'
+import { SignalStrategiesTab } from './SignalStrategiesTab'
 
 const formatDateTimeIst = (value: unknown): string => {
   if (!value) return '—'
@@ -97,6 +106,7 @@ export function AlertsPage() {
     const tabParam = (params.get('tab') || '').toLowerCase()
     if (tabParam === 'indicators') setTab(1)
     if (tabParam === 'events') setTab(2)
+    if (tabParam === 'strategies') setTab(3)
   }, [location.search])
 
   const handleOpenAlert = (alertId: number) => {
@@ -130,6 +140,7 @@ export function AlertsPage() {
         <Tab label="Alerts" />
         <Tab label="Indicators" />
         <Tab label="Events" />
+        <Tab label="Strategies" />
       </Tabs>
       {tab === 0 && (
         <AlertsV3Tab
@@ -141,6 +152,7 @@ export function AlertsPage() {
       )}
       {tab === 1 && <IndicatorsV3Tab />}
       {tab === 2 && <EventsV3Tab onOpenAlert={handleOpenAlert} />}
+      {tab === 3 && <SignalStrategiesTab />}
     </Box>
 	  )
 	}
@@ -508,9 +520,20 @@ function AlertV3EditorDialog({
   const [error, setError] = useState<string | null>(null)
   const [conditionTab, setConditionTab] = useState<0 | 1>(0)
   const [conditionJoin, setConditionJoin] = useState<'AND' | 'OR'>('AND')
-  const [conditionRows, setConditionRows] = useState<ConditionRow[]>([
-    { lhs: '', op: '>', rhs: '' },
-  ])
+	  const [conditionRows, setConditionRows] = useState<ConditionRow[]>([
+	    { lhs: '', op: '>', rhs: '' },
+	  ])
+
+    // Saved strategy linkage (optional)
+    const [useSavedStrategy, setUseSavedStrategy] = useState(false)
+    const [strategies, setStrategies] = useState<SignalStrategy[]>([])
+    const [strategiesLoading, setStrategiesLoading] = useState(false)
+    const [strategiesError, setStrategiesError] = useState<string | null>(null)
+    const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(null)
+    const [strategyVersions, setStrategyVersions] = useState<SignalStrategyVersion[]>([])
+    const [selectedStrategyVersionId, setSelectedStrategyVersionId] = useState<number | null>(null)
+    const [selectedStrategyOutput, setSelectedStrategyOutput] = useState<string | null>(null)
+    const [strategyParams, setStrategyParams] = useState<Record<string, unknown>>({})
 
   const {
     customIndicators,
@@ -521,8 +544,8 @@ function AlertV3EditorDialog({
     enabled: open,
   })
 
-  useEffect(() => {
-    if (!open) return
+	  useEffect(() => {
+	    if (!open) return
     if (targetKind !== 'SYMBOL') {
       setSymbolOptions([])
       setSymbolOptionsLoading(false)
@@ -567,7 +590,64 @@ function AlertV3EditorDialog({
       active = false
       window.clearTimeout(id)
     }
-  }, [exchange, open, targetKind, targetRef])
+	  }, [exchange, open, targetKind, targetRef])
+
+    useEffect(() => {
+      if (!open) return
+      let active = true
+      setStrategiesLoading(true)
+      setStrategiesError(null)
+      void (async () => {
+        try {
+          const res = await listSignalStrategies({ includeLatest: true, includeUsage: false })
+          if (!active) return
+          setStrategies(res)
+        } catch (err) {
+          if (!active) return
+          setStrategies([])
+          setStrategiesError(
+            err instanceof Error ? err.message : 'Failed to load strategies',
+          )
+        } finally {
+          if (!active) return
+          setStrategiesLoading(false)
+        }
+      })()
+      return () => {
+        active = false
+      }
+    }, [open])
+
+    useEffect(() => {
+      if (!open) return
+      if (selectedStrategyId == null) {
+        setStrategyVersions([])
+        return
+      }
+      let active = true
+      void (async () => {
+        try {
+          const res = await listSignalStrategyVersions(selectedStrategyId)
+          if (!active) return
+          setStrategyVersions(res)
+          if (res.length > 0) {
+            const desired = selectedStrategyVersionId
+            const exists = desired != null && res.some((v) => v.id === desired)
+            if (!exists) setSelectedStrategyVersionId(res[0]!.id)
+          }
+        } catch (err) {
+          if (!active) return
+          setStrategyVersions([])
+          setStrategiesError(
+            err instanceof Error ? err.message : 'Failed to load strategy versions',
+          )
+        }
+      })()
+      return () => {
+        active = false
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, selectedStrategyId])
 
   useEffect(() => {
     if (!open) return
@@ -606,12 +686,18 @@ function AlertV3EditorDialog({
       setThrottleSeconds('')
       setOnlyMarketHours(false)
       setExpiresAt('')
-      setEnabled(true)
-      setConditionTab(0)
-      setConditionJoin('AND')
-      setConditionRows([{ lhs: '', op: '>', rhs: '' }])
-      return
-    }
+	      setEnabled(true)
+	      setConditionTab(0)
+	      setConditionJoin('AND')
+	      setConditionRows([{ lhs: '', op: '>', rhs: '' }])
+        setUseSavedStrategy(false)
+        setSelectedStrategyId(null)
+        setStrategyVersions([])
+        setSelectedStrategyVersionId(null)
+        setSelectedStrategyOutput(null)
+        setStrategyParams({})
+	      return
+	    }
     setName(alert.name)
     setBrokerName(alert.broker_name ?? brokers[0]?.name ?? 'zerodha')
     setTargetKind(alert.target_kind as any)
@@ -669,11 +755,37 @@ function AlertV3EditorDialog({
     setThrottleSeconds(alert.throttle_seconds != null ? String(alert.throttle_seconds) : '')
     setOnlyMarketHours(alert.only_market_hours)
     setExpiresAt(alert.expires_at ?? '')
-    setEnabled(alert.enabled)
-    setConditionTab(1)
-    setConditionJoin('AND')
-    setConditionRows([{ lhs: '', op: '>', rhs: '' }])
-  }, [open, alert, brokers, createDefaults])
+	    setEnabled(alert.enabled)
+	    setConditionTab(1)
+	    setConditionJoin('AND')
+	    setConditionRows([{ lhs: '', op: '>', rhs: '' }])
+      setUseSavedStrategy(false)
+      setSelectedStrategyId(null)
+      setStrategyVersions([])
+      setSelectedStrategyVersionId(null)
+      setSelectedStrategyOutput(null)
+      setStrategyParams({})
+	  }, [open, alert, brokers, createDefaults])
+
+    useEffect(() => {
+      if (!open) return
+      const vid = (alert?.signal_strategy_version_id ?? null) as number | null
+      if (vid == null) return
+
+      setUseSavedStrategy(true)
+      setSelectedStrategyVersionId(vid)
+      setSelectedStrategyOutput(alert?.signal_strategy_output ?? null)
+      setStrategyParams(alert?.signal_strategy_params ?? {})
+
+      void (async () => {
+        try {
+          const v = await getSignalStrategyVersion(vid)
+          setSelectedStrategyId(v.strategy_id)
+        } catch {
+          // ignore: user can still select manually
+        }
+      })()
+    }, [alert?.id, open])
 
   useEffect(() => {
     if (actionType === 'ALERT_ONLY') setActionTab(0)
@@ -713,9 +825,10 @@ function AlertV3EditorDialog({
     return (v.params ?? {}) as Record<string, any>
   }
 
-  const setVariableKind = (idx: number, kind: VariableKind) => {
-    setVariables((prev) =>
-      prev.map((v, i) => {
+	  const setVariableKind = (idx: number, kind: VariableKind) => {
+      if (useSavedStrategy) return
+	    setVariables((prev) =>
+	      prev.map((v, i) => {
         if (i !== idx) return v
         const name = v.name
         if (kind === 'DSL') return { name, dsl: v.dsl ?? '' }
@@ -743,12 +856,65 @@ function AlertV3EditorDialog({
     )
   }
 
-  const operandOptions = useMemo(() => {
-    const vars = variables
-      .map((v) => (v.name || '').trim())
-      .filter((x) => x.length > 0)
-    return Array.from(new Set([...vars, ...ALERT_V3_METRICS]))
-  }, [variables])
+	  const operandOptions = useMemo(() => {
+	    const vars = variables
+	      .map((v) => (v.name || '').trim())
+	      .filter((x) => x.length > 0)
+	    return Array.from(new Set([...vars, ...ALERT_V3_METRICS]))
+	  }, [variables])
+
+    const activeStrategyVersion = useMemo(() => {
+      if (selectedStrategyVersionId == null) return null
+      return strategyVersions.find((v) => v.id === selectedStrategyVersionId) ?? null
+    }, [selectedStrategyVersionId, strategyVersions])
+
+    useEffect(() => {
+      if (!open) return
+      if (!useSavedStrategy) return
+      if (!activeStrategyVersion) return
+      setVariables(activeStrategyVersion.variables ?? [])
+      setConditionTab(1)
+
+      const signalOutputs = (activeStrategyVersion.outputs ?? []).filter(
+        (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+      )
+      const defaultOutput = signalOutputs[0]?.name ?? null
+      if (!selectedStrategyOutput && defaultOutput) {
+        setSelectedStrategyOutput(defaultOutput)
+      }
+
+      // Initialize params with defaults + current values (if any).
+      setStrategyParams((prev) => {
+        const next: Record<string, unknown> = {}
+        for (const inp of activeStrategyVersion.inputs ?? []) {
+          if (!inp?.name) continue
+          if (inp.default != null) next[inp.name] = inp.default
+        }
+        for (const [k, v] of Object.entries(prev || {})) {
+          next[k] = v
+        }
+        return next
+      })
+    }, [activeStrategyVersion?.id, open, useSavedStrategy, selectedStrategyOutput])
+
+    useEffect(() => {
+      if (!open) return
+      if (!useSavedStrategy) return
+      if (!activeStrategyVersion) return
+
+      const signalOutputs = (activeStrategyVersion.outputs ?? []).filter(
+        (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+      )
+      const resolvedName =
+        signalOutputs.find((o) => o.name === selectedStrategyOutput)?.name ??
+        signalOutputs[0]?.name ??
+        null
+      const outDsl =
+        signalOutputs.find((o) => o.name === resolvedName)?.dsl ??
+        signalOutputs[0]?.dsl ??
+        ''
+      setConditionDsl(String(outDsl || ''))
+    }, [activeStrategyVersion?.id, open, selectedStrategyOutput, useSavedStrategy])
 
   const buildConditionDsl = (): { dsl: string; errors: string[] } => {
     const errors: string[] = []
@@ -775,12 +941,15 @@ function AlertV3EditorDialog({
     [conditionRows, conditionJoin],
   )
 
-  const handleSave = async () => {
-    setSaving(true)
-    setError(null)
-    try {
-      const effectiveConditionDsl =
-        conditionTab === 0 ? conditionPreview.dsl.trim() : conditionDsl.trim()
+	  const handleSave = async () => {
+	    setSaving(true)
+	    setError(null)
+	    try {
+	      if (useSavedStrategy && selectedStrategyVersionId == null) {
+	        throw new Error('Select a saved strategy (and version) before saving.')
+	      }
+	      const effectiveConditionDsl =
+	        conditionTab === 0 ? conditionPreview.dsl.trim() : conditionDsl.trim()
       if (conditionTab === 0 && conditionPreview.errors.length > 0) {
         throw new Error(conditionPreview.errors.join(' '))
       }
@@ -804,24 +973,27 @@ function AlertV3EditorDialog({
               mtp_pct: tradeMtpPct.trim() ? Number(tradeMtpPct) : null,
               gtt: tradeGtt,
             }
-      const payloadBase: AlertDefinitionCreate = {
-        name: name.trim() || 'Untitled alert',
-        broker_name: brokerName,
-        target_kind: targetKind,
-        target_ref: targetKind === 'GROUP' ? targetRef : null,
-        symbol: targetKind === 'SYMBOL' ? targetRef.trim().toUpperCase() : null,
-        exchange: targetKind === 'SYMBOL' ? exchange : null,
-        action_type: actionType,
-        action_params: actionParams,
-        evaluation_cadence: evaluationCadence.trim() || null,
-        variables,
-        condition_dsl: effectiveConditionDsl,
-        trigger_mode: triggerMode,
-        throttle_seconds: throttleSeconds.trim() ? Number(throttleSeconds) : null,
-        only_market_hours: onlyMarketHours,
-        expires_at: expiresAt.trim() ? expiresAt : null,
-        enabled,
-      }
+	      const payloadBase: AlertDefinitionCreate = {
+	        name: name.trim() || 'Untitled alert',
+	        broker_name: brokerName,
+	        target_kind: targetKind,
+	        target_ref: targetKind === 'GROUP' ? targetRef : null,
+	        symbol: targetKind === 'SYMBOL' ? targetRef.trim().toUpperCase() : null,
+	        exchange: targetKind === 'SYMBOL' ? exchange : null,
+	        action_type: actionType,
+	        action_params: actionParams,
+	        evaluation_cadence: evaluationCadence.trim() || null,
+	        variables,
+	        condition_dsl: effectiveConditionDsl,
+	        signal_strategy_version_id: useSavedStrategy ? selectedStrategyVersionId : null,
+	        signal_strategy_output: useSavedStrategy ? selectedStrategyOutput : null,
+	        signal_strategy_params: useSavedStrategy ? strategyParams : {},
+	        trigger_mode: triggerMode,
+	        throttle_seconds: throttleSeconds.trim() ? Number(throttleSeconds) : null,
+	        only_market_hours: onlyMarketHours,
+	        expires_at: expiresAt.trim() ? expiresAt : null,
+	        enabled,
+	      }
 
       if (!payloadBase.condition_dsl) {
         throw new Error('Condition DSL cannot be empty.')
@@ -843,9 +1015,10 @@ function AlertV3EditorDialog({
     }
   }
 
-  const updateVar = (idx: number, next: AlertVariableDef) => {
-    setVariables((prev) => prev.map((v, i) => (i === idx ? next : v)))
-  }
+	  const updateVar = (idx: number, next: AlertVariableDef) => {
+      if (useSavedStrategy) return
+	    setVariables((prev) => prev.map((v, i) => (i === idx ? next : v)))
+	  }
 
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="md" fullWidth>
@@ -1039,15 +1212,181 @@ function AlertV3EditorDialog({
           </Tabs>
         )}
 
-        {(actionType === 'ALERT_ONLY' || actionTab === 0) && (
-          <>
-            <Typography variant="subtitle2" sx={{ mb: 1 }}>
-              Variables (optional)
-            </Typography>
+	        {(actionType === 'ALERT_ONLY' || actionTab === 0) && (
+	          <>
+              <Box sx={{ mb: 2 }}>
+                <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={useSavedStrategy}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setUseSavedStrategy(next)
+                          if (!next) return
+                          setConditionTab(1)
+                        }}
+                      />
+                    }
+                    label="Use saved strategy"
+                  />
+                  {strategiesError && (
+                    <Typography variant="caption" color="error">
+                      {strategiesError}
+                    </Typography>
+                  )}
+                </Stack>
+
+                {useSavedStrategy && (
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                      <Autocomplete
+                        options={strategies}
+                        value={
+                          strategies.find((s) => s.id === selectedStrategyId) ?? null
+                        }
+                        loading={strategiesLoading}
+                        onChange={(_e, v) => {
+                          setSelectedStrategyId(v?.id ?? null)
+                          setSelectedStrategyVersionId(null)
+                          setSelectedStrategyOutput(null)
+                          setStrategyParams({})
+                        }}
+                        getOptionLabel={(s) => `${s.name} (v${s.latest_version})`}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="Strategy"
+                            size="small"
+                            sx={{ minWidth: 360 }}
+                          />
+                        )}
+                      />
+
+                      <TextField
+                        label="Version"
+                        select
+                        size="small"
+                        value={selectedStrategyVersionId ?? ''}
+                        onChange={(e) => {
+                          const n = Number(e.target.value || '')
+                          setSelectedStrategyVersionId(Number.isFinite(n) ? n : null)
+                          setSelectedStrategyOutput(null)
+                        }}
+                        sx={{ minWidth: 120 }}
+                        disabled={selectedStrategyId == null || strategyVersions.length === 0}
+                      >
+                        {strategyVersions.map((v) => (
+                          <MenuItem key={v.id} value={v.id}>
+                            v{v.version}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+
+                      <TextField
+                        label="Signal output"
+                        select
+                        size="small"
+                        value={selectedStrategyOutput ?? ''}
+                        onChange={(e) => setSelectedStrategyOutput(e.target.value || null)}
+                        sx={{ minWidth: 180 }}
+                        disabled={
+                          !activeStrategyVersion ||
+                          (activeStrategyVersion.outputs ?? []).filter(
+                            (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+                          ).length === 0
+                        }
+                      >
+                        {(activeStrategyVersion?.outputs ?? [])
+                          .filter((o) => String(o.kind || '').toUpperCase() === 'SIGNAL')
+                          .map((o) => (
+                            <MenuItem key={o.name} value={o.name}>
+                              {o.name}
+                            </MenuItem>
+                          ))}
+                      </TextField>
+                    </Stack>
+
+                    {(activeStrategyVersion?.inputs ?? []).length > 0 && (
+                      <Box>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                          Strategy parameters
+                        </Typography>
+                        <Stack spacing={1}>
+                          {(activeStrategyVersion?.inputs ?? []).map((inp) => {
+                            const key = inp.name
+                            const raw = strategyParams[key]
+                            const val = raw == null ? '' : String(raw)
+                            const typ = inp.type
+                            const enumValues = Array.isArray(inp.enum_values) ? inp.enum_values : []
+                            return (
+                              <Stack key={key} direction="row" spacing={1} alignItems="center">
+                                <TextField
+                                  label={key}
+                                  size="small"
+                                  value={val}
+                                  onChange={(e) => {
+                                    const nextRaw = e.target.value
+                                    const nextVal =
+                                      typ === 'number'
+                                        ? (Number.isFinite(Number(nextRaw)) ? Number(nextRaw) : nextRaw)
+                                        : typ === 'bool'
+                                          ? nextRaw === 'true'
+                                          : nextRaw
+                                    setStrategyParams((prev) => ({ ...prev, [key]: nextVal }))
+                                  }}
+                                  select={typ === 'bool' || (typ === 'enum' && enumValues.length > 0)}
+                                  sx={{ minWidth: 220 }}
+                                >
+                                  {typ === 'bool' ? (
+                                    [
+                                      <MenuItem key="true" value="true">
+                                        true
+                                      </MenuItem>,
+                                      <MenuItem key="false" value="false">
+                                        false
+                                      </MenuItem>,
+                                    ]
+                                  ) : null}
+                                  {typ === 'enum' && enumValues.length > 0
+                                    ? enumValues.map((ev) => (
+                                        <MenuItem key={ev} value={ev}>
+                                          {ev}
+                                        </MenuItem>
+                                      ))
+                                    : null}
+                                </TextField>
+                                {inp.default != null && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    default: {String(inp.default)}
+                                  </Typography>
+                                )}
+                              </Stack>
+                            )
+                          })}
+                        </Stack>
+                      </Box>
+                    )}
+                  </Stack>
+                )}
+              </Box>
+
+	            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+	              Variables (optional)
+	            </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               Provide readable aliases like <code>RSI_1H_14</code> = <code>RSI(close, 14, &quot;1h&quot;)</code>.
             </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
+	            <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                  mb: 2,
+                  pointerEvents: useSavedStrategy ? 'none' : 'auto',
+                  opacity: useSavedStrategy ? 0.7 : 1,
+                }}
+              >
               {variables.map((v, idx) => (
                 <Box key={idx} sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <TextField
@@ -1488,14 +1827,17 @@ function AlertV3EditorDialog({
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
               Condition
             </Typography>
-            <Tabs
-              value={conditionTab}
-              onChange={(_e, v) => setConditionTab(v as 0 | 1)}
-              sx={{ mb: 1 }}
-            >
-              <Tab label="Builder" />
-              <Tab label="Advanced (DSL)" />
-            </Tabs>
+	            <Tabs
+	              value={conditionTab}
+	              onChange={(_e, v) => {
+                  if (useSavedStrategy) return
+                  setConditionTab(v as 0 | 1)
+                }}
+	              sx={{ mb: 1 }}
+	            >
+	              <Tab label="Builder" disabled={useSavedStrategy} />
+	              <Tab label="Advanced (DSL)" />
+	            </Tabs>
 
             {conditionTab === 0 && (
               <Box sx={{ mb: 2 }}>

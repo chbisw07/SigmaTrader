@@ -26,6 +26,9 @@ export type ScreenerRun = {
   finished_at?: string | null
   created_at: string
   rows?: ScreenerRow[] | null
+  signal_strategy_version_id?: number | null
+  signal_strategy_output?: string | null
+  signal_strategy_params?: Record<string, unknown>
 }
 
 export type ScreenerRunRequest = {
@@ -34,6 +37,9 @@ export type ScreenerRunRequest = {
   variables: AlertVariableDef[]
   condition_dsl: string
   evaluation_cadence?: string | null
+  signal_strategy_version_id?: number | null
+  signal_strategy_output?: string | null
+  signal_strategy_params?: Record<string, unknown>
 }
 
 async function readApiError(res: Response): Promise<string> {
@@ -103,4 +109,3 @@ export async function createGroupFromScreenerRun(
   }
   return (await res.json()) as { id: number; name: string }
 }
-
