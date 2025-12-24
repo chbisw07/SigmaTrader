@@ -17,12 +17,15 @@ from app.models import (
     SignalStrategyVersion,
     User,
 )
+from app.schemas.alerts_v3 import AlertVariableDef
 from app.schemas.groups import GroupMemberCreate, GroupRead
 from app.schemas.screener_v3 import (
+    ScreenerCleanupResponse,
     ScreenerCreateGroupRequest,
     ScreenerRow,
     ScreenerRunRead,
     ScreenerRunRequest,
+    ScreenerRunsCleanupRequest,
 )
 from app.services.indicator_alerts import IndicatorAlertError
 from app.services.screener_v3 import (
@@ -69,8 +72,37 @@ def _rows_from_json(raw: str) -> list[ScreenerRow]:
     return out
 
 
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 def _run_to_read(run: ScreenerRun, *, include_rows: bool) -> ScreenerRunRead:
     rows = _rows_from_json(run.results_json) if include_rows else None
+    include_holdings = False
+    group_ids: list[int] = []
+    try:
+        target = json.loads(run.target_json or "{}")
+        if isinstance(target, dict):
+            include_holdings = bool(target.get("include_holdings"))
+            group_ids = [int(x) for x in (target.get("group_ids") or [])]
+    except Exception:
+        include_holdings = False
+        group_ids = []
+
+    variables = []
+    try:
+        parsed_vars = json.loads(run.variables_json or "[]")
+        if isinstance(parsed_vars, list):
+            for item in parsed_vars:
+                if isinstance(item, dict):
+                    variables.append(AlertVariableDef(**item))
+    except Exception:
+        variables = []
+
     params: dict = {}
     try:
         parsed = json.loads(getattr(run, "signal_strategy_params_json", "") or "{}")
@@ -87,9 +119,13 @@ def _run_to_read(run: ScreenerRun, *, include_rows: bool) -> ScreenerRunRead:
         matched_symbols=run.matched_symbols,
         missing_symbols=run.missing_symbols,
         error=run.error,
-        started_at=run.started_at,
-        finished_at=run.finished_at,
-        created_at=run.created_at,
+        started_at=_ensure_utc(run.started_at),
+        finished_at=_ensure_utc(run.finished_at),
+        created_at=_ensure_utc(run.created_at) or datetime.now(UTC),
+        include_holdings=include_holdings,
+        group_ids=group_ids,
+        variables=variables,
+        condition_dsl=run.condition_dsl or "",
         rows=rows,
         signal_strategy_version_id=getattr(run, "signal_strategy_version_id", None),
         signal_strategy_output=getattr(run, "signal_strategy_output", None),
@@ -302,6 +338,88 @@ def create_group_from_run(
     result = _model_validate(GroupRead, group)
     result.member_count = len(created)
     return result
+
+
+@router.get("/runs", response_model=list[ScreenerRunRead])
+def list_screener_runs(
+    limit: int = Query(25, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    include_rows: bool = Query(False),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ScreenerRunRead]:
+    runs = (
+        db.query(ScreenerRun)
+        .filter(ScreenerRun.user_id == user.id)
+        .order_by(ScreenerRun.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [_run_to_read(r, include_rows=include_rows) for r in runs]
+
+
+@router.delete("/runs/{run_id}", status_code=204)
+def delete_screener_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    run = db.get(ScreenerRun, run_id)
+    if run is None or run.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    db.delete(run)
+    db.commit()
+
+
+@router.post("/runs/cleanup", response_model=ScreenerCleanupResponse)
+def cleanup_screener_runs(
+    payload: ScreenerRunsCleanupRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ScreenerCleanupResponse:
+    """Delete old runs according to retention policy.
+
+    Rules are applied in this order:
+    1) If max_days is set: delete runs older than now - max_days.
+    2) If max_runs is set: keep newest max_runs runs, delete the rest.
+    """
+
+    deleted = 0
+
+    if payload.max_days is not None:
+        cutoff = datetime.now(UTC) - payload.max_days_delta()
+        q = db.query(ScreenerRun).filter(
+            ScreenerRun.user_id == user.id, ScreenerRun.created_at < cutoff
+        )
+        if payload.dry_run:
+            deleted += q.count()
+        else:
+            deleted += q.delete(synchronize_session=False)
+            db.commit()
+
+    if payload.max_runs is not None:
+        ids = (
+            db.query(ScreenerRun.id)
+            .filter(ScreenerRun.user_id == user.id)
+            .order_by(ScreenerRun.created_at.desc())
+            .offset(int(payload.max_runs))
+            .all()
+        )
+        old_ids = [int(r[0]) for r in ids]
+        if old_ids:
+            if payload.dry_run:
+                deleted += len(old_ids)
+            else:
+                deleted += (
+                    db.query(ScreenerRun)
+                    .filter(ScreenerRun.user_id == user.id, ScreenerRun.id.in_(old_ids))
+                    .delete(synchronize_session=False)
+                )
+                db.commit()
+
+    remaining = db.query(ScreenerRun).filter(ScreenerRun.user_id == user.id).count()
+    return ScreenerCleanupResponse(deleted=deleted, remaining=remaining)
 
 
 __all__ = ["router"]

@@ -25,6 +25,10 @@ export type ScreenerRun = {
   started_at?: string | null
   finished_at?: string | null
   created_at: string
+  include_holdings?: boolean
+  group_ids?: number[]
+  variables?: AlertVariableDef[]
+  condition_dsl?: string
   rows?: ScreenerRow[] | null
   signal_strategy_version_id?: number | null
   signal_strategy_output?: string | null
@@ -90,6 +94,54 @@ export async function getScreenerRun(
     )
   }
   return (await res.json()) as ScreenerRun
+}
+
+export async function listScreenerRuns(params?: {
+  limit?: number
+  offset?: number
+  includeRows?: boolean
+}): Promise<ScreenerRun[]> {
+  const url = new URL('/api/screener-v3/runs', window.location.origin)
+  if (params?.limit != null) url.searchParams.set('limit', String(params.limit))
+  if (params?.offset != null) url.searchParams.set('offset', String(params.offset))
+  if (params?.includeRows) url.searchParams.set('include_rows', '1')
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to load screener runs (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as ScreenerRun[]
+}
+
+export async function deleteScreenerRun(runId: number): Promise<void> {
+  const res = await fetch(`/api/screener-v3/runs/${runId}`, { method: 'DELETE' })
+  if (!res.ok && res.status !== 204) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to delete run (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+}
+
+export async function cleanupScreenerRuns(payload: {
+  max_runs?: number | null
+  max_days?: number | null
+  dry_run?: boolean
+}): Promise<{ deleted: number; remaining: number }> {
+  const res = await fetch('/api/screener-v3/runs/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to cleanup runs (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as { deleted: number; remaining: number }
 }
 
 export async function createGroupFromScreenerRun(

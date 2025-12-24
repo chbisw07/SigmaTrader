@@ -41,12 +41,16 @@ import { useCustomIndicators } from '../hooks/useCustomIndicators'
 import { listGroups, type Group } from '../services/groups'
 import {
   createGroupFromScreenerRun,
+  cleanupScreenerRuns,
+  deleteScreenerRun,
   getScreenerRun,
+  listScreenerRuns,
   runScreener,
   type ScreenerRow,
   type ScreenerRun,
 } from '../services/screenerV3'
 import {
+  getSignalStrategyVersion,
   listSignalStrategies,
   listSignalStrategyVersions,
   type SignalStrategy,
@@ -80,6 +84,41 @@ const SCREENER_LEFT_PANEL_WIDTH_STORAGE_KEY = 'st_screener_left_panel_width_v1'
 const DEFAULT_LEFT_PANEL_WIDTH = 760
 const SCREENER_RESULTS_COLUMN_VISIBILITY_STORAGE_KEY =
   'st_screener_results_column_visibility_v1'
+const SCREENER_RUNS_RETENTION_STORAGE_KEY = 'st_screener_runs_retention_v1'
+
+type ScreenerRunsRetentionSettings = {
+  maxRuns: number
+  maxDays: number
+  autoCleanup: boolean
+}
+
+function loadRunsRetentionSettings(): ScreenerRunsRetentionSettings {
+  try {
+    const raw = window.localStorage.getItem(SCREENER_RUNS_RETENTION_STORAGE_KEY)
+    if (!raw) {
+      return { maxRuns: 50, maxDays: 14, autoCleanup: false }
+    }
+    const parsed = JSON.parse(raw) as Partial<ScreenerRunsRetentionSettings>
+    return {
+      maxRuns: typeof parsed.maxRuns === 'number' ? parsed.maxRuns : 50,
+      maxDays: typeof parsed.maxDays === 'number' ? parsed.maxDays : 14,
+      autoCleanup: typeof parsed.autoCleanup === 'boolean' ? parsed.autoCleanup : false,
+    }
+  } catch {
+    return { maxRuns: 50, maxDays: 14, autoCleanup: false }
+  }
+}
+
+function saveRunsRetentionSettings(next: ScreenerRunsRetentionSettings): void {
+  try {
+    window.localStorage.setItem(
+      SCREENER_RUNS_RETENTION_STORAGE_KEY,
+      JSON.stringify(next),
+    )
+  } catch {
+    // ignore
+  }
+}
 
 const DEFAULT_SCREENER_COLUMN_VISIBILITY: GridColumnVisibilityModel = {
   // Useful for debugging, but often empty; keep available via Columns menu.
@@ -226,6 +265,21 @@ export function ScreenerPage() {
 
   const [matchedOnly, setMatchedOnly] = useState(true)
   const [showVariables, setShowVariables] = useState(false)
+
+  type RightTab = 'results' | 'runs'
+  const [rightTab, setRightTab] = useState<RightTab>('results')
+
+  const [runs, setRuns] = useState<ScreenerRun[]>([])
+  const [runsLoading, setRunsLoading] = useState(false)
+  const [runsError, setRunsError] = useState<string | null>(null)
+  const [runsInfo, setRunsInfo] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
+
+  const [retention, setRetention] = useState<ScreenerRunsRetentionSettings>(() =>
+    loadRunsRetentionSettings(),
+  )
+  const [cleanupLoading, setCleanupLoading] = useState(false)
+  const lastAutoCleanupRunId = useRef<number | null>(null)
 
   const [columnVisibilityModel, setColumnVisibilityModel] =
     useState<GridColumnVisibilityModel>(() => {
@@ -557,6 +611,64 @@ export function ScreenerPage() {
     }
   }, [run])
 
+  const refreshRuns = useCallback(async () => {
+    setRunsLoading(true)
+    setRunsError(null)
+    try {
+      const res = await listScreenerRuns({ limit: 200, offset: 0, includeRows: false })
+      setRuns(res)
+    } catch (err) {
+      setRunsError(err instanceof Error ? err.message : 'Failed to load runs')
+    } finally {
+      setRunsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    saveRunsRetentionSettings(retention)
+  }, [retention])
+
+  const doCleanupRuns = useCallback(
+    async (opts?: { dryRun?: boolean }) => {
+      setCleanupLoading(true)
+      setRunsInfo(null)
+      setRunsError(null)
+      try {
+        const maxRuns = Number.isFinite(retention.maxRuns) ? retention.maxRuns : 0
+        const maxDays = Number.isFinite(retention.maxDays) ? retention.maxDays : 0
+        const res = await cleanupScreenerRuns({
+          max_runs: maxRuns > 0 ? maxRuns : null,
+          max_days: maxDays > 0 ? maxDays : null,
+          dry_run: opts?.dryRun ?? false,
+        })
+        setRunsInfo(
+          `${opts?.dryRun ? 'Would delete' : 'Deleted'} ${res.deleted}; remaining ${res.remaining}.`,
+        )
+        await refreshRuns()
+      } catch (err) {
+        setRunsError(err instanceof Error ? err.message : 'Failed to cleanup runs')
+      } finally {
+        setCleanupLoading(false)
+      }
+    },
+    [refreshRuns, retention.maxDays, retention.maxRuns],
+  )
+
+  useEffect(() => {
+    if (rightTab !== 'runs') return
+    void refreshRuns()
+  }, [rightTab, refreshRuns])
+
+  useEffect(() => {
+    if (!retention.autoCleanup) return
+    if (!run) return
+    if (run.status !== 'DONE' && run.status !== 'ERROR') return
+    if (lastAutoCleanupRunId.current === run.id) return
+    lastAutoCleanupRunId.current = run.id
+    void doCleanupRuns()
+    void refreshRuns()
+  }, [doCleanupRuns, refreshRuns, retention.autoCleanup, run])
+
   const handleAddVariable = () => {
     setVariables((current) => [...current, { name: '', dsl: '' }])
   }
@@ -688,6 +800,186 @@ export function ScreenerPage() {
       })),
     [filteredRows],
   )
+
+  const groupNameById = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const g of groups) m.set(g.id, g.name)
+    return m
+  }, [groups])
+
+  const formatDateTime = useCallback((iso?: string | null): string => {
+    if (!iso) return '—'
+    const dt = new Date(iso)
+    if (Number.isNaN(dt.getTime())) return '—'
+    return dt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+  }, [])
+
+  const universeLabel = useCallback(
+    (r: ScreenerRun): string => {
+      const parts: string[] = []
+      if (r.include_holdings) parts.push('Holdings')
+      const ids = r.group_ids ?? []
+      if (ids.length > 0) {
+        const names = ids
+          .map((id) => groupNameById.get(id) ?? `#${id}`)
+          .filter(Boolean)
+        parts.push(names.join(', '))
+      }
+      return parts.length > 0 ? parts.join(' + ') : '—'
+    },
+    [groupNameById],
+  )
+
+  const runRows = useMemo(() => runs.map((r) => ({ ...r, id: r.id })), [runs])
+
+  const loadRunIntoEditor = useCallback(
+    async (r: ScreenerRun) => {
+      setRunsInfo(null)
+      setRunsError(null)
+      setIncludeHoldings(Boolean(r.include_holdings))
+      const ids = new Set<number>((r.group_ids ?? []).map((x) => Number(x)))
+      setSelectedGroups(groups.filter((g) => ids.has(g.id)))
+      setEvaluationCadence(String(r.evaluation_cadence ?? ''))
+      setVariables(Array.isArray(r.variables) ? (r.variables as AlertVariableDef[]) : [])
+      setConditionTab(1)
+      setConditionDsl(String(r.condition_dsl ?? ''))
+
+      if (r.signal_strategy_version_id != null) {
+        try {
+          const v = await getSignalStrategyVersion(Number(r.signal_strategy_version_id))
+          setUseSavedStrategy(true)
+          setSelectedStrategyId(v.strategy_id)
+          setSelectedStrategyVersionId(Number(r.signal_strategy_version_id))
+          setSelectedStrategyOutput(r.signal_strategy_output ?? null)
+          setStrategyParams((r.signal_strategy_params ?? {}) as Record<string, unknown>)
+        } catch (err) {
+          setRunsError(
+            err instanceof Error
+              ? err.message
+              : 'Failed to load saved strategy version for this run',
+          )
+        }
+      } else {
+        setUseSavedStrategy(false)
+        setSelectedStrategyId(null)
+        setSelectedStrategyVersionId(null)
+        setSelectedStrategyOutput(null)
+        setStrategyParams({})
+      }
+
+      setRunsInfo(`Loaded run #${r.id} into editor.`)
+    },
+    [groups],
+  )
+
+  const viewRunResults = useCallback(async (runId: number) => {
+    setRunError(null)
+    setRunLoading(true)
+    try {
+      const full = await getScreenerRun(runId, { includeRows: true })
+      setRun(full)
+      setSelectedRunId(runId)
+      setRightTab('results')
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Failed to load run results')
+    } finally {
+      setRunLoading(false)
+    }
+  }, [])
+
+  const openRunsTab = useCallback(
+    async (runId?: number) => {
+      setRightTab('runs')
+      if (runId != null) setSelectedRunId(runId)
+      await refreshRuns()
+    },
+    [refreshRuns],
+  )
+
+  const runsColumns: GridColDef[] = useMemo(() => {
+    const cols: GridColDef[] = [
+      {
+        field: 'id',
+        headerName: 'Run #',
+        width: 90,
+      },
+      {
+        field: 'created_at',
+        headerName: 'Created',
+        width: 190,
+        valueGetter: (_v, row: any) => formatDateTime((row as ScreenerRun).created_at),
+      },
+      { field: 'status', headerName: 'Status', width: 110 },
+      {
+        field: 'universe',
+        headerName: 'Universe',
+        flex: 1,
+        minWidth: 220,
+        valueGetter: (_v, row: any) => universeLabel(row as ScreenerRun),
+      },
+      { field: 'evaluation_cadence', headerName: 'Cadence', width: 110 },
+      { field: 'matched_symbols', headerName: 'Matched', width: 110 },
+      { field: 'total_symbols', headerName: 'Total', width: 100 },
+      { field: 'missing_symbols', headerName: 'Missing', width: 110 },
+      {
+        field: 'strategy',
+        headerName: 'Mode',
+        width: 220,
+        valueGetter: (_v, row: any) => {
+          const r = row as ScreenerRun
+          if (r.signal_strategy_version_id != null) {
+            const out = r.signal_strategy_output ? `:${r.signal_strategy_output}` : ''
+            return `Strategy v${r.signal_strategy_version_id}${out}`
+          }
+          return 'DSL'
+        },
+      },
+      {
+        field: 'condition_dsl',
+        headerName: 'DSL',
+        flex: 2,
+        minWidth: 320,
+      },
+      {
+        field: 'actions',
+        headerName: 'Actions',
+        width: 260,
+        sortable: false,
+        filterable: false,
+        renderCell: (params: any) => {
+          const r = params.row as ScreenerRun
+          return (
+            <Stack direction="row" spacing={1}>
+              <Button size="small" onClick={() => void viewRunResults(r.id)}>
+                View
+              </Button>
+              <Button size="small" onClick={() => void loadRunIntoEditor(r)}>
+                Load
+              </Button>
+              <Button
+                size="small"
+                color="error"
+                onClick={async () => {
+                  const ok = window.confirm(`Delete screener run #${r.id}?`)
+                  if (!ok) return
+                  try {
+                    await deleteScreenerRun(r.id)
+                    setRunsInfo(`Deleted run #${r.id}.`)
+                    await refreshRuns()
+                  } catch (err) {
+                    setRunsError(err instanceof Error ? err.message : 'Failed to delete run')
+                  }
+                }}
+              >
+                Delete
+              </Button>
+            </Stack>
+          )
+        },
+      },
+    ]
+    return cols
+  }, [formatDateTime, loadRunIntoEditor, refreshRuns, universeLabel, viewRunResults])
 
   const handleCreateGroup = async () => {
     if (!run) return
@@ -1593,11 +1885,16 @@ export function ScreenerPage() {
                 {runLoading ? 'Running…' : 'Run screener'}
               </Button>
               {run && (
-                <Typography variant="body2" color="text.secondary">
-                  Run #{run.id} — {run.status} — {run.matched_symbols}/
-                  {run.total_symbols} matched — missing {run.missing_symbols}
-                  {run.status === 'ERROR' && run.error ? ` — ${run.error}` : ''}
-                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                  <Button size="small" variant="text" onClick={() => void openRunsTab(run.id)}>
+                    Run #{run.id}
+                  </Button>
+                  <Typography variant="body2" color="text.secondary">
+                    — {run.status} — {run.matched_symbols}/{run.total_symbols} matched — missing{' '}
+                    {run.missing_symbols}
+                    {run.status === 'ERROR' && run.error ? ` — ${run.error}` : ''}
+                  </Typography>
+                </Stack>
               )}
               {runError && (
                 <Typography variant="body2" color="error">
@@ -1639,77 +1936,225 @@ export function ScreenerPage() {
 
         <Box sx={{ flex: 1, minWidth: 300, display: 'flex', flexDirection: 'column' }}>
           <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
-          <Stack direction="row" spacing={2} sx={{ mb: 1 }} alignItems="center">
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={matchedOnly}
-                  onChange={(e) => setMatchedOnly(e.target.checked)}
-                />
-              }
-              label="Matched only"
-            />
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={showVariables}
-                  onChange={(e) => setShowVariables(e.target.checked)}
-                />
-              }
-              label="Show variable values"
-            />
-            <Button
-              variant="outlined"
-              disabled={!run || run.status !== 'DONE' || run.matched_symbols === 0}
-              onClick={() => {
-                setCreateGroupError(null)
-                setCreateGroupOpen(true)
-              }}
-            >
-              Create group from matches
-            </Button>
-            <Box sx={{ flex: 1 }} />
-            <Button variant="text" onClick={() => navigate('/groups')}>
-              Manage groups
-            </Button>
-          </Stack>
-          <Box sx={{ height: { xs: 560, lg: 720 }, width: '100%' }}>
-            <DataGrid
-              rows={gridRows}
-              columns={columns}
-              loading={runLoading || (run?.status === 'RUNNING')}
-              disableRowSelectionOnClick
-              columnVisibilityModel={columnVisibilityModel}
-              onColumnVisibilityModelChange={(model) => {
-                setColumnVisibilityModel(model)
-                try {
-                  window.localStorage.setItem(
-                    SCREENER_RESULTS_COLUMN_VISIBILITY_STORAGE_KEY,
-                    JSON.stringify(model),
-                  )
-                } catch {
-                  // Ignore persistence errors.
-                }
-              }}
-              slots={{ toolbar: GridToolbar }}
-              slotProps={{
-                toolbar: {
-                  showQuickFilter: true,
-                  quickFilterProps: { debounceMs: 300 },
-                },
-                filterPanel: {
-                  logicOperators: [GridLogicOperator.And],
-                },
-              }}
-              initialState={{
-                pagination: { paginationModel: { pageSize: 25 } },
-              }}
-              pageSizeOptions={[25, 50, 100]}
-              localeText={{
-                noRowsLabel: run ? 'No rows.' : 'Run a screener to see results.',
-              }}
-            />
-          </Box>
+            <Stack spacing={1}>
+              <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 0.5 }}>
+                <Tabs
+                  value={rightTab}
+                  onChange={(_e, v) => setRightTab(v as RightTab)}
+                  sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36 } }}
+                >
+                  <Tab value="results" label="Results" />
+                  <Tab
+                    value="runs"
+                    label={`Runs${runs.length > 0 ? ` (${runs.length})` : ''}`}
+                  />
+                </Tabs>
+                <Box sx={{ flex: 1 }} />
+                {rightTab === 'runs' ? (
+                  <Tooltip title="Refresh runs list">
+                    <IconButton size="small" onClick={() => void refreshRuns()}>
+                      <RefreshIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                ) : null}
+              </Stack>
+
+              {rightTab === 'results' ? (
+                <>
+                  <Stack direction="row" spacing={2} sx={{ mb: 1 }} alignItems="center">
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={matchedOnly}
+                          onChange={(e) => setMatchedOnly(e.target.checked)}
+                        />
+                      }
+                      label="Matched only"
+                    />
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={showVariables}
+                          onChange={(e) => setShowVariables(e.target.checked)}
+                        />
+                      }
+                      label="Show variable values"
+                    />
+                    <Button
+                      variant="outlined"
+                      disabled={!run || run.status !== 'DONE' || run.matched_symbols === 0}
+                      onClick={() => {
+                        setCreateGroupError(null)
+                        setCreateGroupOpen(true)
+                      }}
+                    >
+                      Create group from matches
+                    </Button>
+                    <Box sx={{ flex: 1 }} />
+                    <Button variant="text" onClick={() => void openRunsTab(run?.id)}>
+                      Runs
+                    </Button>
+                    <Button variant="text" onClick={() => navigate('/groups')}>
+                      Manage groups
+                    </Button>
+                  </Stack>
+
+                  <Box sx={{ height: { xs: 560, lg: 720 }, width: '100%' }}>
+                    <DataGrid
+                      rows={gridRows}
+                      columns={columns}
+                      loading={runLoading || (run?.status === 'RUNNING')}
+                      disableRowSelectionOnClick
+                      columnVisibilityModel={columnVisibilityModel}
+                      onColumnVisibilityModelChange={(model) => {
+                        setColumnVisibilityModel(model)
+                        try {
+                          window.localStorage.setItem(
+                            SCREENER_RESULTS_COLUMN_VISIBILITY_STORAGE_KEY,
+                            JSON.stringify(model),
+                          )
+                        } catch {
+                          // Ignore persistence errors.
+                        }
+                      }}
+                      slots={{ toolbar: GridToolbar }}
+                      slotProps={{
+                        toolbar: {
+                          showQuickFilter: true,
+                          quickFilterProps: { debounceMs: 300 },
+                        },
+                        filterPanel: {
+                          logicOperators: [GridLogicOperator.And],
+                        },
+                      }}
+                      initialState={{
+                        pagination: { paginationModel: { pageSize: 25 } },
+                      }}
+                      pageSizeOptions={[25, 50, 100]}
+                      localeText={{
+                        noRowsLabel: run ? 'No rows.' : 'Run a screener to see results.',
+                      }}
+                    />
+                  </Box>
+                </>
+              ) : (
+                <>
+                  <Box
+                    sx={{
+                      p: 1.5,
+                      border: 1,
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                    }}
+                  >
+                    <Stack
+                      direction={{ xs: 'column', md: 'row' }}
+                      spacing={2}
+                      alignItems={{ xs: 'stretch', md: 'center' }}
+                    >
+                      <TextField
+                        label="Keep last N runs"
+                        size="small"
+                        type="number"
+                        value={retention.maxRuns}
+                        onChange={(e) =>
+                          setRetention((prev) => ({
+                            ...prev,
+                            maxRuns: Math.max(0, Number(e.target.value || 0)),
+                          }))
+                        }
+                        helperText="0 disables this rule."
+                        sx={{ width: 180 }}
+                      />
+                      <TextField
+                        label="Keep last X days"
+                        size="small"
+                        type="number"
+                        value={retention.maxDays}
+                        onChange={(e) =>
+                          setRetention((prev) => ({
+                            ...prev,
+                            maxDays: Math.max(0, Number(e.target.value || 0)),
+                          }))
+                        }
+                        helperText="0 disables this rule."
+                        sx={{ width: 180 }}
+                      />
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={retention.autoCleanup}
+                            onChange={(e) =>
+                              setRetention((prev) => ({
+                                ...prev,
+                                autoCleanup: e.target.checked,
+                              }))
+                            }
+                          />
+                        }
+                        label="Auto cleanup after run"
+                      />
+                      <Box sx={{ flex: 1 }} />
+                      <Button
+                        variant="outlined"
+                        disabled={cleanupLoading}
+                        onClick={() => void doCleanupRuns()}
+                      >
+                        {cleanupLoading ? 'Cleaning…' : 'Cleanup now'}
+                      </Button>
+                      <Button
+                        variant="text"
+                        disabled={cleanupLoading}
+                        onClick={() => void doCleanupRuns({ dryRun: true })}
+                      >
+                        Dry run
+                      </Button>
+                    </Stack>
+                    {runsInfo ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        {runsInfo}
+                      </Typography>
+                    ) : null}
+                    {runsError ? (
+                      <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                        {runsError}
+                      </Typography>
+                    ) : null}
+                  </Box>
+
+                  <Box sx={{ height: { xs: 560, lg: 720 }, width: '100%' }}>
+                    <DataGrid
+                      rows={runRows}
+                      columns={runsColumns}
+                      loading={runsLoading}
+                      disableRowSelectionOnClick
+                      rowSelectionModel={selectedRunId != null ? [selectedRunId] : []}
+                      onRowSelectionModelChange={(model) => {
+                        const first = Array.isArray(model) ? model[0] : null
+                        setSelectedRunId(first != null ? Number(first) : null)
+                      }}
+                      slots={{ toolbar: GridToolbar }}
+                      slotProps={{
+                        toolbar: {
+                          showQuickFilter: true,
+                          quickFilterProps: { debounceMs: 300 },
+                        },
+                        filterPanel: {
+                          logicOperators: [GridLogicOperator.And],
+                        },
+                      }}
+                      initialState={{
+                        pagination: { paginationModel: { pageSize: 25 } },
+                      }}
+                      pageSizeOptions={[25, 50, 100]}
+                      localeText={{
+                        noRowsLabel: 'No past runs yet.',
+                      }}
+                    />
+                  </Box>
+                </>
+              )}
+            </Stack>
           </Paper>
         </Box>
       </Box>

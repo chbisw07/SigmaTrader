@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -49,6 +49,11 @@ class ScreenerRunRead(BaseModel):
     finished_at: Optional[datetime] = None
     created_at: datetime
 
+    include_holdings: bool = False
+    group_ids: List[int] = Field(default_factory=list)
+    variables: List[AlertVariableDef] = Field(default_factory=list)
+    condition_dsl: str = ""
+
     rows: Optional[List[ScreenerRow]] = None
 
     signal_strategy_version_id: Optional[int] = None
@@ -60,3 +65,17 @@ class ScreenerCreateGroupRequest(BaseModel):
     name: str
     kind: str = "WATCHLIST"
     description: Optional[str] = None
+
+
+class ScreenerRunsCleanupRequest(BaseModel):
+    max_runs: Optional[int] = Field(default=None, ge=0)
+    max_days: Optional[int] = Field(default=None, ge=0)
+    dry_run: bool = False
+
+    def max_days_delta(self) -> timedelta:
+        return timedelta(days=int(self.max_days or 0))
+
+
+class ScreenerCleanupResponse(BaseModel):
+    deleted: int
+    remaining: int
