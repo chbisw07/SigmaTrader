@@ -246,6 +246,8 @@ def rebalance_execute(
                 target_kind="HOLDINGS",
                 group_id=None,
                 broker_name=broker,  # type: ignore[arg-type]
+                rebalance_method=payload.rebalance_method,
+                rotation=payload.rotation,
                 budget_pct=payload.budget_pct,
                 budget_amount=payload.budget_amount,
                 drift_band_abs_pct=payload.drift_band_abs_pct,
@@ -359,6 +361,8 @@ def rebalance_execute(
             target_kind="GROUP",
             group_id=payload.group_id,
             broker_name=broker,  # type: ignore[arg-type]
+            rebalance_method=payload.rebalance_method,
+            rotation=payload.rotation,
             budget_pct=payload.budget_pct,
             budget_amount=payload.budget_amount,
             drift_band_abs_pct=payload.drift_band_abs_pct,

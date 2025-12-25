@@ -3,11 +3,13 @@ import HistoryIcon from '@mui/icons-material/History'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Checkbox from '@mui/material/Checkbox'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import FormControl from '@mui/material/FormControl'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import InputLabel from '@mui/material/InputLabel'
 import MenuItem from '@mui/material/MenuItem'
@@ -33,6 +35,8 @@ import {
   listRebalanceRuns,
   previewRebalance,
   updateRebalanceSchedule,
+  type RebalanceMethod,
+  type RebalanceRotationWeighting,
   type RebalancePreviewResult,
   type RebalanceRun,
   type RebalanceSchedule,
@@ -40,6 +44,13 @@ import {
   type RebalanceScheduleFrequency,
   type RebalanceTargetKind,
 } from '../services/rebalance'
+import { listGroups, type Group } from '../services/groups'
+import {
+  listSignalStrategies,
+  listSignalStrategyVersions,
+  type SignalStrategy,
+  type SignalStrategyVersion,
+} from '../services/signalStrategies'
 
 type RebalanceTradeRow = {
   id: string
@@ -56,12 +67,27 @@ type RebalanceTradeRow = {
 
 type RebalanceDraft = {
   brokerName: 'zerodha' | 'angelone'
+  rebalanceMethod: RebalanceMethod
   budgetPct: string
   budgetAmount: string
   absBandPct: string
   relBandPct: string
   maxTrades: string
   minTradeValue: string
+  rotationStrategyId: string
+  rotationVersionId: string
+  rotationOutput: string
+  rotationParamsJson: string
+  rotationUniverseGroupId: string
+  rotationScreenerRunId: string
+  rotationTopN: string
+  rotationWeighting: RebalanceRotationWeighting
+  rotationSellNotInTopN: boolean
+  rotationMinPrice: string
+  rotationMinAvgVolume20d: string
+  rotationWhitelist: string
+  rotationBlacklist: string
+  rotationRequirePositiveScore: boolean
   mode: 'MANUAL' | 'AUTO'
   executionTarget: 'LIVE' | 'PAPER'
   orderType: 'MARKET' | 'LIMIT'
@@ -71,12 +97,27 @@ type RebalanceDraft = {
 
 const DEFAULT_REBALANCE: RebalanceDraft = {
   brokerName: 'zerodha',
+  rebalanceMethod: 'TARGET_WEIGHT',
   budgetPct: '10',
   budgetAmount: '',
   absBandPct: '2',
   relBandPct: '15',
   maxTrades: '10',
   minTradeValue: '2000',
+  rotationStrategyId: '',
+  rotationVersionId: '',
+  rotationOutput: '',
+  rotationParamsJson: '',
+  rotationUniverseGroupId: '',
+  rotationScreenerRunId: '',
+  rotationTopN: '10',
+  rotationWeighting: 'EQUAL',
+  rotationSellNotInTopN: true,
+  rotationMinPrice: '',
+  rotationMinAvgVolume20d: '',
+  rotationWhitelist: '',
+  rotationBlacklist: '',
+  rotationRequirePositiveScore: true,
   mode: 'MANUAL',
   executionTarget: 'LIVE',
   orderType: 'MARKET',
@@ -118,6 +159,12 @@ function parseNum(raw: string): number | null {
   return v
 }
 
+function parseIntOrNull(raw: string): number | null {
+  const v = Number(raw)
+  if (!Number.isFinite(v) || v <= 0) return null
+  return Math.floor(v)
+}
+
 export type RebalanceDialogProps = {
   open: boolean
   onClose: () => void
@@ -140,6 +187,7 @@ export function RebalanceDialog({
   scheduleSupported,
 }: RebalanceDialogProps) {
   const historyEnabled = targetKind === 'GROUP' && groupId != null
+  const signalRotationSupported = historyEnabled && !!scheduleSupported
   const [tab, setTab] = useState<'preview' | 'history' | 'schedule'>('preview')
   const [helpOpen, setHelpOpen] = useState(false)
   const [draft, setDraft] = useState<RebalanceDraft>(() => ({
@@ -157,6 +205,9 @@ export function RebalanceDialog({
   const [scheduleDraft, setScheduleDraft] =
     useState<RebalanceScheduleConfig | null>(null)
   const [scheduleEnabled, setScheduleEnabled] = useState(true)
+  const [groups, setGroups] = useState<Group[]>([])
+  const [signalStrategies, setSignalStrategies] = useState<SignalStrategy[]>([])
+  const [signalVersions, setSignalVersions] = useState<SignalStrategyVersion[]>([])
 
   useEffect(() => {
     if (!open) return
@@ -169,6 +220,9 @@ export function RebalanceDialog({
     setSchedule(null)
     setScheduleDraft(null)
     setScheduleEnabled(true)
+    setGroups([])
+    setSignalStrategies([])
+    setSignalVersions([])
 
     if (historyEnabled) {
       void (async () => {
@@ -196,7 +250,65 @@ export function RebalanceDialog({
         }
       })()
     }
+
+    if (signalRotationSupported) {
+      void (async () => {
+        try {
+          const [gs, ss] = await Promise.all([
+            listGroups(),
+            listSignalStrategies({ includeLatest: true, includeUsage: false }),
+          ])
+          setGroups(gs)
+          setSignalStrategies(ss)
+        } catch {
+          // best-effort
+        }
+      })()
+    }
   }, [open, brokerName, historyEnabled, groupId, scheduleSupported])
+
+  useEffect(() => {
+    if (!open || !signalRotationSupported) return
+    const strategyId = Number(draft.rotationStrategyId)
+    if (!Number.isFinite(strategyId) || strategyId <= 0) {
+      setSignalVersions([])
+      return
+    }
+    void (async () => {
+      try {
+        const versions = await listSignalStrategyVersions(strategyId)
+        setSignalVersions(versions)
+        if (!versions.length) return
+        const latest = versions.reduce(
+          (best, v) => (v.version > best.version ? v : best),
+          versions[0],
+        )
+        setDraft((prev) => {
+          if (prev.rotationVersionId && prev.rotationOutput) return prev
+          return {
+            ...prev,
+            rotationVersionId: prev.rotationVersionId || String(latest.id),
+            rotationOutput:
+              prev.rotationOutput ||
+              (latest.outputs.find((o) => o.kind === 'OVERLAY')?.name ?? ''),
+          }
+        })
+      } catch {
+        setSignalVersions([])
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, signalRotationSupported, draft.rotationStrategyId])
+
+  const selectedVersion = useMemo(() => {
+    const vid = Number(draft.rotationVersionId)
+    if (!Number.isFinite(vid) || vid <= 0) return null
+    return signalVersions.find((v) => v.id === vid) ?? null
+  }, [draft.rotationVersionId, signalVersions])
+
+  const overlayOutputs = useMemo(() => {
+    return (selectedVersion?.outputs ?? []).filter((o) => o.kind === 'OVERLAY')
+  }, [selectedVersion])
 
   const saveSchedule = async () => {
     if (!historyEnabled || !scheduleSupported || !groupId || !scheduleDraft) return
@@ -328,10 +440,77 @@ export function RebalanceDialog({
         Number.isFinite(maxTradesRaw) && maxTradesRaw >= 0 ? Math.floor(maxTradesRaw) : null
       const minTradeValue = draft.minTradeValue.trim() ? parseNum(draft.minTradeValue.trim()) : null
 
+      let rotationPayload: any = null
+      if (signalRotationSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION') {
+        const versionId = parseIntOrNull(draft.rotationVersionId.trim())
+        if (!versionId) throw new Error('Rotation: select a strategy version')
+        const outputName = draft.rotationOutput.trim()
+        if (!outputName) throw new Error('Rotation: select an output (OVERLAY)')
+        const topN = parseIntOrNull(draft.rotationTopN.trim())
+        if (!topN) throw new Error('Rotation: enter a valid Top N')
+        const universeGroupId = draft.rotationUniverseGroupId.trim()
+          ? parseIntOrNull(draft.rotationUniverseGroupId.trim())
+          : null
+        const screenerRunId = draft.rotationScreenerRunId.trim()
+          ? parseIntOrNull(draft.rotationScreenerRunId.trim())
+          : null
+        if (universeGroupId && screenerRunId)
+          throw new Error('Rotation: choose either Universe group or Screener run id (not both)')
+
+        let paramsObj: Record<string, unknown> = {}
+        if (draft.rotationParamsJson.trim()) {
+          try {
+            const parsed = JSON.parse(draft.rotationParamsJson.trim()) as unknown
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              paramsObj = parsed as Record<string, unknown>
+            } else {
+              throw new Error('Signal params must be a JSON object')
+            }
+          } catch (e) {
+            throw new Error(
+              `Rotation: invalid Signal params JSON${
+                e instanceof Error && e.message ? `: ${e.message}` : ''
+              }`,
+            )
+          }
+        }
+
+        const minPrice = draft.rotationMinPrice.trim() ? parseNum(draft.rotationMinPrice.trim()) : null
+        const minAvgVol = draft.rotationMinAvgVolume20d.trim()
+          ? parseNum(draft.rotationMinAvgVolume20d.trim())
+          : null
+        const whitelist = draft.rotationWhitelist
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+        const blacklist = draft.rotationBlacklist
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+
+        rotationPayload = {
+          signal_strategy_version_id: versionId,
+          signal_output: outputName,
+          signal_params: paramsObj,
+          universe_group_id: universeGroupId,
+          screener_run_id: screenerRunId,
+          top_n: topN,
+          weighting: draft.rotationWeighting,
+          sell_not_in_top_n: !!draft.rotationSellNotInTopN,
+          min_price: minPrice,
+          min_avg_volume_20d: minAvgVol,
+          symbol_whitelist: whitelist,
+          symbol_blacklist: blacklist,
+          require_positive_score: !!draft.rotationRequirePositiveScore,
+        }
+      }
+
       const results = await previewRebalance({
         target_kind: targetKind,
         group_id: targetKind === 'GROUP' ? (groupId ?? null) : null,
         broker_name: draft.brokerName,
+        rebalance_method: draft.rebalanceMethod,
+        rotation: rotationPayload,
         budget_pct: budgetPct,
         budget_amount: budgetAmount,
         drift_band_abs_pct: absBand,
@@ -362,10 +541,77 @@ export function RebalanceDialog({
       const idem =
         historyEnabled && draft.idempotencyKey.trim() ? draft.idempotencyKey.trim() : null
 
+      let rotationPayload: any = null
+      if (signalRotationSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION') {
+        const versionId = parseIntOrNull(draft.rotationVersionId.trim())
+        if (!versionId) throw new Error('Rotation: select a strategy version')
+        const outputName = draft.rotationOutput.trim()
+        if (!outputName) throw new Error('Rotation: select an output (OVERLAY)')
+        const topN = parseIntOrNull(draft.rotationTopN.trim())
+        if (!topN) throw new Error('Rotation: enter a valid Top N')
+        const universeGroupId = draft.rotationUniverseGroupId.trim()
+          ? parseIntOrNull(draft.rotationUniverseGroupId.trim())
+          : null
+        const screenerRunId = draft.rotationScreenerRunId.trim()
+          ? parseIntOrNull(draft.rotationScreenerRunId.trim())
+          : null
+        if (universeGroupId && screenerRunId)
+          throw new Error('Rotation: choose either Universe group or Screener run id (not both)')
+
+        let paramsObj: Record<string, unknown> = {}
+        if (draft.rotationParamsJson.trim()) {
+          try {
+            const parsed = JSON.parse(draft.rotationParamsJson.trim()) as unknown
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              paramsObj = parsed as Record<string, unknown>
+            } else {
+              throw new Error('Signal params must be a JSON object')
+            }
+          } catch (e) {
+            throw new Error(
+              `Rotation: invalid Signal params JSON${
+                e instanceof Error && e.message ? `: ${e.message}` : ''
+              }`,
+            )
+          }
+        }
+
+        const minPrice = draft.rotationMinPrice.trim() ? parseNum(draft.rotationMinPrice.trim()) : null
+        const minAvgVol = draft.rotationMinAvgVolume20d.trim()
+          ? parseNum(draft.rotationMinAvgVolume20d.trim())
+          : null
+        const whitelist = draft.rotationWhitelist
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+        const blacklist = draft.rotationBlacklist
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+
+        rotationPayload = {
+          signal_strategy_version_id: versionId,
+          signal_output: outputName,
+          signal_params: paramsObj,
+          universe_group_id: universeGroupId,
+          screener_run_id: screenerRunId,
+          top_n: topN,
+          weighting: draft.rotationWeighting,
+          sell_not_in_top_n: !!draft.rotationSellNotInTopN,
+          min_price: minPrice,
+          min_avg_volume_20d: minAvgVol,
+          symbol_whitelist: whitelist,
+          symbol_blacklist: blacklist,
+          require_positive_score: !!draft.rotationRequirePositiveScore,
+        }
+      }
+
       const results = await executeRebalance({
         target_kind: targetKind,
         group_id: targetKind === 'GROUP' ? (groupId ?? null) : null,
         broker_name: draft.brokerName,
+        rebalance_method: draft.rebalanceMethod,
+        rotation: rotationPayload,
         budget_pct: budgetPct,
         budget_amount: budgetAmount,
         drift_band_abs_pct: absBand,
@@ -447,7 +693,244 @@ export function RebalanceDialog({
         )}
 
         {tab === 'preview' && (
-          <Stack spacing={2} sx={{ mt: 2 }}>
+            <Stack spacing={2} sx={{ mt: 2 }}>
+            {signalRotationSupported && (
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                <FormControl sx={{ width: { xs: '100%', md: 240 } }}>
+                  <InputLabel id="rebalance-method-label">Rebalance method</InputLabel>
+                  <Select
+                    labelId="rebalance-method-label"
+                    label="Rebalance method"
+                    value={draft.rebalanceMethod}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        rebalanceMethod: e.target.value as RebalanceMethod,
+                      }))
+                    }
+                  >
+                    <MenuItem value="TARGET_WEIGHT">Target weights</MenuItem>
+                    <MenuItem value="SIGNAL_ROTATION">Signal-driven rotation</MenuItem>
+                  </Select>
+                </FormControl>
+              </Stack>
+            )}
+
+            {signalRotationSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION' && (
+              <Stack spacing={2}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <FormControl sx={{ width: { xs: '100%', md: 260 } }}>
+                    <InputLabel id="rot-strategy-label">Strategy</InputLabel>
+                    <Select
+                      labelId="rot-strategy-label"
+                      label="Strategy"
+                      value={draft.rotationStrategyId}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          rotationStrategyId: String(e.target.value),
+                          rotationVersionId: '',
+                          rotationOutput: '',
+                        }))
+                      }
+                    >
+                      {signalStrategies.map((s) => (
+                        <MenuItem key={s.id} value={String(s.id)}>
+                          {s.name} (#{s.id})
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <FormControl sx={{ width: { xs: '100%', md: 220 } }}>
+                    <InputLabel id="rot-version-label">Version</InputLabel>
+                    <Select
+                      labelId="rot-version-label"
+                      label="Version"
+                      value={draft.rotationVersionId}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          rotationVersionId: String(e.target.value),
+                          rotationOutput: '',
+                        }))
+                      }
+                    >
+                      {signalVersions.map((v) => (
+                        <MenuItem key={v.id} value={String(v.id)}>
+                          v{v.version} (#{v.id})
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <FormControl sx={{ width: { xs: '100%', md: 220 } }}>
+                    <InputLabel id="rot-output-label">Output</InputLabel>
+                    <Select
+                      labelId="rot-output-label"
+                      label="Output"
+                      value={draft.rotationOutput}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          rotationOutput: String(e.target.value),
+                        }))
+                      }
+                    >
+                      {overlayOutputs.map((o) => (
+                        <MenuItem key={o.name} value={o.name}>
+                          {o.name}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <TextField
+                    label="Top N"
+                    value={draft.rotationTopN}
+                    onChange={(e) => setDraft((prev) => ({ ...prev, rotationTopN: e.target.value }))}
+                    sx={{ width: { xs: '100%', md: 140 } }}
+                  />
+                  <FormControl sx={{ width: { xs: '100%', md: 200 } }}>
+                    <InputLabel id="rot-weighting-label">Weighting</InputLabel>
+                    <Select
+                      labelId="rot-weighting-label"
+                      label="Weighting"
+                      value={draft.rotationWeighting}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          rotationWeighting: e.target.value as RebalanceRotationWeighting,
+                        }))
+                      }
+                    >
+                      <MenuItem value="EQUAL">Equal</MenuItem>
+                      <MenuItem value="SCORE">Score-proportional</MenuItem>
+                      <MenuItem value="RANK">Rank-based</MenuItem>
+                    </Select>
+                  </FormControl>
+
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={draft.rotationSellNotInTopN}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            rotationSellNotInTopN: e.target.checked,
+                          }))
+                        }
+                      />
+                    }
+                    label="Sell positions not in Top N"
+                  />
+                </Stack>
+
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <FormControl sx={{ width: { xs: '100%', md: 320 } }}>
+                    <InputLabel id="rot-universe-group-label">Universe group (optional)</InputLabel>
+                    <Select
+                      labelId="rot-universe-group-label"
+                      label="Universe group (optional)"
+                      value={draft.rotationUniverseGroupId}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          rotationUniverseGroupId: String(e.target.value),
+                        }))
+                      }
+                    >
+                      <MenuItem value="">(Use this portfolio group)</MenuItem>
+                      {groups.map((g) => (
+                        <MenuItem key={g.id} value={String(g.id)}>
+                          {g.name} ({g.kind}) (#{g.id})
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  <TextField
+                    label="Screener run id (optional)"
+                    value={draft.rotationScreenerRunId}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, rotationScreenerRunId: e.target.value }))
+                    }
+                    helperText="Alternative to Universe group."
+                    sx={{ width: { xs: '100%', md: 220 } }}
+                  />
+                </Stack>
+
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <TextField
+                    label="Min price (optional)"
+                    value={draft.rotationMinPrice}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, rotationMinPrice: e.target.value }))
+                    }
+                    sx={{ width: { xs: '100%', md: 200 } }}
+                  />
+                  <TextField
+                    label="Min avg volume 20d (optional)"
+                    value={draft.rotationMinAvgVolume20d}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, rotationMinAvgVolume20d: e.target.value }))
+                    }
+                    sx={{ width: { xs: '100%', md: 240 } }}
+                  />
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={draft.rotationRequirePositiveScore}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            rotationRequirePositiveScore: e.target.checked,
+                          }))
+                        }
+                      />
+                    }
+                    label="Require positive score"
+                  />
+                </Stack>
+
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <TextField
+                    label="Whitelist (comma-separated)"
+                    value={draft.rotationWhitelist}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, rotationWhitelist: e.target.value }))
+                    }
+                    sx={{ width: { xs: '100%', md: 360 } }}
+                  />
+                  <TextField
+                    label="Blacklist (comma-separated)"
+                    value={draft.rotationBlacklist}
+                    onChange={(e) =>
+                      setDraft((prev) => ({ ...prev, rotationBlacklist: e.target.value }))
+                    }
+                    sx={{ width: { xs: '100%', md: 360 } }}
+                  />
+                </Stack>
+
+                <TextField
+                  label="Signal params (JSON, optional)"
+                  value={draft.rotationParamsJson}
+                  onChange={(e) =>
+                    setDraft((prev) => ({ ...prev, rotationParamsJson: e.target.value }))
+                  }
+                  helperText={
+                    selectedVersion?.inputs?.length
+                      ? `Inputs: ${selectedVersion.inputs.map((i) => i.name).join(', ')}`
+                      : 'Overrides strategy input defaults.'
+                  }
+                  multiline
+                  minRows={2}
+                />
+              </Stack>
+            )}
+
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
               <FormControl sx={{ width: { xs: '100%', md: 180 } }}>
                 <InputLabel id="rebalance-broker-label">Broker</InputLabel>

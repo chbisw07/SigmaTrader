@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +10,48 @@ from app.pydantic_compat import PYDANTIC_V2, ConfigDict, model_validator
 RebalanceBrokerScope = Literal["zerodha", "angelone", "both"]
 RebalanceMode = Literal["MANUAL", "AUTO"]
 RebalanceTargetKind = Literal["GROUP", "HOLDINGS"]
+RebalanceMethod = Literal["TARGET_WEIGHT", "SIGNAL_ROTATION"]
+RebalanceRotationWeighting = Literal["EQUAL", "SCORE", "RANK"]
+
+
+class RebalanceRotationConfig(BaseModel):
+    """Signal/strategy-driven rotation config (v2).
+
+    Notes:
+    - Requires an OVERLAY output (numeric) for ranking.
+    - When both universe_group_id and screener_run_id are omitted, the rebalance
+      group's members are used as the candidate universe.
+    """
+
+    signal_strategy_version_id: int = Field(..., ge=1)
+    signal_output: str = Field(..., min_length=1, max_length=64)
+    signal_params: Dict[str, Any] = Field(default_factory=dict)
+
+    universe_group_id: Optional[int] = Field(None, ge=1)
+    screener_run_id: Optional[int] = Field(None, ge=1)
+
+    top_n: int = Field(10, ge=1, le=500)
+    weighting: RebalanceRotationWeighting = "EQUAL"
+
+    sell_not_in_top_n: bool = True
+
+    min_price: Optional[float] = Field(None, ge=0.0)
+    min_avg_volume_20d: Optional[float] = Field(None, ge=0.0)
+
+    symbol_whitelist: List[str] = Field(default_factory=list)
+    symbol_blacklist: List[str] = Field(default_factory=list)
+
+    require_positive_score: bool = True
+
+    @model_validator(mode="before")
+    def _validate_universe(cls, values):  # type: ignore[no-untyped-def]
+        if not isinstance(values, dict):
+            return values
+        if values.get("universe_group_id") and values.get("screener_run_id"):
+            raise ValueError(
+                "Provide only one of universe_group_id or screener_run_id."
+            )
+        return values
 
 
 class RebalancePreviewRequest(BaseModel):
@@ -20,6 +62,8 @@ class RebalancePreviewRequest(BaseModel):
         description="Required when target_kind=GROUP.",
     )
     broker_name: RebalanceBrokerScope = "zerodha"
+    rebalance_method: RebalanceMethod = "TARGET_WEIGHT"
+    rotation: Optional[RebalanceRotationConfig] = None
 
     budget_pct: Optional[float] = Field(
         0.10,
@@ -59,6 +103,17 @@ class RebalancePreviewRequest(BaseModel):
         if str(target_kind).upper() == "GROUP":
             if group_id is None:
                 raise ValueError("group_id is required when target_kind=GROUP.")
+        rebalance_method = values.get("rebalance_method") or "TARGET_WEIGHT"
+        rotation = values.get("rotation")
+        if str(rebalance_method).upper() == "SIGNAL_ROTATION":
+            if str(target_kind).upper() != "GROUP":
+                raise ValueError(
+                    "rebalance_method=SIGNAL_ROTATION requires target_kind=GROUP."
+                )
+            if rotation is None:
+                raise ValueError(
+                    "rotation config is required when rebalance_method=SIGNAL_ROTATION."
+                )
         return values
 
 
@@ -78,7 +133,7 @@ class RebalanceTrade(BaseModel):
     delta_value: float
     scale: float
 
-    reason: Dict[str, object] = {}
+    reason: Dict[str, object] = Field(default_factory=dict)
 
 
 class RebalancePreviewSummary(BaseModel):
@@ -104,6 +159,7 @@ class RebalancePreviewResult(BaseModel):
     trades: List[RebalanceTrade] = []
     summary: RebalancePreviewSummary
     warnings: List[str] = []
+    derived_targets: Optional[List[Dict[str, object]]] = None
 
 
 class RebalancePreviewResponse(BaseModel):
@@ -174,6 +230,9 @@ __all__ = [
     "RebalanceBrokerScope",
     "RebalanceMode",
     "RebalanceTargetKind",
+    "RebalanceMethod",
+    "RebalanceRotationWeighting",
+    "RebalanceRotationConfig",
     "RebalancePreviewRequest",
     "RebalancePreviewResponse",
     "RebalancePreviewResult",

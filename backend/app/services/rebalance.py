@@ -17,6 +17,7 @@ from app.schemas.rebalance import (
     RebalancePreviewSummary,
     RebalanceTrade,
 )
+from app.services.rebalance_rotation import derive_rotation_targets
 
 
 def _json_dump(obj: object) -> str:
@@ -196,7 +197,7 @@ def preview_rebalance(
             detail="Group has no members.",
         )
 
-    member_infos = [
+    base_member_infos = [
         _MemberInfo(
             symbol=_norm_symbol(m.symbol),
             exchange=_norm_exchange(m.exchange),
@@ -207,13 +208,101 @@ def preview_rebalance(
         for m in members
         if _norm_symbol(m.symbol)
     ]
-    if not member_infos:
+    if not base_member_infos:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Group has no valid symbols.",
         )
 
+    member_infos = base_member_infos
     target_weights = _normalize_target_weights(member_infos)
+    derived_targets: Optional[List[Dict[str, object]]] = None
+    extra_reason_by_symbol: Dict[str, Dict[str, object]] = {}
+    rotation_warnings: List[str] = []
+
+    if str(req.rebalance_method).upper() == "SIGNAL_ROTATION":
+        if req.rotation is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="rotation config is required for SIGNAL_ROTATION.",
+            )
+        rotation = derive_rotation_targets(
+            db,
+            settings,
+            user=user,
+            rebalance_group=group,
+            cfg=req.rotation,
+        )
+        rotation_warnings = list(rotation.warnings or [])
+        derived_targets = [
+            {
+                "symbol": t.symbol,
+                "exchange": t.exchange,
+                "rank": t.rank,
+                "score": t.score,
+                "target_weight": t.target_weight,
+            }
+            for t in rotation.targets
+        ]
+
+        # Build new member set: existing group members + any missing top-N symbols.
+        existing_pairs = {(m.symbol, m.exchange) for m in base_member_infos}
+        additions = [
+            _MemberInfo(
+                symbol=t.symbol, exchange=t.exchange, target_weight_raw=t.target_weight
+            )
+            for t in rotation.targets
+            if (t.symbol, t.exchange) not in existing_pairs
+        ]
+        # Overwrite weights for base members; optionally rotate out non-top-N.
+        member_infos = []
+        selected_pairs = set(rotation.weight_by_pair.keys())
+        for m in base_member_infos:
+            key = (m.symbol, m.exchange)
+            if key in selected_pairs:
+                member_infos.append(
+                    _MemberInfo(
+                        symbol=m.symbol,
+                        exchange=m.exchange,
+                        target_weight_raw=float(rotation.weight_by_pair.get(key, 0.0)),
+                    )
+                )
+                extra_reason_by_symbol[m.symbol] = rotation.meta_by_symbol.get(
+                    m.symbol, {}
+                )
+            else:
+                tw = (
+                    0.0 if bool(req.rotation.sell_not_in_top_n) else m.target_weight_raw
+                )
+                member_infos.append(
+                    _MemberInfo(
+                        symbol=m.symbol,
+                        exchange=m.exchange,
+                        target_weight_raw=tw,
+                    )
+                )
+                extra_reason_by_symbol[m.symbol] = {
+                    "rotation": {
+                        "included": False,
+                        "reason": (
+                            "not_in_top_n"
+                            if bool(req.rotation.sell_not_in_top_n)
+                            else "not_in_top_n_kept"
+                        ),
+                        "strategy": {
+                            "signal_strategy_version_id": int(
+                                req.rotation.signal_strategy_version_id
+                            ),
+                            "signal_output": str(req.rotation.signal_output),
+                        },
+                    }
+                }
+
+        for a in additions:
+            member_infos.append(a)
+            extra_reason_by_symbol[a.symbol] = rotation.meta_by_symbol.get(a.symbol, {})
+
+        target_weights = _normalize_target_weights(member_infos)
 
     for broker in brokers:
         result = _preview_rebalance_single_broker(
@@ -225,6 +314,9 @@ def preview_rebalance(
             member_infos=member_infos,
             target_weights=target_weights,
             req=req,
+            derived_targets=derived_targets,
+            extra_reason_by_symbol=extra_reason_by_symbol,
+            extra_warnings=rotation_warnings,
         )
         result.target_kind = "GROUP"
         result.group_id = group.id
@@ -242,8 +334,12 @@ def _preview_rebalance_single_broker(
     member_infos: List[_MemberInfo],
     target_weights: Dict[Tuple[str, str], float],
     req: RebalancePreviewRequest,
+    derived_targets: Optional[List[Dict[str, object]]] = None,
+    extra_reason_by_symbol: Optional[Dict[str, Dict[str, object]]] = None,
+    extra_warnings: Optional[List[str]] = None,
 ) -> RebalancePreviewResult:
-    warnings: list[str] = []
+    warnings: list[str] = list(extra_warnings or [])
+    extra_reason_by_symbol = extra_reason_by_symbol or {}
 
     holdings = list_holdings(
         broker_name=broker_name,
@@ -418,6 +514,7 @@ def _preview_rebalance_single_broker(
                     "abs_band": abs_band,
                     "rel_band": rel_band,
                     "budget": float(budget_amount),
+                    **(extra_reason_by_symbol.get(str(c["symbol"]) or "", {})),
                 },
             )
         )
@@ -476,6 +573,7 @@ def _preview_rebalance_single_broker(
         trades=trades,
         summary=summary,
         warnings=warnings,
+        derived_targets=derived_targets,
     )
 
 
@@ -485,6 +583,8 @@ def build_run_snapshots(
     preview: RebalancePreviewResult,
 ) -> tuple[str, str, str]:
     policy_snapshot = {
+        "rebalance_method": req.rebalance_method,
+        "rotation": model_to_dict(req.rotation) if req.rotation is not None else None,
         "budget_pct": req.budget_pct,
         "budget_amount": req.budget_amount,
         "drift_band_abs_pct": req.drift_band_abs_pct,

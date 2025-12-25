@@ -1,6 +1,24 @@
 export type RebalanceBroker = 'zerodha' | 'angelone' | 'both'
 export type RebalanceMode = 'MANUAL' | 'AUTO'
 export type RebalanceTargetKind = 'GROUP' | 'HOLDINGS'
+export type RebalanceMethod = 'TARGET_WEIGHT' | 'SIGNAL_ROTATION'
+export type RebalanceRotationWeighting = 'EQUAL' | 'SCORE' | 'RANK'
+
+export type RebalanceRotationConfig = {
+  signal_strategy_version_id: number
+  signal_output: string
+  signal_params?: Record<string, unknown>
+  universe_group_id?: number | null
+  screener_run_id?: number | null
+  top_n: number
+  weighting: RebalanceRotationWeighting
+  sell_not_in_top_n: boolean
+  min_price?: number | null
+  min_avg_volume_20d?: number | null
+  symbol_whitelist?: string[]
+  symbol_blacklist?: string[]
+  require_positive_score: boolean
+}
 
 export type RebalanceTrade = {
   symbol: string
@@ -40,12 +58,15 @@ export type RebalancePreviewResult = {
   trades: RebalanceTrade[]
   summary: RebalancePreviewSummary
   warnings: string[]
+  derived_targets?: Array<Record<string, unknown>> | null
 }
 
 export async function previewRebalance(payload: {
   target_kind: RebalanceTargetKind
   group_id?: number | null
   broker_name: RebalanceBroker
+  rebalance_method?: RebalanceMethod | null
+  rotation?: RebalanceRotationConfig | null
   budget_pct?: number | null
   budget_amount?: number | null
   drift_band_abs_pct?: number | null
@@ -101,6 +122,8 @@ export async function executeRebalance(payload: {
   target_kind: RebalanceTargetKind
   group_id?: number | null
   broker_name: RebalanceBroker
+  rebalance_method?: RebalanceMethod | null
+  rotation?: RebalanceRotationConfig | null
   budget_pct?: number | null
   budget_amount?: number | null
   drift_band_abs_pct?: number | null
