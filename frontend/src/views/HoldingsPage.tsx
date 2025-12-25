@@ -101,6 +101,8 @@ const BRACKET_BASE_MTP_DEFAULT = 5
 const BRACKET_APPRECIATION_THRESHOLD = 3
 const BRACKET_MTP_MIN = 3
 const BRACKET_MTP_MAX = 20
+const DEFAULT_RISK_FREE_RATE_PCT = 6.5
+const DEFAULT_ALPHA_BETA_BENCHMARK = { symbol: 'NIFTYBEES', exchange: 'NSE' as const }
 
 export function HoldingsPage() {
   const navigate = useNavigate()
@@ -214,6 +216,15 @@ export function HoldingsPage() {
   const [availableFunds, setAvailableFunds] = useState<number | null>(null)
   const [availableFundsError, setAvailableFundsError] = useState<string | null>(null)
   const [availableFundsLoading, setAvailableFundsLoading] = useState(false)
+  const [riskFreeRatePct, setRiskFreeRatePct] = useState<string>(
+    String(DEFAULT_RISK_FREE_RATE_PCT),
+  )
+  const [benchmarkHistory, setBenchmarkHistory] = useState<CandlePoint[] | null>(
+    null,
+  )
+  const [benchmarkHistoryError, setBenchmarkHistoryError] = useState<string | null>(
+    null,
+  )
   const loadRequestId = useRef(0)
   const refreshRequestId = useRef(0)
   const refreshingRef = useRef(false)
@@ -890,10 +901,6 @@ export function HoldingsPage() {
     let currentValue = 0
     let todayWeightedReturn = 0
     let todayReturnWeight = 0
-    let vol20dWeighted = 0
-    let vol20dWeight = 0
-    let vol6mWeighted = 0
-    let vol6mWeight = 0
 
     let overallWinner = 0
     let overallLoser = 0
@@ -940,27 +947,6 @@ export function HoldingsPage() {
           todayReturnWeight += current
         }
       }
-
-      const weight = Number.isFinite(current) && current > 0 ? current : 0
-      if (weight > 0) {
-        const vol20 =
-          row.indicators?.volatility20dPct != null
-            ? Number(row.indicators.volatility20dPct)
-            : null
-        if (vol20 != null && Number.isFinite(vol20)) {
-          vol20dWeighted += vol20 * weight
-          vol20dWeight += weight
-        }
-
-        const vol6m =
-          row.indicators?.volatility6mPct != null
-            ? Number(row.indicators.volatility6mPct)
-            : null
-        if (vol6m != null && Number.isFinite(vol6m)) {
-          vol6mWeighted += vol6m * weight
-          vol6mWeight += weight
-        }
-      }
     }
 
     const totalPnlPct =
@@ -968,13 +954,192 @@ export function HoldingsPage() {
     const todayPnlPct =
       todayReturnWeight > 0 ? (todayWeightedReturn / todayReturnWeight) * 100 : null
 
-    const portfolioVol20dPct = vol20dWeight > 0 ? vol20dWeighted / vol20dWeight : null
-    const portfolioVol6mPct = vol6mWeight > 0 ? vol6mWeighted / vol6mWeight : null
-
     const overallWinRate =
       overallComparable > 0 ? (overallWinner / overallComparable) * 100 : null
     const todayWinRate =
       todayComparable > 0 ? (todayWinner / todayComparable) * 100 : null
+
+    const computePortfolioCagr = (
+      tradingDays: number,
+    ): { cagrPct: number | null; coveragePct: number | null } => {
+      if (tradingDays <= 0) return { cagrPct: null, coveragePct: null }
+
+      let startValue = 0
+      let endValue = 0
+      let coveredCurrentValue = 0
+
+      for (const row of activeRows) {
+        const qty = row.quantity != null ? Number(row.quantity) : 0
+        if (!Number.isFinite(qty) || qty <= 0) continue
+
+        const history = row.history ?? []
+        const endClose =
+          history.length > 0
+            ? Number(history[history.length - 1].close)
+            : row.last_price != null
+              ? Number(row.last_price)
+              : null
+        if (endClose == null || !Number.isFinite(endClose) || endClose <= 0) continue
+
+        coveredCurrentValue += qty * endClose
+
+        const startIndex = history.length - (tradingDays + 1)
+        if (startIndex < 0 || startIndex >= history.length) continue
+        const startClose = Number(history[startIndex].close)
+        if (!Number.isFinite(startClose) || startClose <= 0) continue
+
+        startValue += qty * startClose
+        endValue += qty * endClose
+      }
+
+      const coveragePct =
+        currentValue > 0 && coveredCurrentValue > 0
+          ? (coveredCurrentValue / currentValue) * 100
+          : null
+
+      if (!Number.isFinite(startValue) || startValue <= 0 || endValue <= 0) {
+        return { cagrPct: null, coveragePct }
+      }
+
+      const exponent = 252 / tradingDays
+      const ratio = endValue / startValue
+      if (!Number.isFinite(exponent) || exponent <= 0 || !Number.isFinite(ratio) || ratio <= 0) {
+        return { cagrPct: null, coveragePct }
+      }
+
+      const cagrPct = (Math.pow(ratio, exponent) - 1) * 100
+      return { cagrPct: Number.isFinite(cagrPct) ? cagrPct : null, coveragePct }
+    }
+
+    const cagr1y = computePortfolioCagr(252)
+    const cagr2y = computePortfolioCagr(504)
+    // Keep this bounded to the 2-year data we maintain in practice.
+
+    const alphaBeta = (() => {
+      const benchmark = benchmarkHistory
+      if (!benchmark || benchmark.length < 200) {
+        return { alphaAnnualPct: null as number | null, beta: null as number | null }
+      }
+      if (activeRows.length === 0) {
+        return { alphaAnnualPct: null as number | null, beta: null as number | null }
+      }
+
+      const rfParsed = Number(riskFreeRatePct)
+      const rfAnnualPct =
+        Number.isFinite(rfParsed) && rfParsed >= 0 && rfParsed <= 100
+          ? rfParsed
+          : DEFAULT_RISK_FREE_RATE_PCT
+      const dailyRf = Math.pow(1 + rfAnnualPct / 100, 1 / 252) - 1
+
+      const toDateKey = (ts: string) => ts.slice(0, 10)
+
+      const benchByDate = new Map<string, number>()
+      for (const p of benchmark) {
+        const close = Number(p.close)
+        if (!p?.ts || !Number.isFinite(close) || close <= 0) continue
+        benchByDate.set(toDateKey(p.ts), close)
+      }
+      const benchDates = Array.from(benchByDate.keys()).sort()
+      if (benchDates.length < 160) {
+        return { alphaAnnualPct: null as number | null, beta: null as number | null }
+      }
+
+      const windowDays = 126
+      const dates = benchDates.slice(-(windowDays + 1))
+
+      const closeBySymbol = new Map<string, Map<string, number>>()
+      for (const row of activeRows) {
+        const history = row.history ?? []
+        if (history.length < 200) continue
+        const byDate = new Map<string, number>()
+        for (const p of history) {
+          const close = Number(p.close)
+          if (!p?.ts || !Number.isFinite(close) || close <= 0) continue
+          byDate.set(toDateKey(p.ts), close)
+        }
+        if (byDate.size >= 160) {
+          closeBySymbol.set(row.symbol, byDate)
+        }
+      }
+
+      const quantities = new Map<string, number>()
+      for (const row of activeRows) {
+        const qty = row.quantity != null ? Number(row.quantity) : 0
+        if (Number.isFinite(qty) && qty > 0) quantities.set(row.symbol, qty)
+      }
+
+      const portfolioSeries: number[] = []
+      const benchmarkSeries: number[] = []
+      for (const date of dates) {
+        const benchClose = benchByDate.get(date)
+        if (benchClose == null) continue
+        let portfolioValueAtDate = 0
+        for (const [symbol, qty] of quantities) {
+          const byDate = closeBySymbol.get(symbol)
+          if (!byDate) continue
+          const close = byDate.get(date)
+          if (close == null) continue
+          portfolioValueAtDate += qty * close
+        }
+        if (!Number.isFinite(portfolioValueAtDate) || portfolioValueAtDate <= 0) continue
+        portfolioSeries.push(portfolioValueAtDate)
+        benchmarkSeries.push(benchClose)
+      }
+
+      if (portfolioSeries.length < 80) {
+        return { alphaAnnualPct: null as number | null, beta: null as number | null }
+      }
+
+      const portExcess: number[] = []
+      const benchExcess: number[] = []
+      for (let i = 1; i < portfolioSeries.length; i += 1) {
+        const prevP = portfolioSeries[i - 1]
+        const currP = portfolioSeries[i]
+        const prevM = benchmarkSeries[i - 1]
+        const currM = benchmarkSeries[i]
+        if (prevP <= 0 || currP <= 0 || prevM <= 0 || currM <= 0) continue
+        const rp = currP / prevP - 1
+        const rm = currM / prevM - 1
+        if (!Number.isFinite(rp) || !Number.isFinite(rm)) continue
+        portExcess.push(rp - dailyRf)
+        benchExcess.push(rm - dailyRf)
+      }
+
+      if (portExcess.length < 60) {
+        return { alphaAnnualPct: null as number | null, beta: null as number | null }
+      }
+
+      const mean = (xs: number[]) =>
+        xs.reduce((acc, v) => acc + v, 0) / Math.max(xs.length, 1)
+
+      const meanP = mean(portExcess)
+      const meanM = mean(benchExcess)
+      let cov = 0
+      let varM = 0
+      for (let i = 0; i < portExcess.length; i += 1) {
+        const dp = portExcess[i] - meanP
+        const dm = benchExcess[i] - meanM
+        cov += dp * dm
+        varM += dm * dm
+      }
+      cov /= Math.max(portExcess.length - 1, 1)
+      varM /= Math.max(portExcess.length - 1, 1)
+      if (!Number.isFinite(varM) || varM <= 0) {
+        return { alphaAnnualPct: null as number | null, beta: null as number | null }
+      }
+
+      const beta = cov / varM
+      if (!Number.isFinite(beta)) {
+        return { alphaAnnualPct: null as number | null, beta: null as number | null }
+      }
+
+      const alphaDaily = meanP - beta * meanM
+      const alphaAnnualPct = alphaDaily * 252 * 100
+      return {
+        alphaAnnualPct: Number.isFinite(alphaAnnualPct) ? alphaAnnualPct : null,
+        beta,
+      }
+    })()
 
     return {
       count: activeRows.length,
@@ -990,10 +1155,14 @@ export function HoldingsPage() {
       todayComparable,
       overallWinRate,
       todayWinRate,
-      portfolioVol20dPct,
-      portfolioVol6mPct,
+      cagr1yPct: cagr1y.cagrPct,
+      cagr2yPct: cagr2y.cagrPct,
+      cagr1yCoveragePct: cagr1y.coveragePct,
+      cagr2yCoveragePct: cagr2y.coveragePct,
+      alphaAnnualPct: alphaBeta.alphaAnnualPct,
+      beta: alphaBeta.beta,
     }
-  }, [filteredRows])
+  }, [benchmarkHistory, filteredRows, riskFreeRatePct])
 
   const formatInrCompact = useCallback((value: number | null) => {
     if (value == null || !Number.isFinite(value)) return '—'
@@ -1011,6 +1180,67 @@ export function HoldingsPage() {
   const formatPct = useCallback((value: number | null, digits = 2) => {
     if (value == null || !Number.isFinite(value)) return '—'
     return `${value.toFixed(digits)}%`
+  }, [])
+
+  const riskFreeRateParsed = Number(riskFreeRatePct)
+  const riskFreeRateIsValid =
+    Number.isFinite(riskFreeRateParsed)
+    && riskFreeRateParsed >= 0
+    && riskFreeRateParsed <= 100
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem('st_risk_free_rate_pct_v1')
+      if (!raw) return
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100) {
+        setRiskFreeRatePct(String(parsed))
+      }
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const parsed = Number(riskFreeRatePct)
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return
+    try {
+      window.localStorage.setItem('st_risk_free_rate_pct_v1', String(parsed))
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [riskFreeRatePct])
+
+  useEffect(() => {
+    let active = true
+    const loadBenchmark = async () => {
+      try {
+        setBenchmarkHistoryError(null)
+        const history = await fetchMarketHistory({
+          symbol: DEFAULT_ALPHA_BETA_BENCHMARK.symbol,
+          exchange: DEFAULT_ALPHA_BETA_BENCHMARK.exchange,
+          timeframe: '1d',
+          periodDays: ANALYTICS_LOOKBACK_DAYS,
+        })
+        if (!active) return
+        setBenchmarkHistory(history)
+      } catch (err) {
+        if (!active) return
+        setBenchmarkHistory(null)
+        setBenchmarkHistoryError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load benchmark history.',
+        )
+      }
+    }
+
+    void loadBenchmark()
+    return () => {
+      active = false
+    }
   }, [])
 
   useEffect(() => {
@@ -2822,9 +3052,9 @@ export function HoldingsPage() {
           variant="outlined"
           sx={{
             p: 1.5,
-            flex: '0 1 520px',
+            flex: '0 1 640px',
             minWidth: 320,
-            maxWidth: 720,
+            maxWidth: 860,
           }}
         >
           <Box
@@ -2920,16 +3150,51 @@ export function HoldingsPage() {
 
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="caption" color="text.secondary">
-                Volatility (1D / 6M)
+                Alpha / Beta (6M)
               </Typography>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Typography variant="subtitle2">
-                  {formatPct(holdingsSummary.portfolioVol20dPct)}
-                </Typography>
-                <Typography variant="subtitle2">
-                  {formatPct(holdingsSummary.portfolioVol6mPct)}
-                </Typography>
-              </Box>
+              <Tooltip
+                title={
+                  benchmarkHistoryError
+                    ? benchmarkHistoryError
+                    : `Benchmark: ${DEFAULT_ALPHA_BETA_BENCHMARK.exchange}:${DEFAULT_ALPHA_BETA_BENCHMARK.symbol} · Risk-free: ${riskFreeRateIsValid ? riskFreeRateParsed.toFixed(2) : DEFAULT_RISK_FREE_RATE_PCT}% (annual) · CAGR coverage (1Y/2Y): ${formatPct(holdingsSummary.cagr1yCoveragePct, 0)}/${formatPct(holdingsSummary.cagr2yCoveragePct, 0)}`
+                }
+              >
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography variant="subtitle2">
+                      <Box
+                        component="span"
+                        sx={{
+                          color:
+                            holdingsSummary.alphaAnnualPct != null
+                              ? holdingsSummary.alphaAnnualPct > 0
+                                ? 'success.main'
+                                : holdingsSummary.alphaAnnualPct < 0
+                                  ? 'error.main'
+                                  : 'text.primary'
+                              : 'text.primary',
+                        }}
+                      >
+                        α {formatPct(holdingsSummary.alphaAnnualPct, 2)}
+                      </Box>
+                    </Typography>
+                    <Typography variant="subtitle2">
+                      β{' '}
+                      {holdingsSummary.beta != null && Number.isFinite(holdingsSummary.beta)
+                        ? holdingsSummary.beta.toFixed(2)
+                        : '—'}
+                    </Typography>
+                  </Box>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ whiteSpace: 'nowrap' }}
+                  >
+                    CAGR: 1Y {formatPct(holdingsSummary.cagr1yPct, 1)} · 2Y{' '}
+                    {formatPct(holdingsSummary.cagr2yPct, 1)}
+                  </Typography>
+                </Box>
+              </Tooltip>
             </Box>
           </Box>
         </Paper>
@@ -2943,10 +3208,10 @@ export function HoldingsPage() {
       >
         <DialogTitle>Holdings settings</DialogTitle>
         <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <Box>
-            <Typography variant="subtitle2" sx={{ mb: 1 }}>
-              Chart
-            </Typography>
+	          <Box>
+	            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+	              Chart
+	            </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Typography variant="caption" color="text.secondary">
                 Chart period:
@@ -2965,13 +3230,35 @@ export function HoldingsPage() {
                 <MenuItem value="365">1Y</MenuItem>
                 <MenuItem value="730">2Y</MenuItem>
               </Select>
-            </Box>
-          </Box>
+	            </Box>
+	          </Box>
 
           <Box>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
-              Auto refresh
+              Risk (for alpha/beta)
             </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <TextField
+                label="Risk-free rate (%)"
+                size="small"
+                value={riskFreeRatePct}
+                onChange={(e) => setRiskFreeRatePct(e.target.value)}
+                sx={{ width: 160 }}
+                inputProps={{ min: 0, max: 100, step: 0.1 }}
+                error={riskFreeRatePct.trim() !== '' && !riskFreeRateIsValid}
+                helperText={
+                  riskFreeRatePct.trim() !== '' && !riskFreeRateIsValid
+                    ? 'Enter a % between 0 and 100.'
+                    : `Default: ${DEFAULT_RISK_FREE_RATE_PCT}%. Benchmark: ${DEFAULT_ALPHA_BETA_BENCHMARK.exchange}:${DEFAULT_ALPHA_BETA_BENCHMARK.symbol}.`
+                }
+              />
+            </Box>
+          </Box>
+
+	          <Box>
+	            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+	              Auto refresh
+	            </Typography>
             <Box
               sx={{
                 display: 'flex',
