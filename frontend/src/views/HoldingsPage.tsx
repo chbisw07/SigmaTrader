@@ -1,5 +1,6 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Paper from '@mui/material/Paper'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -26,7 +27,7 @@ import {
   GridLogicOperator,
   type GridRowSelectionModel,
 } from '@mui/x-data-grid'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
@@ -41,6 +42,7 @@ import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
 import { fetchHoldings, type Holding } from '../services/positions'
 import { fetchAngeloneStatus } from '../services/angelone'
+import { fetchMarginsForBroker } from '../services/brokerRuntime'
 import {
   fetchHoldingsCorrelation,
   type HoldingsCorrelationResult,
@@ -66,6 +68,7 @@ type HoldingIndicators = {
   ma50Pct?: number
   ma200Pct?: number
   volatility20dPct?: number
+  volatility6mPct?: number
   atr14Pct?: number
   perf1wPct?: number
   perf1mPct?: number
@@ -208,6 +211,9 @@ export function HoldingsPage() {
   const [refreshConfigHydrated, setRefreshConfigHydrated] = useState(false)
 
   const [portfolioValue, setPortfolioValue] = useState<number | null>(null)
+  const [availableFunds, setAvailableFunds] = useState<number | null>(null)
+  const [availableFundsError, setAvailableFundsError] = useState<string | null>(null)
+  const [availableFundsLoading, setAvailableFundsLoading] = useState(false)
   const loadRequestId = useRef(0)
   const refreshRequestId = useRef(0)
   const refreshingRef = useRef(false)
@@ -871,6 +877,185 @@ export function HoldingsPage() {
   ])
 
   const filteredRows: HoldingRow[] = holdings
+
+  const holdingsSummary = useMemo(() => {
+    const activeRows = filteredRows.filter((row) => {
+      const symbol = (row.symbol || '').trim()
+      if (!symbol) return false
+      const qty = row.quantity != null ? Number(row.quantity) : 0
+      return Number.isFinite(qty) && qty > 0
+    })
+
+    let invested = 0
+    let currentValue = 0
+    let todayWeightedReturn = 0
+    let todayReturnWeight = 0
+    let vol20dWeighted = 0
+    let vol20dWeight = 0
+    let vol6mWeighted = 0
+    let vol6mWeight = 0
+
+    let overallWinner = 0
+    let overallLoser = 0
+    let overallComparable = 0
+
+    let todayWinner = 0
+    let todayLoser = 0
+    let todayComparable = 0
+
+    for (const row of activeRows) {
+      const qty = row.quantity != null ? Number(row.quantity) : 0
+      const avgPrice = row.average_price != null ? Number(row.average_price) : 0
+      const lastPrice = row.last_price != null ? Number(row.last_price) : 0
+
+      const investedValue =
+        Number.isFinite(qty) && qty > 0 && Number.isFinite(avgPrice) && avgPrice > 0
+          ? qty * avgPrice
+          : 0
+      const current =
+        Number.isFinite(qty) && qty > 0 && Number.isFinite(lastPrice) && lastPrice > 0
+          ? qty * lastPrice
+          : investedValue
+
+      invested += investedValue
+      currentValue += current
+
+      const totalPnlPct =
+        row.total_pnl_percent != null ? Number(row.total_pnl_percent) : null
+      if (totalPnlPct != null && Number.isFinite(totalPnlPct)) {
+        overallComparable += 1
+        if (totalPnlPct > 0) overallWinner += 1
+        else if (totalPnlPct < 0) overallLoser += 1
+      }
+
+      const todayPnlPct =
+        row.today_pnl_percent != null ? Number(row.today_pnl_percent) : null
+      if (todayPnlPct != null && Number.isFinite(todayPnlPct)) {
+        todayComparable += 1
+        if (todayPnlPct > 0) todayWinner += 1
+        else if (todayPnlPct < 0) todayLoser += 1
+
+        if (Number.isFinite(current) && current > 0) {
+          todayWeightedReturn += (todayPnlPct / 100) * current
+          todayReturnWeight += current
+        }
+      }
+
+      const weight = Number.isFinite(current) && current > 0 ? current : 0
+      if (weight > 0) {
+        const vol20 =
+          row.indicators?.volatility20dPct != null
+            ? Number(row.indicators.volatility20dPct)
+            : null
+        if (vol20 != null && Number.isFinite(vol20)) {
+          vol20dWeighted += vol20 * weight
+          vol20dWeight += weight
+        }
+
+        const vol6m =
+          row.indicators?.volatility6mPct != null
+            ? Number(row.indicators.volatility6mPct)
+            : null
+        if (vol6m != null && Number.isFinite(vol6m)) {
+          vol6mWeighted += vol6m * weight
+          vol6mWeight += weight
+        }
+      }
+    }
+
+    const totalPnlPct =
+      invested > 0 ? ((currentValue - invested) / invested) * 100 : null
+    const todayPnlPct =
+      todayReturnWeight > 0 ? (todayWeightedReturn / todayReturnWeight) * 100 : null
+
+    const portfolioVol20dPct = vol20dWeight > 0 ? vol20dWeighted / vol20dWeight : null
+    const portfolioVol6mPct = vol6mWeight > 0 ? vol6mWeighted / vol6mWeight : null
+
+    const overallWinRate =
+      overallComparable > 0 ? (overallWinner / overallComparable) * 100 : null
+    const todayWinRate =
+      todayComparable > 0 ? (todayWinner / todayComparable) * 100 : null
+
+    return {
+      count: activeRows.length,
+      invested,
+      currentValue,
+      totalPnlPct,
+      todayPnlPct,
+      overallWinner,
+      overallLoser,
+      overallComparable,
+      todayWinner,
+      todayLoser,
+      todayComparable,
+      overallWinRate,
+      todayWinRate,
+      portfolioVol20dPct,
+      portfolioVol6mPct,
+    }
+  }, [filteredRows])
+
+  const formatInrCompact = useCallback((value: number | null) => {
+    if (value == null || !Number.isFinite(value)) return '—'
+    const abs = Math.abs(value)
+    if (abs >= 1e7) return `₹${(value / 1e7).toFixed(2)}Cr`
+    if (abs >= 1e5) return `₹${(value / 1e5).toFixed(2)}L`
+    if (abs >= 1e3) return `₹${(value / 1e3).toFixed(1)}K`
+    return value.toLocaleString('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 0,
+    })
+  }, [])
+
+  const formatPct = useCallback((value: number | null, digits = 2) => {
+    if (value == null || !Number.isFinite(value)) return '—'
+    return `${value.toFixed(digits)}%`
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const loadFunds = async () => {
+      const holdingsBroker = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+      if (!universeId.startsWith('holdings')) {
+        setAvailableFunds(null)
+        setAvailableFundsError(null)
+        setAvailableFundsLoading(false)
+        return
+      }
+      if (holdingsBroker !== 'zerodha') {
+        setAvailableFunds(null)
+        setAvailableFundsError(null)
+        setAvailableFundsLoading(false)
+        return
+      }
+
+      try {
+        setAvailableFundsLoading(true)
+        setAvailableFundsError(null)
+        const margins = await fetchMarginsForBroker('zerodha')
+        if (!active) return
+        setAvailableFunds(
+          margins.available != null && Number.isFinite(Number(margins.available))
+            ? Number(margins.available)
+            : null,
+        )
+      } catch (err) {
+        if (!active) return
+        setAvailableFunds(null)
+        setAvailableFundsError(
+          err instanceof Error ? err.message : 'Failed to load available funds.',
+        )
+      } finally {
+        if (active) setAvailableFundsLoading(false)
+      }
+    }
+
+    void loadFunds()
+    return () => {
+      active = false
+    }
+  }, [universeId])
 
   const totalActiveAlerts = holdings.reduce((acc, h) => {
     const found = h as HoldingRow & { _activeAlertCount?: number }
@@ -2590,32 +2775,165 @@ export function HoldingsPage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        {activeGroup ? activeGroup.name : 'Holdings'}
-      </Typography>
-      <Typography color="text.secondary" sx={{ mb: 2 }}>
-        {activeGroup
-          ? activeGroup.description
-            ? activeGroup.description
-            : 'Symbols loaded from the selected group.'
-          : universeId === 'holdings:angelone'
-            ? 'Live holdings fetched from AngelOne (SmartAPI), including unrealized P&L when last price is available.'
-            : 'Live holdings fetched from Zerodha, including unrealized P&L when last price is available.'}
-      </Typography>
-      {refreshError && (
-        <Typography variant="caption" color="error" sx={{ mb: 1, display: 'block' }}>
-          {refreshError}
-        </Typography>
-      )}
-      {corrError && (
-        <Typography
-          variant="caption"
-          color="error"
-          sx={{ mb: 1, display: 'block' }}
+      <Box
+        sx={{
+          mb: 1,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 2,
+          flexWrap: 'wrap',
+        }}
+      >
+        <Box sx={{ flex: '1 1 560px', minWidth: 320 }}>
+          <Typography variant="h4" gutterBottom>
+            {activeGroup ? activeGroup.name : 'Holdings'}
+          </Typography>
+          <Typography color="text.secondary" sx={{ mb: 1 }}>
+            {activeGroup
+              ? activeGroup.description
+                ? activeGroup.description
+                : 'Symbols loaded from the selected group.'
+              : universeId === 'holdings:angelone'
+                ? 'Live holdings fetched from AngelOne (SmartAPI), including unrealized P&L when last price is available.'
+                : 'Live holdings fetched from Zerodha, including unrealized P&L when last price is available.'}
+          </Typography>
+          {refreshError && (
+            <Typography
+              variant="caption"
+              color="error"
+              sx={{ mb: 1, display: 'block' }}
+            >
+              {refreshError}
+            </Typography>
+          )}
+          {corrError && (
+            <Typography
+              variant="caption"
+              color="error"
+              sx={{ mb: 1, display: 'block' }}
+            >
+              {corrError}
+            </Typography>
+          )}
+        </Box>
+
+        <Paper
+          variant="outlined"
+          sx={{
+            p: 1.5,
+            flex: '0 1 520px',
+            minWidth: 320,
+            maxWidth: 720,
+          }}
         >
-          {corrError}
-        </Typography>
-      )}
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 1,
+              flexWrap: 'wrap',
+            }}
+          >
+            <Typography variant="subtitle2">Holdings summary</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                {holdingsSummary.count} positions
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Win rate: {formatPct(holdingsSummary.overallWinRate, 1)} | Today:{' '}
+                {formatPct(holdingsSummary.todayWinRate, 1)}
+              </Typography>
+            </Box>
+          </Box>
+
+          <Box
+            sx={{
+              mt: 1,
+              display: 'grid',
+              gap: 1,
+              gridTemplateColumns: {
+                xs: 'repeat(2, minmax(0, 1fr))',
+                md: 'repeat(3, minmax(0, 1fr))',
+              },
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="caption" color="text.secondary">
+                Funds available
+              </Typography>
+              <Tooltip
+                title={availableFundsError ?? ''}
+                disableHoverListener={!availableFundsError}
+              >
+                <Typography variant="subtitle2" sx={{ whiteSpace: 'nowrap' }}>
+                  {universeId === 'holdings:angelone'
+                    ? 'N/A'
+                    : availableFundsLoading
+                      ? 'Loading…'
+                      : formatInrCompact(availableFunds)}
+                </Typography>
+              </Tooltip>
+            </Box>
+
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="caption" color="text.secondary">
+                P&L (total / today)
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Typography
+                  variant="subtitle2"
+                  sx={{
+                    color:
+                      holdingsSummary.totalPnlPct != null
+                        ? holdingsSummary.totalPnlPct > 0
+                          ? 'success.main'
+                          : holdingsSummary.totalPnlPct < 0
+                            ? 'error.main'
+                            : 'text.primary'
+                        : 'text.primary',
+                  }}
+                >
+                  {formatPct(holdingsSummary.totalPnlPct)}
+                </Typography>
+                <Typography
+                  variant="subtitle2"
+                  sx={{
+                    color:
+                      holdingsSummary.todayPnlPct != null
+                        ? holdingsSummary.todayPnlPct > 0
+                          ? 'success.main'
+                          : holdingsSummary.todayPnlPct < 0
+                            ? 'error.main'
+                            : 'text.primary'
+                        : 'text.primary',
+                  }}
+                >
+                  {formatPct(holdingsSummary.todayPnlPct)}
+                </Typography>
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                Value: {formatInrCompact(holdingsSummary.currentValue)}
+              </Typography>
+            </Box>
+
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="caption" color="text.secondary">
+                Volatility (1D / 6M)
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Typography variant="subtitle2">
+                  {formatPct(holdingsSummary.portfolioVol20dPct)}
+                </Typography>
+                <Typography variant="subtitle2">
+                  {formatPct(holdingsSummary.portfolioVol6mPct)}
+                </Typography>
+              </Box>
+            </Box>
+          </Box>
+        </Paper>
+      </Box>
 
       <Dialog
         open={settingsOpen}
@@ -2742,17 +3060,18 @@ export function HoldingsPage() {
           mb: 1,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-start',
           flexWrap: 'wrap',
-          gap: 1,
+          gap: 2,
         }}
       >
         <Box
           sx={{
             display: 'flex',
             flexDirection: 'column',
-            alignItems: 'flex-end',
+            alignItems: 'flex-start',
             gap: 0.5,
+            flex: '1 1 auto',
           }}
         >
 	          <Box
@@ -2761,7 +3080,7 @@ export function HoldingsPage() {
 	              alignItems: 'center',
 	              gap: 1,
 	              flexWrap: 'wrap',
-	              justifyContent: 'flex-end',
+	              justifyContent: 'flex-start',
 	            }}
 		          >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -5907,6 +6226,7 @@ function computeHoldingIndicators(
   }
 
   indicators.volatility20dPct = computeVolatilityPct(closes, 20)
+  indicators.volatility6mPct = computeVolatilityPct(closes, 126)
   indicators.atr14Pct = computeAtrPct(highs, lows, closes, 14)
 
   indicators.perf1wPct = computePerfPct(closes, 5)
