@@ -2551,6 +2551,13 @@ export function HoldingsPage() {
           .join(', ')
       : tradePctEquity
 
+  const symbolColumnMinWidth = activeGroup
+    ? activeGroup.kind === 'PORTFOLIO'
+      ? 220
+      : 200
+    : 140
+  const symbolColumnFlex = activeGroup ? 1.2 : 1
+
   const baseColumns: GridColDef[] = [
     {
       field: 'index',
@@ -2564,8 +2571,38 @@ export function HoldingsPage() {
     {
       field: 'symbol',
       headerName: 'Symbol',
-      flex: 1,
-      minWidth: 140,
+      flex: symbolColumnFlex,
+      minWidth: symbolColumnMinWidth,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const symbol = row.symbol || ''
+        const qty = row.quantity != null ? Number(row.quantity) : 0
+        const isHeld = Number.isFinite(qty) && qty > 0
+        const showHoldingsChip = !universeId.startsWith('holdings') && isHeld
+
+        return (
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
+            <span>{symbol}</span>
+            {showHoldingsChip && (
+              <Tooltip title={`In Holdings (Zerodha): qty ${Math.floor(qty)}`}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color="success"
+                  label="Holdings"
+                  sx={{
+                    height: 16,
+                    fontSize: '0.62rem',
+                    lineHeight: 1,
+                    verticalAlign: 'super',
+                    '& .MuiChip-label': { px: 0.5 },
+                  }}
+                />
+              </Tooltip>
+            )}
+          </Box>
+        )
+      },
     },
     {
       field: 'correlation_cluster',
