@@ -17,6 +17,7 @@ from app.schemas.rebalance import (
     RebalancePreviewSummary,
     RebalanceTrade,
 )
+from app.services.rebalance_risk import derive_risk_parity_targets
 from app.services.rebalance_rotation import derive_rotation_targets
 
 
@@ -219,6 +220,7 @@ def preview_rebalance(
     derived_targets: Optional[List[Dict[str, object]]] = None
     extra_reason_by_symbol: Dict[str, Dict[str, object]] = {}
     rotation_warnings: List[str] = []
+    risk_warnings: List[str] = []
 
     if str(req.rebalance_method).upper() == "SIGNAL_ROTATION":
         if req.rotation is None:
@@ -304,6 +306,45 @@ def preview_rebalance(
 
         target_weights = _normalize_target_weights(member_infos)
 
+    if str(req.rebalance_method).upper() == "RISK_PARITY":
+        if req.risk is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="risk config is required for RISK_PARITY.",
+            )
+
+        member_pairs = [(m.symbol, m.exchange) for m in base_member_infos]
+        risk = derive_risk_parity_targets(
+            db,
+            user=user,
+            group=group,
+            members=member_pairs,
+            cfg=req.risk,
+        )
+        derived_targets = risk.derived_targets
+        risk_warnings = list(risk.warnings or [])
+
+        member_infos = [
+            _MemberInfo(
+                symbol=m.symbol,
+                exchange=m.exchange,
+                target_weight_raw=float(
+                    risk.weight_by_pair.get((m.symbol, m.exchange), 0.0)
+                ),
+            )
+            for m in base_member_infos
+        ]
+
+        risk_meta_by_symbol = {
+            str(d.get("symbol") or ""): d for d in (risk.derived_targets or [])
+        }
+        for m in base_member_infos:
+            meta = risk_meta_by_symbol.get(m.symbol)
+            if meta:
+                extra_reason_by_symbol[m.symbol] = {"risk_parity": meta}
+
+        target_weights = _normalize_target_weights(member_infos)
+
     for broker in brokers:
         result = _preview_rebalance_single_broker(
             db,
@@ -316,7 +357,7 @@ def preview_rebalance(
             req=req,
             derived_targets=derived_targets,
             extra_reason_by_symbol=extra_reason_by_symbol,
-            extra_warnings=rotation_warnings,
+            extra_warnings=[*rotation_warnings, *risk_warnings],
         )
         result.target_kind = "GROUP"
         result.group_id = group.id
@@ -585,6 +626,7 @@ def build_run_snapshots(
     policy_snapshot = {
         "rebalance_method": req.rebalance_method,
         "rotation": model_to_dict(req.rotation) if req.rotation is not None else None,
+        "risk": model_to_dict(req.risk) if req.risk is not None else None,
         "budget_pct": req.budget_pct,
         "budget_amount": req.budget_amount,
         "drift_band_abs_pct": req.drift_band_abs_pct,

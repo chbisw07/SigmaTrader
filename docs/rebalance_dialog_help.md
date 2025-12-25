@@ -1,231 +1,287 @@
 # Rebalance Dialog Help (SigmaTrader)
 
-This page explains every field and column in the **Rebalance** dialog so you can confidently preview and place rebalance orders.
+This help is designed to remove every doubt you might have before using rebalancing.
+It explains:
+- what each rebalance mode does (and when to use which),
+- what every input means,
+- how the preview table is calculated,
+- and how to interpret the results safely.
 
-The rebalance feature is designed to be:
-- **Explainable**: every trade is tied to a drift from target.
-- **Budgeted**: you can cap how much gets traded.
-- **Guardrailed**: drift bands, max trades, and minimum trade value reduce churn and tiny orders.
+SigmaTrader rebalancing is designed to be:
+- **Explainable**: you can trace each trade back to a target + drift.
+- **Budgeted**: you can cap how much is traded.
+- **Guardrailed**: drift bands, max trades, and min trade value reduce churn.
 
----
+## Overview
 
-## 1) What “rebalance” means in SigmaTrader
+### What “rebalance” means
 
-SigmaTrader supports two rebalance scopes:
+Rebalancing is the act of moving your portfolio from its **current (“live”) weights** toward a **desired (“target”) allocation**.
 
-### A) Portfolio rebalance (Group kind = `PORTFOLIO`)
-You define **target weights** per symbol in your portfolio group. Rebalance tries to bring your **live holdings weights** closer to those targets.
+In SigmaTrader:
+- A **symbol’s value** is estimated as `qty × price`.
+- **Portfolio value** is the sum of symbol values (cash is not modeled explicitly in v1).
+- **Live weight** is `symbol_value / portfolio_value`.
+- A rebalance proposes BUY/SELL orders that reduce the drift from target.
 
-### B) Holdings rebalance (broker holdings universe) and `HOLDINGS_VIEW` groups
-There are **no saved targets**. Rebalance assumes **equal-weight** across the symbols in the selected scope and proposes trades to reduce concentration (subject to your budget and bands).
+### Scope (where the rebalance applies)
 
-In both cases:
-- SigmaTrader estimates the current value of each position as `qty × price`.
-- Computes live weights, compares to target weights, and proposes BUY/SELL orders.
+SigmaTrader supports two scopes:
+- **Group rebalance** (`target_kind=GROUP`): you rebalance the selected group (usually a `PORTFOLIO`).
+- **Holdings rebalance** (`target_kind=HOLDINGS`): you rebalance your broker holdings universe (no saved targets).
 
----
+### Rebalance methods (modes)
 
-## 2) Preview table columns (boxed in the screenshot)
+For `PORTFOLIO` groups, SigmaTrader supports 3 methods:
+1) **Target weights**: “I already know my target weights.”
+2) **Signal rotation**: “Pick top-N by a strategy signal and rotate into them.”
+3) **Risk parity**: “Allocate weights so each symbol contributes similar risk.”
 
-Each row represents **one proposed trade**.
+For holdings-universe rebalancing, SigmaTrader uses **Target weights** with an **equal-weight target**.
 
-### `Broker`
-Which broker account the trade is for (e.g. `zerodha`, `angelone`).
+## Target weights
 
-### `Symbol`
-The tradingsymbol that will be bought or sold.
+### When to use
 
-### `Side`
-- `BUY`: the symbol is **underweight** vs target.
-- `SELL`: the symbol is **overweight** vs target.
+Use this when you already have a desired allocation:
+- you want stable weights (e.g., 30/30/40),
+- you want to rebalance periodically,
+- you want to slowly nudge the portfolio back to plan without over-trading.
 
-### `Qty`
-The proposed **share quantity** (integer).
+### How targets are defined
 
-Notes:
-- Quantity is derived from `trade_value / price`, then **rounded down**.
-- For sells, quantity is clamped to your available holding quantity.
+**A) Group kind = `PORTFOLIO`**
+- Targets come from the portfolio group members’ `target_weight`.
+- If some weights are missing, SigmaTrader distributes leftover weight across unspecified members.
+- If the sum of weights is above 1.0, SigmaTrader normalizes them back down to 1.0.
 
-### `Est. price`
-The **estimated price** used to size the order and compute `Est. notional`.
+**B) Group kind = `HOLDINGS_VIEW` or target_kind=`HOLDINGS`**
+- There are no saved targets.
+- SigmaTrader assumes **equal-weight** across symbols in scope.
 
-Source (best-effort):
-- First choice: broker holdings **last price** (LTP) if available.
-- Fallback: latest daily close from SigmaTrader candles (if available).
+### What you should expect in preview
 
-Important: this is for **estimation**; real execution price may differ.
+- Overweight symbols → mostly `SELL`.
+- Underweight symbols → mostly `BUY`.
+- If drift bands are set, small drifts are ignored (no trade).
+- If the budget is small, trades are scaled down proportionally.
 
-### `Est. notional`
-Estimated rupee value of the trade:
+## Signal rotation
 
-`Est. notional = Qty × Est. price`
+### The idea (what you are trying to achieve)
 
-This helps you quickly see which trades are “large” vs “small”.
+Signal rotation is a “switching” rebalance:
+- you define a **candidate universe** (a group or a screener run),
+- a **signal strategy output** ranks every candidate symbol,
+- SigmaTrader selects **Top N** symbols as the “desired holdings”,
+- SigmaTrader converts that selection into target weights (equal, score-based, or rank-based),
+- then runs the same rebalance planner (budget + bands + constraints).
 
-### `Target`
-The desired weight (percentage) for that symbol in the selected rebalance scope:
-- **Portfolio rebalance**: comes from the portfolio group’s target weights.
-- **Holdings/HOLDINGS_VIEW rebalance**: equal-weight target across symbols.
+This is useful when your portfolio is meant to follow a strategy (momentum, relative strength, trend, etc.).
 
-This is shown as a **percent of total portfolio value**.
+### Requirements
 
-### `Live`
-The symbol’s **current weight** (percentage) right now:
+- You must pick a **Signal Strategy version** and an **OVERLAY output** (numeric).
+- The OVERLAY output is treated as a **score**:
+  - higher score ⇒ better rank ⇒ higher chance to be in Top N.
 
-`Live = current_value / total_portfolio_value`
+Tip: if your DSL needs a timeframe, define it as a strategy input and use it like:
+```
+TF = "1d"
+score = CLOSE(TF)
+```
 
-where `current_value = holding_qty × price`.
+### Universe selection (where candidates come from)
 
-### `Drift`
-How far the live weight is from target:
+You can provide exactly one:
+- **Universe group (optional)**: any group whose members form the candidate list.
+- **Screener run id (optional)**: uses only the `matched=true` results from that screener run.
 
-`Drift = Live − Target`
+If you provide neither, SigmaTrader uses the current **portfolio group members** as the universe.
 
-Interpretation:
-- Positive drift (e.g. `+8.0%`) means **overweight** → typically SELL.
-- Negative drift (e.g. `−2.1%`) means **underweight** → typically BUY.
+### Top N and weighting
 
-The drift shown is in **percentage points** (because `Live` and `Target` are percentages).
+- **Top N**: number of symbols selected after ranking.
+- **Weighting**:
+  - **Equal**: each selected symbol gets `1/N`.
+  - **Score-proportional**: weights proportional to positive scores.
+  - **Rank-based**: higher rank gets higher weight.
 
----
+### Replacement rules and filters
 
-## 3) The summary line above the table
+These are the “guardrails” that make rotation controllable:
+- **Sell positions not in Top N**:
+  - ON: symbols outside Top N get target weight = 0 ⇒ the rebalance will try to sell them.
+  - OFF: symbols outside Top N keep their existing group targets (rotation acts only on the selected ones).
+- **Require positive score**:
+  - ON: score must be `> 0` to be eligible.
+- **Min price** (optional):
+  - candidates with close price below this are excluded.
+- **Min avg volume 20d** (optional):
+  - candidates with low liquidity are excluded.
+- **Whitelist / Blacklist**:
+  - whitelist keeps only those symbols,
+  - blacklist removes those symbols.
 
-Example:
-`ZERODHA — trades: 6, budget used: 84795 (9.7%), turnover: 11.8%`
+### What you should expect in preview
 
-### `trades`
-How many trade rows are currently proposed (after all filters/constraints).
+- Buys for newly selected symbols.
+- Sells for symbols being rotated out (if “Sell not in Top N” is ON).
+- Trade reasons include `rotation` metadata so you can explain “why is this being sold/bought?”.
 
-### `budget used`
-How much of your configured budget is actually used.
+## Risk parity
 
-SigmaTrader tracks buy and sell totals separately and uses:
+### The idea (what you are trying to achieve)
+
+Risk parity (equal risk contribution, ERC) is a risk-based allocation:
+- Instead of saying “AAA gets 30% weight”, you say:
+  - “each symbol should contribute a similar amount of portfolio risk”.
+
+Intuition:
+- High-volatility assets get smaller weights.
+- Low-volatility assets get larger weights.
+- The goal is to avoid one asset dominating portfolio risk.
+
+### What SigmaTrader does (v1)
+
+1) Collects daily closes (`timeframe=1d`) for all portfolio symbols.
+2) Aligns the symbols on common dates (same candle timestamps).
+3) Computes daily returns and estimates a covariance matrix over a lookback window:
+   - **6M** ≈ 126 trading days
+   - **1Y** ≈ 252 trading days
+4) Solves for weights where each symbol’s risk contribution share is ~equal.
+5) Applies optional weight bounds (min/max weight).
+6) Feeds the derived weights into the standard rebalance planner (budget + bands + constraints).
+
+### Controls (what each field means)
+
+- **Window**:
+  - 6M reacts faster but can be noisy.
+  - 1Y is smoother but reacts slower.
+- **Min observations**:
+  - Minimum number of aligned daily candles needed across *all* symbols.
+  - If you choose a high value, you may get “insufficient history” errors.
+- **Min weight (%) / Max weight (%)**:
+  - Portfolio-level diversification guardrails.
+  - Example: if Max weight is 25%, no single symbol can exceed 25%.
+
+### What you should expect in preview
+
+- Derived targets show:
+  - `target_weight`
+  - volatility estimates (`vol_daily`, `vol_annual`)
+  - `risk_contribution_share` (should be close to equal across symbols)
+  - cache/optimizer diagnostics (`cache_hit`, `iterations`, `max_rc_error`)
+
+## Columns & calculations
+
+### Preview table (each row is one proposed trade)
+
+- **Broker**: which broker account the trade is for (`zerodha`, `angelone`).
+- **Symbol**: the tradingsymbol that will be bought or sold.
+- **Side**:
+  - `BUY` ⇒ underweight vs target
+  - `SELL` ⇒ overweight vs target
+- **Qty**:
+  - computed from `trade_value / price` and rounded down to an integer.
+  - SELL qty is clamped to your available holding quantity.
+- **Est. price**:
+  - best-effort estimate (LTP preferred, else last daily close).
+  - used for sizing, not a guarantee of execution price.
+- **Est. notional**:
+  - `Qty × Est. price`
+- **Target**:
+  - target weight for that symbol (derived from the selected rebalance method).
+- **Live**:
+  - `current_value / portfolio_value`
+- **Drift**:
+  - `Live − Target`
+  - positive drift ⇒ overweight ⇒ usually SELL
+  - negative drift ⇒ underweight ⇒ usually BUY
+
+### Budgeting and scaling
+
+SigmaTrader first computes “ideal” deltas, then scales them down to fit your budget.
+
+Definitions:
+- `budget_amount`:
+  - if Budget amount is set, that value is used.
+  - else `budget_pct × portfolio_value` is used.
+- `scale`:
+  - `scale = min(1, budget_amount / max(total_buy_value, total_sell_value))`
+  - scale applies uniformly to all candidate trades.
+
+### Drift bands
+
+Two types of drift bands are combined:
+- **Abs band**:
+  - ignore if `abs(drift) < abs_band`
+- **Rel band**:
+  - ignore if `abs(drift) < rel_band × target_weight`
+
+Effective threshold per symbol:
+`threshold = max(abs_band, rel_band × target_weight)`
+
+## Scheduling & history
+
+### History tab
+
+For group rebalances, SigmaTrader stores a “run history”:
+- run id, timestamps, status, and order ids.
+- this helps you audit what you did.
+
+Holdings-universe rebalances currently create orders but do not store a rebalance run.
+
+### Scheduling tab (PORTFOLIO groups)
+
+You can configure a schedule:
+- Weekly / Monthly / Quarterly / Custom interval
+- Time and timezone
+
+SigmaTrader shows:
+- **Last** rebalance time
+- **Next** scheduled time
+
+Important:
+- Scheduling stores the schedule and next/last timestamps.
+- It does not auto-execute trades in the background yet (that is a future enhancement).
+
+## FAQ
+
+### “Budget used” vs “Turnover”
+
 - `budget used = max(total_buy_value, total_sell_value)`
+- `turnover = total_buy_value + total_sell_value`
 
-This is a conservative way to show the bigger of the two sides.
+If you sell ₹50k and buy ₹50k, “budget used” is ₹50k but “turnover” is ₹100k.
 
-### `budget used (%)`
-Budget used as a percent of current portfolio value.
+### Why did some symbols not generate trades?
 
-### `turnover`
-An activity metric:
+Common reasons:
+- drift is inside the band (ignored),
+- estimated qty rounds to 0 after scaling,
+- trade notional is below “Min trade value”,
+- max trades clipped the smaller trades,
+- missing price data for that symbol.
 
-`turnover % = (total_buy_value + total_sell_value) / portfolio_value × 100`
+### Why does risk parity require “aligned” candles?
 
-Turnover will be higher than “budget used %” when both buys and sells are present.
+Risk parity uses covariance, which requires comparing returns on the same dates.
+If one symbol has missing days, SigmaTrader needs enough overlap to compute a stable estimate.
 
----
+### Safety checklist (recommended)
 
-## 4) Inputs in the dialog (what they do)
+1) Confirm you selected the right broker and group.
+2) Start with a low budget (2–5%) while learning.
+3) Keep drift bands non-zero (1–2%) to avoid churn.
+4) Prefer MANUAL at first; inspect orders before AUTO.
+5) Be careful with LIMIT orders; MARKET is simpler for rebalance.
+6) Consider taxes/conviction before selling.
 
-### `Broker`
-Which broker’s holdings to use for live weights, and where orders will be created/executed.
+### Known limitations (current)
 
-Recommended:
-- If you opened the dialog from “Holdings (Zerodha)”, keep broker as Zerodha.
-- If you opened it from “Holdings (AngelOne)”, keep broker as AngelOne.
-
-### `Budget (%)`
-Caps how much of your portfolio value the rebalance is allowed to trade.
-
-Example: if portfolio value is ₹10,00,000 and budget is 10%, budget is ₹1,00,000.
-
-### `Budget amount (INR)` (overrides %)
-If set, this becomes the absolute cap (₹). Useful when you want a fixed rupee limit.
-
-### `Abs band (%)` (absolute drift band)
-Minimum drift (in percentage points) required before a symbol is eligible for trading.
-
-Example: if `Abs band = 2%`, a symbol with drift of `+1.2%` will be ignored.
-
-### `Rel band (%)` (relative drift band)
-A band that scales with the target weight:
-
-`relative_threshold = rel_band × target_weight`
-
-The effective threshold is:
-`max(abs_band, relative_threshold)`
-
-This reduces churn for small-weight positions.
-
-### `Max trades`
-Limits the number of proposed trades. When more candidates exist, SigmaTrader keeps the largest trades (by estimated notional) first.
-
-### `Min trade value (INR)`
-Drops tiny trades by requiring:
-`Est. notional >= Min trade value`
-
-### `Mode`
-- `MANUAL`: creates orders in the queue (WAITING) so you can review and execute later.
-- `AUTO`: attempts to execute immediately via broker integration.
-
-### `Target`
-- `LIVE`: sends real orders to your broker.
-- `PAPER`: paper-trading mode (if enabled in your environment).
-
-### `Order type`
-- `MARKET`: executes at market price (price not fixed).
-- `LIMIT`: uses the estimated price as the limit price (may not fill if the market moves away).
-
-### `Product`
-Broker product type, typically:
-- `CNC` for delivery (common for investing/portfolio rebalances)
-- `MIS` for intraday (use with care)
-
-### `Idempotency key (optional)` (group rebalances)
-Prevents accidental duplicate executions if you click twice or retry a request.
-
-Recommendation:
-- Use a short unique key per rebalance action (e.g. `pf_green_2025-12-25_1`).
-
----
-
-## 5) Worked examples
-
-### Example 1 — Portfolio rebalance with target weights
-Portfolio value = ₹1,00,000
-
-Targets:
-- A: 50%
-- B: 50%
-
-Live:
-- A value = ₹80,000 → Live = 80% → Drift = +30%
-- B value = ₹20,000 → Live = 20% → Drift = −30%
-
-Without budget limits, ideal would be to sell A and buy B by ~₹30,000 each.
-
-If budget is 10% (₹10,000), SigmaTrader scales the trade sizes down proportionally, so you might see something like:
-- SELL A ~₹10,000
-- BUY B ~₹10,000
-
-### Example 2 — Holdings rebalance (equal-weight)
-Holdings scope has 5 symbols → equal-weight target = 20% each.
-
-If one symbol is at 35% (drift +15%) and another at 8% (drift −12%), SigmaTrader proposes SELL for the overweight one and BUY for the underweight one, subject to:
-- drift bands,
-- your budget,
-- and min trade value / max trades.
-
----
-
-## 6) Practical safety checklist before pressing “Create queued orders” / “Execute now”
-
-1) **Confirm scope**: are you rebalancing the correct broker and correct group/universe?
-2) **Start small**: use a low budget (e.g. 2–5%) until you trust the behaviour.
-3) **Use bands**: a non-zero band (e.g. 1–2%) reduces churn.
-4) **Use MANUAL first**: review the queued orders before going AUTO.
-5) **Watch LIMIT orders**: limit orders may not fill; MARKET is simpler for rebalancing.
-6) **Check sells**: ensure you’re not selling positions you don’t want to reduce (tax/conviction).
-
----
-
-## 7) Known v1 limitations (important)
-
-- **Cash is not modeled explicitly**: portfolio value is derived from positions only; the system does not allocate a “cash weight”.
-- **Price is best-effort**: LTP is preferred; otherwise last close may be used; execution can differ.
-- **Integer qty rounding** can leave small residual drift.
-- **No replacement/universe expansion**: rebalance trades only among the symbols in scope; it won’t add new symbols.
-- **History is only stored for group rebalances** (`PORTFOLIO` / `HOLDINGS_VIEW` group scopes). Holdings-universe rebalances currently create orders without run-history storage.
-
+- Cash is not modeled explicitly (portfolio value is derived from positions only).
+- Prices are best-effort; execution can differ.
+- Integer qty rounding can leave small residual drift.
+- Signal rotation and risk parity are currently supported only for `PORTFOLIO` groups.
+- Background auto-execution for schedules is not implemented yet.

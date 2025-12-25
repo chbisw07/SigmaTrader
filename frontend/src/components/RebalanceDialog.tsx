@@ -37,6 +37,7 @@ import {
   updateRebalanceSchedule,
   type RebalanceMethod,
   type RebalanceRotationWeighting,
+  type RebalanceRiskWindow,
   type RebalancePreviewResult,
   type RebalanceRun,
   type RebalanceSchedule,
@@ -88,6 +89,10 @@ type RebalanceDraft = {
   rotationWhitelist: string
   rotationBlacklist: string
   rotationRequirePositiveScore: boolean
+  riskWindow: RebalanceRiskWindow
+  riskMinObservations: string
+  riskMinWeightPct: string
+  riskMaxWeightPct: string
   mode: 'MANUAL' | 'AUTO'
   executionTarget: 'LIVE' | 'PAPER'
   orderType: 'MARKET' | 'LIMIT'
@@ -118,6 +123,10 @@ const DEFAULT_REBALANCE: RebalanceDraft = {
   rotationWhitelist: '',
   rotationBlacklist: '',
   rotationRequirePositiveScore: true,
+  riskWindow: '6M',
+  riskMinObservations: '60',
+  riskMinWeightPct: '0',
+  riskMaxWeightPct: '100',
   mode: 'MANUAL',
   executionTarget: 'LIVE',
   orderType: 'MARKET',
@@ -187,9 +196,10 @@ export function RebalanceDialog({
   scheduleSupported,
 }: RebalanceDialogProps) {
   const historyEnabled = targetKind === 'GROUP' && groupId != null
-  const signalRotationSupported = historyEnabled && !!scheduleSupported
+  const advancedMethodsSupported = historyEnabled && !!scheduleSupported
   const [tab, setTab] = useState<'preview' | 'history' | 'schedule'>('preview')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [helpTab, setHelpTab] = useState<string>('Overview')
   const [draft, setDraft] = useState<RebalanceDraft>(() => ({
     ...DEFAULT_REBALANCE,
     brokerName,
@@ -223,6 +233,7 @@ export function RebalanceDialog({
     setGroups([])
     setSignalStrategies([])
     setSignalVersions([])
+    setHelpTab('Overview')
 
     if (historyEnabled) {
       void (async () => {
@@ -251,7 +262,7 @@ export function RebalanceDialog({
       })()
     }
 
-    if (signalRotationSupported) {
+    if (advancedMethodsSupported) {
       void (async () => {
         try {
           const [gs, ss] = await Promise.all([
@@ -265,10 +276,48 @@ export function RebalanceDialog({
         }
       })()
     }
-  }, [open, brokerName, historyEnabled, groupId, scheduleSupported])
+  }, [open, brokerName, historyEnabled, groupId, scheduleSupported, advancedMethodsSupported])
+
+  const helpSections = useMemo(() => {
+    const raw = rebalanceHelpText || ''
+    const lines = raw.split(/\r?\n/)
+    const sections: Array<{ title: string; start: number; end: number }> = []
+    let currentTitle = 'Overview'
+    let start = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.startsWith('## ')) {
+        sections.push({ title: currentTitle, start, end: i })
+        currentTitle = line.slice(3).trim() || 'Overview'
+        start = i
+      }
+    }
+    sections.push({ title: currentTitle, start, end: lines.length })
+    const out: Record<string, string> = {}
+    for (const s of sections) {
+      const text = lines.slice(s.start, s.end).join('\n').trim()
+      if (!text) continue
+      out[s.title] = text
+    }
+    if (!out.Overview) out.Overview = raw.trim()
+    return out
+  }, [])
+
+  const helpTabs = useMemo(() => {
+    const preferred = [
+      'Overview',
+      'Target weights',
+      'Signal rotation',
+      'Risk parity',
+      'Columns & calculations',
+      'Scheduling & history',
+      'FAQ',
+    ]
+    return preferred.filter((k) => helpSections[k])
+  }, [helpSections])
 
   useEffect(() => {
-    if (!open || !signalRotationSupported) return
+    if (!open || !advancedMethodsSupported) return
     const strategyId = Number(draft.rotationStrategyId)
     if (!Number.isFinite(strategyId) || strategyId <= 0) {
       setSignalVersions([])
@@ -298,7 +347,7 @@ export function RebalanceDialog({
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, signalRotationSupported, draft.rotationStrategyId])
+  }, [open, advancedMethodsSupported, draft.rotationStrategyId])
 
   const selectedVersion = useMemo(() => {
     const vid = Number(draft.rotationVersionId)
@@ -441,7 +490,7 @@ export function RebalanceDialog({
       const minTradeValue = draft.minTradeValue.trim() ? parseNum(draft.minTradeValue.trim()) : null
 
       let rotationPayload: any = null
-      if (signalRotationSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION') {
+      if (advancedMethodsSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION') {
         const versionId = parseIntOrNull(draft.rotationVersionId.trim())
         if (!versionId) throw new Error('Rotation: select a strategy version')
         const outputName = draft.rotationOutput.trim()
@@ -505,12 +554,30 @@ export function RebalanceDialog({
         }
       }
 
+      let riskPayload: any = null
+      if (advancedMethodsSupported && draft.rebalanceMethod === 'RISK_PARITY') {
+        const minObs = parseIntOrNull(draft.riskMinObservations.trim()) ?? 60
+        const minW = draft.riskMinWeightPct.trim() ? parsePct(draft.riskMinWeightPct.trim()) : 0
+        const maxW = draft.riskMaxWeightPct.trim() ? parsePct(draft.riskMaxWeightPct.trim()) : 1
+        if (minW == null || maxW == null) throw new Error('Risk: invalid min/max weight')
+        riskPayload = {
+          window: draft.riskWindow,
+          timeframe: '1d',
+          min_observations: minObs,
+          min_weight: minW,
+          max_weight: maxW,
+          max_iter: 2000,
+          tol: 1e-8,
+        }
+      }
+
       const results = await previewRebalance({
         target_kind: targetKind,
         group_id: targetKind === 'GROUP' ? (groupId ?? null) : null,
         broker_name: draft.brokerName,
         rebalance_method: draft.rebalanceMethod,
         rotation: rotationPayload,
+        risk: riskPayload,
         budget_pct: budgetPct,
         budget_amount: budgetAmount,
         drift_band_abs_pct: absBand,
@@ -542,7 +609,7 @@ export function RebalanceDialog({
         historyEnabled && draft.idempotencyKey.trim() ? draft.idempotencyKey.trim() : null
 
       let rotationPayload: any = null
-      if (signalRotationSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION') {
+      if (advancedMethodsSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION') {
         const versionId = parseIntOrNull(draft.rotationVersionId.trim())
         if (!versionId) throw new Error('Rotation: select a strategy version')
         const outputName = draft.rotationOutput.trim()
@@ -606,12 +673,30 @@ export function RebalanceDialog({
         }
       }
 
+      let riskPayload: any = null
+      if (advancedMethodsSupported && draft.rebalanceMethod === 'RISK_PARITY') {
+        const minObs = parseIntOrNull(draft.riskMinObservations.trim()) ?? 60
+        const minW = draft.riskMinWeightPct.trim() ? parsePct(draft.riskMinWeightPct.trim()) : 0
+        const maxW = draft.riskMaxWeightPct.trim() ? parsePct(draft.riskMaxWeightPct.trim()) : 1
+        if (minW == null || maxW == null) throw new Error('Risk: invalid min/max weight')
+        riskPayload = {
+          window: draft.riskWindow,
+          timeframe: '1d',
+          min_observations: minObs,
+          min_weight: minW,
+          max_weight: maxW,
+          max_iter: 2000,
+          tol: 1e-8,
+        }
+      }
+
       const results = await executeRebalance({
         target_kind: targetKind,
         group_id: targetKind === 'GROUP' ? (groupId ?? null) : null,
         broker_name: draft.brokerName,
         rebalance_method: draft.rebalanceMethod,
         rotation: rotationPayload,
+        risk: riskPayload,
         budget_pct: budgetPct,
         budget_amount: budgetAmount,
         drift_band_abs_pct: absBand,
@@ -693,8 +778,8 @@ export function RebalanceDialog({
         )}
 
         {tab === 'preview' && (
-            <Stack spacing={2} sx={{ mt: 2 }}>
-            {signalRotationSupported && (
+          <Stack spacing={2} sx={{ mt: 2 }}>
+            {advancedMethodsSupported && (
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
                 <FormControl sx={{ width: { xs: '100%', md: 240 } }}>
                   <InputLabel id="rebalance-method-label">Rebalance method</InputLabel>
@@ -711,12 +796,13 @@ export function RebalanceDialog({
                   >
                     <MenuItem value="TARGET_WEIGHT">Target weights</MenuItem>
                     <MenuItem value="SIGNAL_ROTATION">Signal-driven rotation</MenuItem>
+                    <MenuItem value="RISK_PARITY">Risk parity (equal risk)</MenuItem>
                   </Select>
                 </FormControl>
               </Stack>
             )}
 
-            {signalRotationSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION' && (
+            {advancedMethodsSupported && draft.rebalanceMethod === 'SIGNAL_ROTATION' && (
               <Stack spacing={2}>
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
                   <FormControl sx={{ width: { xs: '100%', md: 260 } }}>
@@ -928,6 +1014,64 @@ export function RebalanceDialog({
                   multiline
                   minRows={2}
                 />
+              </Stack>
+            )}
+
+            {advancedMethodsSupported && draft.rebalanceMethod === 'RISK_PARITY' && (
+              <Stack spacing={2}>
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                  <FormControl sx={{ width: { xs: '100%', md: 220 } }}>
+                    <InputLabel id="risk-window-label">Window</InputLabel>
+                    <Select
+                      labelId="risk-window-label"
+                      label="Window"
+                      value={draft.riskWindow}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          riskWindow: e.target.value as RebalanceRiskWindow,
+                        }))
+                      }
+                    >
+                      <MenuItem value="6M">6M</MenuItem>
+                      <MenuItem value="1Y">1Y</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <TextField
+                    label="Min observations"
+                    value={draft.riskMinObservations}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        riskMinObservations: e.target.value,
+                      }))
+                    }
+                    helperText="Aligned daily candles across all symbols."
+                    sx={{ width: { xs: '100%', md: 220 } }}
+                  />
+                  <TextField
+                    label="Min weight (%)"
+                    value={draft.riskMinWeightPct}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        riskMinWeightPct: e.target.value,
+                      }))
+                    }
+                    sx={{ width: { xs: '100%', md: 180 } }}
+                  />
+                  <TextField
+                    label="Max weight (%)"
+                    value={draft.riskMaxWeightPct}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        riskMaxWeightPct: e.target.value,
+                      }))
+                    }
+                    sx={{ width: { xs: '100%', md: 180 } }}
+                  />
+                </Stack>
               </Stack>
             )}
 
@@ -1367,7 +1511,20 @@ export function RebalanceDialog({
       <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Rebalance help</DialogTitle>
         <DialogContent dividers>
-          <MarkdownLite text={rebalanceHelpText} />
+          {helpTabs.length > 1 ? (
+            <Tabs
+              value={helpTab}
+              onChange={(_e, v) => setHelpTab(String(v))}
+              variant="scrollable"
+              scrollButtons="auto"
+              sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}
+            >
+              {helpTabs.map((t) => (
+                <Tab key={t} label={t} value={t} />
+              ))}
+            </Tabs>
+          ) : null}
+          <MarkdownLite text={helpSections[helpTab] ?? helpSections.Overview ?? rebalanceHelpText} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHelpOpen(false)}>Close</Button>

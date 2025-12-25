@@ -10,8 +10,42 @@ from app.pydantic_compat import PYDANTIC_V2, ConfigDict, model_validator
 RebalanceBrokerScope = Literal["zerodha", "angelone", "both"]
 RebalanceMode = Literal["MANUAL", "AUTO"]
 RebalanceTargetKind = Literal["GROUP", "HOLDINGS"]
-RebalanceMethod = Literal["TARGET_WEIGHT", "SIGNAL_ROTATION"]
+RebalanceMethod = Literal["TARGET_WEIGHT", "SIGNAL_ROTATION", "RISK_PARITY"]
 RebalanceRotationWeighting = Literal["EQUAL", "SCORE", "RANK"]
+RebalanceRiskWindow = Literal["6M", "1Y"]
+
+
+class RebalanceRiskConfig(BaseModel):
+    """Risk-based target derivation config (v3).
+
+    Uses daily close returns to estimate a covariance matrix over a lookback
+    window, then derives equal risk contribution (risk parity / ERC) weights.
+    """
+
+    window: RebalanceRiskWindow = "6M"
+    timeframe: Literal["1d"] = "1d"
+    min_observations: int = Field(60, ge=10, le=2000)
+
+    min_weight: float = Field(0.0, ge=0.0, le=1.0)
+    max_weight: float = Field(1.0, ge=0.0, le=1.0)
+
+    max_iter: int = Field(2000, ge=10, le=20000)
+    tol: float = Field(1e-8, gt=0.0, lt=1.0)
+
+    @model_validator(mode="before")
+    def _validate_bounds(cls, values):  # type: ignore[no-untyped-def]
+        if not isinstance(values, dict):
+            return values
+        mn = values.get("min_weight", 0.0)
+        mx = values.get("max_weight", 1.0)
+        try:
+            mn_f = float(mn)
+            mx_f = float(mx)
+        except Exception:
+            return values
+        if mn_f > mx_f:
+            raise ValueError("min_weight cannot be greater than max_weight.")
+        return values
 
 
 class RebalanceRotationConfig(BaseModel):
@@ -64,6 +98,7 @@ class RebalancePreviewRequest(BaseModel):
     broker_name: RebalanceBrokerScope = "zerodha"
     rebalance_method: RebalanceMethod = "TARGET_WEIGHT"
     rotation: Optional[RebalanceRotationConfig] = None
+    risk: Optional[RebalanceRiskConfig] = None
 
     budget_pct: Optional[float] = Field(
         0.10,
@@ -113,6 +148,15 @@ class RebalancePreviewRequest(BaseModel):
             if rotation is None:
                 raise ValueError(
                     "rotation config is required when rebalance_method=SIGNAL_ROTATION."
+                )
+        if str(rebalance_method).upper() == "RISK_PARITY":
+            if str(target_kind).upper() != "GROUP":
+                raise ValueError(
+                    "rebalance_method=RISK_PARITY requires target_kind=GROUP."
+                )
+            if values.get("risk") is None:
+                raise ValueError(
+                    "risk config is required when rebalance_method=RISK_PARITY."
                 )
         return values
 
@@ -233,6 +277,7 @@ __all__ = [
     "RebalanceMethod",
     "RebalanceRotationWeighting",
     "RebalanceRotationConfig",
+    "RebalanceRiskConfig",
     "RebalancePreviewRequest",
     "RebalancePreviewResponse",
     "RebalancePreviewResult",

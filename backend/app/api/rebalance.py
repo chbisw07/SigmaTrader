@@ -248,6 +248,7 @@ def rebalance_execute(
                 broker_name=broker,  # type: ignore[arg-type]
                 rebalance_method=payload.rebalance_method,
                 rotation=payload.rotation,
+                risk=payload.risk,
                 budget_pct=payload.budget_pct,
                 budget_amount=payload.budget_amount,
                 drift_band_abs_pct=payload.drift_band_abs_pct,
@@ -363,6 +364,7 @@ def rebalance_execute(
             broker_name=broker,  # type: ignore[arg-type]
             rebalance_method=payload.rebalance_method,
             rotation=payload.rotation,
+            risk=payload.risk,
             budget_pct=payload.budget_pct,
             budget_amount=payload.budget_amount,
             drift_band_abs_pct=payload.drift_band_abs_pct,

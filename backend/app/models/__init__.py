@@ -10,6 +10,7 @@ from .rebalance import (
     RebalanceRunOrder,
     RebalanceSchedule,
 )
+from .risk_covariance_cache import RiskCovarianceCache
 from .screener_v3 import ScreenerRun
 from .signal_strategies import SignalStrategy, SignalStrategyVersion
 from .system_event import SystemEvent
@@ -45,6 +46,7 @@ __all__ = [
     "BrokerInstrument",
     "MarketInstrument",
     "Candle",
+    "RiskCovarianceCache",
     "IndicatorRule",
     "Group",
     "GroupMember",
