@@ -28,11 +28,16 @@ import { MarkdownLite } from './MarkdownLite'
 
 import {
   executeRebalance,
+  fetchRebalanceSchedule,
   getRebalanceRun,
   listRebalanceRuns,
   previewRebalance,
+  updateRebalanceSchedule,
   type RebalancePreviewResult,
   type RebalanceRun,
+  type RebalanceSchedule,
+  type RebalanceScheduleConfig,
+  type RebalanceScheduleFrequency,
   type RebalanceTargetKind,
 } from '../services/rebalance'
 
@@ -121,6 +126,7 @@ export type RebalanceDialogProps = {
   groupId?: number | null
   brokerName: 'zerodha' | 'angelone'
   brokerLocked?: boolean
+  scheduleSupported?: boolean
 }
 
 export function RebalanceDialog({
@@ -131,9 +137,10 @@ export function RebalanceDialog({
   groupId,
   brokerName,
   brokerLocked,
+  scheduleSupported,
 }: RebalanceDialogProps) {
   const historyEnabled = targetKind === 'GROUP' && groupId != null
-  const [tab, setTab] = useState<'preview' | 'history'>('preview')
+  const [tab, setTab] = useState<'preview' | 'history' | 'schedule'>('preview')
   const [helpOpen, setHelpOpen] = useState(false)
   const [draft, setDraft] = useState<RebalanceDraft>(() => ({
     ...DEFAULT_REBALANCE,
@@ -146,6 +153,10 @@ export function RebalanceDialog({
   )
   const [runs, setRuns] = useState<RebalanceRun[]>([])
   const [selectedRun, setSelectedRun] = useState<RebalanceRun | null>(null)
+  const [schedule, setSchedule] = useState<RebalanceSchedule | null>(null)
+  const [scheduleDraft, setScheduleDraft] =
+    useState<RebalanceScheduleConfig | null>(null)
+  const [scheduleEnabled, setScheduleEnabled] = useState(true)
 
   useEffect(() => {
     if (!open) return
@@ -155,16 +166,56 @@ export function RebalanceDialog({
     setPreviewResults(null)
     setSelectedRun(null)
     setRuns([])
-    if (!historyEnabled) return
-    void (async () => {
-      try {
-        const rows = await listRebalanceRuns({ group_id: groupId as number, broker_name: null })
-        setRuns(rows)
-      } catch {
-        // best-effort
-      }
-    })()
-  }, [open, brokerName, historyEnabled, groupId])
+    setSchedule(null)
+    setScheduleDraft(null)
+    setScheduleEnabled(true)
+
+    if (historyEnabled) {
+      void (async () => {
+        try {
+          const rows = await listRebalanceRuns({
+            group_id: groupId as number,
+            broker_name: null,
+          })
+          setRuns(rows)
+        } catch {
+          // best-effort
+        }
+      })()
+    }
+
+    if (historyEnabled && scheduleSupported) {
+      void (async () => {
+        try {
+          const s = await fetchRebalanceSchedule(groupId as number)
+          setSchedule(s)
+          setScheduleDraft(s.config)
+          setScheduleEnabled(!!s.enabled)
+        } catch {
+          // best-effort
+        }
+      })()
+    }
+  }, [open, brokerName, historyEnabled, groupId, scheduleSupported])
+
+  const saveSchedule = async () => {
+    if (!historyEnabled || !scheduleSupported || !groupId || !scheduleDraft) return
+    try {
+      setBusy(true)
+      setError(null)
+      const updated = await updateRebalanceSchedule(groupId, {
+        enabled: scheduleEnabled,
+        config: scheduleDraft,
+      })
+      setSchedule(updated)
+      setScheduleDraft(updated.config)
+      setScheduleEnabled(!!updated.enabled)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update schedule')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const tradeRows = useMemo((): RebalanceTradeRow[] => {
     const results = previewResults ?? []
@@ -337,12 +388,30 @@ export function RebalanceDialog({
         setRuns(rows)
         setTab('history')
       }
+
+      if (historyEnabled && scheduleSupported) {
+        try {
+          const s = await fetchRebalanceSchedule(groupId as number)
+          setSchedule(s)
+          setScheduleDraft(s.config)
+          setScheduleEnabled(!!s.enabled)
+        } catch {
+          // best-effort
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to execute rebalance')
     } finally {
       setBusy(false)
     }
   }
+
+  const scheduleNextLabel = schedule?.next_run_at
+    ? `Next: ${formatIstDateTime(schedule.next_run_at)}`
+    : 'Next: —'
+  const scheduleLastLabel = schedule?.last_run_at
+    ? `Last: ${formatIstDateTime(schedule.last_run_at)}`
+    : 'Last: —'
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
@@ -359,14 +428,23 @@ export function RebalanceDialog({
       <DialogContent>
         <Tabs
           value={tab}
-          onChange={(_e, v) => setTab(v as 'preview' | 'history')}
+          onChange={(_e, v) => setTab(v as 'preview' | 'history' | 'schedule')}
           sx={{ borderBottom: 1, borderColor: 'divider' }}
         >
           <Tab label="Preview" value="preview" icon={<AutorenewIcon />} iconPosition="start" />
           {historyEnabled && (
             <Tab label="History" value="history" icon={<HistoryIcon />} iconPosition="start" />
           )}
+          {historyEnabled && scheduleSupported && (
+            <Tab label="Schedule" value="schedule" icon={<HistoryIcon />} iconPosition="start" />
+          )}
         </Tabs>
+
+        {historyEnabled && scheduleSupported && (
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+            {scheduleLastLabel} • {scheduleNextLabel}
+          </Typography>
+        )}
 
         {tab === 'preview' && (
           <Stack spacing={2} sx={{ mt: 2 }}>
@@ -626,6 +704,176 @@ export function RebalanceDialog({
                 </Box>
               </>
             )}
+          </Stack>
+        )}
+
+        {tab === 'schedule' && historyEnabled && scheduleSupported && (
+          <Stack spacing={2} sx={{ mt: 2 }}>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center">
+              <FormControl sx={{ width: { xs: '100%', md: 180 } }}>
+                <InputLabel id="sched-enabled-label">Enabled</InputLabel>
+                <Select
+                  labelId="sched-enabled-label"
+                  label="Enabled"
+                  value={scheduleEnabled ? 'yes' : 'no'}
+                  onChange={(e) => setScheduleEnabled(String(e.target.value) === 'yes')}
+                >
+                  <MenuItem value="yes">Yes</MenuItem>
+                  <MenuItem value="no">No</MenuItem>
+                </Select>
+              </FormControl>
+
+              <FormControl sx={{ width: { xs: '100%', md: 200 } }}>
+                <InputLabel id="sched-frequency-label">Frequency</InputLabel>
+                <Select
+                  labelId="sched-frequency-label"
+                  label="Frequency"
+                  value={scheduleDraft?.frequency ?? 'MONTHLY'}
+                  onChange={(e) => {
+                    const freq = String(e.target.value) as RebalanceScheduleFrequency
+                    setScheduleDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            frequency: freq,
+                          }
+                        : null,
+                    )
+                  }}
+                >
+                  <MenuItem value="WEEKLY">Weekly</MenuItem>
+                  <MenuItem value="MONTHLY">Monthly</MenuItem>
+                  <MenuItem value="QUARTERLY">Quarterly</MenuItem>
+                  <MenuItem value="CUSTOM_DAYS">Every N days</MenuItem>
+                </Select>
+              </FormControl>
+
+              <TextField
+                label="Time (HH:MM)"
+                value={scheduleDraft?.time_local ?? '15:10'}
+                onChange={(e) =>
+                  setScheduleDraft((prev) =>
+                    prev ? { ...prev, time_local: e.target.value } : null,
+                  )
+                }
+                sx={{ width: { xs: '100%', md: 160 } }}
+              />
+
+              <FormControl sx={{ width: { xs: '100%', md: 200 } }}>
+                <InputLabel id="sched-tz-label">Timezone</InputLabel>
+                <Select
+                  labelId="sched-tz-label"
+                  label="Timezone"
+                  value={scheduleDraft?.timezone ?? 'Asia/Kolkata'}
+                  onChange={(e) =>
+                    setScheduleDraft((prev) =>
+                      prev ? { ...prev, timezone: String(e.target.value) } : null,
+                    )
+                  }
+                >
+                  <MenuItem value="Asia/Kolkata">Asia/Kolkata</MenuItem>
+                </Select>
+              </FormControl>
+            </Stack>
+
+            {scheduleDraft?.frequency === 'WEEKLY' && (
+              <FormControl sx={{ width: { xs: '100%', md: 260 } }}>
+                <InputLabel id="sched-weekday-label">Day of week</InputLabel>
+                <Select
+                  labelId="sched-weekday-label"
+                  label="Day of week"
+                  value={String(scheduleDraft.weekday ?? 4)}
+                  onChange={(e) =>
+                    setScheduleDraft((prev) =>
+                      prev
+                        ? { ...prev, weekday: Number(e.target.value) }
+                        : null,
+                    )
+                  }
+                >
+                  <MenuItem value="0">Mon</MenuItem>
+                  <MenuItem value="1">Tue</MenuItem>
+                  <MenuItem value="2">Wed</MenuItem>
+                  <MenuItem value="3">Thu</MenuItem>
+                  <MenuItem value="4">Fri</MenuItem>
+                </Select>
+              </FormControl>
+            )}
+
+            {(scheduleDraft?.frequency === 'MONTHLY' || scheduleDraft?.frequency === 'QUARTERLY') && (
+              <FormControl sx={{ width: { xs: '100%', md: 260 } }}>
+                <InputLabel id="sched-dom-label">Day of month</InputLabel>
+                <Select
+                  labelId="sched-dom-label"
+                  label="Day of month"
+                  value={String(scheduleDraft.day_of_month ?? 'LAST')}
+                  onChange={(e) => {
+                    const v = String(e.target.value)
+                    setScheduleDraft((prev) =>
+                      prev
+                        ? { ...prev, day_of_month: v === 'LAST' ? 'LAST' : Number(v) }
+                        : null,
+                    )
+                  }}
+                >
+                  <MenuItem value="LAST">Last day</MenuItem>
+                  {[1, 5, 10, 15, 20, 25].map((d) => (
+                    <MenuItem key={d} value={String(d)}>
+                      {d}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+
+            {scheduleDraft?.frequency === 'CUSTOM_DAYS' && (
+              <TextField
+                label="Every N days"
+                value={String(scheduleDraft.interval_days ?? 30)}
+                onChange={(e) =>
+                  setScheduleDraft((prev) =>
+                    prev
+                      ? { ...prev, interval_days: Number(e.target.value) }
+                      : null,
+                  )
+                }
+                sx={{ width: { xs: '100%', md: 260 } }}
+              />
+            )}
+
+            <FormControl sx={{ width: { xs: '100%', md: 260 } }}>
+              <InputLabel id="sched-roll-label">Weekend adjustment</InputLabel>
+              <Select
+                labelId="sched-roll-label"
+                label="Weekend adjustment"
+                value={scheduleDraft?.roll_to_trading_day ?? 'NEXT'}
+                onChange={(e) =>
+                  setScheduleDraft((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          roll_to_trading_day: String(e.target.value) as RebalanceScheduleConfig['roll_to_trading_day'],
+                        }
+                      : null,
+                  )
+                }
+              >
+                <MenuItem value="NEXT">Move to next weekday</MenuItem>
+                <MenuItem value="PREV">Move to previous weekday</MenuItem>
+                <MenuItem value="NONE">No adjustment</MenuItem>
+              </Select>
+            </FormControl>
+
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button
+                variant="contained"
+                disabled={busy || !scheduleDraft}
+                onClick={() => void saveSchedule()}
+              >
+                Save schedule
+              </Button>
+              {error && <Typography color="error">{error}</Typography>}
+            </Stack>
           </Stack>
         )}
       </DialogContent>

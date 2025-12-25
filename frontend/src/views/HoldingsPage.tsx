@@ -232,6 +232,7 @@ export function HoldingsPage() {
         groupId: null as number | null,
         brokerName: 'zerodha' as const,
         brokerLocked: true,
+        scheduleSupported: false,
       }
     }
     if (universeId === 'holdings:angelone') {
@@ -242,6 +243,7 @@ export function HoldingsPage() {
         groupId: null as number | null,
         brokerName: 'angelone' as const,
         brokerLocked: true,
+        scheduleSupported: false,
       }
     }
     if (universeId.startsWith('group:') && activeGroup) {
@@ -253,6 +255,7 @@ export function HoldingsPage() {
           groupId: activeGroup.id,
           brokerName: tradeBrokerName,
           brokerLocked: false,
+          scheduleSupported: activeGroup.kind === 'PORTFOLIO',
         }
       }
     }
@@ -263,6 +266,7 @@ export function HoldingsPage() {
       groupId: null as number | null,
       brokerName: tradeBrokerName,
       brokerLocked: false,
+      scheduleSupported: false,
     }
   }, [activeGroup, tradeBrokerName, universeId])
   const [benchmarkHistory, setBenchmarkHistory] = useState<CandlePoint[] | null>(
@@ -3433,6 +3437,7 @@ export function HoldingsPage() {
         groupId={rebalanceConfig.groupId}
         brokerName={rebalanceConfig.brokerName}
         brokerLocked={rebalanceConfig.brokerLocked}
+        scheduleSupported={rebalanceConfig.scheduleSupported}
       />
 
       <Box

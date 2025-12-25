@@ -11,7 +11,15 @@ from app.api.auth import get_current_user
 from app.api.orders import execute_order_internal
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.models import Order, RebalanceRun, RebalanceRunOrder, User
+from app.models import (
+    Group,
+    Order,
+    RebalancePolicy,
+    RebalanceRun,
+    RebalanceRunOrder,
+    RebalanceSchedule,
+    User,
+)
 from app.schemas.rebalance import (
     RebalanceExecuteRequest,
     RebalanceExecuteResponse,
@@ -20,7 +28,18 @@ from app.schemas.rebalance import (
     RebalancePreviewResponse,
     RebalanceRunRead,
 )
+from app.schemas.rebalance_schedule import (
+    RebalanceScheduleConfig,
+    RebalanceScheduleRead,
+    RebalanceScheduleUpdate,
+)
 from app.services.rebalance import _broker_list, build_run_snapshots, preview_rebalance
+from app.services.rebalance_schedule import (
+    _json_load,
+    compute_next_rebalance_at,
+    normalize_schedule_config,
+    schedule_config_to_json,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -29,6 +48,60 @@ router = APIRouter()
 
 def _now_utc() -> datetime:
     return datetime.now(UTC)
+
+
+def _get_group_or_404(db: Session, group_id: int) -> Group:
+    g = db.get(Group, group_id)
+    if g is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return g
+
+
+def _ensure_policy_and_schedule(
+    db: Session,
+    *,
+    user_id: int,
+    group_id: int,
+) -> tuple[RebalancePolicy, RebalanceSchedule]:
+    policy: RebalancePolicy | None = (
+        db.query(RebalancePolicy)
+        .filter(
+            RebalancePolicy.owner_id == user_id, RebalancePolicy.group_id == group_id
+        )
+        .one_or_none()
+    )
+    if policy is None:
+        policy = RebalancePolicy(
+            owner_id=user_id,
+            group_id=group_id,
+            name="default",
+            enabled=True,
+            broker_scope="zerodha",
+            policy_json=None,
+        )
+        db.add(policy)
+        db.commit()
+        db.refresh(policy)
+
+    sched: RebalanceSchedule | None = (
+        db.query(RebalanceSchedule)
+        .filter(RebalanceSchedule.policy_id == policy.id)
+        .one_or_none()
+    )
+    if sched is None:
+        cfg = normalize_schedule_config({})
+        next_at = compute_next_rebalance_at(cfg=cfg)
+        sched = RebalanceSchedule(
+            policy_id=policy.id,
+            enabled=True,
+            schedule_json=schedule_config_to_json(cfg),
+            next_run_at=next_at,
+            last_run_at=None,
+        )
+        db.add(sched)
+        db.commit()
+        db.refresh(sched)
+    return policy, sched
 
 
 @router.post("/preview", response_model=RebalancePreviewResponse)
@@ -40,6 +113,120 @@ def rebalance_preview(
 ) -> RebalancePreviewResponse:
     results = preview_rebalance(db, settings, user=user, req=payload)
     return RebalancePreviewResponse(results=results)
+
+
+@router.get("/schedule", response_model=RebalanceScheduleRead)
+def get_rebalance_schedule(
+    group_id: Annotated[int, Query(ge=1)],
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RebalanceScheduleRead:
+    group = _get_group_or_404(db, group_id)
+    if group.owner_id is not None and group.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if group.kind != "PORTFOLIO":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Rebalance schedules are supported only for PORTFOLIO groups.",
+        )
+
+    _policy, sched = _ensure_policy_and_schedule(db, user_id=user.id, group_id=group.id)
+    cfg = normalize_schedule_config(_json_load(sched.schedule_json))
+
+    # Keep next_run_at current even if the config was edited externally.
+    next_at = (
+        compute_next_rebalance_at(cfg=cfg, last_run_at_utc=sched.last_run_at)
+        if sched.enabled
+        else None
+    )
+    if next_at != sched.next_run_at:
+        sched.next_run_at = next_at
+        db.add(sched)
+        db.commit()
+        db.refresh(sched)
+
+    cfg_model = RebalanceScheduleConfig(
+        frequency=cfg.frequency,
+        time_local=cfg.time_local,
+        timezone=cfg.timezone,
+        weekday=cfg.weekday,
+        day_of_month=cfg.day_of_month,
+        interval_days=cfg.interval_days,
+        roll_to_trading_day=cfg.roll_to_trading_day,
+    )
+    return RebalanceScheduleRead(
+        group_id=group.id,
+        enabled=bool(sched.enabled),
+        config=cfg_model,
+        next_run_at=sched.next_run_at,
+        last_run_at=sched.last_run_at,
+        updated_at=sched.updated_at,
+    )
+
+
+@router.put("/schedule", response_model=RebalanceScheduleRead)
+def update_rebalance_schedule(
+    group_id: Annotated[int, Query(ge=1)],
+    payload: RebalanceScheduleUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RebalanceScheduleRead:
+    group = _get_group_or_404(db, group_id)
+    if group.owner_id is not None and group.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if group.kind != "PORTFOLIO":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Rebalance schedules are supported only for PORTFOLIO groups.",
+        )
+
+    _policy, sched = _ensure_policy_and_schedule(db, user_id=user.id, group_id=group.id)
+
+    if payload.enabled is not None:
+        sched.enabled = bool(payload.enabled)
+
+    if payload.config is not None:
+        cfg = normalize_schedule_config(
+            {
+                "frequency": payload.config.frequency,
+                "time_local": payload.config.time_local,
+                "timezone": payload.config.timezone,
+                "weekday": payload.config.weekday,
+                "day_of_month": payload.config.day_of_month,
+                "interval_days": payload.config.interval_days,
+                "roll_to_trading_day": payload.config.roll_to_trading_day,
+            }
+        )
+        sched.schedule_json = schedule_config_to_json(cfg)
+    else:
+        cfg = normalize_schedule_config(_json_load(sched.schedule_json))
+
+    sched.next_run_at = (
+        compute_next_rebalance_at(cfg=cfg, last_run_at_utc=sched.last_run_at)
+        if sched.enabled
+        else None
+    )
+    db.add(sched)
+    db.commit()
+    db.refresh(sched)
+
+    cfg_model = payload.config or RebalanceScheduleConfig(
+        frequency=cfg.frequency,
+        time_local=cfg.time_local,
+        timezone=cfg.timezone,
+        weekday=cfg.weekday,
+        day_of_month=cfg.day_of_month,
+        interval_days=cfg.interval_days,
+        roll_to_trading_day=cfg.roll_to_trading_day,
+    )
+    return RebalanceScheduleRead(
+        group_id=group.id,
+        enabled=bool(sched.enabled),
+        config=cfg_model,
+        next_run_at=sched.next_run_at,
+        last_run_at=sched.last_run_at,
+        updated_at=sched.updated_at,
+    )
 
 
 @router.post("/execute", response_model=RebalanceExecuteResponse)
@@ -325,6 +512,32 @@ def rebalance_execute(
                 created_order_ids=created_order_ids,
             )
         )
+
+        # Best-effort: bump schedule last/next for portfolio group rebalances.
+        try:
+            group = db.get(Group, int(payload.group_id or 0))
+            if (
+                group is not None
+                and group.kind == "PORTFOLIO"
+                and (group.owner_id is None or group.owner_id == user.id)
+                and payload.target_kind == "GROUP"
+            ):
+                _policy, sched = _ensure_policy_and_schedule(
+                    db, user_id=user.id, group_id=group.id
+                )
+                cfg = normalize_schedule_config(_json_load(sched.schedule_json))
+                sched.last_run_at = run.executed_at or _now_utc()
+                sched.next_run_at = (
+                    compute_next_rebalance_at(
+                        cfg=cfg, last_run_at_utc=sched.last_run_at
+                    )
+                    if sched.enabled
+                    else None
+                )
+                db.add(sched)
+                db.commit()
+        except Exception:
+            pass
 
     return RebalanceExecuteResponse(results=results)
 

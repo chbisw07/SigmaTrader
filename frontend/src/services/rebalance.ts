@@ -161,3 +161,62 @@ export async function getRebalanceRun(runId: number): Promise<RebalanceRun> {
   }
   return (await res.json()) as RebalanceRun
 }
+
+export type RebalanceScheduleFrequency =
+  | 'WEEKLY'
+  | 'MONTHLY'
+  | 'QUARTERLY'
+  | 'CUSTOM_DAYS'
+
+export type RebalanceScheduleRoll = 'NEXT' | 'PREV' | 'NONE'
+
+export type RebalanceScheduleConfig = {
+  frequency: RebalanceScheduleFrequency
+  time_local: string
+  timezone: string
+  weekday?: number | null
+  day_of_month?: number | 'LAST' | null
+  interval_days?: number | null
+  roll_to_trading_day: RebalanceScheduleRoll
+}
+
+export type RebalanceSchedule = {
+  group_id: number
+  enabled: boolean
+  config: RebalanceScheduleConfig
+  next_run_at?: string | null
+  last_run_at?: string | null
+  updated_at?: string | null
+}
+
+export async function fetchRebalanceSchedule(groupId: number): Promise<RebalanceSchedule> {
+  const res = await fetch(`/api/rebalance/schedule?group_id=${groupId}`)
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to load rebalance schedule (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as RebalanceSchedule
+}
+
+export async function updateRebalanceSchedule(
+  groupId: number,
+  payload: {
+    enabled?: boolean
+    config?: RebalanceScheduleConfig
+  },
+): Promise<RebalanceSchedule> {
+  const res = await fetch(`/api/rebalance/schedule?group_id=${groupId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to update rebalance schedule (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as RebalanceSchedule
+}
