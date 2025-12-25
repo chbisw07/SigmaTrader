@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -359,17 +359,23 @@ def list_screener_runs(
     return [_run_to_read(r, include_rows=include_rows) for r in runs]
 
 
-@router.delete("/runs/{run_id}", status_code=204)
+@router.delete(
+    "/runs/{run_id}",
+    status_code=204,
+    response_class=Response,
+    response_model=None,
+)
 def delete_screener_run(
     run_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> None:
+) -> Response:
     run = db.get(ScreenerRun, run_id)
     if run is None or run.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     db.delete(run)
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/runs/cleanup", response_model=ScreenerCleanupResponse)

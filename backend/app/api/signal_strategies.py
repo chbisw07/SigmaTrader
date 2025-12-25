@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -370,12 +370,17 @@ def update_signal_strategy(
     return _read_strategy(db, s=s, include_latest=True, include_usage=True)
 
 
-@router.delete("/{strategy_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{strategy_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
+)
 def delete_signal_strategy(
     strategy_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> None:
+) -> Response:
     s = _get_strategy_or_404(db, user_id=user.id, strategy_id=strategy_id)
     versions = (
         db.query(SignalStrategyVersion.id)
@@ -391,6 +396,7 @@ def delete_signal_strategy(
         )
     db.delete(s)
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{strategy_id}/export", response_model=SignalStrategyExport)

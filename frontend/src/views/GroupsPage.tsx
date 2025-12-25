@@ -1295,10 +1295,10 @@ export function GroupsPage() {
                 >
                   Open in grid
                 </Button>
-	              <Button
-	                size="small"
-	                variant="outlined"
-	                startIcon={<PlayListAddIcon />}
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<PlayListAddIcon />}
                 disabled={!selectedGroup?.members?.length}
                 onClick={openAllocation}
               >

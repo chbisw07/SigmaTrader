@@ -1,5 +1,6 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import AutorenewIcon from '@mui/icons-material/Autorenew'
 import Paper from '@mui/material/Paper'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
@@ -37,6 +38,7 @@ import {
   shouldClampSellToHoldingsQty,
 } from '../components/Trade/tradeConstraints'
 import { resolvePrimaryPriceForHolding } from '../components/Trade/tradePricing'
+import { RebalanceDialog } from '../components/RebalanceDialog'
 
 import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
@@ -125,6 +127,7 @@ export function HoldingsPage() {
     columns: Array<{ key: string; label: string; type: string }>
     valuesByKey: Map<string, Record<string, unknown>>
   } | null>(null)
+  const [rebalanceOpen, setRebalanceOpen] = useState(false)
 
   const [tradeOpen, setTradeOpen] = useState(false)
   const [tradeHolding, setTradeHolding] = useState<HoldingRow | null>(null)
@@ -219,6 +222,49 @@ export function HoldingsPage() {
   const [riskFreeRatePct, setRiskFreeRatePct] = useState<string>(
     String(DEFAULT_RISK_FREE_RATE_PCT),
   )
+
+  const rebalanceConfig = useMemo(() => {
+    if (universeId === 'holdings') {
+      return {
+        show: true,
+        title: 'Rebalance holdings (Zerodha)',
+        targetKind: 'HOLDINGS' as const,
+        groupId: null as number | null,
+        brokerName: 'zerodha' as const,
+        brokerLocked: true,
+      }
+    }
+    if (universeId === 'holdings:angelone') {
+      return {
+        show: true,
+        title: 'Rebalance holdings (AngelOne)',
+        targetKind: 'HOLDINGS' as const,
+        groupId: null as number | null,
+        brokerName: 'angelone' as const,
+        brokerLocked: true,
+      }
+    }
+    if (universeId.startsWith('group:') && activeGroup) {
+      if (activeGroup.kind === 'PORTFOLIO' || activeGroup.kind === 'HOLDINGS_VIEW') {
+        return {
+          show: true,
+          title: `Rebalance: ${activeGroup.name}`,
+          targetKind: 'GROUP' as const,
+          groupId: activeGroup.id,
+          brokerName: tradeBrokerName,
+          brokerLocked: false,
+        }
+      }
+    }
+    return {
+      show: false,
+      title: 'Rebalance',
+      targetKind: 'GROUP' as const,
+      groupId: null as number | null,
+      brokerName: tradeBrokerName,
+      brokerLocked: false,
+    }
+  }, [activeGroup, tradeBrokerName, universeId])
   const [benchmarkHistory, setBenchmarkHistory] = useState<CandlePoint[] | null>(
     null,
   )
@@ -3379,6 +3425,16 @@ export function HoldingsPage() {
         </DialogActions>
       </Dialog>
 
+      <RebalanceDialog
+        open={rebalanceOpen}
+        onClose={() => setRebalanceOpen(false)}
+        title={rebalanceConfig.title}
+        targetKind={rebalanceConfig.targetKind}
+        groupId={rebalanceConfig.groupId}
+        brokerName={rebalanceConfig.brokerName}
+        brokerLocked={rebalanceConfig.brokerLocked}
+      />
+
       <Box
         sx={{
           mb: 1,
@@ -3535,6 +3591,16 @@ export function HoldingsPage() {
               >
                 Group
               </Button>
+              {rebalanceConfig.show && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<AutorenewIcon />}
+                  onClick={() => setRebalanceOpen(true)}
+                >
+                  Rebalance
+                </Button>
+              )}
 	            <Button
 	              size="small"
 	              variant="outlined"

@@ -14,6 +14,7 @@ from . import (
     orders,
     paper,
     positions,
+    rebalance,
     risk_settings,
     screener_v3,
     signal_strategies,
@@ -76,6 +77,13 @@ router.include_router(
     prefix="/api/positions",
     dependencies=[Depends(require_admin)],
     tags=["positions"],
+)
+
+router.include_router(
+    rebalance.router,
+    prefix="/api/rebalance",
+    dependencies=[Depends(require_admin)],
+    tags=["rebalance"],
 )
 
 router.include_router(

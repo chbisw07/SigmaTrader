@@ -4,6 +4,12 @@ from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
 from .instruments import BrokerInstrument, Listing, Security
 from .market_data import Candle, MarketInstrument
+from .rebalance import (
+    RebalancePolicy,
+    RebalanceRun,
+    RebalanceRunOrder,
+    RebalanceSchedule,
+)
 from .screener_v3 import ScreenerRun
 from .signal_strategies import SignalStrategy, SignalStrategyVersion
 from .system_event import SystemEvent
@@ -42,6 +48,10 @@ __all__ = [
     "IndicatorRule",
     "Group",
     "GroupMember",
+    "RebalancePolicy",
+    "RebalanceSchedule",
+    "RebalanceRun",
+    "RebalanceRunOrder",
     "GroupImport",
     "GroupImportValue",
     "ScreenerRun",
