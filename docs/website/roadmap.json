@@ -1,0 +1,2647 @@
+{
+  "generated_at": "2025-12-25T19:18:55.855Z",
+  "source": "docs/sprint_tasks_codex.xlsx",
+  "sprints": [
+    {
+      "sprint": "S01",
+      "tasks": [
+        {
+          "sprint": "S01",
+          "group": "G01",
+          "groupDesc": "Backend scaffolding and FastAPI project setup",
+          "taskId": "S01_G01_TB001",
+          "taskDesc": "Initialize backend repository with FastAPI project structure (src/app, tests, config folders).",
+          "status": "implemented",
+          "remarks": "Backend skeleton (app, core, api, tests folders) created."
+        },
+        {
+          "sprint": "S01",
+          "group": "G01",
+          "groupDesc": "Backend scaffolding and FastAPI project setup",
+          "taskId": "S01_G01_TB002",
+          "taskDesc": "Set up base FastAPI application with root and /health endpoints.",
+          "status": "implemented",
+          "remarks": "FastAPI app with root and /health endpoints implemented and tested."
+        },
+        {
+          "sprint": "S01",
+          "group": "G01",
+          "groupDesc": "Backend scaffolding and FastAPI project setup",
+          "taskId": "S01_G01_TB003",
+          "taskDesc": "Configure environment-based settings (dev/prod) using pydantic settings or similar.",
+          "status": "implemented",
+          "remarks": "Environment-aware settings wired into app and health responses."
+        },
+        {
+          "sprint": "S01",
+          "group": "G02",
+          "groupDesc": "Frontend scaffolding and React/TypeScript/Material UI setup",
+          "taskId": "S01_G02_TF001",
+          "taskDesc": "Create React TypeScript app with Material UI and routing (React Router).",
+          "status": "implemented",
+          "remarks": "React+TS app scaffolded with basic app shell."
+        },
+        {
+          "sprint": "S01",
+          "group": "G02",
+          "groupDesc": "Frontend scaffolding and React/TypeScript/Material UI setup",
+          "taskId": "S01_G02_TF002",
+          "taskDesc": "Implement base layout with top bar and sidebar navigation placeholders.",
+          "status": "implemented",
+          "remarks": "Top bar + side nav with placeholder pages (Dashboard, Queue, Orders, Analytics, Settings)."
+        },
+        {
+          "sprint": "S01",
+          "group": "G02",
+          "groupDesc": "Frontend scaffolding and React/TypeScript/Material UI setup",
+          "taskId": "S01_G02_TF003",
+          "taskDesc": "Wire basic API call from frontend to backend /health endpoint and display connection status.",
+          "status": "implemented",
+          "remarks": "API status indicator wired to backend /health endpoint."
+        },
+        {
+          "sprint": "S01",
+          "group": "G03",
+          "groupDesc": "Tooling, Git workflow, and initial documentation",
+          "taskId": "S01_G03_TB001",
+          "taskDesc": "Configure linting/formatting (black/isort/ruff) and pre-commit hooks for backend.",
+          "status": "implemented",
+          "remarks": "Backend codebase can be auto-formatted and linted; hooks available via pre-commit."
+        },
+        {
+          "sprint": "S01",
+          "group": "G03",
+          "groupDesc": "Tooling, Git workflow, and initial documentation",
+          "taskId": "S01_G03_TF002",
+          "taskDesc": "Configure linting/formatting (ESLint/Prettier) for frontend.",
+          "status": "implemented",
+          "remarks": "Frontend has ESLint + Prettier with npm scripts for linting and formatting."
+        },
+        {
+          "sprint": "S01",
+          "group": "G03",
+          "groupDesc": "Tooling, Git workflow, and initial documentation",
+          "taskId": "S01_G03_TB003",
+          "taskDesc": "Create initial README with project overview and setup steps.",
+          "status": "implemented",
+          "remarks": "README now documents backend/frontend run, test, and lint/format commands."
+        }
+      ]
+    },
+    {
+      "sprint": "S02",
+      "tasks": [
+        {
+          "sprint": "S02",
+          "group": "G01",
+          "groupDesc": "Design core SQLite schema for alerts, orders, strategies, risk settings",
+          "taskId": "S02_G01_TB001",
+          "taskDesc": "Design database schema for alerts, orders, strategies, risk_settings, positions, analytics_trades tables.",
+          "status": "implemented",
+          "remarks": "Core tables (strategies, risk_settings, alerts, orders, positions, analytics_trades) are designed with keys, checks, and indexes."
+        },
+        {
+          "sprint": "S02",
+          "group": "G01",
+          "groupDesc": "Design core SQLite schema for alerts, orders, strategies, risk settings",
+          "taskId": "S02_G01_TB002",
+          "taskDesc": "Review schema for extensibility and alignment with PRD (manual queue, risk, analytics).",
+          "status": "implemented",
+          "remarks": "Schema reviewed for extensibility and alignment with PRD, including risk scopes and simulation support."
+        },
+        {
+          "sprint": "S02",
+          "group": "G02",
+          "groupDesc": "Implement ORM models and migrations",
+          "taskId": "S02_G02_TB001",
+          "taskDesc": "Implement SQLAlchemy ORM models for core tables (alerts, orders, strategies, risk_settings).",
+          "status": "implemented",
+          "remarks": "Core tables (strategies, risk_settings, alerts, orders, positions, analytics_trades) are mapped as ORM entities."
+        },
+        {
+          "sprint": "S02",
+          "group": "G02",
+          "groupDesc": "Implement ORM models and migrations",
+          "taskId": "S02_G02_TB002",
+          "taskDesc": "Set up Alembic (or equivalent migration tool) for managing schema migrations.",
+          "status": "implemented",
+          "remarks": "Alembic upgrade head creates the SQLite schema from ORM metadata."
+        },
+        {
+          "sprint": "S02",
+          "group": "G02",
+          "groupDesc": "Implement ORM models and migrations",
+          "taskId": "S02_G02_TB003",
+          "taskDesc": "Implement DB session management and dependency injection in FastAPI.",
+          "status": "implemented",
+          "remarks": "DB session management is in app.db.session, and README documents Alembic + testing commands."
+        },
+        {
+          "sprint": "S02",
+          "group": "G03",
+          "groupDesc": "Backend admin APIs for strategies and risk settings",
+          "taskId": "S02_G03_TB001",
+          "taskDesc": "Create CRUD APIs to manage strategies (list/create/update).",
+          "status": "implemented",
+          "remarks": "Strategies can be created and updated via FastAPI endpoints with tests covering basic flows."
+        },
+        {
+          "sprint": "S02",
+          "group": "G03",
+          "groupDesc": "Backend admin APIs for strategies and risk settings",
+          "taskId": "S02_G03_TB002",
+          "taskDesc": "Create CRUD APIs to manage global and per-strategy risk_settings.",
+          "status": "implemented",
+          "remarks": "Global and per-strategy risk_settings can be created and queried; uniqueness and scope rules enforced."
+        },
+        {
+          "sprint": "S02",
+          "group": "G03",
+          "groupDesc": "Backend admin APIs for strategies and risk settings",
+          "taskId": "S02_G03_TF003",
+          "taskDesc": "Create simple admin UI to view strategies and risk_settings (read-only).",
+          "status": "implemented",
+          "remarks": "Strategies and risk_settings can now be inspected and, for key fields, edited from a single Settings screen (mode toggle and risk creation)."
+        }
+      ]
+    },
+    {
+      "sprint": "S03",
+      "tasks": [
+        {
+          "sprint": "S03",
+          "group": "G01",
+          "groupDesc": "TradingView webhook endpoint and alert validation",
+          "taskId": "S03_G01_TB001",
+          "taskDesc": "Implement /webhook/tradingview endpoint that receives and validates JSON payload with secret.",
+          "status": "implemented",
+          "remarks": "Endpoint validates the secret and accepts structured TradingView payloads."
+        },
+        {
+          "sprint": "S03",
+          "group": "G01",
+          "groupDesc": "TradingView webhook endpoint and alert validation",
+          "taskId": "S03_G01_TB002",
+          "taskDesc": "Map incoming alerts to internal Alert entities and persist to DB.",
+          "status": "implemented",
+          "remarks": "Webhook creates Alert rows with normalized fields and stores the raw payload JSON."
+        },
+        {
+          "sprint": "S03",
+          "group": "G01",
+          "groupDesc": "TradingView webhook endpoint and alert validation",
+          "taskId": "S03_G01_TB003",
+          "taskDesc": "Implement basic unit tests for webhook endpoint and validation.",
+          "status": "implemented",
+          "remarks": "Tests cover valid/invalid secret flows and DB insertion of Alerts."
+        },
+        {
+          "sprint": "S03",
+          "group": "G02",
+          "groupDesc": "Alert-to-order transformation and manual queue creation",
+          "taskId": "S03_G02_TB001",
+          "taskDesc": "Implement service to convert Alert into Order Request (manual mode by default).",
+          "status": "implemented",
+          "remarks": "Alert-to-order mapping uses symbol/action/qty/price, defaults to MARKET/MIS and MANUAL mode."
+        },
+        {
+          "sprint": "S03",
+          "group": "G02",
+          "groupDesc": "Alert-to-order transformation and manual queue creation",
+          "taskId": "S03_G02_TB002",
+          "taskDesc": "Persist orders with WAITING status in DB for manual queue.",
+          "status": "implemented",
+          "remarks": "Orders are stored with status=WAITING and mode=MANUAL, ready for the manual queue."
+        },
+        {
+          "sprint": "S03",
+          "group": "G02",
+          "groupDesc": "Alert-to-order transformation and manual queue creation",
+          "taskId": "S03_G02_TB003",
+          "taskDesc": "Expose API to list waiting orders and basic order details for frontend.",
+          "status": "implemented",
+          "remarks": "Tests verify the order is linked to the alert and in WAITING/MANUAL state."
+        },
+        {
+          "sprint": "S03",
+          "group": "G03",
+          "groupDesc": "Risk management placeholder for later full implementation",
+          "taskId": "S03_G03_TB001",
+          "taskDesc": "Add pluggable Risk Engine interface with stub implementation (logs checks but does not enforce yet).",
+          "status": "implemented",
+          "remarks": "GET /api/orders/queue returns WAITING, MANUAL, non-simulated orders with optional strategy filter."
+        }
+      ]
+    },
+    {
+      "sprint": "S04",
+      "tasks": [
+        {
+          "sprint": "S04",
+          "group": "G01",
+          "groupDesc": "Dashboard layout and navigation structure",
+          "taskId": "S04_G01_TF001",
+          "taskDesc": "Implement top-level navigation items (Dashboard, Queue, Orders, Analytics, Settings).",
+          "status": "implemented",
+          "remarks": "Navigation items (Dashboard, Queue, Orders, Analytics, Settings) are present and wired."
+        },
+        {
+          "sprint": "S04",
+          "group": "G01",
+          "groupDesc": "Dashboard layout and navigation structure",
+          "taskId": "S04_G01_TF002",
+          "taskDesc": "Create Dashboard page skeleton with placeholder widgets (P&L, trade count, connection status).",
+          "status": "implemented",
+          "remarks": "Dashboard is ready to host P&L and connection status widgets in later sprints."
+        },
+        {
+          "sprint": "S04",
+          "group": "G02",
+          "groupDesc": "Waiting queue UI for manual orders",
+          "taskId": "S04_G02_TF001",
+          "taskDesc": "Implement Waiting Queue page with Material UI table of pending orders.",
+          "status": "implemented",
+          "remarks": "Waiting Queue UI lists WAITING manual orders and exposes Edit/Execute/Cancel controls for each row."
+        },
+        {
+          "sprint": "S04",
+          "group": "G02",
+          "groupDesc": "Waiting queue UI for manual orders",
+          "taskId": "S04_G02_TF002",
+          "taskDesc": "Add inline editing for quantity, price, order type, and product fields in queue rows.",
+          "status": "implemented",
+          "remarks": "Edit dialog updates qty/order_type/price/product for WAITING manual orders before execution."
+        },
+        {
+          "sprint": "S04",
+          "group": "G02",
+          "groupDesc": "Waiting queue UI for manual orders",
+          "taskId": "S04_G02_TF003",
+          "taskDesc": "Wire Execute and Cancel buttons to backend APIs (no broker integration yet).",
+          "status": "implemented",
+          "remarks": "Execute and Cancel actions both update the queue and Orders history; broker IDs/errors are visible on the Orders page."
+        },
+        {
+          "sprint": "S04",
+          "group": "G02",
+          "groupDesc": "Waiting queue UI for manual orders",
+          "taskId": "S04_G02_TB004",
+          "taskDesc": "Implement backend APIs to update/cancel waiting orders and track status changes.",
+          "status": "implemented",
+          "remarks": "PATCH /api/orders/{id}/status enables cancelling WAITING orders."
+        },
+        {
+          "sprint": "S04",
+          "group": "G03",
+          "groupDesc": "Basic order history UI and backend API",
+          "taskId": "S04_G03_TB001",
+          "taskDesc": "Implement backend API to list all orders with filters (date, strategy, status, symbol).",
+          "status": "implemented",
+          "remarks": "Provides a basic orders history feed for the Orders page."
+        },
+        {
+          "sprint": "S04",
+          "group": "G03",
+          "groupDesc": "Basic order history UI and backend API",
+          "taskId": "S04_G03_TF002",
+          "taskDesc": "Create Orders History page with filter controls and table displaying orders.",
+          "status": "implemented",
+          "remarks": "Orders page lists historical orders using /api/orders/."
+        }
+      ]
+    },
+    {
+      "sprint": "S05",
+      "tasks": [
+        {
+          "sprint": "S05",
+          "group": "G01",
+          "groupDesc": "Integrate Zerodha Kite Connect client on backend",
+          "taskId": "S05_G01_TB001",
+          "taskDesc": "Configure Zerodha Kite Connect Python client with API key/secret from env.",
+          "status": "implemented",
+          "remarks": "Backend can now construct a Zerodha client once an access token is available."
+        },
+        {
+          "sprint": "S05",
+          "group": "G01",
+          "groupDesc": "Integrate Zerodha Kite Connect client on backend",
+          "taskId": "S05_G01_TB002",
+          "taskDesc": "Implement service for placing market/limit orders via Zerodha API.",
+          "status": "implemented",
+          "remarks": "Order placement service is tested against a fake Kite client (no real network calls)."
+        },
+        {
+          "sprint": "S05",
+          "group": "G01",
+          "groupDesc": "Integrate Zerodha Kite Connect client on backend",
+          "taskId": "S05_G01_TB003",
+          "taskDesc": "Implement service to fetch order book and order status from Zerodha.",
+          "status": "implemented",
+          "remarks": "Backend has basic services to retrieve Zerodha order book and order history."
+        },
+        {
+          "sprint": "S05",
+          "group": "G02",
+          "groupDesc": "Broker connection flow (Connect Zerodha)",
+          "taskId": "S05_G02_TB001",
+          "taskDesc": "Implement backend endpoints for Zerodha OAuth flow and token exchange.",
+          "status": "implemented",
+          "remarks": "Backend exposes login-url, connect, and status endpoints that also call Kite profile to verify the connection."
+        },
+        {
+          "sprint": "S05",
+          "group": "G02",
+          "groupDesc": "Broker connection flow (Connect Zerodha)",
+          "taskId": "S05_G02_TB002",
+          "taskDesc": "Securely store encrypted Zerodha access token in DB.",
+          "status": "implemented",
+          "remarks": "BrokerConnection model holds one encrypted access token per broker (currently zerodha)."
+        },
+        {
+          "sprint": "S05",
+          "group": "G02",
+          "groupDesc": "Broker connection flow (Connect Zerodha)",
+          "taskId": "S05_G02_TF003",
+          "taskDesc": "Create frontend Connect Zerodha UI with button and status indicator.",
+          "status": "implemented",
+          "remarks": "Settings page shows Zerodha connection status, last-updated time in IST, and user name/id when available."
+        },
+        {
+          "sprint": "S05",
+          "group": "G03",
+          "groupDesc": "Send orders from manual queue to Zerodha",
+          "taskId": "S05_G03_TB001",
+          "taskDesc": "Wire Execute action to call Zerodha order placement service and update order with broker ID.",
+          "status": "implemented",
+          "remarks": "Manual queue orders can now be executed to Zerodha; status is updated and Zerodha order id stored."
+        },
+        {
+          "sprint": "S05",
+          "group": "G03",
+          "groupDesc": "Send orders from manual queue to Zerodha",
+          "taskId": "S05_G03_TB002",
+          "taskDesc": "Handle Zerodha errors and update order status to FAILED with error message.",
+          "status": "implemented",
+          "remarks": "Auto-AMO fallback is implemented for Zerodha off-hours errors; other errors still mark the order FAILED and persist error_message."
+        },
+        {
+          "sprint": "S05",
+          "group": "G03",
+          "groupDesc": "Send orders from manual queue to Zerodha",
+          "taskId": "S05_G03_TF003",
+          "taskDesc": "Surface broker execution results and errors in Waiting Queue and Orders History UI.",
+          "status": "implemented",
+          "remarks": "Execution results and broker ids are surfaced in both Queue (interaction) and Orders history (audit)."
+        }
+      ]
+    },
+    {
+      "sprint": "S07",
+      "tasks": [
+        {
+          "sprint": "S07",
+          "group": "G01",
+          "groupDesc": "Order status synchronization with Zerodha",
+          "taskId": "S07_G01_TB001",
+          "taskDesc": "Implement background job to periodically sync order statuses from Zerodha (OPEN/COMPLETE/REJECTED).",
+          "status": "implemented",
+          "remarks": "Status sync is triggered via a backend API and is safe to call on-demand or from an external scheduler."
+        },
+        {
+          "sprint": "S07",
+          "group": "G01",
+          "groupDesc": "Order status synchronization with Zerodha",
+          "taskId": "S07_G01_TB002",
+          "taskDesc": "Update Orders table with latest status and broker messages.",
+          "status": "implemented",
+          "remarks": "Rejected orders now capture Zerodha-provided status messages when available, improving auditability in the Orders history."
+        },
+        {
+          "sprint": "S07",
+          "group": "G01",
+          "groupDesc": "Order status synchronization with Zerodha",
+          "taskId": "S07_G01_TF003",
+          "taskDesc": "Reflect real-time-ish status changes in Orders History UI (polling or refresh).",
+          "status": "implemented",
+          "remarks": "User can now manually synchronize statuses from Zerodha and see updated states without restarting the app."
+        },
+        {
+          "sprint": "S07",
+          "group": "G02",
+          "groupDesc": "Positions and holdings view",
+          "taskId": "S07_G02_TB001",
+          "taskDesc": "Implement backend services to fetch positions and holdings from Zerodha and cache in DB.",
+          "status": "implemented",
+          "remarks": "Positions caching covers the main use case; holdings can be added to the cache later if needed."
+        },
+        {
+          "sprint": "S07",
+          "group": "G02",
+          "groupDesc": "Positions and holdings view",
+          "taskId": "S07_G02_TB002",
+          "taskDesc": "Expose API endpoints for positions and holdings for frontend.",
+          "status": "implemented",
+          "remarks": "Frontend services consume these endpoints for the Positions and Holdings pages."
+        },
+        {
+          "sprint": "S07",
+          "group": "G02",
+          "groupDesc": "Positions and holdings view",
+          "taskId": "S07_G02_TF003",
+          "taskDesc": "Create Positions & Holdings UI pages with P&L calculations.",
+          "status": "implemented",
+          "remarks": "User can now inspect positions (with cached P&L) and holdings (with unrealized P&L) directly in the UI."
+        },
+        {
+          "sprint": "S07",
+          "group": "G03",
+          "groupDesc": "Analytics backend for P&L and strategy performance",
+          "taskId": "S07_G03_TB001",
+          "taskDesc": "Implement trade grouping logic (entry/exit pairs) to populate analytics_trades table.",
+          "status": "implemented",
+          "remarks": "Current grouping handles simple round-trip trades; more complex scaling/partial patterns can be added later."
+        },
+        {
+          "sprint": "S07",
+          "group": "G03",
+          "groupDesc": "Analytics backend for P&L and strategy performance",
+          "taskId": "S07_G03_TB002",
+          "taskDesc": "Implement analytics queries for P&L, win rate, max drawdown per strategy and date range.",
+          "status": "implemented",
+          "remarks": "Provides a solid backend foundation for strategy performance dashboards without yet focusing on specific chart shapes."
+        },
+        {
+          "sprint": "S07",
+          "group": "G03",
+          "groupDesc": "Analytics backend for P&L and strategy performance",
+          "taskId": "S07_G03_TB003",
+          "taskDesc": "Expose analytics API endpoints for frontend consumption.",
+          "status": "implemented",
+          "remarks": "Frontend (Analytics page) can call these endpoints to render P&L and performance views in later sprints."
+        },
+        {
+          "sprint": "S07",
+          "group": "G04",
+          "groupDesc": "Analytics frontend (charts and tables)",
+          "taskId": "S07_G04_TF001",
+          "taskDesc": "Implement Analytics page with summary cards (P&L, win rate, max DD, avg R:R).",
+          "status": "implemented",
+          "remarks": "Summary card shows trades, total P&L, win rate, avg win/loss, and max drawdown; a Rebuild button triggers backend rebuild-trades and refreshes metrics."
+        },
+        {
+          "sprint": "S07",
+          "group": "G04",
+          "groupDesc": "Analytics frontend (charts and tables)",
+          "taskId": "S07_G04_TF002",
+          "taskDesc": "Add P&L over time chart and P&L by symbol/strategy visualizations.",
+          "status": "implemented",
+          "remarks": "Charts update automatically when filters change and are kept deliberately simple without adding new dependencies."
+        },
+        {
+          "sprint": "S07",
+          "group": "G04",
+          "groupDesc": "Analytics frontend (charts and tables)",
+          "taskId": "S07_G04_TF003",
+          "taskDesc": "Add trades table with filters for date range, strategy, and symbol.",
+          "status": "implemented",
+          "remarks": "Gives a clear audit-style view of trades aligned with the summary and charts."
+        }
+      ]
+    },
+    {
+      "sprint": "S08",
+      "tasks": [
+        {
+          "sprint": "S08",
+          "group": "G01",
+          "groupDesc": "Structured logging, error handling, and observability",
+          "taskId": "S08_G01_TB001",
+          "taskDesc": "Implement structured logging for backend (alerts, orders, broker calls, risk decisions).",
+          "status": "implemented",
+          "remarks": "Logs include correlation_id so a single alert/order can be traced across webhook, risk, and broker calls."
+        },
+        {
+          "sprint": "S08",
+          "group": "G01",
+          "groupDesc": "Structured logging, error handling, and observability",
+          "taskId": "S08_G01_TB002",
+          "taskDesc": "Standardize error responses and add correlation IDs for tracing requests.",
+          "status": "implemented",
+          "remarks": "Critical errors now have consistent HTTP status codes and messages while being traceable via X-Request-ID."
+        },
+        {
+          "sprint": "S08",
+          "group": "G01",
+          "groupDesc": "Structured logging, error handling, and observability",
+          "taskId": "S08_G01_TF003",
+          "taskDesc": "Add minimal log/notification view in UI for recent errors/warnings.",
+          "status": "implemented",
+          "remarks": "Gives a quick at-a-glance view of recent issues without setting up a full log viewer."
+        },
+        {
+          "sprint": "S08",
+          "group": "G02",
+          "groupDesc": "Security hardening and configuration management",
+          "taskId": "S08_G02_TB001",
+          "taskDesc": "Ensure HTTPS, secure cookie/JWT handling, and secret management via environment variables.",
+          "status": "implemented",
+          "remarks": "When admin credentials are configured, API access requires Basic auth; when unset, behaviour remains unchanged for local single-user development."
+        },
+        {
+          "sprint": "S08",
+          "group": "G02",
+          "groupDesc": "Security hardening and configuration management",
+          "taskId": "S08_G02_TB002",
+          "taskDesc": "Review and harden RBAC or at least basic auth protections for APIs and admin features.",
+          "status": "implemented",
+          "remarks": "This provides a lightweight RBAC boundary around admin features without introducing a full user model."
+        },
+        {
+          "sprint": "S08",
+          "group": "G03",
+          "groupDesc": "Deployment setup and documentation",
+          "taskId": "S08_G03_TB001",
+          "taskDesc": "Create Dockerfiles for backend and frontend and optional docker-compose setup for local run.",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S08",
+          "group": "G03",
+          "groupDesc": "Deployment setup and documentation",
+          "taskId": "S08_G03_TB002",
+          "taskDesc": "Document deployment steps (local, and optional cloud target) and operational runbook.",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S08",
+          "group": "G03",
+          "groupDesc": "Deployment setup and documentation",
+          "taskId": "S08_G03_TB003",
+          "taskDesc": "Update README with final architecture, sprint summary, and how to operate the app.",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S08",
+          "group": "G04",
+          "groupDesc": "Backend log aggregation and server log UI",
+          "taskId": "S08_G04_TB001",
+          "taskDesc": "Persist important backend events (alerts, orders, broker, risk) in a system_events table.",
+          "status": "implemented",
+          "remarks": "Important events can now be queried and shown in the UI without parsing textual logs."
+        },
+        {
+          "sprint": "S08",
+          "group": "G04",
+          "groupDesc": "Backend log aggregation and server log UI",
+          "taskId": "S08_G04_TB002",
+          "taskDesc": "Expose API endpoints to query recent system events for the UI.",
+          "status": "implemented",
+          "remarks": "Provides a simple API surface that the UI and tools can use to inspect important backend events."
+        },
+        {
+          "sprint": "S08",
+          "group": "G04",
+          "groupDesc": "Backend log aggregation and server log UI",
+          "taskId": "S08_G04_TF003",
+          "taskDesc": "Show a table of recent backend events (alerts, orders, broker events) in the web app.",
+          "status": "implemented",
+          "remarks": "Gives an at-a-glance view of both server and client issues without leaving the app."
+        },
+        {
+          "sprint": "S08",
+          "group": "G05",
+          "groupDesc": "Broker config UI and secure secret storage",
+          "taskId": "S08_G05_TB001",
+          "taskDesc": "Design backend model/migration for per-broker key/value secrets (e.g., Zerodha api_key/api_secret) with encrypted storage.",
+          "status": "implemented",
+          "remarks": "Secrets are encrypted using the existing crypto_key helper so no new crypto mechanism was introduced."
+        },
+        {
+          "sprint": "S08",
+          "group": "G05",
+          "groupDesc": "Broker config UI and secure secret storage",
+          "taskId": "S08_G05_TB002",
+          "taskDesc": "Expose backend APIs to read/update broker config entries and wire them into Kite client creation.",
+          "status": "implemented",
+          "remarks": "New /api/brokers endpoints provide an admin-only surface for managing per-broker secrets; error messages avoid echoing secret values."
+        },
+        {
+          "sprint": "S08",
+          "group": "G05",
+          "groupDesc": "Broker config UI and secure secret storage",
+          "taskId": "S08_G05_TF003",
+          "taskDesc": "Extend Settings page with broker selector, key/value table for secrets, and masked request_token field with show/hide toggle.",
+          "status": "implemented",
+          "remarks": "Secrets can be revealed temporarily in the UI for convenience; this is acceptable for the current single-user local setup."
+        }
+      ]
+    },
+    {
+      "sprint": "S09",
+      "tasks": [
+        {
+          "sprint": "S09",
+          "group": "G01",
+          "groupDesc": "Authentication backend (users, passwords, sessions)",
+          "taskId": "S09_G01_TB001",
+          "taskDesc": "Design auth model (users table, roles, password hashing, session strategy) and update PRD/ERD accordingly.",
+          "status": "implemented",
+          "remarks": "Auth helpers live in app.core.auth and are shared between the runtime and Alembic migration used to seed the default admin."
+        },
+        {
+          "sprint": "S09",
+          "group": "G01",
+          "groupDesc": "Authentication backend (users, passwords, sessions)",
+          "taskId": "S09_G01_TB002",
+          "taskDesc": "Implement SQLAlchemy User model + Alembic migration, seeding a default admin user (admin/admin) with a secure password hash.",
+          "status": "implemented",
+          "remarks": "Tests create users via the API and models rather than relying on the seeded admin, since pytest uses metadata create_all instead of running migrations."
+        },
+        {
+          "sprint": "S09",
+          "group": "G01",
+          "groupDesc": "Authentication backend (users, passwords, sessions)",
+          "taskId": "S09_G01_TB003",
+          "taskDesc": "Implement backend auth APIs (register, login, logout, change password, current user) with JWT/cookie sessions and pytest coverage.",
+          "status": "implemented",
+          "remarks": "S09/G03 will attach these auth primitives to existing admin routers and refine role-based authorization; current APIs remain backwards compatible."
+        },
+        {
+          "sprint": "S09",
+          "group": "G02",
+          "groupDesc": "Frontend auth flows and landing layout",
+          "taskId": "S09_G02_TF001",
+          "taskDesc": "Create public login/register routes with a right-aligned auth panel and a marketing/hero area on the left describing SigmaTrader benefits.",
+          "status": "implemented",
+          "remarks": "AuthPage includes marketing copy geared towards SigmaTrader's benefits and an orange-accent hero section, matching the PRD intent for a customer-facing landing layout."
+        },
+        {
+          "sprint": "S09",
+          "group": "G02",
+          "groupDesc": "Frontend auth flows and landing layout",
+          "taskId": "S09_G02_TF002",
+          "taskDesc": "Implement signup and login forms wired to auth APIs, including validation and error messaging.",
+          "status": "implemented",
+          "remarks": "Error messages from auth APIs are surfaced inline and also recorded in the client-side log buffer for troubleshooting."
+        },
+        {
+          "sprint": "S09",
+          "group": "G02",
+          "groupDesc": "Frontend auth flows and landing layout",
+          "taskId": "S09_G02_TF003",
+          "taskDesc": "Protect app routes behind login and add a top-right user menu (username, profile, change password, logout).",
+          "status": "implemented",
+          "remarks": "MainLayout now receives currentUser and exposes a basic user menu with a working Logout action; profile/change-password entries are stubbed for S10."
+        },
+        {
+          "sprint": "S09",
+          "group": "G03",
+          "groupDesc": "Authorization and integration with existing admin features",
+          "taskId": "S09_G03_TB001",
+          "taskDesc": "Replace or augment HTTP Basic admin protection with role-based user auth, mapping ADMIN role to existing admin-only APIs.",
+          "status": "implemented",
+          "remarks": "This keeps backwards compatibility for environments still using Basic auth while allowing the new auth system to be the primary way to access admin APIs."
+        },
+        {
+          "sprint": "S09",
+          "group": "G03",
+          "groupDesc": "Authorization and integration with existing admin features",
+          "taskId": "S09_G03_TB002",
+          "taskDesc": "Ensure broker config, risk settings, analytics, and system events remain restricted to admin users while normal traders can view their own data.",
+          "status": "implemented",
+          "remarks": "Broker configuration is again restricted to admins; normal users must log in as an ADMIN to edit secrets or risk settings."
+        },
+        {
+          "sprint": "S09",
+          "group": "G03",
+          "groupDesc": "Authorization and integration with existing admin features",
+          "taskId": "S09_G03_TB003",
+          "taskDesc": "Define dev-mode behaviour (optional auth bypass) and verify TradingView webhook and Zerodha connect flows remain compatible.",
+          "status": "implemented",
+          "remarks": "This keeps the existing test suite stable while the UI begins to rely on session-based admin access in real usage."
+        }
+      ]
+    },
+    {
+      "sprint": "S10",
+      "tasks": [
+        {
+          "sprint": "S10",
+          "group": "G01",
+          "groupDesc": "Auth security refinements (rate limiting, password reset)",
+          "taskId": "S10_G01_TB001",
+          "taskDesc": "Add basic rate limiting / lockout behaviour on login to reduce brute-force attempts (e.g., small delay or temporary block after repeated failures).",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S10",
+          "group": "G01",
+          "groupDesc": "Auth security refinements (rate limiting, password reset)",
+          "taskId": "S10_G01_TB002",
+          "taskDesc": "Implement password reset flows: change-password for users plus an admin-only endpoint to reset another user's password.",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S10",
+          "group": "G02",
+          "groupDesc": "Auth observability and audit logging",
+          "taskId": "S10_G02_TB001",
+          "taskDesc": "Record login, logout, and password-change events into system_events and surface them in the System Events UI with appropriate filters.",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S10",
+          "group": "G02",
+          "groupDesc": "Auth observability and audit logging",
+          "taskId": "S10_G02_TB002",
+          "taskDesc": "Add optional notifications or banners when suspicious auth activity is detected (e.g., repeated failures).",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S10",
+          "group": "G03",
+          "groupDesc": "Roles and user experience enhancements",
+          "taskId": "S10_G03_TB001",
+          "taskDesc": "Introduce additional roles (e.g., VIEW_ONLY) and adjust API/UI permissions so that view-only users cannot modify risk, strategies, or broker config.",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S10",
+          "group": "G03",
+          "groupDesc": "Roles and user experience enhancements",
+          "taskId": "S10_G03_TB002",
+          "taskDesc": "Add per-user preferences (e.g., default landing page, theme choice) stored in the DB and applied in the frontend.",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S10",
+          "group": "G04",
+          "groupDesc": "Future multi-broker/multi-account design (auth-aware)",
+          "taskId": "S10_G04_TB001",
+          "taskDesc": "Refine the multi-broker/multi-account model around (st_user_id, platform, broker_id), deciding how users select a broker/platform at login and how a single broker account can optionally be shared across ST users.",
+          "status": "implemented",
+          "remarks": "Design captured in PRD and implementation report; no code changes in this sprint, it feeds directly into S11/S12."
+        }
+      ]
+    },
+    {
+      "sprint": "S11",
+      "tasks": [
+        {
+          "sprint": "S11",
+          "group": "G01",
+          "groupDesc": "Multi-tenant DB schema (per-user broker/alerts/orders)",
+          "taskId": "S11_G01_TB001",
+          "taskDesc": "Design multi-tenant schema: add user_id to broker_connections, broker_secrets, alerts, orders (and identify other tables that must be user-scoped).",
+          "status": "implemented",
+          "remarks": "Alembic migrations 0006_add_user_scoping and 0007_adjust_broker_uniqueness now create a multi-tenant schema where broker connections and secrets are per user."
+        },
+        {
+          "sprint": "S11",
+          "group": "G01",
+          "groupDesc": "Multi-tenant DB schema (per-user broker/alerts/orders)",
+          "taskId": "S11_G01_TB002",
+          "taskDesc": "Implement Alembic migrations for the new schema, factoring in that sigma_trader.db can be recreated from scratch.",
+          "status": "implemented",
+          "remarks": "Alembic migrations 0006_add_user_scoping and 0007_adjust_broker_uniqueness now create a multi-tenant schema where broker connections and secrets are per user."
+        },
+        {
+          "sprint": "S11",
+          "group": "G01",
+          "groupDesc": "Multi-tenant DB schema (per-user broker/alerts/orders)",
+          "taskId": "S11_G01_TB003",
+          "taskDesc": "Bootstrap existing data into the new schema (migrate any global broker connections/secrets to the owning user where applicable).",
+          "status": "implemented",
+          "remarks": "Alembic migrations 0006_add_user_scoping and 0007_adjust_broker_uniqueness now create a multi-tenant schema where broker connections and secrets are per user."
+        },
+        {
+          "sprint": "S11",
+          "group": "G02",
+          "groupDesc": "Per-user broker APIs and Settings UI",
+          "taskId": "S11_G02_TB001",
+          "taskDesc": "Update broker services and APIs so broker_secrets and broker_connections are always read/written for the current user.",
+          "status": "implemented",
+          "remarks": "Zerodha APIs and broker config endpoints always call these helpers with the currently logged-in user, so each user gets their own encrypted api_key/api_secret."
+        },
+        {
+          "sprint": "S11",
+          "group": "G02",
+          "groupDesc": "Per-user broker APIs and Settings UI",
+          "taskId": "S11_G02_TF002",
+          "taskDesc": "Adjust Settings page broker configuration to load and persist secrets per logged-in user, and clearly show which broker/user is being edited.",
+          "status": "implemented",
+          "remarks": "Admin and normal users can each maintain their own Zerodha credentials without overwriting each other; future work may add explicit account labels in the UI."
+        },
+        {
+          "sprint": "S11",
+          "group": "G03",
+          "groupDesc": "Per-user alert and order scoping",
+          "taskId": "S11_G03_TB001",
+          "taskDesc": "Add user_id to Alert and Order models and ensure new alerts/orders are created under the correct user based on TradingView routing.",
+          "status": "implemented",
+          "remarks": "Order history and manual queue listings now honour the logged-in user when available, and analytics summary/trades endpoints restrict results to that user plus global trades."
+        },
+        {
+          "sprint": "S11",
+          "group": "G03",
+          "groupDesc": "Per-user alert and order scoping",
+          "taskId": "S11_G03_TB002",
+          "taskDesc": "Update Queue, Orders, Analytics, and related APIs to filter by current user (with an option for ADMINs to view cross-user data later).",
+          "status": "implemented",
+          "remarks": "Order history and manual queue listings now honour the logged-in user when available, and analytics summary/trades endpoints restrict results to that user plus global trades."
+        }
+      ]
+    },
+    {
+      "sprint": "S12",
+      "tasks": [
+        {
+          "sprint": "S12",
+          "group": "G01",
+          "groupDesc": "TradingView alert schema and routing design",
+          "taskId": "S12_G01_TB001",
+          "taskDesc": "Define a normalized internal alert schema (fields for user_id, broker, strategy, alert_type, trade/position details) and the routing mechanism from TradingView to user+broker.",
+          "status": "implemented",
+          "remarks": "TradingView payloads now carry st_user_id and are mapped to User.username; alerts without a valid st_user_id are ignored with a structured system event, and valid alerts create Alert/Order rows with user_id populated."
+        },
+        {
+          "sprint": "S12",
+          "group": "G01",
+          "groupDesc": "TradingView alert schema and routing design",
+          "taskId": "S12_G01_TB002",
+          "taskDesc": "Design how TradingView payloads should encode user/account information (e.g., account_tag or per-user secrets) so each alert maps to exactly one SigmaTrader user.",
+          "status": "implemented",
+          "remarks": "TradingView payloads now carry st_user_id and are mapped to User.username; alerts without a valid st_user_id are ignored with a structured system event, and valid alerts create Alert/Order rows with user_id populated."
+        },
+        {
+          "sprint": "S12",
+          "group": "G02",
+          "groupDesc": "Zerodha adapter and per-user account mapping",
+          "taskId": "S12_G02_TB001",
+          "taskDesc": "Implement a Zerodha-specific alert adapter that maps TradingView JSON into the normalized internal alert schema for a given user/broker.",
+          "status": "implemented",
+          "remarks": "Adapter maps TV placeholders (ticker, action, contracts, price) into the normalized schema including symbol_display, broker_symbol/broker_exchange, product, and a human-readable reason field used later in analytics."
+        },
+        {
+          "sprint": "S12",
+          "group": "G02",
+          "groupDesc": "Zerodha adapter and per-user account mapping",
+          "taskId": "S12_G02_TB002",
+          "taskDesc": "Introduce per-user broker/account mapping so each user can bind one or more Zerodha accounts to their profile.",
+          "status": "implemented",
+          "remarks": "Adapter maps TV placeholders (ticker, action, contracts, price) into the normalized schema including symbol_display, broker_symbol/broker_exchange, product, and a human-readable reason field used later in analytics."
+        },
+        {
+          "sprint": "S12",
+          "group": "G03",
+          "groupDesc": "Webhook v2 implementation and tests",
+          "taskId": "S12_G03_TB001",
+          "taskDesc": "Update webhook/tradingview handler to use the new adapter+routing design, creating per-user alerts and orders and rejecting alerts that cannot be mapped cleanly.",
+          "status": "implemented",
+          "remarks": "Tests cover per-user AUTO and MANUAL alerts via TradingView and verify that AUTO orders fail cleanly with Zerodha-not-connected errors while manual orders remain in the WAITING queue."
+        },
+        {
+          "sprint": "S12",
+          "group": "G03",
+          "groupDesc": "Webhook v2 implementation and tests",
+          "taskId": "S12_G03_TB002",
+          "taskDesc": "Add pytest coverage for per-user Zerodha alerts (AUTO and MANUAL), including cases where the user is not connected to the broker.",
+          "status": "implemented",
+          "remarks": "Tests cover per-user AUTO and MANUAL alerts via TradingView and verify that AUTO orders fail cleanly with Zerodha-not-connected errors while manual orders remain in the WAITING queue."
+        },
+        {
+          "sprint": "S12",
+          "group": "G04",
+          "groupDesc": "Config-based mapping for future brokers/platforms",
+          "taskId": "S12_G04_TB001",
+          "taskDesc": "Design a configuration format (JSON/YAML) for platform-specific alert mappings so new brokers/platforms can be added with minimal or no code changes.",
+          "status": "implemented",
+          "remarks": "tradingview_zerodha_adapter now calls load_zerodha_symbol_map() so TradingView symbols like NSE:SCHNEIDER can be mapped to broker-specific codes such as SCHNEIDER-EQ when configured."
+        }
+      ]
+    },
+    {
+      "sprint": "S14",
+      "tasks": [
+        {
+          "sprint": "S14",
+          "group": "G01",
+          "groupDesc": "Advanced order types and stop-loss controls",
+          "taskId": "S14_G01_TB001",
+          "taskDesc": "Extend Order model and APIs to support Zerodha order types MARKET / LIMIT / SL / SL-M plus trigger price and trigger percent fields.",
+          "status": "implemented",
+          "remarks": "Order model, schemas, and Zerodha client now support trigger_price/trigger_percent and extended order_type values (MARKET/LIMIT/SL/SL-M)."
+        },
+        {
+          "sprint": "S14",
+          "group": "G01",
+          "groupDesc": "Advanced order types and stop-loss controls",
+          "taskId": "S14_G01_TB002",
+          "taskDesc": "Update execute_order to route SL and SL-M correctly to KiteConnect (trigger_price mandatory, price optional for SL-M) and add guardrails for valid stop-loss placement.",
+          "status": "implemented",
+          "remarks": "execute_order applies LTP-based stop-loss guardrails and forwards trigger_price to Zerodha with appropriate pricing rules for SL vs SL-M."
+        },
+        {
+          "sprint": "S14",
+          "group": "G02",
+          "groupDesc": "Funds and margin preview for edited orders",
+          "taskId": "S14_G02_TB001",
+          "taskDesc": "Wrap Zerodha margins and order_margins APIs in the backend and expose endpoints to fetch available funds and a margin/charges preview for a hypothetical order.",
+          "status": "implemented",
+          "remarks": "Zerodha margins and order_margins are wrapped by new /api/zerodha/margins and /api/zerodha/order-preview endpoints for funds and charges preview."
+        },
+        {
+          "sprint": "S14",
+          "group": "G02",
+          "groupDesc": "Funds and margin preview for edited orders",
+          "taskId": "S14_G02_TF002",
+          "taskDesc": "Enhance the Waiting Queue edit dialog to display Required funds (incl. charges) and Available funds, updating dynamically as qty/price/type change.",
+          "status": "implemented",
+          "remarks": "Queue edit dialog now has a Funds & charges panel that calls the new preview APIs and shows Required vs Available amounts."
+        },
+        {
+          "sprint": "S14",
+          "group": "G03",
+          "groupDesc": "Queue edit UX polish and stop-loss helpers",
+          "taskId": "S14_G03_TF001",
+          "taskDesc": "Refactor the edit queue order dialog into clear sections (Quantity & price, Stop-loss, Product & preferences, Funds) and add fields for trigger price and trigger percent.",
+          "status": "implemented",
+          "remarks": "Queue edit dialog now has structured sections, BUY/SELL toggles, full order type support (MARKET/LIMIT/SL/SL-M), and complementary trigger price/percent fields with LTP-aware helpers."
+        }
+      ]
+    },
+    {
+      "sprint": "S15",
+      "tasks": [
+        {
+          "sprint": "S15",
+          "group": "G01",
+          "groupDesc": "Zerodha GTT order support",
+          "taskId": "S15_G01_TB001",
+          "taskDesc": "Design how SigmaTrader will map queue orders and preferences into Zerodha GTT single-leg orders (trigger values, last_price source, and order payload).",
+          "status": "implemented",
+          "remarks": "Designed single-leg equity GTT support by mapping queue orders (LIMIT + optional trigger price) to Zerodha GTTs using trigger_id as the broker reference."
+        },
+        {
+          "sprint": "S15",
+          "group": "G01",
+          "groupDesc": "Zerodha GTT order support",
+          "taskId": "S15_G01_TB002",
+          "taskDesc": "Implement backend support for placing, listing, and cancelling Zerodha GTTs using KiteConnect place_gtt / get_gtts / delete_gtt, wired to per-user broker connections.",
+          "status": "implemented",
+          "remarks": "Backend now wraps KiteConnect place_gtt/get_gtts/delete_gtt via ZerodhaClient and routes GTT-enabled executions through a dedicated branch in execute_order."
+        },
+        {
+          "sprint": "S15",
+          "group": "G01",
+          "groupDesc": "Zerodha GTT order support",
+          "taskId": "S15_G01_TF003",
+          "taskDesc": "Extend the queue edit and manual order flows to allow creating GTT orders (instead of or in addition to regular orders) when the user selects a GTT option.",
+          "status": "implemented",
+          "remarks": "Queue edit dialog exposes a \"Place as GTT at Zerodha\" checkbox that forces LIMIT order_type when enabled and sends gtt=true to the backend."
+        }
+      ]
+    },
+    {
+      "sprint": "S16",
+      "tasks": [
+        {
+          "sprint": "S16",
+          "group": "G01",
+          "groupDesc": "Paper trading architecture and configuration",
+          "taskId": "S16_G01_TB001",
+          "taskDesc": "Design paper trading execution targets (e.g., LIVE vs PAPER) and per-user/per-strategy configuration, including a selectable poll interval between 15 seconds and 4 hours.",
+          "status": "implemented",
+          "remarks": "Strategies now have execution_target (LIVE/PAPER) and an optional paper_poll_interval_sec, persisted via Alembic 0012."
+        },
+        {
+          "sprint": "S16",
+          "group": "G02",
+          "groupDesc": "Backend paper execution engine and price polling",
+          "taskId": "S16_G02_TB001",
+          "taskDesc": "Implement a paper broker engine that manages simulated orders and periodically polls Zerodha LTP for symbols with open paper orders, filling LIMIT/SL/SL-M orders when prices cross configured levels.",
+          "status": "implemented",
+          "remarks": "Paper trading engine added: simulated orders for strategies with execution_target=PAPER are filled via LTP-based rules in poll_paper_orders."
+        },
+        {
+          "sprint": "S16",
+          "group": "G02",
+          "groupDesc": "Backend paper execution engine and price polling",
+          "taskId": "S16_G02_TB002",
+          "taskDesc": "Route TradingView AUTO orders and manual queue execution through the paper engine when the strategy/user is configured for PAPER, avoiding any real Zerodha calls and marking orders as simulated.",
+          "status": "implemented",
+          "remarks": "AUTO and manual executions for PAPER strategies are routed to submit_paper_order instead of Zerodha, and a /api/paper/poll endpoint runs fill passes."
+        },
+        {
+          "sprint": "S16",
+          "group": "G03",
+          "groupDesc": "Paper mode UI and analytics integration",
+          "taskId": "S16_G03_TF001",
+          "taskDesc": "Extend Settings/Strategies UI to let the user select LIVE vs PAPER execution per strategy (and optional default per user), along with the desired poll interval.",
+          "status": "implemented",
+          "remarks": "Settings page now surfaces per-strategy execution_target (LIVE/PAPER) and paper_poll_interval_sec, making paper mode configuration discoverable in the UI."
+        },
+        {
+          "sprint": "S16",
+          "group": "G03",
+          "groupDesc": "Paper mode UI and analytics integration",
+          "taskId": "S16_G03_TF002",
+          "taskDesc": "Update Queue, Orders, and Analytics views to label simulated paper trades clearly and allow filtering them in/out of P&L and performance charts.",
+          "status": "implemented",
+          "remarks": "Orders and Analytics UIs now distinguish simulated (paper) trades, with toggles to show/hide them and an option to include them in analytics summary and trades."
+        },
+        {
+          "sprint": "S16",
+          "group": "G04",
+          "groupDesc": "Paper mode market-hours awareness",
+          "taskId": "S16_G04_TB001",
+          "taskDesc": "Introduce a market-hours helper (e.g., is_market_open_now) that models NSE/BSE trading sessions with local rules (weekday, 09:15–15:30 IST) and a configurable holiday calendar.",
+          "status": "implemented",
+          "remarks": "Added core.market_hours.is_market_open_now() modelling NSE/BSE trading hours (weekday, 09:15–15:30 IST) with optional holiday overrides from indian_holidays.json."
+        },
+        {
+          "sprint": "S16",
+          "group": "G04",
+          "groupDesc": "Paper mode market-hours awareness",
+          "taskId": "S16_G04_TB002",
+          "taskDesc": "Apply market-hours checks to paper execution: fail new paper orders placed outside market hours and skip paper fill logic when the market is closed.",
+          "status": "implemented",
+          "remarks": "Paper execution now fails new orders when the market is closed and skips fill logic in poll_paper_orders outside trading hours; AUTO paper orders record a clear rejected event."
+        }
+      ]
+    },
+    {
+      "sprint": "S17",
+      "tasks": [
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Appearance and theming (light/dark + presets)",
+          "taskId": "S13_G01_TF001",
+          "taskDesc": "Introduce a theme system with light/dark palettes and 2–3 preset color themes applied via a central MUI theme provider.",
+          "status": "implemented",
+          "remarks": "Theme infrastructure only; no per-user preferences or UI controls yet."
+        },
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Appearance and theming (light/dark + presets)",
+          "taskId": "S13_G01_TF002",
+          "taskDesc": "Add an Appearance settings panel where the user can switch between light/dark mode and the available preset themes.",
+          "status": "implemented",
+          "remarks": "Initial focus on a simple dropdown or radio-group selector in the sidebar (e.g., new Appearance page)."
+        },
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Appearance and theming (light/dark + presets)",
+          "taskId": "S13_G01_TB003",
+          "taskDesc": "Persist the selected theme per user in the backend so appearance choices survive reloads and logouts.",
+          "status": "implemented",
+          "remarks": "Reuse the existing users table or a small preferences table to store theme choice keyed by user id."
+        },
+        {
+          "sprint": "S17",
+          "group": "G02",
+          "groupDesc": "Branding and logo integration",
+          "taskId": "S13_G02_TF001",
+          "taskDesc": "Add SigmaTrader logo to the app shell (AppBar/sidebar) using assets from frontend/public and ensure it fits both light and dark themes.",
+          "status": "implemented",
+          "remarks": "Initial focus on placing a small logo mark next to the SigmaTrader title in the top bar or sidebar without changing layout structure."
+        },
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Market data store & holdings charts",
+          "taskId": "S17_G01_TB001",
+          "taskDesc": "Design candles schema and instrument map for OHLCV storage (2-year OHLCV retention).",
+          "status": "implemented",
+          "remarks": "Candles and market_instruments tables added via Alembic; OHLCV retention handled in market_data service."
+        },
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Market data store & holdings charts",
+          "taskId": "S17_G01_TB002",
+          "taskDesc": "Implement Kite historical-data ingestion with chunked date ranges and gap-filling.",
+          "status": "implemented",
+          "remarks": "market_data.ensure_history and _fetch_and_store_history ingest Kite historical_data with chunked ranges and lazy gap-filling."
+        },
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Market data store & holdings charts",
+          "taskId": "S17_G01_TB003",
+          "taskDesc": "Add background/scheduled job to keep OHLCV data fresh for holdings + key indices.",
+          "status": "implemented",
+          "remarks": "Background sync thread (schedule_market_data_sync) keeps 1m/1d candles fresh using _market_sync_loop and _sync_all_instruments_once."
+        },
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Market data store & holdings charts",
+          "taskId": "S17_G01_TB004",
+          "taskDesc": "Expose /api/market/history endpoint returning normalized OHLCV series for charts/analytics.",
+          "status": "implemented",
+          "remarks": "FastAPI /api/market/history endpoint returns normalized OHLCV series backed by the candles store and aggregation helpers."
+        },
+        {
+          "sprint": "S17",
+          "group": "G01",
+          "groupDesc": "Market data store & holdings charts",
+          "taskId": "S17_G01_TF001",
+          "taskDesc": "Add timeframe/period selector and sparkline chart column to Holdings DataGrid.",
+          "status": "implemented",
+          "remarks": "Holdings DataGrid shows per-symbol sparkline chart with chart-period selector and client-side caching per (symbol, exchange, period)."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TB001",
+          "taskDesc": "Design indicator_rule schema and alert condition model on top of candles store.",
+          "status": "implemented",
+          "remarks": "IndicatorRule schema and JSON-based condition model defined on top of the candles store for indicator-driven alerts."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TB002",
+          "taskDesc": "Add ORM models + Alembic migration for indicator_rules and alert/source fields.",
+          "status": "implemented",
+          "remarks": "Alembic migration creates indicator_rules table and links alerts via rule_id and source=INTERNAL_INDICATOR."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TB003",
+          "taskDesc": "Implement indicator engine to compute RSI, MAs, volatility, ATR, and performance windows from candles.",
+          "status": "implemented",
+          "remarks": "indicator_alerts service computes RSI, moving averages, volatility, ATR, performance windows, and volume ratios using market_data.load_series."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TB004",
+          "taskDesc": "Implement rule evaluation + alert/order creation pipeline using existing risk engine and orders API.",
+          "status": "implemented",
+          "remarks": "Rule evaluation engine resolves HOLDINGS universe, evaluates conditions with AND/OR logic, records INTERNAL_INDICATOR alerts, and enqueues optional WAITING orders (SELL_PERCENT / BUY_QUANTITY)."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TB005",
+          "taskDesc": "Add scheduler / evaluation endpoint to run indicator rules periodically in IST market hours.",
+          "status": "implemented",
+          "remarks": "Background scheduler thread evaluates enabled indicator rules every few minutes in IST; evaluate_indicator_rules_once() is available for manual runs."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TF001",
+          "taskDesc": "Expose indicator columns (RSI, MA%, volatility, performance) in Holdings DataGrid with filtering.",
+          "status": "implemented",
+          "remarks": "Holdings DataGrid now derives RSI(14), 1M/1Y price performance, volatility 20D%, ATR(14)%, and volume-vs-20D-average columns from OHLCV history with numeric filters and negative-value highlighting."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TF002",
+          "taskDesc": "Add TradingView-style Alert modal on Holdings rows to create/edit indicator rules.",
+          "status": "implemented",
+          "remarks": "Each Holdings row exposes an Alert button that opens a modal to configure indicator rules (indicator, operator, thresholds, period/window, trigger mode, and action type) backed by /api/indicator-alerts CRUD."
+        },
+        {
+          "sprint": "S17",
+          "group": "G03",
+          "groupDesc": "Indicator-based alerts & holdings analytics",
+          "taskId": "S17_G03_TF003",
+          "taskDesc": "Surface fired indicator alerts and resulting WAITING orders in Alerts panel and Queue view.",
+          "status": "implemented",
+          "remarks": "Fired indicator rules create INTERNAL_INDICATOR alerts and corresponding WAITING orders that flow through the existing queue and execution pipeline alongside TradingView alerts."
+        }
+      ]
+    },
+    {
+      "sprint": "S18",
+      "tasks": [
+        {
+          "sprint": "S18",
+          "group": "G01",
+          "groupDesc": "Alert expression engine (AST + DSL)",
+          "taskId": "S18_G01_TB001",
+          "taskDesc": "Refine indicator_rules model to store expression_json AST, target_type/target_id, and trigger metadata.",
+          "status": "implemented",
+          "remarks": "indicator_rules migration 0015 adds expression_json, target_type/target_id, last_evaluated_at and the ORM model exposes these fields for future AST-backed alerts."
+        },
+        {
+          "sprint": "S18",
+          "group": "G01",
+          "groupDesc": "Alert expression engine (AST + DSL)",
+          "taskId": "S18_G01_TB002",
+          "taskDesc": "Implement ExpressionNode evaluation engine supporting indicator-vs-number and indicator-vs-indicator comparisons, including CROSS_ABOVE/CROSS_BELOW and ONCE_PER_BAR semantics.",
+          "status": "implemented",
+          "remarks": "Expression engine evaluates indicator-vs-number and indicator-vs-indicator comparisons (including CROSS_ABOVE/CROSS_BELOW) using OHLCV samples grouped by timeframe."
+        },
+        {
+          "sprint": "S18",
+          "group": "G01",
+          "groupDesc": "Alert expression engine (AST + DSL)",
+          "taskId": "S18_G01_TB003",
+          "taskDesc": "Implement text expression DSL parser that maps alert expressions (RSI, SMA, VOLATILITY, AND/OR/NOT, parentheses) into ExpressionNode trees with validation.",
+          "status": "implemented",
+          "remarks": "Text DSL parser in alert_expression_dsl.py tokenizes expressions (RSI, SMA, VOLATILITY, AND/OR/NOT, parentheses) into ExpressionNode trees with validation against allowed timeframes."
+        },
+        {
+          "sprint": "S18",
+          "group": "G02",
+          "groupDesc": "Strategies & reusable alert templates",
+          "taskId": "S18_G02_TB001",
+          "taskDesc": "Introduce Strategy ORM model and migration with name, comments, scope (GLOBAL/LOCAL), dsl_expression, expression_json, and optional default trigger/action settings.",
+          "status": "implemented",
+          "remarks": "Strategy ORM/model extended with owner_id, scope (GLOBAL/LOCAL), dsl_expression, expression_json, is_builtin plus migration 0016; strategies now act as reusable templates for alerts."
+        },
+        {
+          "sprint": "S18",
+          "group": "G02",
+          "groupDesc": "Strategies & reusable alert templates",
+          "taskId": "S18_G02_TB002",
+          "taskDesc": "Expose backend CRUD APIs for strategies, including filters by scope and symbol availability (GLOBAL vs LOCAL).",
+          "status": "implemented",
+          "remarks": "Strategy CRUD and /api/strategies/templates endpoint implemented with auth and ownership checks; builtin templates are exposed as read-only presets and user strategies are filterable by scope."
+        },
+        {
+          "sprint": "S18",
+          "group": "G02",
+          "groupDesc": "Strategies & reusable alert templates",
+          "taskId": "S18_G02_TB003",
+          "taskDesc": "Seed a small set of GLOBAL preset strategies (RSI overbought, bullish MA crossover, intraday pullback) using the DSL.",
+          "status": "implemented",
+          "remarks": "Migration 0017 seeds three GLOBAL builtin strategies (ST001-G, ST002-G, ST003-G) with DSL expressions and marks them as is_builtin for reuse in the alert UI."
+        },
+        {
+          "sprint": "S18",
+          "group": "G03",
+          "groupDesc": "Alerts management UX & holdings integration",
+          "taskId": "S18_G03_TF001",
+          "taskDesc": "Extend indicator alert modal with strategy picker, Save-as-strategy flow, and advanced visual builder for multi-condition/grouped expressions.",
+          "status": "implemented",
+          "remarks": "Indicator alert modal now includes a strategy template selector, Save-as-strategy button, indicator preview, and refined controls (sorted timeframes, consistent button sizing)."
+        },
+        {
+          "sprint": "S18",
+          "group": "G03",
+          "groupDesc": "Alerts management UX & holdings integration",
+          "taskId": "S18_G03_TF002",
+          "taskDesc": "Add dedicated Alerts page with DataGrid to list indicator rules and TradingView alerts with strategy, status, trigger counts, and timestamps.",
+          "status": "implemented",
+          "remarks": "Alerts page lists indicator rules with strategy linkage, status, timestamps, and now includes edit/pause/delete management actions for internal alerts."
+        },
+        {
+          "sprint": "S18",
+          "group": "G03",
+          "groupDesc": "Alerts management UX & holdings integration",
+          "taskId": "S18_G03_TF003",
+          "taskDesc": "Add alert chip/indicator in Holdings grid to show per-symbol alert presence/count and open a small panel listing active rules.",
+          "status": "planned",
+          "remarks": "Alert column in holdings grid exposes an ALERT button per symbol linked to the indicator alert modal."
+        },
+        {
+          "sprint": "S18",
+          "group": "G04",
+          "groupDesc": "DSL-backed indicator alerts end-to-end",
+          "taskId": "S18_G04_TB001",
+          "taskDesc": "Extend indicator alert API/model so rules can optionally carry a dsl_expression that is parsed into expression_json while keeping conditions_json backward compatible.",
+          "status": "implemented",
+          "remarks": "indicator_rules now support optional dsl_expression; create/update APIs parse DSL into expression_json while keeping conditions_json for backwards compatibility."
+        },
+        {
+          "sprint": "S18",
+          "group": "G04",
+          "groupDesc": "DSL-backed indicator alerts end-to-end",
+          "taskId": "S18_G04_TB002",
+          "taskDesc": "Wire expression_json evaluation into the indicator alert scheduler so rules backed by the AST drive firing logic, with a safe fallback to legacy condition-based evaluation.",
+          "status": "implemented",
+          "remarks": "Indicator alert scheduler evaluates expression_json-backed rules via the AST engine and falls back to legacy per-condition logic when no expression is present, updating last_evaluated_at for each rule."
+        },
+        {
+          "sprint": "S18",
+          "group": "G04",
+          "groupDesc": "DSL-backed indicator alerts end-to-end",
+          "taskId": "S18_G04_TF001",
+          "taskDesc": "Add Simple/DSL mode toggle and DSL editor to the indicator alert dialog, with inline validation and parse errors surfaced from the backend.",
+          "status": "implemented",
+          "remarks": "Holdings alert dialog now has Simple/DSL tabs; DSL mode sends dsl_expression to the backend and uses the same trigger/action settings as the simple builder."
+        },
+        {
+          "sprint": "S18",
+          "group": "G04",
+          "groupDesc": "DSL-backed indicator alerts end-to-end",
+          "taskId": "S18_G04_TF002",
+          "taskDesc": "Load and display existing DSL-backed rules in Holdings and Alerts views, including showing the compiled DSL text and allowing edits via the DSL editor.",
+          "status": "implemented",
+          "remarks": "DSL-backed rules are surfaced in Holdings (Existing alerts list) and on the Alerts page, which now supports editing enabled/trigger mode and updating DSL text, plus delete actions."
+        }
+      ]
+    },
+    {
+      "sprint": "S19",
+      "tasks": [
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TB001",
+          "taskDesc": "Enrich holdings-correlation API with per-symbol stats (avg correlation, most-correlated partner) and robust data filters.",
+          "status": "implemented",
+          "remarks": "Provides building blocks for cluster logic and per-symbol diversification hints."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TB002",
+          "taskDesc": "Implement correlation-based clustering of holdings (2–4 clusters) and expose cluster metadata via the analytics API.",
+          "status": "implemented",
+          "remarks": "Each holding gets a cluster label plus intra-/cross-cluster correlation stats for downstream UX."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TF001",
+          "taskDesc": "Extend Analytics correlation section with per-symbol metrics, effective independent bets, and clearer diversification summary.",
+          "status": "implemented",
+          "remarks": "Shows average correlation, an effective cluster/independent-bets count, and refined traffic-light diversification rating."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TF002",
+          "taskDesc": "Surface correlation clusters in Holdings and Alerts (cluster column, badges, and cluster weight/tooltips).",
+          "status": "implemented",
+          "remarks": "Helps visualise which names move together and supports cluster-aware decisions when adding alerts or positions."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TB003",
+          "taskDesc": "Add simple rule-based diversification recommendations using correlations and clusters (concentration warnings, low-correlation opportunities).",
+          "status": "implemented",
+          "remarks": "Provides practical hints such as trimming highly correlated heavy clusters or adding lower-correlation names where feasible."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TB004",
+          "taskDesc": "Expose a dedicated cluster_threshold parameter (separate from highlight |corr|) in the holdings-correlation API and thread it through the Analytics UI controls.",
+          "status": "implemented",
+          "remarks": "Lets you experiment with tighter/looser correlation clusters without affecting the heatmap highlighting logic."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TB005",
+          "taskDesc": "Add a simple hierarchical clustering option over correlation distance (1 - corr) to derive 2–4 holdings clusters for comparison with the current graph-based method.",
+          "status": "planned",
+          "remarks": "Enables explicit multi-cluster views even when weak correlation links would otherwise connect all holdings into one component."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TF003",
+          "taskDesc": "Add cluster-level summary cards in the Analytics correlation section showing each cluster’s weight, average internal correlation, and average correlation to other clusters.",
+          "status": "implemented",
+          "remarks": "Gives a clear at-a-glance view of Cluster A/B/C weights and how tightly or loosely each group moves internally and versus the rest."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TB006",
+          "taskDesc": "Derive simple per-symbol role labels (e.g., core driver, satellite, diversifier/hedge) from weight and average correlation and surface them in Analytics copy or tooltips.",
+          "status": "implemented",
+          "remarks": "Helps interpret which holdings are central drivers of portfolio behaviour versus those mainly providing diversification."
+        },
+        {
+          "sprint": "S19",
+          "group": "G01",
+          "groupDesc": "Holdings correlation analytics & diversification",
+          "taskId": "S19_G01_TB007",
+          "taskDesc": "Add robustness warnings when correlation estimates are based on very few observations or many holdings were excluded due to missing data.",
+          "status": "implemented",
+          "remarks": "Clarifies when correlation-driven insights should be treated as tentative versus reasonably reliable."
+        }
+      ]
+    },
+    {
+      "sprint": "S20",
+      "tasks": [
+        {
+          "sprint": "S20",
+          "group": "G01",
+          "groupDesc": "Holdings trade sizing & risk controls",
+          "taskId": "S20_G01_TB001",
+          "taskDesc": "Expose a lightweight portfolio summary (live equity and per-symbol position values) to support % of portfolio and risk-based sizing calculations.",
+          "status": "planned",
+          "remarks": "Provides a single source of truth for total portfolio value and per-position notional used by sizing modes."
+        },
+        {
+          "sprint": "S20",
+          "group": "G01",
+          "groupDesc": "Holdings trade sizing & risk controls",
+          "taskId": "S20_G01_TF001",
+          "taskDesc": "Extend Buy/Sell dialog with unified sizing modes (Qty, Amount, % of position, % of portfolio) and consistent auto-calculation between them.",
+          "status": "planned",
+          "remarks": "Keeps day-to-day trading simple while enabling portfolio-level rebalancing directly from the holdings dialog."
+        },
+        {
+          "sprint": "S20",
+          "group": "G01",
+          "groupDesc": "Holdings trade sizing & risk controls",
+          "taskId": "S20_G01_TB002",
+          "taskDesc": "Add backend helper to compute risk-based position size from entry price, stop level, and risk budget (₹ or % of portfolio).",
+          "status": "planned",
+          "remarks": "Encodes the core risk per share and max-loss sizing formulas in one validated place."
+        },
+        {
+          "sprint": "S20",
+          "group": "G01",
+          "groupDesc": "Holdings trade sizing & risk controls",
+          "taskId": "S20_G01_TF002",
+          "taskDesc": "Introduce a Risk sizing mode in the Buy/Sell dialog that lets the user specify risk budget and stop price and shows derived qty/amount and expected max loss.",
+          "status": "planned",
+          "remarks": "Makes it easier to keep per-trade downside consistent without changing the existing order-routing pipeline."
+        },
+        {
+          "sprint": "S20",
+          "group": "G02",
+          "groupDesc": "Holdings performance & UX optimisation",
+          "taskId": "S20_G02_TB001",
+          "taskDesc": "Parallelise OHLCV history fetch for holdings with a small concurrency pool instead of strictly sequential per-symbol requests.",
+          "status": "planned",
+          "remarks": "Reduces total time to populate indicator and chart columns for large portfolios without overloading the backend or Zerodha APIs."
+        },
+        {
+          "sprint": "S20",
+          "group": "G02",
+          "groupDesc": "Holdings performance & UX optimisation",
+          "taskId": "S20_G02_TF001",
+          "taskDesc": "Batch holdings indicator updates in the frontend so that setHoldings is called once (or in a few chunks) instead of once per symbol.",
+          "status": "planned",
+          "remarks": "Makes the Holdings grid feel snappier and avoids row-by-row flicker as indicator columns load."
+        },
+        {
+          "sprint": "S20",
+          "group": "G02",
+          "groupDesc": "Holdings performance & UX optimisation",
+          "taskId": "S20_G02_TB002",
+          "taskDesc": "Add a backend helper or endpoint to return precomputed indicator snapshots for holdings to reduce the number of per-symbol history calls.",
+          "status": "planned",
+          "remarks": "Enables a future shift from many small history calls to a single enriched holdings payload for even faster page loads."
+        }
+      ]
+    },
+    {
+      "sprint": "S21",
+      "tasks": [
+        {
+          "sprint": "S21",
+          "group": "G01",
+          "groupDesc": "Custom bracket orders (primary + follow-up GTT legs)",
+          "taskId": "S21_G01_TB001",
+          "taskDesc": "Design and implement backend helper/flow to create paired manual orders (primary + LIMIT GTT leg) given side, qty, effective price, and MTP.",
+          "status": "implemented",
+          "remarks": "Bracket pairing implemented by creating a second LIMIT+GTT manual order from the frontend using existing /api/orders/, avoiding extra backend helper complexity in this phase."
+        },
+        {
+          "sprint": "S21",
+          "group": "G01",
+          "groupDesc": "Custom bracket orders (primary + follow-up GTT legs)",
+          "taskId": "S21_G01_TF001",
+          "taskDesc": "Extend Holdings Buy/Sell dialog with a Bracket section that lets the user enable a follow-up GTT leg, pre-fills MTP% from current appreciation, and previews the derived target price.",
+          "status": "implemented",
+          "remarks": "Holdings Buy/Sell dialog now has a Bracket section with enable checkbox, MTP% field, and live GTT price preview."
+        },
+        {
+          "sprint": "S21",
+          "group": "G01",
+          "groupDesc": "Custom bracket orders (primary + follow-up GTT legs)",
+          "taskId": "S21_G01_TF002",
+          "taskDesc": "Highlight bracket-related information in the Queue and Orders grids (order_type, trigger_price, GTT flag) and optionally tag bracket legs for easier identification.",
+          "status": "implemented",
+          "remarks": "Queue and Orders grids converted to DataGrid and now expose order_type, trigger_price, and GTT flags clearly (e.g. LIMIT (GTT))."
+        },
+        {
+          "sprint": "S21",
+          "group": "G02",
+          "groupDesc": "Bracket-order backtesting using Kite OHLCV",
+          "taskId": "S21_G02_TB001",
+          "taskDesc": "Add a backend console script that pulls OHLCV via the existing market-data layer and simulates the custom bracket logic over a given symbol, timeframe, and lookback.",
+          "status": "planned",
+          "remarks": "Enables quantitative evaluation of how often the MTP-based bracket legs would have been filled and the resulting P&L and drawdowns."
+        },
+        {
+          "sprint": "S21",
+          "group": "G01",
+          "groupDesc": "Custom bracket orders (primary + follow-up GTT legs)",
+          "taskId": "S21_G01_TF003",
+          "taskDesc": "Refine SELL-side default MTP logic so that it mirrors positive Today P&L% only above a small threshold and clamps to a reasonable min/max band.",
+          "status": "implemented",
+          "remarks": "Uses today_pnl_percent from holdings with a 3% threshold and 3–20% clamps, instead of raw gain vs average price."
+        },
+        {
+          "sprint": "S21",
+          "group": "G03",
+          "groupDesc": "Portfolio improvement guidelines & triage framework",
+          "taskId": "S21_G03_TD001",
+          "taskDesc": "Document practical portfolio-stabilisation and profit-framework suggestions (A/B/C buckets, bracket use, risk sizing) in pf_improvement_suggestions.md.",
+          "status": "implemented",
+          "remarks": "Provides a reference playbook for using SigmaTrader tools to manage existing losers and structure new trades systematically."
+        }
+      ]
+    },
+    {
+      "sprint": "S22",
+      "tasks": [
+        {
+          "sprint": "S22",
+          "group": "G01",
+          "groupDesc": "Holdings screener & batch actions",
+          "taskId": "S22_G01_TF001",
+          "taskDesc": "Replace Holdings advanced filters with a Screener panel (builder mode) that supports multiple conditions with AND/OR and persists as a saved screener definition.",
+          "status": "implemented",
+          "remarks": "First iteration uses client-side evaluation on the existing holdings payload and reuses DataGrid filtering."
+        },
+        {
+          "sprint": "S22",
+          "group": "G01",
+          "groupDesc": "Holdings screener & batch actions",
+          "taskId": "S22_G01_TF002",
+          "taskDesc": "Add a DSL mode to the Holdings screener that lets users write filter expressions using the indicator/alert DSL and validates them via the existing DSL parser.",
+          "status": "implemented",
+          "remarks": "Keeps DSL syntax consistent with indicator alerts while limiting evaluation to metrics already computed for holdings."
+        },
+        {
+          "sprint": "S22",
+          "group": "G01",
+          "groupDesc": "Holdings screener & batch actions",
+          "taskId": "S22_G01_TB001",
+          "taskDesc": "Expose a backend helper or endpoint to evaluate DSL-based screener expressions against the user’s holdings, reusing the alert expression engine and indicator metrics.",
+          "status": "implemented",
+          "remarks": "Provides a single place to evaluate more complex screeners and keeps client logic simple."
+        },
+        {
+          "sprint": "S22",
+          "group": "G02",
+          "groupDesc": "Groups/baskets & basic watchlists (Phase 1)",
+          "taskId": "S22_G02_TB001",
+          "taskDesc": "Add schema and ORM models for groups and group_members to represent named baskets, watchlists, and model portfolios.",
+          "status": "implemented",
+          "remarks": "DB models + APIs for groups/group_members present."
+        },
+        {
+          "sprint": "S22",
+          "group": "G02",
+          "groupDesc": "Groups/baskets & basic watchlists (Phase 1)",
+          "taskId": "S22_G02_TF001",
+          "taskDesc": "Add a Groups page to create and edit groups, manage member symbols, and assign equal or custom target weights.",
+          "status": "implemented",
+          "remarks": "Groups page supports create/edit, members, weights, bulk add."
+        },
+        {
+          "sprint": "S22",
+          "group": "G02",
+          "groupDesc": "Groups/baskets & basic watchlists (Phase 1)",
+          "taskId": "S22_G02_TF002",
+          "taskDesc": "Integrate group membership into Holdings so rows can be tagged with groups and filtered by group, and add an action to allocate a fixed amount equally across a selected group via queued orders.",
+          "status": "implemented",
+          "remarks": "Holdings integrates group tags; allocate flow queues orders."
+        }
+      ]
+    },
+    {
+      "sprint": "S23",
+      "tasks": [
+        {
+          "sprint": "S23",
+          "group": "G01",
+          "groupDesc": "Implement AUTO and MANUAL execution modes per strategy",
+          "taskId": "S23_G01_TB001",
+          "taskDesc": "Extend strategies to include execution_mode (AUTO/MANUAL) in DB and APIs.",
+          "status": "implemented",
+          "remarks": "Strategies now carry an execution_mode flag that downstream routing logic and the frontend Settings UI can rely on."
+        },
+        {
+          "sprint": "S23",
+          "group": "G01",
+          "groupDesc": "Implement AUTO and MANUAL execution modes per strategy",
+          "taskId": "S23_G01_TB002",
+          "taskDesc": "Implement alert routing logic based on strategy execution_mode (AUTO -> immediate send, MANUAL -> queue).",
+          "status": "implemented",
+          "remarks": "AUTO strategies bypass the manual queue and send orders directly to Zerodha using the same execution path as the manual Execute endpoint, including AMO fallback logic."
+        },
+        {
+          "sprint": "S23",
+          "group": "G01",
+          "groupDesc": "Implement AUTO and MANUAL execution modes per strategy",
+          "taskId": "S23_G01_TF003",
+          "taskDesc": "Add UI controls to view and change execution mode per strategy in Settings.",
+          "status": "implemented",
+          "remarks": "User can toggle strategies between MANUAL and AUTO modes directly from the Settings UI; changes are persisted to the backend."
+        },
+        {
+          "sprint": "S23",
+          "group": "G02",
+          "groupDesc": "Risk management engine (limits and overrides)",
+          "taskId": "S23_G02_TB001",
+          "taskDesc": "Implement risk rules for max_order_value, max_quantity_per_order, and allow_short_selling.",
+          "status": "implemented",
+          "remarks": "Risk checks run inside the order execution path for both MANUAL queue executes and AUTO strategy orders."
+        },
+        {
+          "sprint": "S23",
+          "group": "G02",
+          "groupDesc": "Risk management engine (limits and overrides)",
+          "taskId": "S23_G02_TB002",
+          "taskDesc": "Implement daily loss limit tracking and enforcement in Risk Engine.",
+          "status": "implemented",
+          "remarks": "Risk decisions are stored on the Order via status/error_message and are visible in the Orders history UI."
+        },
+        {
+          "sprint": "S23",
+          "group": "G02",
+          "groupDesc": "Risk management engine (limits and overrides)",
+          "taskId": "S23_G02_TB003",
+          "taskDesc": "Make Risk Engine apply to both auto and manual executions before broker call.",
+          "status": "implemented",
+          "remarks": "AUTO and MANUAL flows now share the same risk gate in execute_order; broker requests are only sent if the risk engine allows the order."
+        },
+        {
+          "sprint": "S23",
+          "group": "G02",
+          "groupDesc": "Risk management engine (limits and overrides)",
+          "taskId": "S23_G02_TF004",
+          "taskDesc": "Display risk-related rejections/adjustments in UI (tooltips, messages on orders).",
+          "status": "implemented",
+          "remarks": "Users can see which orders were blocked (REJECTED_RISK) or had their quantities adjusted before execution."
+        },
+        {
+          "sprint": "S23",
+          "group": "G03",
+          "groupDesc": "Trade type (MIS/CNC) and GTT-related behavior",
+          "taskId": "S23_G03_TB001",
+          "taskDesc": "Extend order model and APIs to handle product type (MIS/CNC) and optional GTT properties.",
+          "status": "implemented",
+          "remarks": "Backoffice and APIs can now track product type and a GTT preference on orders; real GTT placement will be wired in a later sprint."
+        },
+        {
+          "sprint": "S23",
+          "group": "G03",
+          "groupDesc": "Trade type (MIS/CNC) and GTT-related behavior",
+          "taskId": "S23_G03_TF002",
+          "taskDesc": "Allow users to modify trade_type and GTT toggle in Waiting Queue UI before execution.",
+          "status": "implemented",
+          "remarks": "Users can adjust trade type and mark orders as GTT-preferred before executing them from the manual queue."
+        },
+        {
+          "sprint": "S23",
+          "group": "G01",
+          "groupDesc": "UniverseGrid architecture & holdings adapter (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G01_TF001",
+          "taskDesc": "Define frontend Universe / overlay / capabilities types and small adapter layer for holdings.",
+          "status": "implemented",
+          "remarks": "Universe types + holdings adapter in place."
+        },
+        {
+          "sprint": "S23",
+          "group": "G01",
+          "groupDesc": "UniverseGrid architecture & holdings adapter (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G01_TF002",
+          "taskDesc": "Extract reusable UniverseGrid component from HoldingsPage while preserving current holdings behavior.",
+          "status": "implemented",
+          "remarks": "UniverseGrid extracted and reused by HoldingsPage."
+        },
+        {
+          "sprint": "S23",
+          "group": "G01",
+          "groupDesc": "UniverseGrid architecture & holdings adapter (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G01_TF003",
+          "taskDesc": "Refactor HoldingsPage to use UniverseGrid with a holdings universe adapter only.",
+          "status": "implemented",
+          "remarks": "HoldingsPage now uses UniverseGrid adapter."
+        },
+        {
+          "sprint": "S23",
+          "group": "G02",
+          "groupDesc": "Universe picker and group universes (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G02_TF001",
+          "taskDesc": "Implement Universe picker UX to switch between holdings and group-based universes.",
+          "status": "implemented",
+          "remarks": "Universe picker supports holdings + group universes."
+        },
+        {
+          "sprint": "S23",
+          "group": "G02",
+          "groupDesc": "Universe picker and group universes (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G02_TF002",
+          "taskDesc": "Wire group universes to load group members, join holdings overlay, and open Groups in UniverseGrid.",
+          "status": "implemented",
+          "remarks": "Group universe loads members + holdings overlay; Groups open-in-grid."
+        },
+        {
+          "sprint": "S23",
+          "group": "G03",
+          "groupDesc": "Bulk trade dialog generalisation for all universes (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G03_TF001",
+          "taskDesc": "Extract bulk trade dialog and sizing/allocation logic into a reusable module that consumes Universe rows.",
+          "status": "implemented",
+          "remarks": "Bulk trade generalized; per-holding sizing/overrides preserved."
+        },
+        {
+          "sprint": "S23",
+          "group": "G03",
+          "groupDesc": "Bulk trade dialog generalisation for all universes (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G03_TF002",
+          "taskDesc": "Ensure BUY/SELL rules respect holdings overlay (CNC clamp) while still allowing MIS shorts for non-holdings.",
+          "status": "implemented",
+          "remarks": "CNC SELL clamps to holdings qty; MIS shorts allowed; bulk price per symbol + regression test."
+        },
+        {
+          "sprint": "S23",
+          "group": "G04",
+          "groupDesc": "Basket and portfolio metadata groundwork (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G04_TB001",
+          "taskDesc": "Extend backend groups/DB to capture basket/portfolio member metadata (qty, reference price, created_at).",
+          "status": "implemented",
+          "remarks": "Added group member reference qty/price + PORTFOLIO kind; migration 0023."
+        },
+        {
+          "sprint": "S23",
+          "group": "G04",
+          "groupDesc": "Basket and portfolio metadata groundwork (see docs/holdings_refactoring.md)",
+          "taskId": "S23_G04_TF002",
+          "taskDesc": "Surface basket/portfolio overlays in UniverseGrid with since-creation P&L and amount-required columns.",
+          "status": "implemented",
+          "remarks": "Holdings/UniverseGrid shows ref qty/price, amount required, P&L since; GroupsPage edits ref fields."
+        },
+        {
+          "sprint": "S23",
+          "group": "G05",
+          "groupDesc": "Trade dialog execution routing (manual/auto + live/paper)",
+          "taskId": "S23_G05_TB001",
+          "taskDesc": "Add per-order execution_target (LIVE/PAPER) and extend order create/execute flow to support AUTO (send now) vs MANUAL (queue) with audit trail.",
+          "status": "implemented",
+          "remarks": "Supports trade dialogs; auto skips Waiting Queue but persists in Orders history."
+        },
+        {
+          "sprint": "S23",
+          "group": "G05",
+          "groupDesc": "Trade dialog execution routing (manual/auto + live/paper)",
+          "taskId": "S23_G05_TF001",
+          "taskDesc": "Add Mode (MANUAL/AUTO) + Execution Target (LIVE/PAPER) controls to per-symbol and bulk buy/sell dialogs; default MANUAL + LIVE; confirm on AUTO+LIVE.",
+          "status": "implemented",
+          "remarks": "AUTO executes immediately; MANUAL enqueues. Bulk executes sequentially with progress."
+        },
+        {
+          "sprint": "S23",
+          "group": "G05",
+          "groupDesc": "Trade dialog execution routing (manual/auto + live/paper)",
+          "taskId": "S23_G05_TF002",
+          "taskDesc": "Add columns to show order mode + execution_target in Orders/Queue UIs and enable quick filtering.",
+          "status": "implemented",
+          "remarks": "Queue primarily shows MANUAL, but mode column helps audit and debugging."
+        },
+        {
+          "sprint": "S23",
+          "group": "G05",
+          "groupDesc": "Trade dialog execution routing (manual/auto + live/paper)",
+          "taskId": "S23_G05_TF003",
+          "taskDesc": "Add Settings defaults for trade dialogs (default mode + default execution target) and persist in localStorage/server config as appropriate.",
+          "status": "planned",
+          "remarks": "Keeps UX safe by default; user can opt-in to AUTO/LIVE."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TB001",
+          "taskDesc": "Define AlertDefinition + AlertEvent schemas/models (target symbol/universe, variables, condition DSL, trigger_mode, evaluation_cadence, time constraints) and CRUD APIs.",
+          "status": "implemented",
+          "remarks": "Added AlertDefinition/CustomIndicator/AlertEvent models + CRUD."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TB002",
+          "taskDesc": "Implement per-alert evaluation cadence scheduler using latest completed bars for each referenced timeframe; enforce missing-data=false rule.",
+          "status": "implemented",
+          "remarks": "Per-alert cadence evaluation implemented; missing-data returns false."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TB003",
+          "taskDesc": "Implement event operators semantics: CROSSES_ABOVE/BELOW and MOVING_UP/DOWN (numeric RHS only) with now/prev rules.",
+          "status": "implemented",
+          "remarks": "CROSSES_ABOVE/BELOW + MOVING_UP/DOWN (numeric RHS) implemented."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TB004",
+          "taskDesc": "Add metrics/columns as operands (TODAY_PNL_PCT, PNL_PCT, INVESTED, CURRENT_VALUE, etc.) accessible in expressions and snapshots.",
+          "status": "implemented",
+          "remarks": "Added metric operands (TODAY_PNL_PCT, PNL_PCT, etc)."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TB005",
+          "taskDesc": "Custom indicators backend (Phase A): model + CRUD + validation + allowed function set (A MVP surface) + compilation/cache hooks.",
+          "status": "implemented",
+          "remarks": "Custom indicators CRUD + validation + compilation implemented."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TB006",
+          "taskDesc": "Add evaluation/test endpoints for “Test on last bar” preview (return per-symbol TRUE/FALSE + snapshot + missing-data reasons).",
+          "status": "implemented",
+          "remarks": "Added POST /api/alerts-v3/test (limit param) to compile + evaluate v3 expression per target symbol and return matched + snapshot + bar_time + error."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TB007",
+          "taskDesc": "Backend tests: condition builder DSL serialization, operator semantics, per-alert cadence scheduling, custom indicator validation guardrails.",
+          "status": "implemented",
+          "remarks": "Added backend regression tests for v3 parser/compiler/evaluator + API."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TF001",
+          "taskDesc": "Build Alerts module page with tabs: Alerts / Indicators / Events; add routing + navigation entry.",
+          "status": "implemented",
+          "remarks": "Alerts page now has tabs: Alerts/Indicators/Events/Legacy."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TF002",
+          "taskDesc": "Implement Create/Edit Alert wizard: Target → Variables → Conditions → Trigger settings; store canonical DSL string; show read-only DSL preview.",
+          "status": "implemented",
+          "remarks": "Create/Edit alert via dialog; variables defined as name+DSL."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TF003",
+          "taskDesc": "Condition builder UI: operand pickers (Variable/Metric/Constant), operators (relational + event), AND/OR join, add/remove rows.",
+          "status": "implemented",
+          "remarks": "Added Condition Builder tab (row-based LHS/op/RHS with AND/OR match mode) plus DSL preview; kept Advanced (DSL) textbox as fallback."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TF004",
+          "taskDesc": "Variables UI: indicator variable rows + metric variable support; hide/disable Bars/Length for PRICE/VOLUME primitives.",
+          "status": "implemented",
+          "remarks": "Replaced variables DSL-only UI with structured variable builder (Type selector: Metric/Price/OHLCV/indicators/RET/ATR/Custom/DSL) showing relevant params and keeping DSL option."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TF005",
+          "taskDesc": "Indicators tab UI: custom indicator list + create/edit dialog with formula builder and allowed-function guidance (Phase A).",
+          "status": "implemented",
+          "remarks": "Indicators tab supports custom indicator CRUD."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TF006",
+          "taskDesc": "Events tab UI: list/filter alert events and display snapshots/reasons; link back to alert definition.",
+          "status": "implemented",
+          "remarks": "Events tab now includes snapshot drilldown (Details dialog) showing snapshot JSON and an Open alert action linking back to the alert editor."
+        },
+        {
+          "sprint": "S23",
+          "group": "G06",
+          "groupDesc": "Alerts refactor v3: indicator-first alerts over universes (see docs/alerts_refactor_v3.md)",
+          "taskId": "S23_G06_TF007",
+          "taskDesc": "Frontend tests: wizard flow smoke test + condition builder serialization + selected-rows→group guidance.",
+          "status": "implemented",
+          "remarks": "Not implemented."
+        }
+      ]
+    },
+    {
+      "sprint": "S24",
+      "tasks": [
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TB001",
+          "taskDesc": "Backend: Add DB tables/models for group import datasets (schema + per-symbol values) and link dataset to a group.",
+          "status": "implemented",
+          "remarks": "Added GroupImport/GroupImportValue models + Alembic migration 0032."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TB002",
+          "taskDesc": "Backend: Implement symbol normalization + broker instrument resolution for NSE/BSE; skip/reject rows that do not resolve.",
+          "status": "implemented",
+          "remarks": "Implemented symbol normalization + broker instrument validation using market_instruments (+ optional Kite fallback)."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TB003",
+          "taskDesc": "Backend: Enforce import column restrictions (no OHLCV/price/volume/performance/indicator-derived columns); return polite reasons for skipped columns.",
+          "status": "implemented",
+          "remarks": "Enforced disallowed import columns (OHLCV/perf/indicators/ratios) in backend + UI."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TB004",
+          "taskDesc": "Backend: Add group import API endpoint to create group + dataset from uploaded/parsed CSV with mapping/selection instructions; support “replace vs keep existing dataset”.",
+          "status": "implemented",
+          "remarks": "Added POST /api/groups/import/watchlist with conflict handling (ERROR/REPLACE_DATASET/REPLACE_GROUP)."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TB005",
+          "taskDesc": "Backend: Add read endpoint(s) to return dataset schema + values for a group so Holdings/Groups grid can render dynamic columns.",
+          "status": "implemented",
+          "remarks": "Added GET /api/groups/{id}/dataset and /dataset/values for dynamic column rendering."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TB006",
+          "taskDesc": "Backend: Tests for symbol resolution, restricted columns, and import endpoint behaviors (duplicate headers, collisions, replace semantics).",
+          "status": "implemented",
+          "remarks": "Added backend tests covering restrictions, unresolved symbols, and replace semantics."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TF001",
+          "taskDesc": "Frontend: Add “Import watchlist (CSV)” wizard on Groups page: upload → preview → map symbol/exchange → choose columns → create group.",
+          "status": "implemented",
+          "remarks": "Added Groups page CSV import wizard (upload → map → select columns → import)."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TF002",
+          "taskDesc": "Frontend: Render dynamic dataset columns in Holdings/Groups grid views only when selected group has an attached dataset.",
+          "status": "implemented",
+          "remarks": "Holdings group view now loads dataset and renders dynamic DataGrid columns for imported metadata."
+        },
+        {
+          "sprint": "S24",
+          "group": "G01",
+          "groupDesc": "Groups improvement: watchlist CSV import with dynamic columns (see docs/groups_improvement.md)",
+          "taskId": "S24_G01_TF003",
+          "taskDesc": "Frontend: Show import summary with skipped symbols/columns + reasons; provide “replace dataset” confirmation for existing group.",
+          "status": "implemented",
+          "remarks": "Import dialog shows summary (imported/skipped) and links to open imported group in holdings grid."
+        }
+      ]
+    },
+    {
+      "sprint": "S25",
+      "tasks": [
+        {
+          "sprint": "S25",
+          "group": "G01",
+          "groupDesc": "Multi-broker core refactor (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G01_TB001",
+          "taskDesc": "Backend: Introduce broker capability registry + GET /api/brokers/capabilities (supports_gtt, supports_margin_preview, etc.).",
+          "status": "implemented",
+          "remarks": "Added GET /api/brokers/capabilities with capability matrix for supported brokers."
+        },
+        {
+          "sprint": "S25",
+          "group": "G01",
+          "groupDesc": "Multi-broker core refactor (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G01_TB002",
+          "taskDesc": "Backend: Refactor Order schema to be broker-agnostic: add broker_name + broker_order_id; migrate/backfill existing zerodha_order_id; update order sync.",
+          "status": "implemented",
+          "remarks": "Added Order.broker_name + broker_order_id, Alembic migration 0033 backfill, updated execution + sync to use broker fields (legacy zerodha_order_id preserved)."
+        },
+        {
+          "sprint": "S25",
+          "group": "G01",
+          "groupDesc": "Multi-broker core refactor (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G01_TB003",
+          "taskDesc": "Backend: Broker-parameterize core runtime endpoints where shape matches (e.g., holdings/positions/order sync by broker_name).",
+          "status": "implemented",
+          "remarks": "Added broker_name filters/params for orders list/queue/sync and positions sync/holdings; introduced /api/orders/sync."
+        },
+        {
+          "sprint": "S25",
+          "group": "G01",
+          "groupDesc": "Multi-broker core refactor (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G01_TF001",
+          "taskDesc": "Frontend: Add broker-aware UX patterns (explicit broker selection on Holdings/Positions/Queue; broker column + filters on Orders; avoid broad all-brokers grids).",
+          "status": "implemented",
+          "remarks": "Updated Queue/Orders/Positions to be broker-aware with broker selectors and broker columns; avoided all-brokers grids by default."
+        },
+        {
+          "sprint": "S25",
+          "group": "G01",
+          "groupDesc": "Multi-broker core refactor (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G01_TF002",
+          "taskDesc": "Frontend: Introduce brokerRuntime service facade and migrate pages off direct Zerodha-only services where applicable.",
+          "status": "implemented",
+          "remarks": "Added frontend broker runtime facade (brokerRuntime.ts) and migrated Orders/Queue to use broker-parameterized sync + capabilities."
+        },
+        {
+          "sprint": "S25",
+          "group": "G02",
+          "groupDesc": "Alerts: broker-bound targeting + execution (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G02_TB001",
+          "taskDesc": "Backend: Add first-class alert target columns (broker_name, symbol, exchange) with migration; keep target_ref for GROUP/legacy.",
+          "status": "implemented",
+          "remarks": "Added AlertDefinition.broker_name + symbol with Alembic migration 0034; normalized HOLDINGS target_ref to HOLDINGS and updated API schemas."
+        },
+        {
+          "sprint": "S25",
+          "group": "G02",
+          "groupDesc": "Alerts: broker-bound targeting + execution (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G02_TB002",
+          "taskDesc": "Backend: Update alerts evaluation/execution to use canonical evaluation + broker-scoped validation at execution time; make HOLDINGS alerts broker-specific by default.",
+          "status": "implemented",
+          "remarks": "Updated alerts v3 evaluation to be broker-aware for HOLDINGS/holdings metrics; BUY/SELL alerts now create broker-bound Orders and support AUTO execution."
+        },
+        {
+          "sprint": "S25",
+          "group": "G02",
+          "groupDesc": "Alerts: broker-bound targeting + execution (see docs/angelone_support_prework.md)",
+          "taskId": "S25_G02_TF001",
+          "taskDesc": "Frontend: Update Alerts UI to require broker for actionable alerts and to store symbol/exchange/broker in dedicated fields; migrate display labels accordingly.",
+          "status": "implemented",
+          "remarks": "Updated Alerts UI to choose broker and store broker_name/symbol/exchange fields; refreshed labels and services/types."
+        },
+        {
+          "sprint": "S25",
+          "group": "G03",
+          "groupDesc": "Canonical instruments: ISIN-backed security/listing + broker_instrument mapping",
+          "taskId": "S25_G03_TB001",
+          "taskDesc": "Backend: Add canonical instrument tables: security(isin), listing(exchange+symbol), broker_instrument(broker token/symbol) + migrations.",
+          "status": "implemented",
+          "remarks": "Added canonical instrument models/tables (securities/listings/broker_instruments) with Alembic migration 0035 and legacy backfill from market_instruments."
+        },
+        {
+          "sprint": "S25",
+          "group": "G03",
+          "groupDesc": "Canonical instruments: ISIN-backed security/listing + broker_instrument mapping",
+          "taskId": "S25_G03_TB002",
+          "taskDesc": "Backend: Implement instrument master ingestion for Zerodha and AngelOne; map via ISIN into canonical tables; schedule refresh.",
+          "status": "implemented",
+          "remarks": "Implemented instrument master ingestion (Zerodha via Kite instruments; AngelOne via SmartAPI scrip master URL) with background scheduler + /api/instruments/sync."
+        },
+        {
+          "sprint": "S25",
+          "group": "G03",
+          "groupDesc": "Canonical instruments: ISIN-backed security/listing + broker_instrument mapping",
+          "taskId": "S25_G03_TB003",
+          "taskDesc": "Backend: Refactor group imports/symbol resolution and market-data lookup to use canonical listing + broker_instrument mapping (de-couple from Kite instrument_token).",
+          "status": "implemented",
+          "remarks": "Refactored group imports and market data token lookup to use canonical listings + broker_instruments mapping; market symbol search now uses listings."
+        },
+        {
+          "sprint": "S25",
+          "group": "G03",
+          "groupDesc": "Canonical instruments: ISIN-backed security/listing + broker_instrument mapping",
+          "taskId": "S25_G03_TB004",
+          "taskDesc": "Backend: Canonical market-data provider v1 = Zerodha; pause evaluation when Zerodha market data unavailable; surface status in Settings.",
+          "status": "implemented",
+          "remarks": "Introduced canonical market data broker setting (default zerodha), market status endpoint /api/market/status, and surfaced status chip in Settings."
+        },
+        {
+          "sprint": "S25",
+          "group": "G04",
+          "groupDesc": "AngelOne (SmartAPI) integration",
+          "taskId": "S25_G04_TB001",
+          "taskDesc": "Backend: Add AngelOne broker secrets support (api_key/api_secret) with env label aliases (SMARTAPI_API_KEY/SMARTAPI_API_SECRET).",
+          "status": "implemented",
+          "remarks": "Added SmartAPI env aliases + broker secrets fallback for angelone."
+        },
+        {
+          "sprint": "S25",
+          "group": "G04",
+          "groupDesc": "AngelOne (SmartAPI) integration",
+          "taskId": "S25_G04_TB002",
+          "taskDesc": "Backend: Implement SmartAPI client adapter + connect/status endpoints; store encrypted JSON session blob + expiry; require OTP/PIN during connect.",
+          "status": "implemented",
+          "remarks": "Added /api/angelone/connect + /api/angelone/status; stores encrypted jwt/refresh/feed tokens."
+        },
+        {
+          "sprint": "S25",
+          "group": "G04",
+          "groupDesc": "AngelOne (SmartAPI) integration",
+          "taskId": "S25_G04_TB003",
+          "taskDesc": "Backend: Implement AngelOne order placement + order book sync via broker interface; ensure idempotency and error mapping.",
+          "status": "implemented",
+          "remarks": "Added AngelOne order placement + /api/orders/sync support with status/error mapping."
+        },
+        {
+          "sprint": "S25",
+          "group": "G04",
+          "groupDesc": "AngelOne (SmartAPI) integration",
+          "taskId": "S25_G04_TB004",
+          "taskDesc": "Backend: Implement broker-parameterized holdings/positions fetching for AngelOne; wire Holdings (AngelOne) view.",
+          "status": "implemented",
+          "remarks": "Added broker_name-scoped holdings + positions sync for AngelOne; positions snapshots now broker-scoped."
+        },
+        {
+          "sprint": "S25",
+          "group": "G04",
+          "groupDesc": "AngelOne (SmartAPI) integration",
+          "taskId": "S25_G04_TF001",
+          "taskDesc": "Frontend: Settings → add AngelOne connect card (OTP/PIN flow) and show per-broker connection health.",
+          "status": "implemented",
+          "remarks": "Settings: AngelOne connect card + connected status chip."
+        },
+        {
+          "sprint": "S25",
+          "group": "G04",
+          "groupDesc": "AngelOne (SmartAPI) integration",
+          "taskId": "S25_G04_TF002",
+          "taskDesc": "Frontend: Add Holdings (AngelOne) entry and broker tabs/dropdowns for broker-scoped datasets (holdings/positions).",
+          "status": "implemented",
+          "remarks": "Holdings: optional Holdings (AngelOne) universe when connected; Positions: broker filter sent to API."
+        },
+        {
+          "sprint": "S25",
+          "group": "G05",
+          "groupDesc": "Synthetic GTT / conditional orders (SigmaTrader-managed)",
+          "taskId": "S25_G05_TB001",
+          "taskDesc": "Backend: Add conditional_orders model + state machine; persist triggers and broker-bound execution params; survive restarts.",
+          "status": "implemented",
+          "remarks": "Added migration 0037 + order fields to persist conditional state (armed/checked/triggered) and survive restarts."
+        },
+        {
+          "sprint": "S25",
+          "group": "G05",
+          "groupDesc": "Synthetic GTT / conditional orders (SigmaTrader-managed)",
+          "taskId": "S25_G05_TB002",
+          "taskDesc": "Backend: Implement evaluation loop using canonical market data; on trigger, validate mapping and place normal orders on destination broker; add idempotency/locking.",
+          "status": "implemented",
+          "remarks": "Added synthetic-gtt scheduler: evaluates armed conditional orders (prefers Zerodha LTP, falls back to destination broker), then executes as normal broker order on trigger."
+        },
+        {
+          "sprint": "S25",
+          "group": "G05",
+          "groupDesc": "Synthetic GTT / conditional orders (SigmaTrader-managed)",
+          "taskId": "S25_G05_TB003",
+          "taskDesc": "Backend: Implement synthetic bracket/OCO logic; prefer broker-side SL order (if supported) and server-side target/OCO when needed.",
+          "status": "pending",
+          "remarks": "Basic follow-up conditional orders work; full OCO / bracket stop-loss orchestration is not implemented yet."
+        },
+        {
+          "sprint": "S25",
+          "group": "G05",
+          "groupDesc": "Synthetic GTT / conditional orders (SigmaTrader-managed)",
+          "taskId": "S25_G05_TF001",
+          "taskDesc": "Frontend: Queue UI: expose “Broker GTT (Zerodha)” vs “Server-side conditional (SigmaTrader)” clearly; allow creating synthetic bracket orders for non-GTT brokers.",
+          "status": "implemented",
+          "remarks": "Holdings/Queue/Alerts UI now supports conditional orders for AngelOne; Queue Execute arms conditional orders and keeps them in WAITING (ARMED)."
+        },
+        {
+          "sprint": "S25",
+          "group": "G05",
+          "groupDesc": "Synthetic GTT / conditional orders (SigmaTrader-managed)",
+          "taskId": "S25_G05_TF002",
+          "taskDesc": "Frontend: Add monitoring UX for conditional orders (health/warnings when evaluation paused, status per order).",
+          "status": "pending",
+          "remarks": "Minimal monitoring added in Queue (WAITING (ARMED), Cond=Sigma)."
+        },
+        {
+          "sprint": "S25",
+          "group": "G06",
+          "groupDesc": "Dashboard: holdings overlay across brokers",
+          "taskId": "S25_G06_TF001",
+          "taskDesc": "Frontend: Dashboard “Include Holdings” overlay aggregates holdings from selected brokers via checkboxes (default all connected).",
+          "status": "implemented",
+          "remarks": "Dashboard supports holdings overlay per broker via checkboxes; backend computes separate holdings series per selected broker."
+        },
+        {
+          "sprint": "S25",
+          "group": "G06",
+          "groupDesc": "Dashboard: holdings overlay across brokers",
+          "taskId": "S25_G06_TF002",
+          "taskDesc": "Frontend: Persist dashboard broker-checkbox selection per user (until changed).",
+          "status": "implemented",
+          "remarks": "Dashboard persists holdings broker selection (localStorage) and indices cache key includes broker selection to avoid unnecessary refreshes."
+        }
+      ]
+    },
+    {
+      "sprint": "S26",
+      "tasks": [
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TD001",
+          "taskDesc": "Document strategy saving/reuse design (parameterization, multi-output, versioning, sharing) and key decisions.",
+          "status": "implemented",
+          "remarks": "Added docs/strategy_saving.md capturing feasibility, UX/BE design, and decisions (parameterizable YES, multi-output YES, export/import desired)."
+        },
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TB001",
+          "taskDesc": "Backend: Add SavedSignalStrategyV3 model with versioning + tags/regime + outputs + compatibility metadata; CRUD APIs; export/import endpoints.",
+          "status": "implemented",
+          "remarks": "Added SignalStrategy + SignalStrategyVersion models, Alembic migration, and /api/signal-strategies CRUD + versioning + export/import + usage counts."
+        },
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TB002",
+          "taskDesc": "Backend: Support parameter overrides per usage (Alert/Screener/Dashboard) with validation and compile-time type checking.",
+          "status": "implemented",
+          "remarks": "Added DSL param substitution support across Alerts V3/Screener V3/Dashboard analytics requests; params flow through compiler/evaluator with type coercion."
+        },
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TB003",
+          "taskDesc": "Backend: Wire saved strategies into Alerts V3 + Screener V3 (linking, pinning by version, usage tracking, collision detection).",
+          "status": "implemented",
+          "remarks": "Wired strategy version/output/params into Alerts V3 (create/update) and Screener V3 run; DB stores pinned version + materialized params for traceability."
+        },
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TF001",
+          "taskDesc": "Frontend: Add Alerts → Strategies tab (register) with create/edit/duplicate, tags/regime filters, and “used by” visibility; integrate picker into Create Alert.",
+          "status": "implemented",
+          "remarks": "Added Alerts → Strategies tab for create/edit/version/export/import; Create/Edit Alert supports linking to a saved strategy version + output + params."
+        },
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TF002",
+          "taskDesc": "Frontend: Screener + Dashboard integration (load/apply saved strategy, select outputs to plot, type-based plotting: numeric curve vs boolean markers).",
+          "status": "implemented",
+          "remarks": "Added Screener saved-strategy selector + params and passes linkage to backend; Dashboard “Load strategy” dialog applies variables (hidden) + overlays + params and sets signal DSL."
+        },
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TF003",
+          "taskDesc": "Frontend: Naming collision UX when merging strategy variables into existing alert (warn, rename, continue/cancel).",
+          "status": "pending",
+          "remarks": "Not implemented: v1 applies strategies by replacement (no merge), so variable-name collision detection/rename flow is deferred."
+        },
+        {
+          "sprint": "S26",
+          "group": "G01",
+          "groupDesc": "Strategy saving & reuse (DSL V3)",
+          "taskId": "S26_G01_TD002",
+          "taskDesc": "Design global template packs and export/import format (JSON schema, versioning, signature/metadata).",
+          "status": "pending",
+          "remarks": ""
+        },
+        {
+          "sprint": "S26",
+          "group": "G02",
+          "groupDesc": "Screener: run history & retention",
+          "taskId": "S26_G02_TB001",
+          "taskDesc": "Backend: Add Screener V3 run history APIs (list/delete/cleanup) and enrich run read model with query metadata (targets, variables, DSL).",
+          "status": "implemented",
+          "remarks": "Added /api/screener-v3/runs list/delete + /runs/cleanup; run payload now includes include_holdings/group_ids/variables/condition_dsl for reloading past runs."
+        },
+        {
+          "sprint": "S26",
+          "group": "G02",
+          "groupDesc": "Screener: run history & retention",
+          "taskId": "S26_G02_TF001",
+          "taskDesc": "Frontend: Add Results/Runs tabs on Screener; runs table with View/Load/Delete; retention controls and optional auto-cleanup.",
+          "status": "implemented",
+          "remarks": "Screener right panel now supports Runs tab; clicking Run # opens history; retention cleanup can be run manually or automatically."
+        },
+        {
+          "sprint": "S26",
+          "group": "G02",
+          "groupDesc": "Screener: run history & retention",
+          "taskId": "S26_G02_TT001",
+          "taskDesc": "Tests: Add coverage for Screener run list/delete/cleanup endpoints and ensure lint/build passes.",
+          "status": "implemented",
+          "remarks": "Added backend/tests/test_screener_runs_api.py and verified ruff/pytest + frontend build."
+        },
+        {
+          "sprint": "S26",
+          "group": "G02",
+          "groupDesc": "Screener: run history & retention",
+          "taskId": "S26_G02_TB002",
+          "taskDesc": "Backend: Ensure screener run timestamps are UTC-aware so UI displays correct local time (IST +5:30).",
+          "status": "implemented",
+          "remarks": "Normalized ScreenerRun created_at/started_at/finished_at to UTC when serializing."
+        },
+        {
+          "sprint": "S26",
+          "group": "G03",
+          "groupDesc": "System Events UX + retention",
+          "taskId": "S26_G03_TF001",
+          "taskDesc": "Frontend: Make System Events grid match Holdings-style toolbar/layout and add retention-days control (default 7) with cleanup button.",
+          "status": "implemented",
+          "remarks": "Switched to UniverseGrid (GridToolbar with quick filter/columns/density/export) and added retention-days input + cleanup/refresh controls."
+        },
+        {
+          "sprint": "S26",
+          "group": "G03",
+          "groupDesc": "System Events UX + retention",
+          "taskId": "S26_G03_TB001",
+          "taskDesc": "Backend: Add /api/system-events/cleanup to delete events older than N days (default 7) and add tests.",
+          "status": "implemented",
+          "remarks": "Added cleanup endpoint + request/response schemas and test coverage for retention delete."
+        }
+      ]
+    },
+    {
+      "sprint": "S27",
+      "tasks": [
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TB001",
+          "taskDesc": "Backend: Add DB schema for portfolio rebalance (policy + schedule + run history + run orders) scoped to user and group.",
+          "status": "implemented",
+          "remarks": "Rebalance schema added (policy/schedule/run/run_orders) + Alembic migration 0040."
+        },
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TB002",
+          "taskDesc": "Backend: Implement rebalance computation engine (live weights, drift bands, budget scaling, qty rounding, min trade value, max trades).",
+          "status": "implemented",
+          "remarks": "Deterministic target-weight rebalance engine with drift bands, budget scaling, qty rounding, min trade value, max trades, and before/after drift metrics."
+        },
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TB003",
+          "taskDesc": "Backend: Add /api/rebalance/preview endpoint returning proposed trades + summary metrics (turnover, drift reduced, budget used).",
+          "status": "implemented",
+          "remarks": "Added /api/rebalance/preview returning per-broker proposals + summary + warnings."
+        },
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TB004",
+          "taskDesc": "Backend: Add /api/rebalance/execute endpoint to create orders (manual queue or AUTO) and persist run history + order mapping.",
+          "status": "implemented",
+          "remarks": "Added /api/rebalance/execute to create orders (MANUAL/AUTO) and persist RebalanceRun + RebalanceRunOrder mappings; idempotency supported."
+        },
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TF001",
+          "taskDesc": "Frontend: Add Rebalance panel on portfolio group views (next rebalance, last rebalance, broker scope, preview/run/history).",
+          "status": "implemented",
+          "remarks": "Added Rebalance action for PORTFOLIO groups in Groups page with preview/run/history workflow."
+        },
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TF002",
+          "taskDesc": "Frontend: Rebalance preview dialog (proposed buys/sells, before/after weights, budget scaling, warnings, confirm).",
+          "status": "implemented",
+          "remarks": "Preview dialog shows proposed buys/sells, before/after drift summary, warnings, and confirm actions (manual queue or AUTO)."
+        },
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TF003",
+          "taskDesc": "Frontend: Rebalance history tab/table + run detail (inputs snapshot, proposed orders, execution status/errors).",
+          "status": "implemented",
+          "remarks": "History tab lists recent runs and run-order details (order ids, symbols, qty, status)."
+        },
+        {
+          "sprint": "S27",
+          "group": "G01",
+          "groupDesc": "Portfolio rebalance v1: target-weight + budget",
+          "taskId": "S27_G01_TT001",
+          "taskDesc": "Tests: Add backend tests for preview/execute endpoints (budget scaling, band gating, rounding, max trades, broker-scope).",
+          "status": "implemented",
+          "remarks": "Added backend tests for preview/execute (budget scaling + idempotency) with broker calls monkeypatched."
+        },
+        {
+          "sprint": "S27",
+          "group": "G02",
+          "groupDesc": "Rebalance scheduling + next opportunity",
+          "taskId": "S27_G02_TB001",
+          "taskDesc": "Backend: Implement schedule model + next_rebalance_at computation (weekly/monthly/quarterly/custom days, timezone Asia/Kolkata).",
+          "status": "implemented",
+          "remarks": "Implemented schedule config + next_run_at computation (weekly/monthly/quarterly/custom days, Asia/Kolkata, weekend roll)."
+        },
+        {
+          "sprint": "S27",
+          "group": "G02",
+          "groupDesc": "Rebalance scheduling + next opportunity",
+          "taskId": "S27_G02_TF001",
+          "taskDesc": "Frontend: Schedule editor in Rebalance panel (frequency, time, timezone) + display next/last rebalance timestamps.",
+          "status": "implemented",
+          "remarks": "Added Schedule tab in Rebalance dialog to edit frequency/time/timezone and show next/last timestamps (PORTFOLIO groups only)."
+        },
+        {
+          "sprint": "S27",
+          "group": "G02",
+          "groupDesc": "Rebalance scheduling + next opportunity",
+          "taskId": "S27_G02_TB002",
+          "taskDesc": "Backend: Expose schedule/policy read+update endpoints for portfolio groups (GET/PUT).",
+          "status": "implemented",
+          "remarks": "Added /api/rebalance/schedule GET/PUT for PORTFOLIO groups; auto-creates default policy+schedule per user+group."
+        },
+        {
+          "sprint": "S27",
+          "group": "G02",
+          "groupDesc": "Rebalance scheduling + next opportunity",
+          "taskId": "S27_G02_TB003",
+          "taskDesc": "Backend (optional): Add background scheduler (disabled by default) to auto-run rebalance previews/notifications and/or execute when enabled.",
+          "status": "planned",
+          "remarks": "Deferred: background scheduler/auto-run (kept behind future flag)."
+        },
+        {
+          "sprint": "S27",
+          "group": "G03",
+          "groupDesc": "Rebalance v2: signal/strategy-driven rotation",
+          "taskId": "S27_G03_TB001",
+          "taskDesc": "Backend: Extend rebalance engine to support signal-driven targets (use saved Strategy output to rank universe and derive weights).",
+          "status": "implemented",
+          "remarks": "Added SIGNAL_ROTATION rebalance_method to /api/rebalance/preview+execute; derives target weights from strategy output across a universe group or screener run and feeds them into existing target-weight rebalance planner."
+        },
+        {
+          "sprint": "S27",
+          "group": "G03",
+          "groupDesc": "Rebalance v2: signal/strategy-driven rotation",
+          "taskId": "S27_G03_TF001",
+          "taskDesc": "Frontend: Add “Signal-driven rebalance” mode UI (select strategy/version/output, candidate universe, top-N, weighting scheme).",
+          "status": "implemented",
+          "remarks": "Rebalance dialog (PORTFOLIO groups) now supports “Signal-driven rotation”: pick strategy/version/OVERLAY output, universe group or screener run id, top-N, weighting, and filters; uses same preview/execute flow."
+        },
+        {
+          "sprint": "S27",
+          "group": "G03",
+          "groupDesc": "Rebalance v2: signal/strategy-driven rotation",
+          "taskId": "S27_G03_TB002",
+          "taskDesc": "Backend: Add replacement rules (sell criteria, eligibility filters, min liquidity/price, blacklist/whitelist) and audit reasons.",
+          "status": "implemented",
+          "remarks": "Added replacement/eligibility knobs (sell_not_in_top_n, min_price, min_avg_volume_20d, whitelist/blacklist, require_positive_score) and audit metadata in trade.reason + derived_targets."
+        },
+        {
+          "sprint": "S27",
+          "group": "G03",
+          "groupDesc": "Rebalance v2: signal/strategy-driven rotation",
+          "taskId": "S27_G03_TT001",
+          "taskDesc": "Tests: Coverage for strategy-driven target derivation + replacement rules and constraints.",
+          "status": "implemented",
+          "remarks": "Added deterministic API tests for signal-rotation target derivation, blacklist constraint, and rotation audit fields (seeded candles + stubbed holdings)."
+        },
+        {
+          "sprint": "S27",
+          "group": "G04",
+          "groupDesc": "Rebalance v3: risk-based (risk parity / contributions)",
+          "taskId": "S27_G04_TB001",
+          "taskDesc": "Backend: Compute/caches covariance matrix from price history and per-asset risk metrics needed for risk contribution.",
+          "status": "implemented",
+          "remarks": "Added covariance estimation + caching service for risk parity rebalancing (6M/1Y windows) using candles history."
+        },
+        {
+          "sprint": "S27",
+          "group": "G04",
+          "groupDesc": "Rebalance v3: risk-based (risk parity / contributions)",
+          "taskId": "S27_G04_TB002",
+          "taskDesc": "Backend: Implement risk-based optimizer (risk parity / equal risk contribution) with constraints (max weight, max trades, budget).",
+          "status": "implemented",
+          "remarks": "Implemented equal risk contribution (risk parity/ERC) weight solver with constraints and integrated into /api/rebalance/preview+execute; preview returns derived risk targets + diagnostics."
+        },
+        {
+          "sprint": "S27",
+          "group": "G04",
+          "groupDesc": "Rebalance v3: risk-based (risk parity / contributions)",
+          "taskId": "S27_G04_TF001",
+          "taskDesc": "Frontend: Add “Risk-based rebalance” mode UI (window, constraints, objective) within the same preview/run workflow.",
+          "status": "planned",
+          "remarks": "Risk-based rebalance is configurable and consistent with other modes."
+        },
+        {
+          "sprint": "S27",
+          "group": "G04",
+          "groupDesc": "Rebalance v3: risk-based (risk parity / contributions)",
+          "taskId": "S27_G04_TT001",
+          "taskDesc": "Tests: Add unit tests for covariance estimation + optimizer sanity checks + performance guardrails.",
+          "status": "planned",
+          "remarks": "Confident correctness and reasonable runtime."
+        }
+      ]
+    },
+    {
+      "sprint": "SI",
+      "tasks": [
+        {
+          "sprint": "SI",
+          "group": "Orders/Paper mode",
+          "groupDesc": "Paper LIVE/PAPER routing for orders without strategy_id",
+          "taskId": "SI_IR_0001",
+          "taskDesc": "Orders executed from the queue without a strategy_id were still routed to LIVE Zerodha execution even when the only configured strategy had Execution Target = PAPER.",
+          "status": "implemented",
+          "remarks": "This ensures manual and AUTO executions honour paper mode even for legacy orders not linked to a strategy."
+        },
+        {
+          "sprint": "SI",
+          "group": "Orders/Paper mode",
+          "groupDesc": "Paper orders showing Zerodha broker id in history",
+          "taskId": "SI_IR_0002",
+          "taskDesc": "Simulated (paper) orders in the Orders view were displaying Zerodha broker_account_id/zerodha_order_id in the Broker ID column, making it hard to distinguish live vs paper.",
+          "status": "implemented",
+          "remarks": "Combined with the status suffix \"(PAPER)\", this makes paper executions clearly identifiable."
+        },
+        {
+          "sprint": "SI",
+          "group": "Settings/Paper config",
+          "groupDesc": "Paper poll interval UX & validation",
+          "taskId": "SI_IR_0003",
+          "taskDesc": "Editing paper_poll_interval_sec triggered backend 422 errors on each keypress (e.g. typing 6 before 60) and surfaced raw Pydantic error JSON to the user.",
+          "status": "implemented",
+          "remarks": "The Strategies table now shows 15–14400 sec as helper text and accepts blank (default) or validated numeric intervals without spamming errors."
+        },
+        {
+          "sprint": "SI",
+          "group": "Settings/Broker UI",
+          "groupDesc": "Merge Zerodha connection + broker config into a single broker-centric block",
+          "taskId": "SI_IR_0004",
+          "taskDesc": "Refactor Settings so Zerodha Connection and Broker Configuration appear as one combined broker card, grouping login/status and credentials together under the selected broker.",
+          "status": "implemented",
+          "remarks": "Settings now shows a single broker-centric card that combines Zerodha connection status/login with per-user broker secrets under the selected broker."
+        }
+      ]
+    }
+  ]
+}

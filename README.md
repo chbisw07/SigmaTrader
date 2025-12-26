@@ -134,3 +134,23 @@ Code quality (frontend):
   cd frontend
   npm run format
   ```
+
+#### Marketing website (local)
+
+A standalone, local-first marketing website lives under `website/` (separate from the main app UI in `frontend/`).
+
+Setup and run (from repo root):
+
+```bash
+npm -C website install
+npm -C website run roadmap:generate
+npm -C website run dev
+```
+
+Then open `http://localhost:5174/`.
+
+If you are currently inside `frontend/`, use `../website` instead:
+
+```bash
+npm -C ../website install && npm -C ../website run dev
+```
