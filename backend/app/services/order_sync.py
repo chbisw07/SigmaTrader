@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.clients import ZerodhaClient
 from app.models import Order
+from app.services.portfolio_allocations import (
+    apply_portfolio_allocation_for_executed_order,
+)
 
 
 def _map_zerodha_status(status: str) -> Optional[str]:
@@ -75,6 +78,7 @@ def sync_order_statuses(
         if new_status is None or new_status == order.status:
             continue
 
+        prev_status = order.status
         order.status = new_status
 
         if new_status == "REJECTED":
@@ -86,6 +90,35 @@ def sync_order_statuses(
             )
             if isinstance(msg, str) and msg:
                 order.error_message = msg
+
+        if prev_status != "EXECUTED" and new_status == "EXECUTED":
+
+            def _as_float(v: object) -> float | None:
+                if v is None:
+                    return None
+                try:
+                    return float(v)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    return None
+
+            filled_qty = _as_float(z_entry.get("filled_quantity")) or _as_float(
+                z_entry.get("quantity")
+            )
+            if filled_qty is None:
+                filled_qty = float(order.qty or 0.0)
+
+            avg_price = _as_float(z_entry.get("average_price")) or _as_float(
+                z_entry.get("price")
+            )
+            if avg_price is None and order.price is not None:
+                avg_price = float(order.price)
+
+            apply_portfolio_allocation_for_executed_order(
+                db,
+                order=order,
+                filled_qty=float(filled_qty or 0.0),
+                avg_price=avg_price,
+            )
 
         db.add(order)
         updated += 1

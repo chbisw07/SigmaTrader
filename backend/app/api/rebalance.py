@@ -271,6 +271,7 @@ def rebalance_execute(
                     broker_name=broker,
                     alert_id=None,
                     strategy_id=None,
+                    portfolio_group_id=None,
                     symbol=trade.symbol,
                     exchange=trade.exchange,
                     side=trade.side,
@@ -380,6 +381,20 @@ def rebalance_execute(
             )
         preview = previews[0]
 
+        rebalance_group = db.get(Group, int(payload.group_id or 0))
+        portfolio_group_id = (
+            int(rebalance_group.id)
+            if (
+                rebalance_group is not None
+                and rebalance_group.kind == "PORTFOLIO"
+                and (
+                    rebalance_group.owner_id is None
+                    or rebalance_group.owner_id == user.id
+                )
+            )
+            else None
+        )
+
         policy_json, inputs_json, summary_json = build_run_snapshots(
             req=preview_req,
             preview=preview,
@@ -435,6 +450,7 @@ def rebalance_execute(
                     broker_name=broker,
                     alert_id=None,
                     strategy_id=None,
+                    portfolio_group_id=portfolio_group_id,
                     symbol=trade.symbol,
                     exchange=trade.exchange,
                     side=trade.side,
@@ -521,15 +537,18 @@ def rebalance_execute(
 
         # Best-effort: bump schedule last/next for portfolio group rebalances.
         try:
-            group = db.get(Group, int(payload.group_id or 0))
+            schedule_group = db.get(Group, int(payload.group_id or 0))
             if (
-                group is not None
-                and group.kind == "PORTFOLIO"
-                and (group.owner_id is None or group.owner_id == user.id)
+                schedule_group is not None
+                and schedule_group.kind == "PORTFOLIO"
+                and (
+                    schedule_group.owner_id is None
+                    or schedule_group.owner_id == user.id
+                )
                 and payload.target_kind == "GROUP"
             ):
                 _policy, sched = _ensure_policy_and_schedule(
-                    db, user_id=user.id, group_id=group.id
+                    db, user_id=user.id, group_id=schedule_group.id
                 )
                 cfg = normalize_schedule_config(_json_load(sched.schedule_json))
                 sched.last_run_at = run.executed_at or _now_utc()

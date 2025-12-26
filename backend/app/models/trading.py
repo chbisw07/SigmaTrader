@@ -198,6 +198,7 @@ class Order(Base):
         Index("ix_orders_strategy_status", "strategy_id", "status"),
         Index("ix_orders_symbol_time", "symbol", "created_at"),
         Index("ix_orders_synthetic_status", "synthetic_gtt", "status"),
+        Index("ix_orders_portfolio_group_id", "portfolio_group_id"),
         Index(
             "ix_orders_broker_name_order_id",
             "broker_name",
@@ -218,6 +219,11 @@ class Order(Base):
     )
     strategy_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
+    )
+    # Optional portfolio attribution for orders created via portfolio workflows.
+    portfolio_group_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     symbol: Mapped[str] = mapped_column(String(128), nullable=False)

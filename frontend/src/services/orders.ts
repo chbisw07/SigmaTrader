@@ -17,6 +17,7 @@ export type Order = {
   id: number
   alert_id?: number | null
   strategy_id?: number | null
+  portfolio_group_id?: number | null
   broker_name?: string | null
   symbol: string
   exchange?: string | null
@@ -48,6 +49,7 @@ export type Order = {
 
 export async function createManualOrder(payload: {
   broker_name?: string | null
+  portfolio_group_id?: number | null
   symbol: string
   exchange?: string | null
   side: 'BUY' | 'SELL'

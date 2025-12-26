@@ -80,6 +80,69 @@ export type GroupImportWatchlistResponse = {
   warnings: string[]
 }
 
+export type PortfolioAllocation = {
+  group_id: number
+  group_name: string
+  symbol: string
+  exchange: string
+  reference_qty?: number | null
+  reference_price?: number | null
+}
+
+export type PortfolioAllocationUpdate = {
+  group_id: number
+  reference_qty: number
+}
+
+export async function fetchPortfolioAllocations(params?: {
+  symbol?: string
+  exchange?: string
+}): Promise<PortfolioAllocation[]> {
+  const url = new URL('/api/groups/allocations/portfolio', window.location.origin)
+  if (params?.symbol) url.searchParams.set('symbol', params.symbol)
+  if (params?.exchange) url.searchParams.set('exchange', params.exchange)
+  const res = await fetch(url.toString(), { cache: 'no-store' })
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to load portfolio allocations (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as PortfolioAllocation[]
+}
+
+export async function reconcilePortfolioAllocations(payload: {
+  broker_name?: string
+  symbol: string
+  exchange?: string
+  updates: PortfolioAllocationUpdate[]
+}): Promise<{
+  symbol: string
+  exchange: string
+  holding_qty: number
+  allocated_total: number
+  updated_groups: number
+}> {
+  const res = await fetch('/api/groups/allocations/portfolio/reconcile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to reconcile allocations (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as {
+    symbol: string
+    exchange: string
+    holding_qty: number
+    allocated_total: number
+    updated_groups: number
+  }
+}
+
 async function readApiError(res: Response): Promise<string> {
   const contentType = res.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {

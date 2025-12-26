@@ -38,7 +38,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
 import { createManualOrder } from '../services/orders'
-import { fetchHoldings, type Holding } from '../services/positions'
+import { fetchHoldings, fetchDailyPositions, type Holding } from '../services/positions'
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
@@ -49,8 +49,10 @@ import {
   deleteGroup,
   deleteGroupMember,
   fetchGroup,
+  fetchPortfolioAllocations,
   importWatchlistCsv,
   listGroups,
+  reconcilePortfolioAllocations,
   updateGroup,
   updateGroupMember,
   type Group,
@@ -267,6 +269,22 @@ export function GroupsPage() {
   const [allocationError, setAllocationError] = useState<string | null>(null)
   const [allocationBusy, setAllocationBusy] = useState(false)
 
+  // Portfolio allocation health (PORTFOLIO groups only).
+  const [compareBroker, setCompareBroker] = useState<'zerodha' | 'angelone'>('zerodha')
+  const [holdingsByKey, setHoldingsByKey] = useState<
+    Record<string, { qty: number; avgPrice: number | null }>
+  >({})
+  const [allocationTotalsByKey, setAllocationTotalsByKey] = useState<Record<string, number>>({})
+
+  const [reconcileOpen, setReconcileOpen] = useState(false)
+  const [reconcileBusy, setReconcileBusy] = useState(false)
+  const [reconcileError, setReconcileError] = useState<string | null>(null)
+  const [reconcileSymbolKey, setReconcileSymbolKey] = useState<string | null>(null)
+  const [reconcileHoldQty, setReconcileHoldQty] = useState<number>(0)
+  const [reconcileAllocations, setReconcileAllocations] = useState<
+    Array<{ group_id: number; group_name: string; reference_qty: number }>
+  >([])
+
   // Import watchlist (CSV) wizard state
   type ImportGroupKind = Exclude<GroupKind, 'HOLDINGS_VIEW'>
   const [importOpen, setImportOpen] = useState(false)
@@ -378,8 +396,21 @@ export function GroupsPage() {
     try {
       setLoading(true)
       setError(null)
-      const data = await listGroups()
+      const [data, allocs] = await Promise.all([
+        listGroups(),
+        fetchPortfolioAllocations().catch(() => []),
+      ])
       setGroups(data)
+      const totals: Record<string, number> = {}
+      for (const a of allocs) {
+        const sym = (a.symbol || '').trim().toUpperCase()
+        const exch = (a.exchange || 'NSE').trim().toUpperCase()
+        const key = `${exch}:${sym}`
+        const qty = a.reference_qty != null ? Number(a.reference_qty) : 0
+        if (!Number.isFinite(qty) || qty <= 0) continue
+        totals[key] = (totals[key] ?? 0) + qty
+      }
+      setAllocationTotalsByKey(totals)
 
       const nameMatch = selectName
         ? data.find(
@@ -432,6 +463,61 @@ export function GroupsPage() {
       active = false
     }
   }, [selectedGroupId])
+
+  useEffect(() => {
+    let active = true
+    const loadHoldings = async () => {
+      if (!selectedGroup || selectedGroup.kind !== 'PORTFOLIO') {
+        setHoldingsByKey({})
+        return
+      }
+      try {
+        const [holdings, positions] = await Promise.all([
+          fetchHoldings(compareBroker),
+          fetchDailyPositions({ broker_name: compareBroker }).catch(() => []),
+        ])
+        if (!active) return
+        const posDeltaByKey: Record<string, number> = {}
+        for (const p of positions) {
+          const sym = (p.symbol || '').trim().toUpperCase()
+          const exch = (p.exchange || 'NSE').trim().toUpperCase()
+          const product = (p.product || '').trim().toUpperCase()
+          const qty = Number(p.qty ?? 0)
+          if (!sym || !Number.isFinite(qty) || qty <= 0) continue
+          // Only treat delivery/cash positions as potential "pending holdings".
+          if (product !== 'CNC' && product !== 'DELIVERY') continue
+          const key = `${exch}:${sym}`
+          posDeltaByKey[key] = (posDeltaByKey[key] ?? 0) + qty
+        }
+        const map: Record<string, { qty: number; avgPrice: number | null }> = {}
+        for (const h of holdings) {
+          const sym = (h.symbol || '').trim().toUpperCase()
+          const exch = (h.exchange || 'NSE').trim().toUpperCase()
+          if (!sym) continue
+          const qty = Number(h.quantity ?? 0)
+          const avg = h.average_price != null ? Number(h.average_price) : null
+          const baseQty = Number.isFinite(qty) ? qty : 0
+          // Zerodha holdings for CNC buys often update T+1; positions show the
+          // buy qty immediately. Use an "effective" holdings qty for display
+          // by adding positive delivery position qty.
+          const key = `${exch}:${sym}`
+          const delta = posDeltaByKey[key] ?? 0
+          map[key] = {
+            qty: baseQty + (delta > 0 ? delta : 0),
+            avgPrice: avg != null && Number.isFinite(avg) && avg > 0 ? avg : null,
+          }
+        }
+        setHoldingsByKey(map)
+      } catch {
+        if (!active) return
+        setHoldingsByKey({})
+      }
+    }
+    void loadHoldings()
+    return () => {
+      active = false
+    }
+  }, [compareBroker, selectedGroup])
 
   const groupsById = useMemo(() => {
     const m = new Map<number, Group>()
@@ -973,6 +1059,7 @@ export function GroupsPage() {
       await Promise.all(
         preview.map((p) =>
           createManualOrder({
+            portfolio_group_id: selectedGroup.kind === 'PORTFOLIO' ? selectedGroup.id : null,
             symbol: p.symbol,
             exchange: p.exchange,
             side: allocationDraft.side,
@@ -1060,6 +1147,137 @@ export function GroupsPage() {
     },
   ]
 
+  const openReconcileForMember = useCallback(
+    async (row: GroupMember) => {
+      const sym = (row.symbol || '').trim().toUpperCase()
+      const exch = (row.exchange || 'NSE').trim().toUpperCase()
+      if (!sym) return
+      const key = `${exch}:${sym}`
+      const holdQty = holdingsByKey[key]?.qty ?? 0
+      setReconcileError(null)
+      setReconcileSymbolKey(key)
+      setReconcileHoldQty(Number.isFinite(holdQty) ? holdQty : 0)
+      setReconcileAllocations([])
+      setReconcileOpen(true)
+      setReconcileBusy(true)
+      try {
+        const allocs = await fetchPortfolioAllocations({ symbol: sym, exchange: exch })
+        const rows = allocs
+          .map((a) => ({
+            group_id: a.group_id,
+            group_name: a.group_name,
+            reference_qty:
+              a.reference_qty != null && Number.isFinite(Number(a.reference_qty))
+                ? Math.trunc(Number(a.reference_qty))
+                : 0,
+          }))
+          .sort((a, b) => a.group_name.localeCompare(b.group_name))
+        setReconcileAllocations(rows)
+      } catch (err) {
+        setReconcileError(
+          err instanceof Error ? err.message : 'Failed to load allocations',
+        )
+      } finally {
+        setReconcileBusy(false)
+      }
+    },
+    [holdingsByKey],
+  )
+
+  const reconcileTotal = useMemo(() => {
+    let total = 0
+    for (const a of reconcileAllocations) total += Number(a.reference_qty ?? 0)
+    return total
+  }, [reconcileAllocations])
+
+  const handleReconcileScaleDown = () => {
+    const hold = reconcileHoldQty
+    const total = reconcileTotal
+    if (!Number.isFinite(hold) || hold < 0 || total <= 0) return
+    if (total <= hold) return
+
+    const ratio = hold / total
+    type ScaledRow = {
+      group_id: number
+      group_name: string
+      reference_qty: number
+      remainder: number
+    }
+    const scaled: ScaledRow[] = reconcileAllocations.map((a) => {
+      const raw = Number(a.reference_qty ?? 0)
+      const base = Number.isFinite(raw) && raw > 0 ? raw : 0
+      const exact = base * ratio
+      const floored = Math.floor(exact)
+      return {
+        group_id: a.group_id,
+        group_name: a.group_name,
+        reference_qty: floored,
+        remainder: exact - floored,
+      }
+    })
+
+    let sum = scaled.reduce((s, a) => s + (a.reference_qty ?? 0), 0)
+    const target = Math.floor(hold)
+    if (sum < target) {
+      const sorted = [...scaled].sort(
+        (a, b) => (b.remainder ?? 0) - (a.remainder ?? 0),
+      )
+      for (const a of sorted) {
+        if (sum >= target) break
+        a.reference_qty = (a.reference_qty ?? 0) + 1
+        sum += 1
+      }
+    }
+    setReconcileAllocations(
+      scaled.map((a) => ({
+        group_id: a.group_id,
+        group_name: a.group_name,
+        reference_qty: a.reference_qty,
+      })),
+    )
+  }
+
+  const handleReconcileSetToHoldings = () => {
+    if (reconcileAllocations.length !== 1) return
+    const hold = Math.max(0, Math.trunc(Number(reconcileHoldQty ?? 0)))
+    if (!Number.isFinite(hold)) return
+    setReconcileAllocations((prev) => {
+      if (prev.length !== 1) return prev
+      return [{ ...prev[0], reference_qty: hold }]
+    })
+  }
+
+  const handleReconcileSave = async () => {
+    if (!reconcileSymbolKey) return
+    const [exch, sym] = reconcileSymbolKey.split(':')
+    if (!sym) return
+    setReconcileError(null)
+    setReconcileBusy(true)
+    try {
+      await reconcilePortfolioAllocations({
+        broker_name: compareBroker,
+        symbol: sym,
+        exchange: exch,
+        updates: reconcileAllocations.map((a) => ({
+          group_id: a.group_id,
+          reference_qty: Math.max(0, Math.trunc(Number(a.reference_qty ?? 0))),
+        })),
+      })
+      setReconcileOpen(false)
+      await reloadGroups(selectedGroupId, null)
+      if (selectedGroupId != null) {
+        const detail = await fetchGroup(selectedGroupId)
+        setSelectedGroup(detail)
+      }
+    } catch (err) {
+      setReconcileError(
+        err instanceof Error ? err.message : 'Failed to reconcile allocations',
+      )
+    } finally {
+      setReconcileBusy(false)
+    }
+  }
+
   const membersColumns = useMemo((): GridColDef<GroupMember>[] => {
     const cols: GridColDef<GroupMember>[] = [
       {
@@ -1090,15 +1308,101 @@ export function GroupsPage() {
           headerName: 'Ref qty',
           width: 110,
           valueGetter: (_value, row) => row.reference_qty ?? null,
+          renderCell:
+            selectedGroup?.kind === 'PORTFOLIO'
+              ? (params: GridRenderCellParams<GroupMember>) => {
+                  const row = params.row
+                  const sym = (row.symbol || '').trim().toUpperCase()
+                  const exch = (row.exchange || 'NSE').trim().toUpperCase()
+                  const key = `${exch}:${sym}`
+                  const holdQty = holdingsByKey[key]?.qty ?? null
+                  const refQty =
+                    row.reference_qty != null && Number.isFinite(Number(row.reference_qty))
+                      ? Math.trunc(Number(row.reference_qty))
+                      : null
+                  if (refQty == null) return <span>—</span>
+                  if (holdQty == null) return <span>{refQty}</span>
+                  const holdInt = Math.trunc(Number(holdQty))
+                  const bad = refQty > holdInt
+                  return (
+                    <span style={bad ? { color: '#d32f2f', fontWeight: 600 } : undefined}>
+                      {refQty}/{holdInt}
+                    </span>
+                  )
+                }
+              : undefined,
         },
         {
           field: 'reference_price',
           headerName: 'Ref price',
           width: 130,
           valueGetter: (_value, row) => row.reference_price ?? null,
-          valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
+          renderCell:
+            selectedGroup?.kind === 'PORTFOLIO'
+              ? (params: GridRenderCellParams<GroupMember>) => {
+                  const row = params.row
+                  const sym = (row.symbol || '').trim().toUpperCase()
+                  const exch = (row.exchange || 'NSE').trim().toUpperCase()
+                  const key = `${exch}:${sym}`
+                  const holdAvg = holdingsByKey[key]?.avgPrice ?? null
+                  const ref =
+                    row.reference_price != null && Number.isFinite(Number(row.reference_price))
+                      ? Number(row.reference_price)
+                      : null
+                  if (ref == null) return <span>—</span>
+                  if (holdAvg == null) return <span>{ref.toFixed(2)}</span>
+                  return (
+                    <span>
+                      {ref.toFixed(2)}/{holdAvg.toFixed(2)}
+                    </span>
+                  )
+                }
+              : (params: GridRenderCellParams<GroupMember>) => {
+                  const v = params.row.reference_price
+                  return v != null ? <span>{Number(v).toFixed(2)}</span> : <span>—</span>
+                },
         },
       )
+    }
+
+    if (selectedGroup?.kind === 'PORTFOLIO') {
+      cols.push({
+        field: 'alloc_health',
+        headerName: 'Alloc (ΣX/Y)',
+        width: 150,
+        sortable: false,
+        filterable: false,
+        renderCell: (params: GridRenderCellParams<GroupMember>) => {
+          const row = params.row
+          const sym = (row.symbol || '').trim().toUpperCase()
+          const exch = (row.exchange || 'NSE').trim().toUpperCase()
+          const key = `${exch}:${sym}`
+          const holdQty = holdingsByKey[key]?.qty ?? 0
+          const totalAlloc = allocationTotalsByKey[key] ?? 0
+          const holdInt = Math.trunc(Number.isFinite(holdQty) ? holdQty : 0)
+          const allocInt = Math.trunc(Number.isFinite(totalAlloc) ? totalAlloc : 0)
+          const deficit = allocInt - holdInt
+          const label =
+            holdInt > 0 || allocInt > 0 ? `${allocInt}/${holdInt}` : '—'
+          if (label === '—') return <span>—</span>
+          return (
+            <Chip
+              size="small"
+              label={label}
+              color={deficit > 0 ? 'error' : 'success'}
+              variant={deficit > 0 ? 'filled' : 'outlined'}
+              clickable={deficit > 0}
+              onClick={deficit > 0 ? () => void openReconcileForMember(row) : undefined}
+              title={
+                deficit > 0
+                  ? `Overallocation detected (deficit ${deficit}). Click to reconcile.`
+                  : 'OK'
+              }
+              sx={{ minWidth: 90, justifyContent: 'center' }}
+            />
+          )
+        },
+      })
     }
 
     cols.push(
@@ -1132,7 +1436,7 @@ export function GroupsPage() {
     )
 
     return cols
-  }, [selectedGroup?.kind])
+  }, [allocationTotalsByKey, holdingsByKey, openReconcileForMember, selectedGroup?.kind])
 
   const canAllocateWithWeights =
     selectedGroup?.members?.some((m) => (m.target_weight ?? 0) > 0) ?? false
@@ -1299,6 +1603,35 @@ export function GroupsPage() {
                 Allocate
               </Button>
             </Stack>
+
+            {selectedGroup?.kind === 'PORTFOLIO' && (
+              <Stack
+                direction={{ xs: 'column', md: 'row' }}
+                spacing={1}
+                alignItems={{ xs: 'stretch', md: 'center' }}
+                sx={{ mt: 1 }}
+              >
+                <FormControl size="small" sx={{ minWidth: 180 }}>
+                  <InputLabel id="portfolio-compare-broker-label">
+                    Holdings broker
+                  </InputLabel>
+                  <Select
+                    labelId="portfolio-compare-broker-label"
+                    label="Holdings broker"
+                    value={compareBroker}
+                    onChange={(e) =>
+                      setCompareBroker(e.target.value === 'angelone' ? 'angelone' : 'zerodha')
+                    }
+                  >
+                    <MenuItem value="zerodha">Zerodha</MenuItem>
+                    <MenuItem value="angelone">AngelOne</MenuItem>
+                  </Select>
+                </FormControl>
+                <Typography variant="caption" color="text.secondary">
+                  Used only for X/Y display and allocation health.
+                </Typography>
+              </Stack>
+            )}
 
             {selectedGroup?.description && (
               <Typography sx={{ mt: 0.5 }} variant="body2" color="text.secondary">
@@ -1899,6 +2232,117 @@ export function GroupsPage() {
           <Button onClick={() => setEditMemberOpen(false)}>Cancel</Button>
           <Button variant="contained" onClick={() => void submitMemberEditor()}>
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={reconcileOpen}
+        onClose={() => {
+          if (reconcileBusy) return
+          setReconcileOpen(false)
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Reconcile portfolio allocations</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ mt: 1 }}>
+            {reconcileSymbolKey && (
+              <Typography variant="body2" color="text.secondary">
+                Symbol: {reconcileSymbolKey.split(':')[1]} ({reconcileSymbolKey.split(':')[0]})
+              </Typography>
+            )}
+            <Typography variant="body2" color="text.secondary">
+              Holdings qty (Y): {Math.trunc(reconcileHoldQty)} | Allocated total (ΣX): {Math.trunc(reconcileTotal)}
+            </Typography>
+            {Math.trunc(reconcileTotal) > Math.trunc(reconcileHoldQty) && (
+              <Alert severity="warning">
+                Overallocation detected. Reduce allocations so that ΣX ≤ Y.
+              </Alert>
+            )}
+            {reconcileError && <Alert severity="error">{reconcileError}</Alert>}
+
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={reconcileBusy || reconcileTotal <= reconcileHoldQty}
+                onClick={handleReconcileScaleDown}
+              >
+                Scale down to fit
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                disabled={
+                  reconcileBusy ||
+                  reconcileAllocations.length !== 1 ||
+                  Math.trunc(reconcileHoldQty) === Math.trunc(reconcileTotal)
+                }
+                onClick={handleReconcileSetToHoldings}
+              >
+                Auto-set to holdings
+              </Button>
+              <Box sx={{ flexGrow: 1 }} />
+              <Typography variant="caption" color="text.secondary">
+                Broker: {compareBroker}
+              </Typography>
+            </Stack>
+            {reconcileAllocations.length === 1 && (
+              <Typography variant="caption" color="text.secondary">
+                Auto-set is enabled because this symbol appears in only one portfolio; it assigns all effective holdings (Y) to that portfolio.
+              </Typography>
+            )}
+
+            <Stack spacing={1}>
+              {reconcileAllocations.map((a) => (
+                <Stack
+                  key={a.group_id}
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                >
+                  <Typography sx={{ flex: 1 }} variant="body2">
+                    {a.group_name}
+                  </Typography>
+                  <TextField
+                    size="small"
+                    label="Qty"
+                    value={String(a.reference_qty)}
+                    onChange={(e) => {
+                      const next = Math.max(0, Math.trunc(Number(e.target.value || 0)))
+                      setReconcileAllocations((prev) =>
+                        prev.map((x) =>
+                          x.group_id === a.group_id ? { ...x, reference_qty: next } : x,
+                        ),
+                      )
+                    }}
+                    sx={{ width: 120 }}
+                  />
+                </Stack>
+              ))}
+              {reconcileAllocations.length === 0 && (
+                <Typography variant="body2" color="text.secondary">
+                  {reconcileBusy ? 'Loading…' : 'No portfolio allocations found.'}
+                </Typography>
+              )}
+            </Stack>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setReconcileOpen(false)}
+            disabled={reconcileBusy}
+          >
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            disabled={reconcileBusy || !reconcileAllocations.length}
+            onClick={() => void handleReconcileSave()}
+          >
+            {reconcileBusy ? 'Saving…' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>

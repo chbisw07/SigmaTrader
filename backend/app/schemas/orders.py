@@ -28,6 +28,7 @@ class OrderRead(BaseModel):
     id: int
     alert_id: Optional[int]
     strategy_id: Optional[int]
+    portfolio_group_id: Optional[int] = None
     broker_name: str = "zerodha"
     symbol: str
     exchange: Optional[str]
@@ -90,6 +91,7 @@ class ManualOrderCreate(BaseModel):
     """Payload for creating a new manual WAITING order."""
 
     broker_name: str = "zerodha"
+    portfolio_group_id: Optional[int] = None
     symbol: str
     exchange: Optional[str] = None
     side: Literal["BUY", "SELL"]

@@ -2,6 +2,7 @@ import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
 import Paper from '@mui/material/Paper'
+import Alert from '@mui/material/Alert'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -42,7 +43,7 @@ import { RebalanceDialog } from '../components/RebalanceDialog'
 
 import { createManualOrder } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
-import { fetchHoldings, type Holding } from '../services/positions'
+import { fetchDailyPositions, fetchHoldings, type Holding } from '../services/positions'
 import { fetchAngeloneStatus } from '../services/angelone'
 import { fetchMarginsForBroker } from '../services/brokerRuntime'
 import {
@@ -58,6 +59,7 @@ import {
   fetchGroupDataset,
   fetchGroupDatasetValues,
   fetchGroupMemberships,
+  fetchPortfolioAllocations,
   listGroupMembers,
   listGroups,
   type Group,
@@ -129,10 +131,22 @@ export function HoldingsPage() {
   } | null>(null)
   const [rebalanceOpen, setRebalanceOpen] = useState(false)
 
+  const [portfolioAllocationTotalsByKey, setPortfolioAllocationTotalsByKey] = useState<
+    Record<string, number>
+  >({})
+  const [portfolioAllocationMismatches, setPortfolioAllocationMismatches] = useState<
+    Array<{ key: string; allocated: number; holdingQty: number }>
+  >([])
+
   const [tradeOpen, setTradeOpen] = useState(false)
   const [tradeHolding, setTradeHolding] = useState<HoldingRow | null>(null)
   const [tradeSide, setTradeSide] = useState<'BUY' | 'SELL'>('BUY')
   const [tradeSymbol, setTradeSymbol] = useState<string>('')
+  const [tradePortfolioGroupId, setTradePortfolioGroupId] = useState<number | null>(null)
+  const [tradePortfolioOptions, setTradePortfolioOptions] = useState<
+    Array<{ group_id: number; group_name: string; reference_qty: number }>
+  >([])
+  const [tradePortfolioLoading, setTradePortfolioLoading] = useState(false)
   const [tradeQty, setTradeQty] = useState<string>('')
   const [tradeAmount, setTradeAmount] = useState<string>('')
   const [tradePctEquity, setTradePctEquity] = useState<string>('')
@@ -385,6 +399,7 @@ export function HoldingsPage() {
       setActiveGroupDataset(null)
       const holdingsBroker = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
       const groupsPromise = listGroups().catch(() => [] as Group[])
+      const allocationsPromise = fetchPortfolioAllocations().catch(() => [])
       let rawHoldings: Holding[] = []
       try {
         rawHoldings = await fetchHoldings(holdingsBroker)
@@ -409,11 +424,68 @@ export function HoldingsPage() {
           throw err
         }
       }
-      const groups = await groupsPromise
+      const [groups, allocations] = await Promise.all([groupsPromise, allocationsPromise])
       if (requestId !== loadRequestId.current) return
       setAvailableGroups(groups)
 
+      const allocationTotals: Record<string, number> = {}
+      for (const a of allocations) {
+        const sym = (a.symbol || '').trim().toUpperCase()
+        const exch = (a.exchange || 'NSE').trim().toUpperCase()
+        const qty =
+          a.reference_qty != null && Number.isFinite(Number(a.reference_qty))
+            ? Number(a.reference_qty)
+            : 0
+        if (!sym || !Number.isFinite(qty) || qty <= 0) continue
+        const key = `${exch}:${sym}`
+        allocationTotals[key] = (allocationTotals[key] ?? 0) + qty
+      }
+      setPortfolioAllocationTotalsByKey(allocationTotals)
+
       const holdingsRows: HoldingRow[] = rawHoldings.map((h) => ({ ...h }))
+
+      // Same-day delivery buys often appear in positions before holdings update.
+      // Use an effective holdings qty for mismatch detection: holdings + positive CNC positions.
+      let posDeltaByKey: Record<string, number> = {}
+      try {
+        const positions = await fetchDailyPositions({ broker_name: holdingsBroker })
+        if (requestId !== loadRequestId.current) return
+        posDeltaByKey = {}
+        for (const p of positions) {
+          const sym = (p.symbol || '').trim().toUpperCase()
+          const exch = (p.exchange || 'NSE').trim().toUpperCase()
+          const product = (p.product || '').trim().toUpperCase()
+          const qty = Number(p.qty ?? 0)
+          if (!sym || !Number.isFinite(qty) || qty <= 0) continue
+          if (product !== 'CNC' && product !== 'DELIVERY') continue
+          const key = `${exch}:${sym}`
+          posDeltaByKey[key] = (posDeltaByKey[key] ?? 0) + qty
+        }
+      } catch {
+        posDeltaByKey = {}
+      }
+
+      const holdingQtyByKey: Record<string, number> = {}
+      for (const h of holdingsRows) {
+        const sym = (h.symbol || '').trim().toUpperCase()
+        const exch = (h.exchange || 'NSE').trim().toUpperCase()
+        if (!sym) continue
+        const qty = Number(h.quantity ?? 0)
+        const base = Number.isFinite(qty) ? qty : 0
+        const key = `${exch}:${sym}`
+        const delta = posDeltaByKey[key] ?? 0
+        holdingQtyByKey[key] = base + (delta > 0 ? delta : 0)
+      }
+      const mismatches: Array<{ key: string; allocated: number; holdingQty: number }> = []
+      for (const [key, allocated] of Object.entries(allocationTotals)) {
+        const holdingQty = holdingQtyByKey[key] ?? 0
+        if (allocated > holdingQty + 1e-9) {
+          mismatches.push({ key, allocated, holdingQty })
+        }
+      }
+      setPortfolioAllocationMismatches(
+        mismatches.sort((a, b) => (b.allocated - b.holdingQty) - (a.allocated - a.holdingQty)),
+      )
 
       // Compute a simple live portfolio value estimate so that sizing
       // modes such as % of portfolio and risk-based sizing can use it.
@@ -1881,6 +1953,9 @@ export function HoldingsPage() {
     if (!universeId.startsWith('group:')) {
       setTradeBrokerName(universeId === 'holdings:angelone' ? 'angelone' : 'zerodha')
     }
+    setTradePortfolioGroupId(activeGroup?.kind === 'PORTFOLIO' ? activeGroup.id : null)
+    setTradePortfolioOptions([])
+    setTradePortfolioLoading(false)
     setTradeError(null)
     setTradeOpen(true)
   }
@@ -1924,6 +1999,33 @@ export function HoldingsPage() {
     if (!universeId.startsWith('group:')) {
       setTradeBrokerName(universeId === 'holdings:angelone' ? 'angelone' : 'zerodha')
     }
+    const defaultPortfolioId = activeGroup?.kind === 'PORTFOLIO' ? activeGroup.id : null
+    setTradePortfolioGroupId(defaultPortfolioId)
+    setTradePortfolioOptions([])
+    setTradePortfolioLoading(true)
+    void (async () => {
+      try {
+        const allocs = await fetchPortfolioAllocations({
+          symbol: (holding.symbol || '').trim().toUpperCase(),
+          exchange: (holding.exchange || 'NSE').trim().toUpperCase(),
+        })
+        const rows = allocs
+          .map((a) => ({
+            group_id: a.group_id,
+            group_name: a.group_name,
+            reference_qty:
+              a.reference_qty != null && Number.isFinite(Number(a.reference_qty))
+                ? Math.trunc(Number(a.reference_qty))
+                : 0,
+          }))
+          .sort((a, b) => a.group_name.localeCompare(b.group_name))
+        setTradePortfolioOptions(rows)
+      } catch {
+        setTradePortfolioOptions([])
+      } finally {
+        setTradePortfolioLoading(false)
+      }
+    })()
     setTradeError(null)
     setTradeOpen(true)
   }
@@ -1936,6 +2038,9 @@ export function HoldingsPage() {
     setBulkQtyOverrides({})
     setBulkAmountManual(false)
     setBulkAmountBudget('')
+    setTradePortfolioGroupId(null)
+    setTradePortfolioOptions([])
+    setTradePortfolioLoading(false)
     setTradeOpen(false)
   }
 
@@ -2211,6 +2316,40 @@ export function HoldingsPage() {
       return
     }
 
+    if (!isBulkTrade && tradeSide === 'SELL') {
+      const primary = plans[0]
+      const holding = primary?.holding ?? null
+      if (holding) {
+        const sym = (holding.symbol || '').trim().toUpperCase()
+        const exch = (holding.exchange || 'NSE').trim().toUpperCase()
+        const key = `${exch}:${sym}`
+        const sellQty = primary.qty
+        const portfolioGroupId =
+          activeGroup?.kind === 'PORTFOLIO' ? activeGroup.id : tradePortfolioGroupId
+
+        if (portfolioGroupId != null) {
+          const entry = tradePortfolioOptions.find((p) => p.group_id === portfolioGroupId)
+          const allocatedQty = entry?.reference_qty ?? (holding.reference_qty ?? 0)
+          if (sellQty > allocatedQty) {
+            setTradeError(
+              `Sell qty ${sellQty} exceeds portfolio allocation ${allocatedQty} for ${sym}. Reduce qty or sell from a different bucket.`,
+            )
+            return
+          }
+        } else if (tradePortfolioOptions.some((p) => (p.reference_qty ?? 0) > 0)) {
+          const holdingQty = Number(holding.quantity ?? 0)
+          const totalAllocated = Number(portfolioAllocationTotalsByKey[key] ?? 0)
+          const unassigned = Math.trunc((Number.isFinite(holdingQty) ? holdingQty : 0) - (Number.isFinite(totalAllocated) ? totalAllocated : 0))
+          if (sellQty > unassigned) {
+            setTradeError(
+              `Sell qty ${sellQty} exceeds unassigned qty ${Math.max(0, unassigned)} for ${sym}. Sell from the relevant portfolio, or reconcile allocations first.`,
+            )
+            return
+          }
+        }
+      }
+    }
+
     if (tradeExecutionMode === 'AUTO' && tradeExecutionTarget === 'LIVE') {
       const tradeBroker = tradeBrokerName === 'angelone' ? 'AngelOne' : 'Zerodha'
       const isAngelOne = tradeBrokerName === 'angelone'
@@ -2247,8 +2386,15 @@ export function HoldingsPage() {
 
       for (const { holding, qty, price, bracketPrice } of plans) {
         try {
+          const portfolioGroupId =
+            activeGroup?.kind === 'PORTFOLIO'
+              ? activeGroup.id
+              : isBulkTrade
+                ? null
+                : tradePortfolioGroupId
           const primary = await createManualOrder({
             broker_name: tradeBrokerName,
+            portfolio_group_id: portfolioGroupId,
             symbol: holding.symbol,
             exchange: holding.exchange ?? 'NSE',
             side: tradeSide,
@@ -2286,6 +2432,7 @@ export function HoldingsPage() {
             const bracketSide = tradeSide === 'BUY' ? 'SELL' : 'BUY'
             const bracket = await createManualOrder({
               broker_name: tradeBrokerName,
+              portfolio_group_id: portfolioGroupId,
               symbol: holding.symbol,
               exchange: holding.exchange ?? 'NSE',
               side: bracketSide,
@@ -2741,8 +2888,24 @@ export function HoldingsPage() {
       type: 'number',
       width: 110,
       valueGetter: (_value, row) => (row as HoldingRow).reference_qty ?? null,
-      valueFormatter: (value) =>
-        value != null && Number.isFinite(Number(value)) ? String(Math.trunc(Number(value))) : '—',
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const ref = row.reference_qty
+        if (ref == null || !Number.isFinite(Number(ref))) return <span>—</span>
+        const refQty = Math.trunc(Number(ref))
+        const holdRaw = row.quantity
+        const holdQty =
+          holdRaw != null && Number.isFinite(Number(holdRaw))
+            ? Math.trunc(Number(holdRaw))
+            : null
+        if (holdQty == null) return <span>{refQty}</span>
+        const bad = refQty > holdQty
+        return (
+          <span style={bad ? { color: '#d32f2f', fontWeight: 600 } : undefined}>
+            {refQty}/{holdQty}
+          </span>
+        )
+      },
     },
     {
       field: 'average_price',
@@ -2758,8 +2921,23 @@ export function HoldingsPage() {
       type: 'number',
       width: 130,
       valueGetter: (_value, row) => (row as HoldingRow).reference_price ?? null,
-      valueFormatter: (value) =>
-        value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—',
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const ref = row.reference_price
+        if (ref == null || !Number.isFinite(Number(ref))) return <span>—</span>
+        const refPrice = Number(ref)
+        const holdAvgRaw = row.average_price
+        const holdAvg =
+          holdAvgRaw != null && Number.isFinite(Number(holdAvgRaw)) && Number(holdAvgRaw) > 0
+            ? Number(holdAvgRaw)
+            : null
+        if (holdAvg == null) return <span>{refPrice.toFixed(2)}</span>
+        return (
+          <span>
+            {refPrice.toFixed(2)}/{holdAvg.toFixed(2)}
+          </span>
+        )
+      },
     },
     {
       field: 'last_price',
@@ -3132,6 +3310,24 @@ export function HoldingsPage() {
             >
               {corrError}
             </Typography>
+          )}
+          {portfolioAllocationMismatches.length > 0 && (
+            <Alert
+              severity="warning"
+              sx={{ mb: 1 }}
+              action={
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => navigate('/groups')}
+                >
+                  Open groups
+                </Button>
+              }
+            >
+              Portfolio allocation mismatch detected for {portfolioAllocationMismatches.length} symbol
+              {portfolioAllocationMismatches.length === 1 ? '' : 's'} (Σ portfolio ref qty exceeds broker holdings).
+            </Alert>
           )}
         </Box>
 
@@ -4315,6 +4511,47 @@ export function HoldingsPage() {
                 label={`Execution target: ${tradeExecutionTarget}`}
               />
             </Box>
+
+            {!isBulkTrade && tradeHolding && activeGroup?.kind !== 'PORTFOLIO' && (
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+                <TextField
+                  label="Allocation bucket"
+                  select
+                  size="small"
+                  value={tradePortfolioGroupId != null ? String(tradePortfolioGroupId) : ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setTradePortfolioGroupId(v ? Number(v) : null)
+                  }}
+                  sx={{ minWidth: 260 }}
+                  helperText={
+                    tradePortfolioOptions.length > 0
+                      ? 'Choose which portfolio (or Unassigned) this trade belongs to.'
+                      : tradePortfolioLoading
+                        ? 'Loading portfolio allocations…'
+                        : 'No portfolios contain this symbol; trade is Unassigned.'
+                  }
+                >
+                  <MenuItem value="">Unassigned</MenuItem>
+                  {tradePortfolioOptions.map((p) => (
+                    <MenuItem key={p.group_id} value={String(p.group_id)}>
+                      {p.group_name} (alloc {p.reference_qty})
+                    </MenuItem>
+                  ))}
+                </TextField>
+                {tradePortfolioOptions.length > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    Tip: for portfolio sells, it’s safer to open that portfolio universe and sell there.
+                  </Typography>
+                )}
+              </Box>
+            )}
+
+            {!isBulkTrade && tradeHolding && activeGroup?.kind === 'PORTFOLIO' && (
+              <Alert severity="info">
+                This trade is attributed to portfolio: {activeGroup.name}
+              </Alert>
+            )}
             <Box>
               <Typography variant="caption" color="text.secondary">
                 Position sizing

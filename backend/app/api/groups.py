@@ -28,7 +28,13 @@ from app.schemas.groups import (
     GroupRead,
     GroupUpdate,
 )
+from app.schemas.portfolio_allocations import (
+    PortfolioAllocationRead,
+    PortfolioAllocationReconcileRequest,
+    PortfolioAllocationReconcileResponse,
+)
 from app.services.group_imports import import_watchlist_dataset
+from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -507,6 +513,173 @@ def delete_group_member(
     db.delete(member)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/allocations/portfolio", response_model=List[PortfolioAllocationRead])
+def list_portfolio_allocations(
+    symbol: Optional[str] = Query(None),
+    exchange: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+) -> List[PortfolioAllocationRead]:
+    """Return portfolio allocation baselines stored in group members."""
+
+    q = (
+        db.query(GroupMember, Group)
+        .join(Group, Group.id == GroupMember.group_id)
+        .filter(Group.kind == "PORTFOLIO")
+    )
+    if user is not None:
+        q = q.filter((Group.owner_id == user.id) | (Group.owner_id.is_(None)))
+
+    if symbol:
+        q = q.filter(func.upper(GroupMember.symbol) == symbol.strip().upper())
+    if exchange:
+        q = q.filter(
+            func.upper(func.coalesce(GroupMember.exchange, "NSE"))
+            == exchange.strip().upper()
+        )
+
+    rows = q.order_by(Group.name.asc(), GroupMember.symbol.asc()).all()
+    out: list[PortfolioAllocationRead] = []
+    for member, group in rows:
+        out.append(
+            PortfolioAllocationRead(
+                group_id=group.id,
+                group_name=group.name,
+                symbol=(member.symbol or "").strip().upper(),
+                exchange=(member.exchange or "NSE").strip().upper(),
+                reference_qty=member.reference_qty,
+                reference_price=member.reference_price,
+            )
+        )
+    return out
+
+
+@router.post(
+    "/allocations/portfolio/reconcile",
+    response_model=PortfolioAllocationReconcileResponse,
+)
+def reconcile_portfolio_allocations(
+    payload: PortfolioAllocationReconcileRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
+) -> PortfolioAllocationReconcileResponse:
+    """Apply allocation qty updates for a single symbol across portfolios."""
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required."
+        )
+
+    sym_u = (payload.symbol or "").strip().upper()
+    if not sym_u:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="symbol is required.",
+        )
+    exch_u = (payload.exchange or "NSE").strip().upper()
+
+    updates = payload.updates or []
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="updates is required.",
+        )
+
+    # Fetch current broker holdings as the source-of-truth quantity.
+    from app.api.positions import list_holdings
+
+    holdings = list_holdings(
+        broker_name=payload.broker_name,
+        db=db,
+        settings=settings,
+        user=user,
+    )
+    holding_qty: float = 0.0
+    for h in holdings:
+        if (h.symbol or "").strip().upper() != sym_u:
+            continue
+        if (h.exchange or "NSE").strip().upper() != exch_u:
+            continue
+        holding_qty = float(getattr(h, "quantity", 0.0) or 0.0)
+        break
+
+    total = sum(float(u.reference_qty or 0) for u in updates)
+    if total > holding_qty + 1e-9:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Total allocated qty ({total:g}) exceeds broker holdings qty "
+                f"({holding_qty:g})."
+            ),
+        )
+
+    updated_groups = 0
+    for u in updates:
+        group = _get_group_or_404(db, int(u.group_id))
+        if group.kind != "PORTFOLIO":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Group {group.id} is not a PORTFOLIO.",
+            )
+        if group.owner_id is not None and group.owner_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden"
+            )
+
+        member = (
+            db.query(GroupMember)
+            .filter(
+                GroupMember.group_id == group.id,
+                func.upper(GroupMember.symbol) == sym_u,
+                func.upper(func.coalesce(GroupMember.exchange, "NSE")) == exch_u,
+            )
+            .one_or_none()
+        )
+        if member is None:
+            member = GroupMember(
+                group_id=group.id,
+                symbol=sym_u,
+                exchange=exch_u,
+                target_weight=None,
+                notes=None,
+                reference_qty=int(u.reference_qty),
+                reference_price=None,
+            )
+            db.add(member)
+        else:
+            member.reference_qty = int(u.reference_qty)
+            db.add(member)
+
+        updated_groups += 1
+
+    db.commit()
+
+    record_system_event(
+        db,
+        level="INFO",
+        category="portfolio",
+        message="Portfolio allocations reconciled",
+        correlation_id=None,
+        details={
+            "broker_name": payload.broker_name,
+            "symbol": sym_u,
+            "exchange": exch_u,
+            "holding_qty": float(holding_qty),
+            "allocated_total": float(total),
+            "updated_groups": updated_groups,
+        },
+    )
+
+    return PortfolioAllocationReconcileResponse(
+        symbol=sym_u,
+        exchange=exch_u,
+        holding_qty=float(holding_qty),
+        allocated_total=float(total),
+        updated_groups=updated_groups,
+    )
 
 
 @router.get("/memberships", response_model=GroupMembershipsRead)

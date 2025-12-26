@@ -16,7 +16,7 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
-from app.models import BrokerConnection, Order, Strategy, User
+from app.models import BrokerConnection, Group, Order, Strategy, User
 from app.schemas.orders import (
     ManualOrderCreate,
     OrderRead,
@@ -237,6 +237,32 @@ def create_manual_order(
 
     broker = _ensure_supported_broker(payload.broker_name)
 
+    portfolio_group_id: int | None = None
+    if getattr(payload, "portfolio_group_id", None) is not None:
+        try:
+            portfolio_group_id = int(payload.portfolio_group_id)  # type: ignore[attr-defined]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="portfolio_group_id must be an integer.",
+            ) from exc
+        group = db.get(Group, portfolio_group_id)
+        if group is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Portfolio group not found: {portfolio_group_id}",
+            )
+        if group.kind != "PORTFOLIO":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Group {portfolio_group_id} is not a PORTFOLIO.",
+            )
+        if group.owner_id is not None and group.owner_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden.",
+            )
+
     if payload.gtt and payload.order_type != "LIMIT":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -294,6 +320,7 @@ def create_manual_order(
         broker_name=broker,
         alert_id=None,
         strategy_id=None,
+        portfolio_group_id=portfolio_group_id,
         symbol=payload.symbol,
         exchange=payload.exchange,
         side=payload.side,
@@ -1074,6 +1101,13 @@ def execute_order_internal(
         else:
             price = None
 
+        extra: dict[str, object] = {}
+        if broker_name == "zerodha" and getattr(order, "portfolio_group_id", None):
+            # Zerodha supports an optional `tag` field for client-side attribution.
+            # Keep it short and alphanumeric to satisfy broker constraints.
+            gid = int(order.portfolio_group_id)  # type: ignore[arg-type]
+            extra["tag"] = f"STPF{gid}"
+
         return client.place_order(
             tradingsymbol=tradingsymbol,
             transaction_type=order.side,
@@ -1084,6 +1118,7 @@ def execute_order_internal(
             price=price,
             trigger_price=trigger_price,
             variety=variety,
+            **extra,
         )
 
     try:
