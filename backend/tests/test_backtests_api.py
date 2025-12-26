@@ -66,13 +66,31 @@ def setup_module() -> None:  # type: ignore[override]
 
 
 def test_backtests_runs_roundtrip() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
     res = client.post(
         "/api/backtests/runs",
         json={
             "kind": "SIGNAL",
             "title": "test",
-            "universe": {"mode": "GROUP", "group_id": 123, "symbols": []},
-            "config": {"hello": "world"},
+            "universe": {
+                "mode": "GROUP",
+                "group_id": 123,
+                "symbols": [
+                    {"symbol": "AAA", "exchange": "NSE"},
+                    {"symbol": "BBB", "exchange": "NSE"},
+                ],
+            },
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "mode": "DSL",
+                "dsl": "PRICE() > 0",
+                "forward_windows": [1],
+            },
         },
     )
     assert res.status_code == 200
@@ -80,7 +98,9 @@ def test_backtests_runs_roundtrip() -> None:
     assert run["kind"] == "SIGNAL"
     assert run["status"] == "COMPLETED"
     assert run["title"] == "test"
-    assert run["config"]["config"]["hello"] == "world"
+    assert run["config"]["config"]["dsl"] == "PRICE() > 0"
+    assert run["result"]["meta"]["symbols_requested"] == 2
+    assert run["result"]["by_window"]["1"]["count"] == 4
 
     res2 = client.get("/api/backtests/runs?limit=10")
     assert res2.status_code == 200
@@ -91,6 +111,42 @@ def test_backtests_runs_roundtrip() -> None:
     res3 = client.get(f"/api/backtests/runs/{run['id']}")
     assert res3.status_code == 200
     assert res3.json()["id"] == run["id"]
+
+
+def test_backtests_signal_backtest_basic_metrics() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "SIGNAL",
+            "title": "perf_pct",
+            "universe": {
+                "mode": "GROUP",
+                "group_id": 123,
+                "symbols": [
+                    {"symbol": "AAA", "exchange": "NSE"},
+                    {"symbol": "BBB", "exchange": "NSE"},
+                ],
+            },
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "mode": "DSL",
+                "dsl": "PERF_PCT(1) > 0",
+                "forward_windows": [1],
+            },
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "COMPLETED"
+    win = body["result"]["by_window"]["1"]
+    assert win["count"] == 2
+    assert win["win_rate_pct"] == 50.0
 
 
 def test_backtests_eod_candles_loader() -> None:

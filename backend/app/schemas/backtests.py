@@ -74,7 +74,7 @@ class BacktestRunRead(BaseModel):
 
 
 class EodCandleLoadRequest(BaseModel):
-    symbols: list[UniverseSymbol] = Field(min_length=1)
+    symbols: list[UniverseSymbol] = Field(min_items=1)
     start: datetime
     end: datetime
     allow_fetch: bool = True

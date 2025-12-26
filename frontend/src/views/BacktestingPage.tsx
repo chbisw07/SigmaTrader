@@ -33,10 +33,14 @@ import {
 } from '../services/backtests'
 
 import backtestingHelpText from '../../../docs/backtesting_page_help.md?raw'
+import signalBacktestingHelpText from '../../../docs/backtesting_signal_help.md?raw'
 
 type UniverseMode = 'HOLDINGS' | 'GROUP' | 'BOTH'
 
 type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION'
+
+type SignalMode = 'DSL' | 'RANKING'
+type RankingCadence = 'WEEKLY' | 'MONTHLY'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -70,6 +74,13 @@ export function BacktestingPage() {
   const preset = useMemo(() => getDatePreset('1Y'), [])
   const [startDate, setStartDate] = useState(preset.start)
   const [endDate, setEndDate] = useState(preset.end)
+
+  const [signalMode, setSignalMode] = useState<SignalMode>('DSL')
+  const [signalDsl, setSignalDsl] = useState('RSI(14) < 30')
+  const [signalForwardWindows, setSignalForwardWindows] = useState<number[]>([1, 5, 20])
+  const [rankingWindow, setRankingWindow] = useState(20)
+  const [rankingTopN, setRankingTopN] = useState(10)
+  const [rankingCadence, setRankingCadence] = useState<RankingCadence>('MONTHLY')
 
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
@@ -183,6 +194,33 @@ export function BacktestingPage() {
     try {
       const symbols = await buildUniverseSymbols()
       const title = `${kind} backtest`
+      if (kind === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim()) {
+        throw new Error('DSL is required for Signal backtest (DSL mode).')
+      }
+
+      const config: Record<string, unknown> =
+        kind === 'SIGNAL'
+          ? {
+              timeframe: '1d',
+              start_date: startDate,
+              end_date: endDate,
+              mode: signalMode,
+              dsl: signalMode === 'DSL' ? signalDsl : '',
+              forward_windows: signalForwardWindows,
+              ranking_metric: 'PERF_PCT',
+              ranking_window: rankingWindow,
+              top_n: rankingTopN,
+              cadence: rankingCadence,
+            }
+          : {
+              timeframe: '1d',
+              start_date: startDate,
+              end_date: endDate,
+              preset: {
+                note: 'Backtesting engine will be implemented in subsequent tasks.',
+              },
+            }
+
       const run = await createBacktestRun({
         kind,
         title,
@@ -192,14 +230,7 @@ export function BacktestingPage() {
           group_id: typeof groupId === 'number' ? groupId : null,
           symbols,
         },
-        config: {
-          timeframe: '1d',
-          start_date: startDate,
-          end_date: endDate,
-          preset: {
-            note: 'Backtesting engine will be implemented in subsequent tasks.',
-          },
-        },
+        config,
       })
       setSelectedRunId(run.id)
       await refreshRuns()
@@ -226,6 +257,106 @@ export function BacktestingPage() {
     const groupLabel = groupDetail ? groupDetail.name : '(select group)'
     return `Both: Holdings (${brokerName}) + ${groupLabel}`
   }, [brokerName, groupDetail, universeMode])
+
+  const helpText = tab === 'SIGNAL' ? signalBacktestingHelpText : backtestingHelpText
+
+  const signalPresets = useMemo(
+    () => [
+      { id: 'RSI_OVERSOLD', label: 'RSI oversold (RSI(14) < 30)', mode: 'DSL' as const, dsl: 'RSI(14) < 30' },
+      { id: 'SMA_TREND', label: 'Uptrend (MA(50) > MA(200))', mode: 'DSL' as const, dsl: 'MA(50) > MA(200)' },
+      {
+        id: 'MEAN_REVERT',
+        label: 'Oversold in uptrend (MA50>MA200 AND RSI14<35)',
+        mode: 'DSL' as const,
+        dsl: 'MA(50) > MA(200) AND RSI(14) < 35',
+      },
+      { id: 'TOP_MOM_20D', label: 'Top‑N momentum (20D, monthly)', mode: 'RANKING' as const },
+      { id: 'TOP_MOM_60D', label: 'Top‑N momentum (60D, weekly)', mode: 'RANKING' as const },
+    ],
+    [],
+  )
+
+  const applySignalPreset = useCallback(
+    (presetId: string) => {
+      const p = signalPresets.find((x) => x.id === presetId)
+      if (!p) return
+      if (p.mode === 'DSL') {
+        setSignalMode('DSL')
+        setSignalDsl(p.dsl)
+        return
+      }
+      setSignalMode('RANKING')
+      if (presetId === 'TOP_MOM_60D') {
+        setRankingWindow(60)
+        setRankingTopN(10)
+        setRankingCadence('WEEKLY')
+      } else {
+        setRankingWindow(20)
+        setRankingTopN(10)
+        setRankingCadence('MONTHLY')
+      }
+    },
+    [signalPresets],
+  )
+
+  const signalSummaryRows = useMemo(() => {
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result || tab !== 'SIGNAL') return []
+    const byWindow = result.by_window as Record<string, unknown> | undefined
+    if (!byWindow) return []
+    return Object.entries(byWindow).map(([w, v]) => {
+      const row = (v ?? {}) as Record<string, unknown>
+      return {
+        id: w,
+        window: `${w}D`,
+        count: Number(row.count ?? 0),
+        win_rate_pct: row.win_rate_pct ?? null,
+        avg_return_pct: row.avg_return_pct ?? null,
+        p10: row.p10 ?? null,
+        p50: row.p50 ?? null,
+        p90: row.p90 ?? null,
+      }
+    })
+  }, [selectedRun, tab])
+
+  const signalSummaryColumns = useMemo((): GridColDef[] => {
+    const fmtPct = (value: unknown, digits: number) =>
+      value == null || value === '' ? '' : `${Number(value).toFixed(digits)}%`
+    return [
+      { field: 'window', headerName: 'Window', width: 90 },
+      { field: 'count', headerName: 'Count', width: 90 },
+      {
+        field: 'win_rate_pct',
+        headerName: 'Win %',
+        width: 110,
+        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 1),
+      },
+      {
+        field: 'avg_return_pct',
+        headerName: 'Avg %',
+        width: 110,
+        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+      },
+      {
+        field: 'p10',
+        headerName: 'P10',
+        width: 110,
+        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+      },
+      {
+        field: 'p50',
+        headerName: 'P50',
+        width: 110,
+        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+      },
+      {
+        field: 'p90',
+        headerName: 'P90',
+        width: 110,
+        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+      },
+    ]
+  }, [])
 
   return (
     <Box sx={{ p: 2 }}>
@@ -336,6 +467,109 @@ export function BacktestingPage() {
               />
             </Stack>
 
+            {tab === 'SIGNAL' && (
+              <Stack spacing={1.5}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="bt-signal-mode-label">Signal mode</InputLabel>
+                  <Select
+                    labelId="bt-signal-mode-label"
+                    label="Signal mode"
+                    value={signalMode}
+                    onChange={(e) => setSignalMode(e.target.value as SignalMode)}
+                  >
+                    <MenuItem value="DSL">DSL condition</MenuItem>
+                    <MenuItem value="RANKING">Ranking (Top‑N momentum)</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <FormControl fullWidth size="small">
+                  <InputLabel id="bt-signal-preset-label">Preset</InputLabel>
+                  <Select
+                    labelId="bt-signal-preset-label"
+                    label="Preset"
+                    value=""
+                    onChange={(e) => applySignalPreset(String(e.target.value))}
+                  >
+                    <MenuItem value="">(choose)</MenuItem>
+                    {signalPresets.map((p) => (
+                      <MenuItem key={p.id} value={p.id}>
+                        {p.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                {signalMode === 'DSL' ? (
+                  <TextField
+                    label="DSL"
+                    size="small"
+                    multiline
+                    minRows={3}
+                    value={signalDsl}
+                    onChange={(e) => setSignalDsl(e.target.value)}
+                    placeholder='Example: MA(50) > MA(200) AND RSI(14) < 35'
+                  />
+                ) : (
+                  <Stack direction="row" spacing={1}>
+                    <TextField
+                      label="Momentum window (days)"
+                      size="small"
+                      type="number"
+                      value={rankingWindow}
+                      onChange={(e) => setRankingWindow(Number(e.target.value))}
+                      inputProps={{ min: 1, max: 400 }}
+                      fullWidth
+                    />
+                    <TextField
+                      label="Top N"
+                      size="small"
+                      type="number"
+                      value={rankingTopN}
+                      onChange={(e) => setRankingTopN(Number(e.target.value))}
+                      inputProps={{ min: 1, max: 200 }}
+                      fullWidth
+                    />
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="bt-ranking-cadence-label">Cadence</InputLabel>
+                      <Select
+                        labelId="bt-ranking-cadence-label"
+                        label="Cadence"
+                        value={rankingCadence}
+                        onChange={(e) => setRankingCadence(e.target.value as RankingCadence)}
+                      >
+                        <MenuItem value="WEEKLY">Weekly</MenuItem>
+                        <MenuItem value="MONTHLY">Monthly</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Stack>
+                )}
+
+                <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                  <Typography variant="caption" color="text.secondary" sx={{ mr: 1 }}>
+                    Forward windows
+                  </Typography>
+                  {[1, 5, 20, 60].map((w) => {
+                    const active = signalForwardWindows.includes(w)
+                    return (
+                      <Chip
+                        key={w}
+                        size="small"
+                        label={`${w}D`}
+                        color={active ? 'primary' : 'default'}
+                        variant={active ? 'filled' : 'outlined'}
+                        onClick={() => {
+                          setSignalForwardWindows((prev) => {
+                            const next = active ? prev.filter((x) => x !== w) : [...prev, w]
+                            return next.length ? next.sort((a, b) => a - b) : [1]
+                          })
+                        }}
+                      />
+                    )
+                  })}
+                </Stack>
+              </Stack>
+            )}
+
             <Stack direction="row" spacing={1} flexWrap="wrap">
               {(['6M', '1Y', '2Y'] as const).map((p) => (
                 <Button
@@ -363,9 +597,11 @@ export function BacktestingPage() {
               </Typography>
             )}
 
-            <Typography variant="caption" color="text.secondary">
-              Foundation note: this sprint adds the Backtesting workspace and run history. Strategy engines are implemented in subsequent tasks.
-            </Typography>
+            {tab !== 'SIGNAL' && (
+              <Typography variant="caption" color="text.secondary">
+                Note: Portfolio and Execution backtesting engines are implemented in subsequent tasks (S28/G03+).
+              </Typography>
+            )}
           </Stack>
         </Paper>
 
@@ -401,6 +637,22 @@ export function BacktestingPage() {
                 <Typography variant="body2" color="text.secondary">
                   Run #{selectedRun.id} • {selectedRun.kind} • {selectedRun.status}
                 </Typography>
+
+                {tab === 'SIGNAL' && selectedRun.status === 'COMPLETED' && signalSummaryRows.length > 0 && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="subtitle2">Signal summary (by forward window)</Typography>
+                    <Box sx={{ height: 220, mt: 1 }}>
+                      <DataGrid
+                        rows={signalSummaryRows}
+                        columns={signalSummaryColumns}
+                        density="compact"
+                        disableRowSelectionOnClick
+                        hideFooter
+                      />
+                    </Box>
+                  </Box>
+                )}
+
                 <pre style={{ margin: 0, fontSize: 12, overflow: 'auto' }}>
                   {JSON.stringify(selectedRun, null, 2)}
                 </pre>
@@ -460,7 +712,7 @@ export function BacktestingPage() {
       <Dialog open={helpOpen} onClose={() => setHelpOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Backtesting help</DialogTitle>
         <DialogContent>
-          <MarkdownLite text={backtestingHelpText} />
+          <MarkdownLite text={helpText} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHelpOpen(false)}>Close</Button>
