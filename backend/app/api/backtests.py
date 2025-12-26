@@ -18,8 +18,10 @@ from app.schemas.backtests import (
     EodCandleLoadRequest,
     EodCandleLoadResponse,
 )
+from app.schemas.backtests_portfolio import PortfolioBacktestConfigIn
 from app.schemas.backtests_signal import SignalBacktestConfigIn
 from app.services.backtests_data import _norm_symbol_ref, load_eod_close_matrix
+from app.services.backtests_portfolio import run_target_weights_portfolio_backtest
 from app.services.backtests_signal import SignalBacktestConfig, run_signal_backtest
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -43,6 +45,7 @@ def create_backtest_run(
     title = payload.title.strip() if payload.title and payload.title.strip() else None
 
     cfg_in: SignalBacktestConfigIn | None = None
+    pf_cfg_in: PortfolioBacktestConfigIn | None = None
     if kind == "SIGNAL":
         try:
             cfg_in = SignalBacktestConfigIn.parse_obj(payload.config)
@@ -56,6 +59,24 @@ def create_backtest_run(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="DSL is required for SIGNAL backtest mode DSL.",
             )
+    elif kind == "PORTFOLIO":
+        try:
+            pf_cfg_in = PortfolioBacktestConfigIn.parse_obj(payload.config)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid PORTFOLIO backtest config: {exc}",
+            ) from exc
+        if pf_cfg_in.method != "TARGET_WEIGHTS":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only TARGET_WEIGHTS is supported for PORTFOLIO backtests.",
+            )
+        if payload.universe.group_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="PORTFOLIO backtests require universe.group_id.",
+            )
 
     config = {
         "kind": kind,
@@ -64,7 +85,7 @@ def create_backtest_run(
         "config": payload.config,
     }
     now = datetime.now(UTC)
-    status_val = "RUNNING" if kind == "SIGNAL" else "PENDING"
+    status_val = "RUNNING" if kind in {"SIGNAL", "PORTFOLIO"} else "PENDING"
     run = BacktestRun(
         owner_id=user.id if user is not None else None,
         kind=kind,
@@ -73,7 +94,7 @@ def create_backtest_run(
         config_json=json.dumps(config, ensure_ascii=False),
         result_json=None,
         error_message=None,
-        started_at=now if kind == "SIGNAL" else None,
+        started_at=now if kind in {"SIGNAL", "PORTFOLIO"} else None,
         finished_at=None,
     )
     db.add(run)
@@ -105,8 +126,18 @@ def create_backtest_run(
                 config=cfg,
                 allow_fetch=True,
             )
+        elif kind == "PORTFOLIO":
+            assert pf_cfg_in is not None
+            group_id = int(payload.universe.group_id)
+            result = run_target_weights_portfolio_backtest(
+                db,
+                settings,
+                group_id=group_id,
+                config=pf_cfg_in,
+                allow_fetch=True,
+            )
 
-        if kind == "SIGNAL":
+        if kind in {"SIGNAL", "PORTFOLIO"}:
             run.status = "COMPLETED"
             run.finished_at = datetime.now(UTC)
             run.result_json = json.dumps(result, ensure_ascii=False) if result else None

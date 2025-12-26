@@ -22,6 +22,7 @@ import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { MarkdownLite } from '../components/MarkdownLite'
+import { PriceChart, type PriceCandle } from '../components/PriceChart'
 import { fetchHoldings } from '../services/positions'
 import { fetchGroup, listGroups, type Group, type GroupDetail } from '../services/groups'
 import {
@@ -33,6 +34,7 @@ import {
 } from '../services/backtests'
 
 import backtestingHelpText from '../../../docs/backtesting_page_help.md?raw'
+import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_help.md?raw'
 import signalBacktestingHelpText from '../../../docs/backtesting_signal_help.md?raw'
 
 type UniverseMode = 'HOLDINGS' | 'GROUP' | 'BOTH'
@@ -41,6 +43,7 @@ type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION'
 
 type SignalMode = 'DSL' | 'RANKING'
 type RankingCadence = 'WEEKLY' | 'MONTHLY'
+type PortfolioCadence = 'WEEKLY' | 'MONTHLY'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -81,6 +84,14 @@ export function BacktestingPage() {
   const [rankingWindow, setRankingWindow] = useState(20)
   const [rankingTopN, setRankingTopN] = useState(10)
   const [rankingCadence, setRankingCadence] = useState<RankingCadence>('MONTHLY')
+
+  const [portfolioCadence, setPortfolioCadence] = useState<PortfolioCadence>('MONTHLY')
+  const [portfolioInitialCash, setPortfolioInitialCash] = useState(100000)
+  const [portfolioBudgetPct, setPortfolioBudgetPct] = useState(100)
+  const [portfolioMaxTrades, setPortfolioMaxTrades] = useState(20)
+  const [portfolioMinTradeValue, setPortfolioMinTradeValue] = useState(0)
+  const [portfolioSlippageBps, setPortfolioSlippageBps] = useState(0)
+  const [portfolioChargesBps, setPortfolioChargesBps] = useState(0)
 
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
@@ -197,6 +208,14 @@ export function BacktestingPage() {
       if (kind === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim()) {
         throw new Error('DSL is required for Signal backtest (DSL mode).')
       }
+      if (kind === 'PORTFOLIO') {
+        if (universeMode !== 'GROUP') {
+          throw new Error('Portfolio backtests currently require Universe = Group.')
+        }
+        if (typeof groupId !== 'number') {
+          throw new Error('Please select a portfolio group for Portfolio backtests.')
+        }
+      }
 
       const config: Record<string, unknown> =
         kind === 'SIGNAL'
@@ -212,6 +231,20 @@ export function BacktestingPage() {
               top_n: rankingTopN,
               cadence: rankingCadence,
             }
+          : kind === 'PORTFOLIO'
+            ? {
+                timeframe: '1d',
+                start_date: startDate,
+                end_date: endDate,
+                method: 'TARGET_WEIGHTS',
+                cadence: portfolioCadence,
+                initial_cash: portfolioInitialCash,
+                budget_pct: portfolioBudgetPct,
+                max_trades: portfolioMaxTrades,
+                min_trade_value: portfolioMinTradeValue,
+                slippage_bps: portfolioSlippageBps,
+                charges_bps: portfolioChargesBps,
+              }
           : {
               timeframe: '1d',
               start_date: startDate,
@@ -258,7 +291,12 @@ export function BacktestingPage() {
     return `Both: Holdings (${brokerName}) + ${groupLabel}`
   }, [brokerName, groupDetail, universeMode])
 
-  const helpText = tab === 'SIGNAL' ? signalBacktestingHelpText : backtestingHelpText
+  const helpText =
+    tab === 'SIGNAL'
+      ? signalBacktestingHelpText
+      : tab === 'PORTFOLIO'
+        ? portfolioBacktestingHelpText
+        : backtestingHelpText
 
   const signalPresets = useMemo(
     () => [
@@ -354,6 +392,90 @@ export function BacktestingPage() {
         headerName: 'P90',
         width: 110,
         valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+      },
+    ]
+  }, [])
+
+  const portfolioEquityCandles = useMemo((): PriceCandle[] => {
+    if (tab !== 'PORTFOLIO') return []
+    if (!selectedRun?.result) return []
+    const result = selectedRun.result as Record<string, unknown>
+    const series = result.series as Record<string, unknown> | undefined
+    if (!series) return []
+    const dates = (series.dates as unknown[] | undefined) ?? []
+    const equity = (series.equity as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      candles.push({ ts, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return candles
+  }, [selectedRun, tab])
+
+  const portfolioDrawdownCandles = useMemo((): PriceCandle[] => {
+    if (tab !== 'PORTFOLIO') return []
+    if (!selectedRun?.result) return []
+    const result = selectedRun.result as Record<string, unknown>
+    const series = result.series as Record<string, unknown> | undefined
+    if (!series) return []
+    const dates = (series.dates as unknown[] | undefined) ?? []
+    const dd = (series.drawdown_pct as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(dates.length, dd.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(dd[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      candles.push({ ts, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return candles
+  }, [selectedRun, tab])
+
+  const portfolioMetrics = useMemo(() => {
+    if (tab !== 'PORTFOLIO') return null
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return null
+    return (result.metrics as Record<string, unknown> | undefined) ?? null
+  }, [selectedRun, tab])
+
+  const portfolioActionsRows = useMemo(() => {
+    if (tab !== 'PORTFOLIO') return []
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return []
+    const actions = (result.actions as unknown[] | undefined) ?? []
+    return actions.map((a, idx) => {
+      const row = (a ?? {}) as Record<string, unknown>
+      const trades = (row.trades as unknown[] | undefined) ?? []
+      return {
+        id: idx,
+        date: String(row.date ?? ''),
+        trades: trades.length,
+        turnover_pct: row.turnover_pct ?? null,
+        budget_used: row.budget_used ?? null,
+      }
+    })
+  }, [selectedRun, tab])
+
+  const portfolioActionsColumns = useMemo((): GridColDef[] => {
+    const fmtPct = (value: unknown) =>
+      value == null || value === '' ? '' : `${Number(value).toFixed(1)}%`
+    const fmtNum0 = (value: unknown) =>
+      value == null || value === '' ? '' : Number(value).toFixed(0)
+    return [
+      { field: 'date', headerName: 'Date', width: 120 },
+      { field: 'trades', headerName: 'Trades', width: 90 },
+      {
+        field: 'turnover_pct',
+        headerName: 'Turnover %',
+        width: 120,
+        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value),
+      },
+      {
+        field: 'budget_used',
+        headerName: 'Budget used',
+        width: 140,
+        valueFormatter: (params) => fmtNum0((params as { value?: unknown }).value),
       },
     ]
   }, [])
@@ -570,6 +692,123 @@ export function BacktestingPage() {
               </Stack>
             )}
 
+            {tab === 'PORTFOLIO' && (
+              <Stack spacing={1.5}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="bt-pf-method-label">Method</InputLabel>
+                  <Select labelId="bt-pf-method-label" label="Method" value="TARGET_WEIGHTS" disabled>
+                    <MenuItem value="TARGET_WEIGHTS">Target weights</MenuItem>
+                  </Select>
+                </FormControl>
+
+                <Stack direction="row" spacing={1}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-pf-cadence-label">Cadence</InputLabel>
+                    <Select
+                      labelId="bt-pf-cadence-label"
+                      label="Cadence"
+                      value={portfolioCadence}
+                      onChange={(e) => setPortfolioCadence(e.target.value as PortfolioCadence)}
+                    >
+                      <MenuItem value="WEEKLY">Weekly</MenuItem>
+                      <MenuItem value="MONTHLY">Monthly</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <TextField
+                    label="Initial cash"
+                    size="small"
+                    type="number"
+                    value={portfolioInitialCash}
+                    onChange={(e) => setPortfolioInitialCash(Number(e.target.value))}
+                    inputProps={{ min: 1 }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Budget (%)"
+                    size="small"
+                    type="number"
+                    value={portfolioBudgetPct}
+                    onChange={(e) => setPortfolioBudgetPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Max trades"
+                    size="small"
+                    type="number"
+                    value={portfolioMaxTrades}
+                    onChange={(e) => setPortfolioMaxTrades(Number(e.target.value))}
+                    inputProps={{ min: 1, max: 1000 }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Min trade value"
+                    size="small"
+                    type="number"
+                    value={portfolioMinTradeValue}
+                    onChange={(e) => setPortfolioMinTradeValue(Number(e.target.value))}
+                    inputProps={{ min: 0 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Slippage (bps)"
+                    size="small"
+                    type="number"
+                    value={portfolioSlippageBps}
+                    onChange={(e) => setPortfolioSlippageBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Charges (bps)"
+                    size="small"
+                    type="number"
+                    value={portfolioChargesBps}
+                    onChange={(e) => setPortfolioChargesBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      setPortfolioCadence('MONTHLY')
+                      setPortfolioBudgetPct(100)
+                      setPortfolioMaxTrades(50)
+                      setPortfolioMinTradeValue(0)
+                      setPortfolioSlippageBps(0)
+                      setPortfolioChargesBps(0)
+                    }}
+                  >
+                    Preset: Monthly (no costs)
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      setPortfolioCadence('WEEKLY')
+                      setPortfolioBudgetPct(10)
+                      setPortfolioMaxTrades(10)
+                      setPortfolioMinTradeValue(2000)
+                      setPortfolioSlippageBps(10)
+                      setPortfolioChargesBps(10)
+                    }}
+                  >
+                    Preset: Weekly (tight budget)
+                  </Button>
+                </Stack>
+              </Stack>
+            )}
+
             <Stack direction="row" spacing={1} flexWrap="wrap">
               {(['6M', '1Y', '2Y'] as const).map((p) => (
                 <Button
@@ -597,9 +836,9 @@ export function BacktestingPage() {
               </Typography>
             )}
 
-            {tab !== 'SIGNAL' && (
+            {tab === 'EXECUTION' && (
               <Typography variant="caption" color="text.secondary">
-                Note: Portfolio and Execution backtesting engines are implemented in subsequent tasks (S28/G03+).
+                Note: Execution backtesting is implemented in subsequent tasks (S28/G06).
               </Typography>
             )}
           </Stack>
@@ -650,6 +889,61 @@ export function BacktestingPage() {
                         hideFooter
                       />
                     </Box>
+                  </Box>
+                )}
+
+                {tab === 'PORTFOLIO' && selectedRun.status === 'COMPLETED' && portfolioEquityCandles.length > 0 && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="subtitle2">Equity curve</Typography>
+                    {portfolioMetrics && (
+                      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+                        <Chip
+                          size="small"
+                          label={`Total: ${Number(portfolioMetrics.total_return_pct ?? 0).toFixed(2)}%`}
+                        />
+                        <Chip
+                          size="small"
+                          label={`CAGR: ${Number(portfolioMetrics.cagr_pct ?? 0).toFixed(2)}%`}
+                        />
+                        <Chip
+                          size="small"
+                          label={`Max DD: ${Number(portfolioMetrics.max_drawdown_pct ?? 0).toFixed(2)}%`}
+                        />
+                        <Chip
+                          size="small"
+                          label={`Turnover: ${Number(portfolioMetrics.turnover_pct_total ?? 0).toFixed(1)}%`}
+                        />
+                        <Chip
+                          size="small"
+                          label={`Rebalances: ${Number(portfolioMetrics.rebalance_count ?? 0)}`}
+                        />
+                      </Stack>
+                    )}
+                    <Box sx={{ mt: 1 }}>
+                      <PriceChart candles={portfolioEquityCandles} chartType="line" height={260} />
+                    </Box>
+                    {portfolioDrawdownCandles.length > 0 && (
+                      <Box sx={{ mt: 2 }}>
+                        <Typography variant="subtitle2">Drawdown (%)</Typography>
+                        <Box sx={{ mt: 1 }}>
+                          <PriceChart candles={portfolioDrawdownCandles} chartType="line" height={180} />
+                        </Box>
+                      </Box>
+                    )}
+                    {portfolioActionsRows.length > 0 && (
+                      <Box sx={{ mt: 2 }}>
+                        <Typography variant="subtitle2">Rebalance actions</Typography>
+                        <Box sx={{ height: 220, mt: 1 }}>
+                          <DataGrid
+                            rows={portfolioActionsRows}
+                            columns={portfolioActionsColumns}
+                            density="compact"
+                            disableRowSelectionOnClick
+                            hideFooter
+                          />
+                        </Box>
+                      </Box>
+                    )}
                   </Box>
                 )}
 

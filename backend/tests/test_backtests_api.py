@@ -9,7 +9,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app  # noqa: F401  # ensure routes are imported
-from app.models import Candle
+from app.models import Candle, Group, GroupMember
 
 UTC = timezone.utc
 
@@ -143,10 +143,70 @@ def test_backtests_signal_backtest_basic_metrics() -> None:
     )
     assert res.status_code == 200
     body = res.json()
-    assert body["status"] == "COMPLETED"
+    assert body["status"] == "COMPLETED", body
     win = body["result"]["by_window"]["1"]
     assert win["count"] == 2
     assert win["win_rate_pct"] == 50.0
+
+
+def test_backtests_portfolio_target_weights_basic_run() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    with SessionLocal() as session:
+        g = Group(name="PF_TEST", kind="PORTFOLIO", description="test")
+        session.add(g)
+        session.commit()
+        session.refresh(g)
+        session.add_all(
+            [
+                GroupMember(
+                    group_id=g.id,
+                    symbol="AAA",
+                    exchange="NSE",
+                    target_weight=0.5,
+                ),
+                GroupMember(
+                    group_id=g.id,
+                    symbol="BBB",
+                    exchange="NSE",
+                    target_weight=0.5,
+                ),
+            ]
+        )
+        session.commit()
+        group_id = g.id
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "PORTFOLIO",
+            "title": "pf",
+            "universe": {"mode": "GROUP", "group_id": group_id, "symbols": []},
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "method": "TARGET_WEIGHTS",
+                "cadence": "MONTHLY",
+                "initial_cash": 1000.0,
+                "budget_pct": 100.0,
+                "max_trades": 10,
+                "min_trade_value": 0.0,
+                "slippage_bps": 0.0,
+                "charges_bps": 0.0,
+            },
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "COMPLETED", body
+    series = body["result"]["series"]
+    assert len(series["dates"]) == 3
+    assert len(series["equity"]) == 3
+    assert series["equity"][0] == 1000.0
+    assert series["equity"][-1] == 1005.5
 
 
 def test_backtests_eod_candles_loader() -> None:
