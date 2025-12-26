@@ -38,6 +38,7 @@ import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_he
 import riskParityBacktestingHelpText from '../../../docs/backtesting_risk_parity_help.md?raw'
 import rotationBacktestingHelpText from '../../../docs/backtesting_rotation_help.md?raw'
 import signalBacktestingHelpText from '../../../docs/backtesting_signal_help.md?raw'
+import executionBacktestingHelpText from '../../../docs/backtesting_execution_help.md?raw'
 
 type UniverseMode = 'HOLDINGS' | 'GROUP' | 'BOTH'
 
@@ -47,6 +48,7 @@ type SignalMode = 'DSL' | 'RANKING'
 type RankingCadence = 'WEEKLY' | 'MONTHLY'
 type PortfolioCadence = 'WEEKLY' | 'MONTHLY'
 type PortfolioMethod = 'TARGET_WEIGHTS' | 'ROTATION' | 'RISK_PARITY'
+type FillTiming = 'CLOSE' | 'NEXT_OPEN'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -104,6 +106,12 @@ export function BacktestingPage() {
   const [riskMinWeight, setRiskMinWeight] = useState(0)
   const [riskMaxWeight, setRiskMaxWeight] = useState(100)
 
+  const [executionBaseRunId, setExecutionBaseRunId] = useState<number | ''>('')
+  const [executionBaseRuns, setExecutionBaseRuns] = useState<BacktestRun[]>([])
+  const [executionFillTiming, setExecutionFillTiming] = useState<FillTiming>('NEXT_OPEN')
+  const [executionSlippageBps, setExecutionSlippageBps] = useState(10)
+  const [executionChargesBps, setExecutionChargesBps] = useState(5)
+
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
@@ -143,6 +151,24 @@ export function BacktestingPage() {
   useEffect(() => {
     void refreshRuns()
   }, [refreshRuns])
+
+  useEffect(() => {
+    if (tab !== 'EXECUTION') return
+    let active = true
+    void (async () => {
+      try {
+        const data = await listBacktestRuns({ kind: 'PORTFOLIO', limit: 100 })
+        if (!active) return
+        setExecutionBaseRuns(data)
+      } catch {
+        if (!active) return
+        setExecutionBaseRuns([])
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [tab])
 
   useEffect(() => {
     let active = true
@@ -208,6 +234,11 @@ export function BacktestingPage() {
     }
   }, [compareRunId])
 
+  const executionBaseRun = useMemo(() => {
+    if (executionBaseRunId === '' || typeof executionBaseRunId !== 'number') return null
+    return executionBaseRuns.find((r) => r.id === executionBaseRunId) ?? null
+  }, [executionBaseRunId, executionBaseRuns])
+
   const buildUniverseSymbols = useCallback(async () => {
     const symSet = new Map<string, { symbol: string; exchange: string }>()
     const add = (symbol: string, exchange: string) => {
@@ -237,8 +268,11 @@ export function BacktestingPage() {
     setError(null)
     setRunning(true)
     try {
-      const symbols = await buildUniverseSymbols()
-      const title = `${kind} backtest`
+      const symbols = kind === 'EXECUTION' ? [] : await buildUniverseSymbols()
+      const title =
+        kind === 'EXECUTION'
+          ? `EXECUTION backtest (base #${executionBaseRunId || '?'})`
+          : `${kind} backtest`
       if (kind === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim()) {
         throw new Error('DSL is required for Signal backtest (DSL mode).')
       }
@@ -248,6 +282,11 @@ export function BacktestingPage() {
         }
         if (typeof groupId !== 'number') {
           throw new Error('Please select a portfolio group for Portfolio backtests.')
+        }
+      }
+      if (kind === 'EXECUTION') {
+        if (executionBaseRunId === '' || typeof executionBaseRunId !== 'number') {
+          throw new Error('Please select a base Portfolio run for Execution backtests.')
         }
       }
 
@@ -287,21 +326,26 @@ export function BacktestingPage() {
                 max_weight: riskMaxWeight / 100,
               }
           : {
-              timeframe: '1d',
-              start_date: startDate,
-              end_date: endDate,
-              preset: {
-                note: 'Backtesting engine will be implemented in subsequent tasks.',
-              },
+              base_run_id: executionBaseRunId,
+              fill_timing: executionFillTiming,
+              slippage_bps: executionSlippageBps,
+              charges_bps: executionChargesBps,
             }
+
+      const baseGroupId =
+        kind === 'EXECUTION'
+          ? (executionBaseRun?.config as any)?.universe?.group_id ?? null
+          : typeof groupId === 'number'
+            ? groupId
+            : null
 
       const run = await createBacktestRun({
         kind,
         title,
         universe: {
-          mode: universeMode,
+          mode: kind === 'EXECUTION' ? 'GROUP' : universeMode,
           broker_name: brokerName,
-          group_id: typeof groupId === 'number' ? groupId : null,
+          group_id: baseGroupId,
           symbols,
         },
         config,
@@ -341,7 +385,16 @@ export function BacktestingPage() {
           : portfolioMethod === 'RISK_PARITY'
             ? riskParityBacktestingHelpText
           : portfolioBacktestingHelpText
-        : backtestingHelpText
+        : tab === 'EXECUTION'
+          ? executionBacktestingHelpText
+          : backtestingHelpText
+
+  const runDisabled =
+    running ||
+    (tab === 'PORTFOLIO' && typeof groupId !== 'number') ||
+    (tab === 'EXECUTION' &&
+      (executionBaseRunId === '' || typeof executionBaseRunId !== 'number')) ||
+    (tab === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim())
 
   const signalPresets = useMemo(
     () => [
@@ -380,6 +433,44 @@ export function BacktestingPage() {
       }
     },
     [signalPresets],
+  )
+
+  const executionPresets = useMemo(
+    () => [
+      {
+        id: 'NEXT_OPEN_LIGHT',
+        label: 'Next open (10 bps slippage, 5 bps charges)',
+        fill_timing: 'NEXT_OPEN' as const,
+        slippage_bps: 10,
+        charges_bps: 5,
+      },
+      {
+        id: 'CLOSE_LIGHT',
+        label: 'Same close (10 bps slippage, 5 bps charges)',
+        fill_timing: 'CLOSE' as const,
+        slippage_bps: 10,
+        charges_bps: 5,
+      },
+      {
+        id: 'NEXT_OPEN_HEAVY',
+        label: 'Next open (25 bps slippage, 10 bps charges)',
+        fill_timing: 'NEXT_OPEN' as const,
+        slippage_bps: 25,
+        charges_bps: 10,
+      },
+    ],
+    [],
+  )
+
+  const applyExecutionPreset = useCallback(
+    (presetId: string) => {
+      const p = executionPresets.find((x) => x.id === presetId)
+      if (!p) return
+      setExecutionFillTiming(p.fill_timing)
+      setExecutionSlippageBps(p.slippage_bps)
+      setExecutionChargesBps(p.charges_bps)
+    },
+    [executionPresets],
   )
 
   const signalSummaryRows = useMemo(() => {
@@ -487,6 +578,61 @@ export function BacktestingPage() {
     ]
   }, [compareRun, portfolioEquityCandles, tab])
 
+  const executionEquityCandles = useMemo((): PriceCandle[] => {
+    if (tab !== 'EXECUTION') return []
+    if (!selectedRun?.result) return []
+    const result = selectedRun.result as Record<string, unknown>
+    const realistic = (result.realistic as Record<string, unknown> | undefined) ?? undefined
+    const series = (realistic?.series as Record<string, unknown> | undefined) ?? undefined
+    if (!series) return []
+    const dates = (series.dates as unknown[] | undefined) ?? []
+    const equity = (series.equity as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      candles.push({ ts, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return candles
+  }, [selectedRun, tab])
+
+  const executionIdealOverlay = useMemo(() => {
+    if (tab !== 'EXECUTION') return []
+    if (!selectedRun?.result) return []
+    const result = selectedRun.result as Record<string, unknown>
+    const ideal = (result.ideal as Record<string, unknown> | undefined) ?? undefined
+    const series = (ideal?.series as Record<string, unknown> | undefined) ?? undefined
+    if (!series) return []
+    const dates = (series.dates as unknown[] | undefined) ?? []
+    const equity = (series.equity as unknown[] | undefined) ?? []
+    const byDate = new Map<string, number>()
+    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      byDate.set(ts, v)
+    }
+    const points = executionEquityCandles.map((c) => ({
+      ts: c.ts,
+      value: byDate.get(c.ts) ?? null,
+    }))
+    return [
+      {
+        name: 'Ideal (CLOSE, 0 costs)',
+        color: '#6b7280',
+        points,
+      },
+    ]
+  }, [executionEquityCandles, selectedRun, tab])
+
+  const executionDelta = useMemo(() => {
+    if (tab !== 'EXECUTION') return null
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return null
+    return (result.delta as Record<string, unknown> | undefined) ?? null
+  }, [selectedRun, tab])
+
   const portfolioDrawdownCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'PORTFOLIO') return []
     if (!selectedRun?.result) return []
@@ -584,83 +730,192 @@ export function BacktestingPage() {
           <Stack spacing={2}>
             <Typography variant="subtitle1">Inputs</Typography>
 
-            <FormControl fullWidth size="small">
-              <InputLabel id="bt-universe-label">Universe</InputLabel>
-              <Select
-                labelId="bt-universe-label"
-                label="Universe"
-                value={universeMode}
-                onChange={(e) => setUniverseMode(e.target.value as UniverseMode)}
-              >
-                <MenuItem value="HOLDINGS">Holdings</MenuItem>
-                <MenuItem value="GROUP">Group</MenuItem>
-                <MenuItem value="BOTH">Both</MenuItem>
-              </Select>
-            </FormControl>
+            {tab !== 'EXECUTION' ? (
+              <>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="bt-universe-label">Universe</InputLabel>
+                  <Select
+                    labelId="bt-universe-label"
+                    label="Universe"
+                    value={universeMode}
+                    onChange={(e) => setUniverseMode(e.target.value as UniverseMode)}
+                  >
+                    <MenuItem value="HOLDINGS">Holdings</MenuItem>
+                    <MenuItem value="GROUP">Group</MenuItem>
+                    <MenuItem value="BOTH">Both</MenuItem>
+                  </Select>
+                </FormControl>
 
-            {(universeMode === 'HOLDINGS' || universeMode === 'BOTH') && (
-              <FormControl fullWidth size="small">
-                <InputLabel id="bt-broker-label">Broker</InputLabel>
-                <Select
-                  labelId="bt-broker-label"
-                  label="Broker"
-                  value={brokerName}
-                  onChange={(e) =>
-                    setBrokerName(e.target.value === 'angelone' ? 'angelone' : 'zerodha')
-                  }
-                >
-                  <MenuItem value="zerodha">Zerodha</MenuItem>
-                  <MenuItem value="angelone">AngelOne</MenuItem>
-                </Select>
-              </FormControl>
+                {(universeMode === 'HOLDINGS' || universeMode === 'BOTH') && (
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-broker-label">Broker</InputLabel>
+                    <Select
+                      labelId="bt-broker-label"
+                      label="Broker"
+                      value={brokerName}
+                      onChange={(e) =>
+                        setBrokerName(e.target.value === 'angelone' ? 'angelone' : 'zerodha')
+                      }
+                    >
+                      <MenuItem value="zerodha">Zerodha</MenuItem>
+                      <MenuItem value="angelone">AngelOne</MenuItem>
+                    </Select>
+                  </FormControl>
+                )}
+
+                {(universeMode === 'GROUP' || universeMode === 'BOTH') && (
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-group-label">Group</InputLabel>
+                    <Select
+                      labelId="bt-group-label"
+                      label="Group"
+                      value={groupId}
+                      onChange={(e) =>
+                        setGroupId(e.target.value === '' ? '' : Number(e.target.value))
+                      }
+                    >
+                      <MenuItem value="">(select)</MenuItem>
+                      {groups.map((g) => (
+                        <MenuItem key={g.id} value={String(g.id)}>
+                          {g.name} ({g.kind})
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                )}
+
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                  <Chip size="small" label={selectedUniverseSummary} />
+                  {groupDetail && (universeMode === 'GROUP' || universeMode === 'BOTH') && (
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={`${groupDetail.members.length} symbols`}
+                    />
+                  )}
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Start"
+                    type="date"
+                    size="small"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="End"
+                    type="date"
+                    size="small"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    fullWidth
+                  />
+                </Stack>
+              </>
+            ) : (
+              <Stack spacing={1.5}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="bt-exec-base-label">Base portfolio run</InputLabel>
+                  <Select
+                    labelId="bt-exec-base-label"
+                    label="Base portfolio run"
+                    value={executionBaseRunId}
+                    onChange={(e) =>
+                      setExecutionBaseRunId(e.target.value === '' ? '' : Number(e.target.value))
+                    }
+                  >
+                    <MenuItem value="">(select)</MenuItem>
+                    {executionBaseRuns
+                      .filter((r) => r.kind === 'PORTFOLIO' && r.status === 'COMPLETED')
+                      .map((r) => {
+                        const groupId = Number((r.config as any)?.universe?.group_id ?? NaN)
+                        const groupName = groups.find((g) => g.id === groupId)?.name ?? `Group #${groupId}`
+                        const method = String((r.config as any)?.config?.method ?? '')
+                        return (
+                          <MenuItem key={r.id} value={String(r.id)}>
+                            #{r.id} — {groupName} — {method}
+                          </MenuItem>
+                        )
+                      })}
+                  </Select>
+                </FormControl>
+
+                {executionBaseRun && (
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                    <Chip
+                      size="small"
+                      label={`Base #${executionBaseRun.id} • ${String(
+                        (executionBaseRun.config as any)?.config?.method ?? 'PORTFOLIO',
+                      )}`}
+                    />
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={`Window: ${String((executionBaseRun.config as any)?.config?.start_date ?? '')} → ${String(
+                        (executionBaseRun.config as any)?.config?.end_date ?? '',
+                      )}`}
+                    />
+                  </Stack>
+                )}
+
+                <FormControl fullWidth size="small">
+                  <InputLabel id="bt-exec-preset-label">Preset</InputLabel>
+                  <Select
+                    labelId="bt-exec-preset-label"
+                    label="Preset"
+                    value=""
+                    onChange={(e) => applyExecutionPreset(String(e.target.value))}
+                  >
+                    <MenuItem value="">(choose)</MenuItem>
+                    {executionPresets.map((p) => (
+                      <MenuItem key={p.id} value={p.id}>
+                        {p.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Stack direction="row" spacing={1}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-exec-fill-label">Fill timing</InputLabel>
+                    <Select
+                      labelId="bt-exec-fill-label"
+                      label="Fill timing"
+                      value={executionFillTiming}
+                      onChange={(e) => setExecutionFillTiming(e.target.value as FillTiming)}
+                    >
+                      <MenuItem value="CLOSE">Same day close</MenuItem>
+                      <MenuItem value="NEXT_OPEN">Next day open</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Slippage (bps)"
+                    size="small"
+                    type="number"
+                    value={executionSlippageBps}
+                    onChange={(e) => setExecutionSlippageBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Charges (bps)"
+                    size="small"
+                    type="number"
+                    value={executionChargesBps}
+                    onChange={(e) => setExecutionChargesBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                </Stack>
+              </Stack>
             )}
-
-            {(universeMode === 'GROUP' || universeMode === 'BOTH') && (
-              <FormControl fullWidth size="small">
-                <InputLabel id="bt-group-label">Group</InputLabel>
-                <Select
-                  labelId="bt-group-label"
-                  label="Group"
-                  value={groupId}
-                  onChange={(e) => setGroupId(e.target.value === '' ? '' : Number(e.target.value))}
-                >
-                  <MenuItem value="">(select)</MenuItem>
-                  {groups.map((g) => (
-                    <MenuItem key={g.id} value={String(g.id)}>
-                      {g.name} ({g.kind})
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            )}
-
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-              <Chip size="small" label={selectedUniverseSummary} />
-              {groupDetail && (universeMode === 'GROUP' || universeMode === 'BOTH') && (
-                <Chip size="small" variant="outlined" label={`${groupDetail.members.length} symbols`} />
-              )}
-            </Stack>
-
-            <Stack direction="row" spacing={1}>
-              <TextField
-                label="Start"
-                type="date"
-                size="small"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                fullWidth
-              />
-              <TextField
-                label="End"
-                type="date"
-                size="small"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
-                fullWidth
-              />
-            </Stack>
 
             {tab === 'SIGNAL' && (
               <Stack spacing={1.5}>
@@ -1008,22 +1263,23 @@ export function BacktestingPage() {
             )}
 
             <Stack direction="row" spacing={1} flexWrap="wrap">
-              {(['6M', '1Y', '2Y'] as const).map((p) => (
-                <Button
-                  key={p}
-                  size="small"
-                  variant="outlined"
-                  onClick={() => {
-                    const r = getDatePreset(p)
-                    setStartDate(r.start)
-                    setEndDate(r.end)
-                  }}
-                >
-                  {p}
-                </Button>
-              ))}
+              {tab !== 'EXECUTION' &&
+                (['6M', '1Y', '2Y'] as const).map((p) => (
+                  <Button
+                    key={p}
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      const r = getDatePreset(p)
+                      setStartDate(r.start)
+                      setEndDate(r.end)
+                    }}
+                  >
+                    {p}
+                  </Button>
+                ))}
               <Box sx={{ flexGrow: 1 }} />
-              <Button variant="contained" onClick={() => void handleRun()} disabled={running}>
+              <Button variant="contained" onClick={() => void handleRun()} disabled={runDisabled}>
                 {running ? 'Running…' : 'Run backtest'}
               </Button>
             </Stack>
@@ -1034,11 +1290,6 @@ export function BacktestingPage() {
               </Typography>
             )}
 
-            {tab === 'EXECUTION' && (
-              <Typography variant="caption" color="text.secondary">
-                Note: Execution backtesting is implemented in subsequent tasks (S28/G06).
-              </Typography>
-            )}
           </Stack>
         </Paper>
 
@@ -1173,6 +1424,32 @@ export function BacktestingPage() {
                         </Box>
                       </Box>
                     )}
+                  </Box>
+                )}
+
+                {tab === 'EXECUTION' && selectedRun.status === 'COMPLETED' && executionEquityCandles.length > 0 && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="subtitle2">Equity curve (realistic vs ideal)</Typography>
+                    {executionDelta && (
+                      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+                        <Chip
+                          size="small"
+                          label={`Δ End equity: ${Number(executionDelta.end_equity_delta ?? 0).toFixed(0)}`}
+                        />
+                        <Chip
+                          size="small"
+                          label={`Δ End (%): ${Number(executionDelta.end_equity_delta_pct ?? 0).toFixed(2)}%`}
+                        />
+                      </Stack>
+                    )}
+                    <Box sx={{ mt: 1 }}>
+                      <PriceChart
+                        candles={executionEquityCandles}
+                        chartType="line"
+                        height={260}
+                        overlays={executionIdealOverlay}
+                      />
+                    </Box>
                   </Box>
                 )}
 

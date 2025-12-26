@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 PortfolioBacktestMethod = Literal["TARGET_WEIGHTS", "ROTATION", "RISK_PARITY"]
 RebalanceCadence = Literal["WEEKLY", "MONTHLY"]
+FillTiming = Literal["CLOSE", "NEXT_OPEN"]
 
 
 class PortfolioBacktestConfigIn(BaseModel):
@@ -16,6 +17,7 @@ class PortfolioBacktestConfigIn(BaseModel):
 
     method: PortfolioBacktestMethod = "TARGET_WEIGHTS"
     cadence: RebalanceCadence = "MONTHLY"
+    fill_timing: FillTiming = "CLOSE"
 
     initial_cash: float = Field(default=100000.0, gt=0.0)
 
@@ -39,6 +41,7 @@ class PortfolioBacktestConfigIn(BaseModel):
 
 
 __all__ = [
+    "FillTiming",
     "PortfolioBacktestConfigIn",
     "PortfolioBacktestMethod",
     "RebalanceCadence",

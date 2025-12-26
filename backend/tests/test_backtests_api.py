@@ -209,6 +209,84 @@ def test_backtests_portfolio_target_weights_basic_run() -> None:
     assert series["equity"][-1] == 1005.5
 
 
+def test_backtests_execution_backtest_costs_reduce_equity() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    with SessionLocal() as session:
+        g = Group(name="PF_EXEC", kind="PORTFOLIO", description="test")
+        session.add(g)
+        session.commit()
+        session.refresh(g)
+        session.add_all(
+            [
+                GroupMember(
+                    group_id=g.id,
+                    symbol="AAA",
+                    exchange="NSE",
+                    target_weight=0.5,
+                ),
+                GroupMember(
+                    group_id=g.id,
+                    symbol="BBB",
+                    exchange="NSE",
+                    target_weight=0.5,
+                ),
+            ]
+        )
+        session.commit()
+        group_id = g.id
+
+    base_res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "PORTFOLIO",
+            "title": "pf_base",
+            "universe": {"mode": "GROUP", "group_id": group_id, "symbols": []},
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "method": "TARGET_WEIGHTS",
+                "cadence": "MONTHLY",
+                "fill_timing": "CLOSE",
+                "initial_cash": 1000.0,
+                "budget_pct": 100.0,
+                "max_trades": 10,
+                "min_trade_value": 0.0,
+                "slippage_bps": 0.0,
+                "charges_bps": 0.0,
+            },
+        },
+    )
+    assert base_res.status_code == 200
+    base_body = base_res.json()
+    assert base_body["status"] == "COMPLETED", base_body
+
+    exec_res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "EXECUTION",
+            "title": "exec",
+            "universe": {"mode": "GROUP", "group_id": group_id, "symbols": []},
+            "config": {
+                "base_run_id": base_body["id"],
+                "fill_timing": "CLOSE",
+                "slippage_bps": 25.0,
+                "charges_bps": 10.0,
+            },
+        },
+    )
+    assert exec_res.status_code == 200
+    body = exec_res.json()
+    assert body["status"] == "COMPLETED", body
+    ideal_end = body["result"]["ideal"]["series"]["equity"][-1]
+    real_end = body["result"]["realistic"]["series"]["equity"][-1]
+    assert real_end <= ideal_end
+    assert body["result"]["delta"]["end_equity_delta"] <= 0
+
+
 def test_backtests_portfolio_rotation_top_n_momentum() -> None:
     now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 

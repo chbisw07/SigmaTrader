@@ -14,7 +14,7 @@ from app.services.alert_expression_dsl import parse_expression
 from app.services.backtests_data import (
     UniverseSymbolRef,
     _norm_symbol_ref,
-    load_eod_close_matrix,
+    load_eod_open_close_matrix,
 )
 from app.services.backtests_signal import (
     _eval_expr_at,
@@ -148,6 +148,87 @@ def _portfolio_value(
     return float(v)
 
 
+def _execute_trade_candidates(
+    *,
+    trade_candidates: list[tuple[str, int, float, float]],
+    px_fill_by_key: dict[str, float],
+    positions: dict[str, int],
+    cash: float,
+    budget_cap: float,
+    slip: float,
+    charges_rate: float,
+) -> tuple[float, float, list[dict[str, Any]], float]:
+    """Execute a list of trade candidates.
+
+    trade_candidates: (key, delta_qty, decision_price, decision_notional).
+    - Budget/charges are computed on decision_notional (decision_price).
+    - Cash impact uses fill prices (px_fill_by_key) with slippage.
+    """
+
+    used = 0.0
+    turnover = 0.0
+    trades: list[dict[str, Any]] = []
+
+    for key, delta, decision_px, decision_notional in trade_candidates:
+        if used + decision_notional > budget_cap + 1e-9:
+            continue
+        fill_px = px_fill_by_key.get(key)
+        if fill_px is None or fill_px <= 0:
+            continue
+        charge = float(decision_notional) * charges_rate
+
+        if delta > 0:
+            eff_px = fill_px * (1.0 + slip)
+            if cash <= charge:
+                continue
+            max_afford = int(math.floor((cash - charge) / eff_px))
+            qty = min(delta, max_afford)
+            if qty <= 0:
+                continue
+            exec_notional = qty * decision_px
+            exec_charge = exec_notional * charges_rate
+            cash -= qty * eff_px + exec_charge
+            positions[key] = int(positions.get(key, 0) or 0) + qty
+            used += exec_notional
+            turnover += exec_notional
+            trades.append(
+                {
+                    "symbol": key,
+                    "side": "BUY",
+                    "qty": qty,
+                    "decision_price": decision_px,
+                    "fill_price": eff_px,
+                    "notional": exec_notional,
+                    "charges": exec_charge,
+                }
+            )
+        else:
+            qty_avail = int(positions.get(key, 0) or 0)
+            qty = min(-delta, qty_avail)
+            if qty <= 0:
+                continue
+            eff_px = fill_px * (1.0 - slip)
+            exec_notional = qty * decision_px
+            exec_charge = exec_notional * charges_rate
+            cash += qty * eff_px - exec_charge
+            positions[key] = qty_avail - qty
+            used += exec_notional
+            turnover += exec_notional
+            trades.append(
+                {
+                    "symbol": key,
+                    "side": "SELL",
+                    "qty": qty,
+                    "decision_price": decision_px,
+                    "fill_price": eff_px,
+                    "notional": exec_notional,
+                    "charges": exec_charge,
+                }
+            )
+
+    return cash, used, trades, turnover
+
+
 def run_target_weights_portfolio_backtest(
     db: Session,
     settings: Settings,
@@ -203,7 +284,7 @@ def run_portfolio_backtest(
         days=lookback_days
     )
     end_dt = datetime.combine(config.end_date, datetime.min.time()) + timedelta(days=1)
-    dates, matrix, missing = load_eod_close_matrix(
+    dates, opens_raw, closes_raw, missing = load_eod_open_close_matrix(
         db,
         settings,
         symbols=refs,
@@ -225,9 +306,23 @@ def run_portfolio_backtest(
     if sim_start is None or sim_end is None or sim_start > sim_end:
         raise ValueError("No candles in the selected window.")
 
-    prices_ff: dict[str, list[float | None]] = {
-        key: _forward_fill(series) for key, series in matrix.items()
+    close_ff: dict[str, list[float | None]] = {
+        key: _forward_fill(series) for key, series in closes_raw.items()
     }
+    open_ff: dict[str, list[float | None]] = {}
+    for key in set([*opens_raw.keys(), *close_ff.keys()]):
+        opens = opens_raw.get(key, [None] * len(dates))
+        closes = close_ff.get(key, [None] * len(dates))
+        out: list[float | None] = []
+        last: float | None = None
+        for ov, cv in zip(opens, closes, strict=False):
+            v = ov if ov is not None and ov > 0 else (cv if cv is not None else None)
+            if v is not None and v > 0:
+                last = float(v)
+                out.append(last)
+            else:
+                out.append(last)
+        open_ff[key] = out
 
     sim_dates = dates[sim_start : sim_end + 1]
     rebalance_ix = {
@@ -249,7 +344,7 @@ def run_portfolio_backtest(
 
     if config.method == "ROTATION":
         for key in keys:
-            series = prices_ff.get(key, [])
+            series = close_ff.get(key, [])
             first = None
             for i, v in enumerate(series):
                 if v is not None and v > 0:
@@ -282,19 +377,60 @@ def run_portfolio_backtest(
     slip = float(config.slippage_bps) / 10000.0
     charges_rate = float(config.charges_bps) / 10000.0
 
+    pending: dict[int, list[dict[str, Any]]] = {}
     peak = -math.inf
     for i in range(sim_start, sim_end + 1):
         d = dates[i]
-        px_by_key: dict[str, float] = {}
+        px_close_by_key: dict[str, float] = {}
+        px_open_by_key: dict[str, float] = {}
         for key in keys:
-            s = prices_ff.get(key, [])
-            px = s[i] if i < len(s) else None
+            s_close = close_ff.get(key, [])
+            px = s_close[i] if i < len(s_close) else None
             if px is not None and px > 0:
-                px_by_key[key] = float(px)
+                px_close_by_key[key] = float(px)
+
+            s_open = open_ff.get(key, [])
+            opx = s_open[i] if i < len(s_open) else None
+            if opx is not None and opx > 0:
+                px_open_by_key[key] = float(opx)
+
+        if config.fill_timing == "NEXT_OPEN":
+            for plan in pending.pop(i, []):
+                cash, used, trades, turnover = _execute_trade_candidates(
+                    trade_candidates=plan["trade_candidates"],
+                    px_fill_by_key=px_open_by_key,
+                    positions=positions,
+                    cash=cash,
+                    budget_cap=float(plan["budget_cap"]),
+                    slip=slip,
+                    charges_rate=charges_rate,
+                )
+                total_turnover += turnover
+                value_after = _portfolio_value(
+                    cash=cash, positions=positions, px_by_key=px_close_by_key
+                )
+                actions.append(
+                    {
+                        "date": plan["decision_date"],
+                        "executed_on": d.isoformat(),
+                        "fill_timing": "NEXT_OPEN",
+                        "value_before": plan["value_before"],
+                        "value_after": value_after,
+                        "budget_cap": plan["budget_cap"],
+                        "budget_used": used,
+                        "turnover_pct": (
+                            (used / plan["value_before"] * 100.0)
+                            if plan["value_before"]
+                            else 0.0
+                        ),
+                        "targets": plan["targets"],
+                        "trades": trades,
+                    }
+                )
 
         if i in rebalance_ix:
             value_before = _portfolio_value(
-                cash=cash, positions=positions, px_by_key=px_by_key
+                cash=cash, positions=positions, px_by_key=px_close_by_key
             )
             if value_before > 0:
                 budget_cap = value_before * (float(config.budget_pct) / 100.0)
@@ -339,9 +475,9 @@ def run_portfolio_backtest(
                     returns: list[list[float]] = []
                     if obs >= min_obs and start_i >= 0:
                         for key in keys:
-                            if key not in px_by_key:
+                            if key not in px_close_by_key:
                                 continue
-                            series = prices_ff.get(key, [])
+                            series = close_ff.get(key, [])
                             if i >= len(series):
                                 continue
                             ok = True
@@ -381,117 +517,79 @@ def run_portfolio_backtest(
                 desired_qty: dict[str, int] = {}
                 for key in keys:
                     w = float(target_weights.get(key, 0.0) or 0.0)
-                    px = px_by_key.get(key)
+                    px = px_close_by_key.get(key)
                     if px is None or px <= 0:
                         continue
                     desired_value = value_before * w
                     desired_qty[key] = int(math.floor(desired_value / px))
 
-                trade_candidates: list[tuple[str, int, float]] = []
+                trade_candidates: list[tuple[str, int, float, float]] = []
                 for key, dq in desired_qty.items():
                     cq = int(positions.get(key, 0) or 0)
                     delta = int(dq - cq)
                     if delta == 0:
                         continue
-                    px = px_by_key.get(key)
+                    px = px_close_by_key.get(key)
                     if px is None or px <= 0:
                         continue
                     notional = abs(delta) * px
                     if notional < float(config.min_trade_value):
                         continue
-                    trade_candidates.append((key, delta, float(notional)))
+                    trade_candidates.append((key, delta, float(px), float(notional)))
 
-                trade_candidates.sort(key=lambda x: x[2], reverse=True)
+                trade_candidates.sort(key=lambda x: x[3], reverse=True)
                 trade_candidates = trade_candidates[: int(config.max_trades)]
 
-                used = 0.0
-                trades: list[dict[str, Any]] = []
+                targets_sorted = (
+                    sorted(target_weights.items(), key=lambda x: x[1], reverse=True)
+                    if config.method in {"ROTATION", "RISK_PARITY"}
+                    else None
+                )
 
-                for key, delta, notional in trade_candidates:
-                    if used + notional > budget_cap + 1e-9:
-                        continue
-                    px = px_by_key.get(key)
-                    if px is None or px <= 0:
-                        continue
-                    charge = float(notional) * charges_rate
-
-                    if delta > 0:
-                        eff_px = px * (1.0 + slip)
-                        if cash > charge:
-                            max_afford = int(math.floor((cash - charge) / eff_px))
-                        else:
-                            max_afford = 0
-                        qty = min(delta, max_afford)
-                        if qty <= 0:
-                            continue
-                        exec_notional = qty * px
-                        exec_charge = exec_notional * charges_rate
-                        cash -= qty * eff_px + exec_charge
-                        positions[key] = int(positions.get(key, 0) or 0) + qty
-                        used += exec_notional
-                        total_turnover += exec_notional
-                        trades.append(
+                if config.fill_timing == "CLOSE":
+                    cash, used, trades, turnover = _execute_trade_candidates(
+                        trade_candidates=trade_candidates,
+                        px_fill_by_key=px_close_by_key,
+                        positions=positions,
+                        cash=cash,
+                        budget_cap=budget_cap,
+                        slip=slip,
+                        charges_rate=charges_rate,
+                    )
+                    total_turnover += turnover
+                    value_after = _portfolio_value(
+                        cash=cash, positions=positions, px_by_key=px_close_by_key
+                    )
+                    actions.append(
+                        {
+                            "date": d.isoformat(),
+                            "executed_on": d.isoformat(),
+                            "fill_timing": "CLOSE",
+                            "value_before": value_before,
+                            "value_after": value_after,
+                            "budget_cap": budget_cap,
+                            "budget_used": used,
+                            "turnover_pct": (
+                                (used / value_before * 100.0) if value_before else 0.0
+                            ),
+                            "targets": targets_sorted,
+                            "trades": trades,
+                        }
+                    )
+                else:
+                    exec_i = i + 1
+                    if exec_i <= sim_end and trade_candidates:
+                        pending.setdefault(exec_i, []).append(
                             {
-                                "symbol": key,
-                                "side": "BUY",
-                                "qty": qty,
-                                "price": px,
-                                "fill_price": eff_px,
-                                "notional": exec_notional,
-                                "charges": exec_charge,
-                            }
-                        )
-                    else:
-                        qty_avail = int(positions.get(key, 0) or 0)
-                        qty = min(-delta, qty_avail)
-                        if qty <= 0:
-                            continue
-                        eff_px = px * (1.0 - slip)
-                        exec_notional = qty * px
-                        exec_charge = exec_notional * charges_rate
-                        cash += qty * eff_px - exec_charge
-                        positions[key] = qty_avail - qty
-                        used += exec_notional
-                        total_turnover += exec_notional
-                        trades.append(
-                            {
-                                "symbol": key,
-                                "side": "SELL",
-                                "qty": qty,
-                                "price": px,
-                                "fill_price": eff_px,
-                                "notional": exec_notional,
-                                "charges": exec_charge,
+                                "decision_date": d.isoformat(),
+                                "value_before": value_before,
+                                "budget_cap": budget_cap,
+                                "targets": targets_sorted,
+                                "trade_candidates": trade_candidates,
                             }
                         )
 
-                value_after = _portfolio_value(
-                    cash=cash, positions=positions, px_by_key=px_by_key
-                )
-                actions.append(
-                    {
-                        "date": d.isoformat(),
-                        "value_before": value_before,
-                        "value_after": value_after,
-                        "budget_cap": budget_cap,
-                        "budget_used": used,
-                        "turnover_pct": (
-                            (used / value_before * 100.0) if value_before else 0.0
-                        ),
-                        "targets": (
-                            sorted(
-                                target_weights.items(),
-                                key=lambda x: x[1],
-                                reverse=True,
-                            )
-                            if config.method in {"ROTATION", "RISK_PARITY"}
-                            else None
-                        ),
-                        "trades": trades,
-                    }
-                )
-
-        v = _portfolio_value(cash=cash, positions=positions, px_by_key=px_by_key)
+        v = _portfolio_value(cash=cash, positions=positions, px_by_key=px_close_by_key)
         equity.append(v)
         cash_series.append(float(cash))
         peak = max(peak, v)
@@ -524,6 +622,7 @@ def run_portfolio_backtest(
             "group_name": group.name,
             "method": config.method,
             "cadence": config.cadence,
+            "fill_timing": config.fill_timing,
             "timeframe": config.timeframe,
             "start_date": config.start_date.isoformat(),
             "end_date": config.end_date.isoformat(),

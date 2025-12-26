@@ -21,6 +21,7 @@ from app.schemas.backtests import (
 from app.schemas.backtests_portfolio import PortfolioBacktestConfigIn
 from app.schemas.backtests_signal import SignalBacktestConfigIn
 from app.services.backtests_data import _norm_symbol_ref, load_eod_close_matrix
+from app.services.backtests_execution import run_execution_backtest
 from app.services.backtests_portfolio import run_portfolio_backtest
 from app.services.backtests_signal import SignalBacktestConfig, run_signal_backtest
 
@@ -46,6 +47,7 @@ def create_backtest_run(
 
     cfg_in: SignalBacktestConfigIn | None = None
     pf_cfg_in: PortfolioBacktestConfigIn | None = None
+    exec_cfg_in = None
     if kind == "SIGNAL":
         try:
             cfg_in = SignalBacktestConfigIn.parse_obj(payload.config)
@@ -77,6 +79,45 @@ def create_backtest_run(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="PORTFOLIO backtests require universe.group_id.",
             )
+    else:
+        from app.schemas.backtests_execution import ExecutionBacktestConfigIn
+
+        try:
+            exec_cfg_in = ExecutionBacktestConfigIn.parse_obj(payload.config)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid EXECUTION backtest config: {exc}",
+            ) from exc
+
+        base_run = db.get(BacktestRun, int(exec_cfg_in.base_run_id))
+        if base_run is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="base_run_id not found.",
+            )
+        if user is None:
+            if base_run.owner_id is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="base_run_id not found.",
+                )
+        else:
+            if base_run.owner_id not in (None, user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="base_run_id not found.",
+                )
+        if base_run.kind != "PORTFOLIO":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="base_run_id must reference a PORTFOLIO backtest run.",
+            )
+        if base_run.status != "COMPLETED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="base_run_id must reference a COMPLETED run.",
+            )
 
     config = {
         "kind": kind,
@@ -85,7 +126,7 @@ def create_backtest_run(
         "config": payload.config,
     }
     now = datetime.now(UTC)
-    status_val = "RUNNING" if kind in {"SIGNAL", "PORTFOLIO"} else "PENDING"
+    status_val = "RUNNING"
     run = BacktestRun(
         owner_id=user.id if user is not None else None,
         kind=kind,
@@ -94,7 +135,7 @@ def create_backtest_run(
         config_json=json.dumps(config, ensure_ascii=False),
         result_json=None,
         error_message=None,
-        started_at=now if kind in {"SIGNAL", "PORTFOLIO"} else None,
+        started_at=now,
         finished_at=None,
     )
     db.add(run)
@@ -136,14 +177,24 @@ def create_backtest_run(
                 config=pf_cfg_in,
                 allow_fetch=True,
             )
+        elif kind == "EXECUTION":
+            assert exec_cfg_in is not None
+            base_run = db.get(BacktestRun, int(exec_cfg_in.base_run_id))
+            assert base_run is not None
+            result = run_execution_backtest(
+                db,
+                settings,
+                base_run=base_run,
+                config=exec_cfg_in,
+                allow_fetch=True,
+            )
 
-        if kind in {"SIGNAL", "PORTFOLIO"}:
-            run.status = "COMPLETED"
-            run.finished_at = datetime.now(UTC)
-            run.result_json = json.dumps(result, ensure_ascii=False) if result else None
-            db.add(run)
-            db.commit()
-            db.refresh(run)
+        run.status = "COMPLETED"
+        run.finished_at = datetime.now(UTC)
+        run.result_json = json.dumps(result, ensure_ascii=False) if result else None
+        db.add(run)
+        db.commit()
+        db.refresh(run)
     except Exception as exc:
         run.status = "FAILED"
         run.finished_at = datetime.now(UTC)
