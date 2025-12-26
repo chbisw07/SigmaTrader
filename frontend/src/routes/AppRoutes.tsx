@@ -11,6 +11,7 @@ import { AppearancePage } from '../views/AppearancePage'
 import { AlertsPage } from '../views/AlertsPage'
 import { GroupsPage } from '../views/GroupsPage'
 import { ScreenerPage } from '../views/ScreenerPage'
+import { BacktestingPage } from '../views/BacktestingPage'
 
 export function AppRoutes() {
   return (
@@ -26,6 +27,7 @@ export function AppRoutes() {
       <Route path="/screener" element={<ScreenerPage />} />
       <Route path="/groups" element={<GroupsPage />} />
       <Route path="/alerts" element={<AlertsPage />} />
+      <Route path="/backtesting" element={<BacktestingPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
       <Route path="/system-events" element={<SystemEventsPage />} />
       <Route path="/appearance" element={<AppearancePage />} />

@@ -7,6 +7,7 @@ from . import (
     analytics,
     angelone,
     auth,
+    backtests,
     brokers,
     groups,
     instruments,
@@ -150,6 +151,13 @@ router.include_router(
     prefix="/api/groups",
     dependencies=[Depends(require_admin)],
     tags=["groups"],
+)
+
+router.include_router(
+    backtests.router,
+    prefix="/api/backtests",
+    dependencies=[Depends(require_admin)],
+    tags=["backtests"],
 )
 
 router.include_router(

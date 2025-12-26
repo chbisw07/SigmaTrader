@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import os
+from datetime import datetime, timedelta, timezone
+
+from fastapi.testclient import TestClient
+
+from app.core.config import get_settings
+from app.db.base import Base
+from app.db.session import SessionLocal, engine
+from app.main import app  # noqa: F401  # ensure routes are imported
+from app.models import Candle
+
+UTC = timezone.utc
+
+client = TestClient(app)
+
+
+def setup_module() -> None:  # type: ignore[override]
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    # Avoid hitting external market data during tests.
+    from app.services import market_data as md
+
+    def _noop_fetch(*_args, **_kwargs) -> None:  # pragma: no cover
+        return
+
+    md._fetch_and_store_history = _noop_fetch  # type: ignore[attr-defined]
+
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    with SessionLocal() as session:
+        for i, close in enumerate([100.0, 101.0, 99.5]):
+            ts = now - timedelta(days=2 - i)
+            session.add(
+                Candle(
+                    symbol="AAA",
+                    exchange="NSE",
+                    timeframe="1d",
+                    ts=ts,
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=1000.0,
+                )
+            )
+        for i, close in enumerate([200.0, 202.0, 204.0]):
+            ts = now - timedelta(days=2 - i)
+            session.add(
+                Candle(
+                    symbol="BBB",
+                    exchange="NSE",
+                    timeframe="1d",
+                    ts=ts,
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=1000.0,
+                )
+            )
+        session.commit()
+
+
+def test_backtests_runs_roundtrip() -> None:
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "SIGNAL",
+            "title": "test",
+            "universe": {"mode": "GROUP", "group_id": 123, "symbols": []},
+            "config": {"hello": "world"},
+        },
+    )
+    assert res.status_code == 200
+    run = res.json()
+    assert run["kind"] == "SIGNAL"
+    assert run["status"] == "COMPLETED"
+    assert run["title"] == "test"
+    assert run["config"]["config"]["hello"] == "world"
+
+    res2 = client.get("/api/backtests/runs?limit=10")
+    assert res2.status_code == 200
+    runs = res2.json()
+    assert isinstance(runs, list)
+    assert runs and runs[0]["id"] == run["id"]
+
+    res3 = client.get(f"/api/backtests/runs/{run['id']}")
+    assert res3.status_code == 200
+    assert res3.json()["id"] == run["id"]
+
+
+def test_backtests_eod_candles_loader() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=10)).isoformat()
+    end = (now + timedelta(days=1)).isoformat()
+    res = client.post(
+        "/api/backtests/candles/eod",
+        json={
+            "symbols": [
+                {"symbol": "AAA", "exchange": "NSE"},
+                {"symbol": "BBB", "exchange": "NSE"},
+                {"symbol": "MISSING", "exchange": "NSE"},
+            ],
+            "start": start,
+            "end": end,
+            "allow_fetch": False,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["missing_symbols"] == ["NSE:MISSING"]
+    assert "NSE:AAA" in body["prices"]
+    assert "NSE:BBB" in body["prices"]
+    assert len(body["dates"]) == 3
+    assert body["prices"]["NSE:AAA"] == [100.0, 101.0, 99.5]
+    assert body["prices"]["NSE:BBB"] == [200.0, 202.0, 204.0]

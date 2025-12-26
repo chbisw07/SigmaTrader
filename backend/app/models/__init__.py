@@ -1,4 +1,5 @@
 from .alerts_v3 import AlertDefinition, AlertEvent, CustomIndicator
+from .backtests import BacktestRun
 from .broker import BrokerConnection, BrokerSecret
 from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
@@ -31,6 +32,7 @@ __all__ = [
     "AlertDefinition",
     "AlertEvent",
     "AnalyticsTrade",
+    "BacktestRun",
     "CustomIndicator",
     "Order",
     "Position",
