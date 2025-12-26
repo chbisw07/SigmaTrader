@@ -5,7 +5,6 @@ from typing import List, Optional
 
 from sqlalchemy import (
     CheckConstraint,
-    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -17,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.types import UTCDateTime
 
 
 class Group(Base):
@@ -45,10 +45,10 @@ class Group(Base):
     description: Mapped[Optional[str]] = mapped_column(Text())
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -96,10 +96,10 @@ class GroupMember(Base):
     reference_price: Mapped[Optional[float]] = mapped_column(Float)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),

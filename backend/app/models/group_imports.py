@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from typing import Optional
 
 from sqlalchemy import (
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -15,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.types import UTCDateTime
 
 
 class GroupImport(Base):
@@ -46,10 +46,10 @@ class GroupImport(Base):
     symbol_mapping_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -90,7 +90,7 @@ class GroupImportValue(Base):
     values_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
 
     import_record = relationship("GroupImport", back_populates="values")

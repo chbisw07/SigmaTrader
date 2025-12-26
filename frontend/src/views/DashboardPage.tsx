@@ -25,6 +25,8 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
 
 import { DslHelpDialog } from '../components/DslHelpDialog'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 import { listGroupMembers, listGroups, type Group } from '../services/groups'
 import { fetchHoldings, type Holding } from '../services/positions'
 import { fetchBrokerCapabilities } from '../services/brokerRuntime'
@@ -106,15 +108,6 @@ function formatCompact(value: number): string {
   if (abs >= 1e5) return `${(value / 1e5).toFixed(2)} L`
   if (abs >= 1e3) return `${(value / 1e3).toFixed(2)} K`
   return value.toFixed(2)
-}
-
-function formatIstDateTime(value: string | null | undefined): string {
-  if (!value) return ''
-  const raw = new Date(value)
-  if (Number.isNaN(raw.getTime())) return ''
-  // `value` is an ISO timestamp in UTC (toISOString); the browser converts it
-  // to the user's local timezone (IST on your Ubuntu dev machine).
-  return raw.toLocaleString('en-IN')
 }
 
 const INDICES_CACHE_KEY = 'st_dashboard_indices_cache_v1'
@@ -460,6 +453,7 @@ function MultiLineChart({
 
 export function DashboardPage() {
   const theme = useTheme()
+  const { displayTimeZone } = useTimeSettings()
   const [initialSettings] = useState<DashboardSettingsV1>(() =>
     loadDashboardSettings(),
   )
@@ -1339,12 +1333,12 @@ export function DashboardPage() {
 	                  {data.start.slice(0, 10)} → {data.end.slice(0, 10)}
 	                </Typography>
 	              )}
-	              {lastRefreshedAt && (
-	                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-	                  Last refreshed: {formatIstDateTime(lastRefreshedAt)}
-	                </Typography>
-	              )}
-	            </Stack>
+		              {lastRefreshedAt && (
+		                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+		                  Last refreshed: {formatInDisplayTimeZone(lastRefreshedAt, displayTimeZone)}
+		                </Typography>
+		              )}
+		            </Stack>
 
             <Stack
               direction={{ xs: 'column', md: 'row' }}

@@ -64,29 +64,12 @@ import {
   type SignalStrategyVersion,
 } from '../services/signalStrategies'
 import { SignalStrategiesTab } from './SignalStrategiesTab'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 
-const formatDateTimeIst = (value: unknown): string => {
-  if (!value) return '—'
-  const raw = String(value)
-  const normalized =
-    raw.includes(' ') && !raw.includes('T') ? raw.replace(' ', 'T') : raw
-  const hasTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(normalized)
-
-  let dt = new Date(normalized)
-  if (!hasTz) {
-    const m = normalized.match(
-      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/,
-    )
-    if (m) {
-      const [, y, mo, d, h, mi, s] = m
-      const istOffsetMs = 5.5 * 60 * 60 * 1000
-      const utcMs = Date.UTC(+y, +mo - 1, +d, +h, +mi, +s) - istOffsetMs
-      dt = new Date(utcMs)
-    }
-  }
-
-  if (Number.isNaN(dt.getTime())) return '—'
-  return dt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+function useFormatDateTime() {
+  const { displayTimeZone } = useTimeSettings()
+  return (value: unknown): string => formatInDisplayTimeZone(value, displayTimeZone) || '—'
 }
 
 export function AlertsPage() {
@@ -158,9 +141,9 @@ export function AlertsPage() {
 	}
 
 function AlertsV3Tab({
-	  openAlertId,
-	  onAlertOpened,
-	  createDefaults,
+  openAlertId,
+  onAlertOpened,
+  createDefaults,
   onCreateHandled,
 }: {
   openAlertId: number | null
@@ -168,6 +151,7 @@ function AlertsV3Tab({
   createDefaults: { targetKind: 'SYMBOL'; targetRef: string; exchange: string } | null
   onCreateHandled: () => void
 }) {
+  const formatDateTime = useFormatDateTime()
   const [rows, setRows] = useState<AlertDefinition[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -254,10 +238,6 @@ function AlertsV3Tab({
     onCreateHandled()
   }, [createDefaults, onCreateHandled])
 
-  const formatIstDateTime = (value: unknown): string => {
-    return formatDateTimeIst(value)
-  }
-
   const brokerLabelByName = useMemo(() => {
     const m = new Map<string, string>()
     for (const b of brokers) m.set(b.name, b.label)
@@ -311,7 +291,7 @@ function AlertsV3Tab({
       field: 'last_triggered_at',
       headerName: 'Last trigger',
       width: 180,
-      valueFormatter: (v) => formatIstDateTime(v),
+      valueFormatter: (v) => formatDateTime(v),
     },
     {
       field: 'actions',
@@ -2680,6 +2660,7 @@ function CustomIndicatorHelpDialog({
 }
 
 function EventsV3Tab({ onOpenAlert }: { onOpenAlert: (alertId: number) => void }) {
+  const formatDateTime = useFormatDateTime()
   const [rows, setRows] = useState<AlertEvent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -2702,9 +2683,7 @@ function EventsV3Tab({ onOpenAlert }: { onOpenAlert: (alertId: number) => void }
     void refresh()
   }, [])
 
-  const formatIstDateTime = (value: unknown): string => {
-    return formatDateTimeIst(value)
-  }
+  const formatIstDateTime = (value: unknown): string => formatDateTime(value)
 
   const columns: GridColDef[] = [
     { field: 'triggered_at', headerName: 'Triggered at', width: 190, valueFormatter: (v) => formatIstDateTime(v) },

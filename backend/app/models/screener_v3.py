@@ -5,7 +5,6 @@ from typing import Optional
 
 from sqlalchemy import (
     CheckConstraint,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -15,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.types import UTCDateTime
 
 
 class ScreenerRun(Base):
@@ -64,14 +64,14 @@ class ScreenerRun(Base):
     error: Mapped[Optional[str]] = mapped_column(Text)
     results_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
 
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    started_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),

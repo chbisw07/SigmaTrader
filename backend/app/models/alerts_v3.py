@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.types import UTCDateTime
 
 
 class AlertDefinition(Base):
@@ -110,18 +111,18 @@ class AlertDefinition(Base):
     )
 
     # Lifecycle
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     # Bookkeeping
-    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    last_triggered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    last_triggered_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -153,10 +154,10 @@ class CustomIndicator(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -191,7 +192,7 @@ class AlertEvent(Base):
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
     triggered_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     bar_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
 

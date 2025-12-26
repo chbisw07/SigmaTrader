@@ -2,6 +2,8 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import { useEffect, useMemo, useState } from 'react'
 
+import { useTimeSettings } from '../timeSettingsContext'
+
 type Paksha = 'Shukla Paksha' | 'Krishna Paksha'
 
 const SYNODIC_MONTH_DAYS = 29.530588853
@@ -33,18 +35,33 @@ function mod(n: number, m: number): number {
   return ((n % m) + m) % m
 }
 
-function formatHeaderDateTime(date: Date): string {
-  const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
-  const day = String(date.getDate()).padStart(2, '0')
-  const month = date.toLocaleDateString('en-US', { month: 'short' })
-  const year = date.getFullYear()
-  const time = date.toLocaleTimeString('en-US', {
+function formatHeaderDateTime(date: Date, timeZone?: string): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
     hour12: true,
-  })
-  return `${weekday}, ${day} ${month} ${year}, ${time}`
+    ...(timeZone ? { timeZone } : {}),
+  }
+
+  const parts = new Intl.DateTimeFormat('en-US', opts).formatToParts(date)
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? ''
+
+  const weekday = get('weekday')
+  const day = get('day')
+  const month = get('month')
+  const year = get('year')
+  const hour = get('hour')
+  const minute = get('minute')
+  const second = get('second')
+  const dayPeriod = get('dayPeriod')
+
+  return `${weekday}, ${day} ${month} ${year}, ${hour}:${minute}:${second} ${dayPeriod}`
 }
 
 function computeMoonPhase(date: Date): {
@@ -130,6 +147,7 @@ function MoonPhaseIcon({ phase, size = 22 }: { phase: number; size?: number }) {
 }
 
 export function MoonPhaseHeader() {
+  const { displayTimeZone } = useTimeSettings()
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -138,7 +156,8 @@ export function MoonPhaseHeader() {
   }, [])
 
   const info = useMemo(() => computeMoonPhase(now), [now])
-  const datetimeLabel = useMemo(() => formatHeaderDateTime(now), [now])
+  const tz = displayTimeZone === 'LOCAL' ? undefined : displayTimeZone
+  const datetimeLabel = useMemo(() => formatHeaderDateTime(now, tz), [now, tz])
 
   return (
     <Box
@@ -178,4 +197,3 @@ export function MoonPhaseHeader() {
     </Box>
   )
 }
-

@@ -52,6 +52,7 @@ import {
   type SignalStrategy,
   type SignalStrategyVersion,
 } from '../services/signalStrategies'
+import { formatIst } from '../utils/datetime'
 
 type RebalanceTradeRow = {
   id: string
@@ -141,11 +142,7 @@ function formatPercent(value: number | null | undefined): string {
 
 function formatIstDateTime(value: unknown): string {
   if (!value) return '—'
-  const raw = new Date(value as string)
-  if (Number.isNaN(raw.getTime())) return '—'
-  const istOffsetMs = 5.5 * 60 * 60 * 1000
-  const ist = new Date(raw.getTime() + istOffsetMs)
-  return ist.toLocaleString('en-IN', {
+  const out = formatIst(value, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -154,6 +151,7 @@ function formatIstDateTime(value: unknown): string {
     second: '2-digit',
     hour12: true,
   })
+  return out || '—'
 }
 
 function parsePct(raw: string): number | null {

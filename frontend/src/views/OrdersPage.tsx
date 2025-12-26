@@ -10,6 +10,8 @@ import { useEffect, useState } from 'react'
 import { fetchOrdersHistory, type Order } from '../services/orders'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import { syncOrdersForBroker } from '../services/brokerRuntime'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 import {
   DataGrid,
   type GridColDef,
@@ -23,6 +25,7 @@ export function OrdersPanel({
   embedded?: boolean
   active?: boolean
 }) {
+  const { displayTimeZone } = useTimeSettings()
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -31,13 +34,6 @@ export function OrdersPanel({
   const [loadedOnce, setLoadedOnce] = useState(false)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
-
-  const formatIst = (iso: string): string => {
-    const utc = new Date(iso)
-    const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
-    const ist = new Date(istMs)
-    return ist.toLocaleString('en-IN')
-  }
 
   const loadOrders = async () => {
     try {
@@ -98,7 +94,9 @@ export function OrdersPanel({
       headerName: 'Created At',
       width: 190,
       valueFormatter: (value) =>
-        typeof value === 'string' ? formatIst(value) : '',
+        typeof value === 'string'
+          ? formatInDisplayTimeZone(value, displayTimeZone)
+          : '',
     },
     {
       field: 'symbol',

@@ -17,6 +17,8 @@ import {
   fetchSystemEvents,
   type SystemEvent,
 } from '../services/systemEvents'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 
 const SYSTEM_EVENTS_RETENTION_DAYS_KEY = 'st_system_events_retention_days_v1'
 
@@ -40,6 +42,7 @@ function saveRetentionDays(days: number): void {
 }
 
 export function SystemEventsPage() {
+  const { displayTimeZone } = useTimeSettings()
   const [events, setEvents] = useState<SystemEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -100,17 +103,15 @@ export function SystemEventsPage() {
     })()
   }, [load, runCleanup])
 
-  const formatIst = (iso: string): string => {
-    return new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
-  }
-
   const columns: GridColDef[] = [
     {
       field: 'created_at',
       headerName: 'Time',
       width: 190,
       valueFormatter: (value) =>
-        typeof value === 'string' ? formatIst(value) : '',
+        typeof value === 'string'
+          ? formatInDisplayTimeZone(value, displayTimeZone)
+          : '',
     },
     {
       field: 'level',

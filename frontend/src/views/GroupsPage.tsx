@@ -40,6 +40,8 @@ import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRo
 import { createManualOrder } from '../services/orders'
 import { fetchHoldings, type Holding } from '../services/positions'
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 import {
   addGroupMember,
   bulkAddGroupMembers,
@@ -205,25 +207,8 @@ function formatPercent(value: number | null | undefined): string {
   return `${(Number(value) * 100).toFixed(1)}%`
 }
 
-function formatIstDateTime(value: unknown): string {
-  if (!value) return '—'
-  const raw = new Date(value as string)
-  if (Number.isNaN(raw.getTime())) return '—'
-  // Stored timestamps are UTC-naive, so add the +5:30 offset before display.
-  const istOffsetMs = 5.5 * 60 * 60 * 1000
-  const ist = new Date(raw.getTime() + istOffsetMs)
-  return ist.toLocaleString('en-IN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  })
-}
-
 export function GroupsPage() {
+  const { displayTimeZone } = useTimeSettings()
   const navigate = useNavigate()
   const location = useLocation()
   const preferredGroupName = useMemo(() => {
@@ -1030,7 +1015,16 @@ export function GroupsPage() {
       field: 'updated_at',
       headerName: 'Updated',
       width: 200,
-      valueFormatter: (v) => formatIstDateTime(v),
+      valueFormatter: (v) =>
+        formatInDisplayTimeZone(v, displayTimeZone, {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true,
+        }) || '—',
     },
     {
       field: 'actions',

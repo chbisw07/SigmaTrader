@@ -16,9 +16,8 @@ import {
   type PositionSnapshot,
 } from '../services/positions'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
-
-const formatIst = (iso: string): string =>
-  new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 
 const formatDateLocal = (d: Date): string => {
   const y = d.getFullYear()
@@ -40,6 +39,7 @@ const defaultDateRange = (): { from: string; to: string } => {
 }
 
 export function PositionsPage() {
+  const { displayTimeZone } = useTimeSettings()
   const defaults = defaultDateRange()
   const [positions, setPositions] = useState<PositionSnapshot[]>([])
   const [loading, setLoading] = useState(true)
@@ -200,7 +200,8 @@ export function PositionsPage() {
       field: 'captured_at',
       headerName: 'Captured',
       width: 190,
-      valueFormatter: (v) => (v ? formatIst(String(v)) : ''),
+      valueFormatter: (v) =>
+        v ? formatInDisplayTimeZone(String(v), displayTimeZone) : '',
     },
   ]
 

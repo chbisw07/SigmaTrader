@@ -27,6 +27,8 @@ import {
 } from '../services/analytics'
 import { fetchStrategies, type Strategy } from '../services/admin'
 import { recordAppLog } from '../services/logs'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 
 const CORR_SETTINGS_STORAGE_KEY = 'st_analytics_corr_settings_v1'
 const CORR_RESULT_STORAGE_KEY = 'st_analytics_corr_result_v1'
@@ -328,14 +330,8 @@ type TradesSectionProps = {
   trades: AnalyticsTrade[]
 }
 
-const formatIst = (iso: string): string => {
-  const utc = new Date(iso)
-  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
-  const ist = new Date(istMs)
-  return ist.toLocaleString('en-IN')
-}
-
 function TradesSection({ trades }: TradesSectionProps) {
+  const { displayTimeZone } = useTimeSettings()
   if (!trades.length) {
     return (
       <Typography variant="body2" color="text.secondary">
@@ -414,7 +410,7 @@ function TradesSection({ trades }: TradesSectionProps) {
               {trades.map((t) => (
                 <tr key={t.id}>
                   <td style={{ padding: '4px 8px' }}>
-                    {formatIst(t.closed_at)}
+                    {formatInDisplayTimeZone(t.closed_at, displayTimeZone)}
                   </td>
                   <td style={{ padding: '4px 8px' }}>
                     {t.strategy_name ?? '-'}

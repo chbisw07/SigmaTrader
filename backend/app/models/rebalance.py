@@ -6,7 +6,6 @@ from typing import List, Optional
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
-    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -18,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.types import UTCDateTime
 
 
 class RebalancePolicy(Base):
@@ -60,10 +60,10 @@ class RebalancePolicy(Base):
     policy_json: Mapped[Optional[str]] = mapped_column(Text())
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -96,14 +96,14 @@ class RebalanceSchedule(Base):
 
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     schedule_json: Mapped[Optional[str]] = mapped_column(Text())
-    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -163,9 +163,9 @@ class RebalanceRun(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text())
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
-    executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    executed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     orders: Mapped[List["RebalanceRunOrder"]] = relationship(
         back_populates="run",
@@ -213,7 +213,7 @@ class RebalanceRunOrder(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="PROPOSED")
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
 
     run: Mapped[RebalanceRun] = relationship(back_populates="orders")

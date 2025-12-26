@@ -21,6 +21,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.types import UTCDateTime
 
 
 class Strategy(Base):
@@ -71,10 +72,10 @@ class Strategy(Base):
         default=True,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -127,10 +128,10 @@ class RiskSettings(Base):
     symbol_blacklist: Mapped[Optional[str]] = mapped_column(Text())
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -181,7 +182,7 @@ class Alert(Base):
     reason: Mapped[Optional[str]] = mapped_column(Text())
 
     received_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     bar_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
@@ -234,10 +235,10 @@ class Order(Base):
     gtt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     synthetic_gtt: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     trigger_operator: Mapped[Optional[str]] = mapped_column(String(2))
-    armed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    armed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    last_checked_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
     last_seen_price: Mapped[Optional[float]] = mapped_column(Float)
-    triggered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    triggered_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="WAITING")
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="MANUAL")
@@ -256,10 +257,10 @@ class Order(Base):
     simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -317,18 +318,18 @@ class IndicatorRule(Base):
     )
     action_params_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
-    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    last_triggered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    last_triggered_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        UTCDateTime(),
         nullable=False,
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
@@ -363,7 +364,7 @@ class Position(Base):
     avg_price: Mapped[float] = mapped_column(Float, nullable=False)
     pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     last_updated: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
 
 
@@ -399,7 +400,7 @@ class PositionSnapshot(Base):
     )
     as_of_date: Mapped[date_type] = mapped_column(Date, nullable=False)
     captured_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=lambda: datetime.now(UTC)
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )
 
     symbol: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -455,8 +456,8 @@ class AnalyticsTrade(Base):
     pnl: Mapped[float] = mapped_column(Float, nullable=False)
     r_multiple: Mapped[Optional[float]] = mapped_column(Float)
 
-    opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    closed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 __all__ = [

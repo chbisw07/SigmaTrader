@@ -53,6 +53,18 @@ import {
 } from '../services/brokers'
 import { fetchMarketDataStatus, type MarketDataStatus } from '../services/marketData'
 import { recordAppLog } from '../services/logs'
+import { useTimeSettings } from '../timeSettingsContext'
+import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
+import { formatInTimeZone } from '../utils/datetime'
+
+const DISPLAY_TZ_PRESETS = [
+  'Asia/Kolkata',
+  'LOCAL',
+  'UTC',
+  'Europe/London',
+  'America/New_York',
+  'America/Los_Angeles',
+] as const
 
 function BrokerSecretsTable({
   brokerName,
@@ -344,7 +356,10 @@ export function SettingsPage() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  type SettingsTab = 'broker' | 'risk' | 'strategy'
+  const { displayTimeZone, setDisplayTimeZone } = useTimeSettings()
+  const systemTimeZone = getSystemTimeZone()
+
+  type SettingsTab = 'broker' | 'risk' | 'strategy' | 'time'
   const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
 
   const [strategies, setStrategies] = useState<Strategy[]>([])
@@ -380,10 +395,28 @@ export function SettingsPage() {
 
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
   const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
+  const displayTzIsPreset = DISPLAY_TZ_PRESETS.includes(displayTimeZone as any)
+  const [showCustomTz, setShowCustomTz] = useState<boolean>(
+    () => !displayTzIsPreset && displayTimeZone !== 'LOCAL',
+  )
+  const [customTzDraft, setCustomTzDraft] = useState<string>(() =>
+    !displayTzIsPreset && displayTimeZone !== 'LOCAL' ? displayTimeZone : '',
+  )
+
+  useEffect(() => {
+    const isPreset = DISPLAY_TZ_PRESETS.includes(displayTimeZone as any)
+    if (displayTimeZone === 'LOCAL' || isPreset) {
+      setShowCustomTz(false)
+      setCustomTzDraft('')
+      return
+    }
+    setShowCustomTz(true)
+    setCustomTzDraft(displayTimeZone)
+  }, [displayTimeZone])
 
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get('tab')
-    if (tab === 'broker' || tab === 'risk' || tab === 'strategy') {
+    if (tab === 'broker' || tab === 'risk' || tab === 'strategy' || tab === 'time') {
       if (tab !== activeTab) setActiveTab(tab)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -391,7 +424,13 @@ export function SettingsPage() {
 
   const handleTabChange = (_event: React.SyntheticEvent, next: string) => {
     const nextTab: SettingsTab =
-      next === 'risk' ? 'risk' : next === 'strategy' ? 'strategy' : 'broker'
+      next === 'risk'
+        ? 'risk'
+        : next === 'strategy'
+          ? 'strategy'
+          : next === 'time'
+            ? 'time'
+            : 'broker'
     setActiveTab(nextTab)
     const params = new URLSearchParams(location.search)
     params.set('tab', nextTab)
@@ -807,6 +846,7 @@ export function SettingsPage() {
           <Tab value="broker" label="Broker settings" />
           <Tab value="risk" label="Risk settings" />
           <Tab value="strategy" label="Strategy settings" />
+          <Tab value="time" label="Time" />
         </Tabs>
       </Paper>
 
@@ -969,13 +1009,130 @@ export function SettingsPage() {
         </Box>
       )}
 
-      {activeTab !== 'broker' && loading ? (
+      {activeTab === 'time' ? (
+        <Paper sx={{ mb: 3, p: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Display timezone
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            This only affects how timestamps are displayed in the UI (tables, logs, history). Rebalance scheduling remains fixed to IST.
+          </Typography>
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 560 }}>
+            {(() => {
+              const previewTimeZone =
+                showCustomTz && customTzDraft.trim()
+                  ? customTzDraft.trim()
+                  : displayTimeZone === 'LOCAL'
+                    ? undefined
+                    : displayTimeZone
+              const previewValid =
+                previewTimeZone == null || isValidIanaTimeZone(previewTimeZone)
+              return (
+                <>
+            <TextField
+              select
+              label="Timezone"
+              value={showCustomTz ? 'CUSTOM' : displayTimeZone}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === 'CUSTOM') {
+                  setShowCustomTz(true)
+                  setCustomTzDraft(
+                    displayTimeZone === 'LOCAL'
+                      ? systemTimeZone ?? ''
+                      : String(displayTimeZone),
+                  )
+                  return
+                }
+                setShowCustomTz(false)
+                setCustomTzDraft('')
+                setDisplayTimeZone(v)
+              }}
+              helperText={
+                displayTimeZone === 'LOCAL'
+                  ? `Using system timezone${systemTimeZone ? `: ${systemTimeZone}` : ''}.`
+                  : `Using ${displayTimeZone}.`
+              }
+            >
+              <MenuItem value="Asia/Kolkata">IST (Asia/Kolkata)</MenuItem>
+              <MenuItem value="LOCAL">
+                Local (system){systemTimeZone ? ` — ${systemTimeZone}` : ''}
+              </MenuItem>
+              <MenuItem value="UTC">UTC</MenuItem>
+              <MenuItem value="Europe/London">UK (Europe/London)</MenuItem>
+              <MenuItem value="America/New_York">US East (America/New_York)</MenuItem>
+              <MenuItem value="America/Los_Angeles">US West (America/Los_Angeles)</MenuItem>
+              <MenuItem value="CUSTOM">Custom (IANA timezone…)</MenuItem>
+            </TextField>
+
+            {showCustomTz ? (
+              <TextField
+                label="Custom timezone (IANA)"
+                value={customTzDraft}
+                onChange={(e) => setCustomTzDraft(e.target.value)}
+                error={
+                  Boolean(customTzDraft.trim()) &&
+                  !isValidIanaTimeZone(customTzDraft.trim())
+                }
+                helperText="Example: Asia/Kolkata, Europe/London, America/New_York"
+              />
+            ) : null}
+
+            {showCustomTz ? (
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <Button
+                  variant="contained"
+                  disabled={
+                    !customTzDraft.trim() ||
+                    !isValidIanaTimeZone(customTzDraft.trim())
+                  }
+                  onClick={() => {
+                    const tz = customTzDraft.trim()
+                    if (!tz || !isValidIanaTimeZone(tz)) return
+                    setDisplayTimeZone(tz)
+                  }}
+                >
+                  Apply custom timezone
+                </Button>
+                <Button
+                  variant="text"
+                  onClick={() => {
+                    setShowCustomTz(false)
+                    setCustomTzDraft('')
+                  }}
+                >
+                  Cancel
+                </Button>
+              </Box>
+            ) : null}
+
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <Typography variant="subtitle2">Preview</Typography>
+              <Typography color="text.secondary" variant="body2">
+                Now (display):{' '}
+                {previewValid
+                  ? formatInTimeZone(new Date().toISOString(), previewTimeZone)
+                  : 'Invalid timezone'}
+              </Typography>
+              <Typography color="text.secondary" variant="body2">
+                Now (IST): {formatInTimeZone(new Date().toISOString(), 'Asia/Kolkata')}
+              </Typography>
+            </Paper>
+                </>
+              )
+            })()}
+          </Box>
+        </Paper>
+      ) : activeTab !== 'broker' && loading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
           <Typography variant="body2">
             {activeTab === 'risk'
               ? 'Loading risk settings...'
-              : 'Loading strategy settings...'}
+              : activeTab === 'strategy'
+                ? 'Loading strategy settings...'
+                : 'Loading settings...'}
           </Typography>
         </Box>
       ) : activeTab !== 'broker' && error ? (

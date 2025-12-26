@@ -3,6 +3,7 @@ import { BrowserRouter } from 'react-router-dom'
 
 import { QueuePage } from './views/QueuePage'
 import { AppThemeProvider } from './themeContext'
+import { TimeSettingsProvider } from './timeSettingsContext'
 
 describe('QueuePage', () => {
   beforeEach(() => {
@@ -65,7 +66,9 @@ describe('QueuePage', () => {
     render(
       <BrowserRouter>
         <AppThemeProvider>
-          <QueuePage />
+          <TimeSettingsProvider>
+            <QueuePage />
+          </TimeSettingsProvider>
         </AppThemeProvider>
       </BrowserRouter>,
     )

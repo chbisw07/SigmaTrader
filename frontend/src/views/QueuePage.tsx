@@ -34,6 +34,8 @@ import {
   previewOrderForBroker,
   type BrokerCapabilities,
 } from '../services/brokerRuntime'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 
 export function WaitingQueuePanel({
   embedded = false,
@@ -42,6 +44,7 @@ export function WaitingQueuePanel({
   embedded?: boolean
   active?: boolean
 }) {
+  const { displayTimeZone } = useTimeSettings()
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -79,13 +82,6 @@ export function WaitingQueuePanel({
   const getCaps = (brokerName?: string | null): BrokerCapabilities | null => {
     const name = (brokerName ?? selectedBroker ?? 'zerodha').toLowerCase()
     return brokerCaps[name] ?? null
-  }
-
-  const formatIst = (iso: string): string => {
-    const utc = new Date(iso)
-    const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000
-    const ist = new Date(istMs)
-    return ist.toLocaleString('en-IN')
   }
 
   const loadQueue = async (options: { silent?: boolean } = {}) => {
@@ -496,7 +492,9 @@ export function WaitingQueuePanel({
       headerName: 'Created At',
       width: 190,
       valueFormatter: (value) =>
-        typeof value === 'string' ? formatIst(value) : '',
+        typeof value === 'string'
+          ? formatInDisplayTimeZone(value, displayTimeZone)
+          : '',
     },
     {
       field: 'broker_name',

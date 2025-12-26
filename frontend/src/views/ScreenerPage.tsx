@@ -56,6 +56,8 @@ import {
   type SignalStrategy,
   type SignalStrategyVersion,
 } from '../services/signalStrategies'
+import { useTimeSettings } from '../timeSettingsContext'
+import { formatInDisplayTimeZone } from '../utils/datetime'
 
 type ConditionRow = { lhs: string; op: string; rhs: string }
 
@@ -231,6 +233,7 @@ function buildDslFromRows(join: 'AND' | 'OR', rows: ConditionRow[]): string {
 }
 
 export function ScreenerPage() {
+  const { displayTimeZone } = useTimeSettings()
   const navigate = useNavigate()
   const [groups, setGroups] = useState<Group[]>([])
   const [loadingGroups, setLoadingGroups] = useState(false)
@@ -809,10 +812,9 @@ export function ScreenerPage() {
 
   const formatDateTime = useCallback((iso?: string | null): string => {
     if (!iso) return '—'
-    const dt = new Date(iso)
-    if (Number.isNaN(dt.getTime())) return '—'
-    return dt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
-  }, [])
+    const out = formatInDisplayTimeZone(iso, displayTimeZone)
+    return out || '—'
+  }, [displayTimeZone])
 
   const universeLabel = useCallback(
     (r: ScreenerRun): string => {

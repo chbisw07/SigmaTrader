@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 
 import { AlertsPage } from './views/AlertsPage'
 import { AppThemeProvider } from './themeContext'
+import { TimeSettingsProvider } from './timeSettingsContext'
 
 function okJson(data: unknown): Response {
   return {
@@ -76,7 +77,9 @@ describe('AlertsPage (v3)', () => {
     render(
       <BrowserRouter>
         <AppThemeProvider>
-          <AlertsPage />
+          <TimeSettingsProvider>
+            <AlertsPage />
+          </TimeSettingsProvider>
         </AppThemeProvider>
       </BrowserRouter>,
     )

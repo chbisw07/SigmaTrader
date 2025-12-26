@@ -4,12 +4,15 @@ import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import { AppThemeProvider } from './themeContext.tsx'
+import { TimeSettingsProvider } from './timeSettingsContext.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <AppThemeProvider>
-        <App />
+        <TimeSettingsProvider>
+          <App />
+        </TimeSettingsProvider>
       </AppThemeProvider>
     </BrowserRouter>
   </StrictMode>,
