@@ -420,7 +420,7 @@ export async function fetchGroupMemberships(
 
   const responses = await Promise.all(
     chunks.map(async (chunk) => {
-      const url = new URL('/api/groups/memberships', window.location.origin)
+      const url = new URL('/api/groups/memberships/by-symbol', window.location.origin)
       for (const symbol of chunk) {
         url.searchParams.append('symbols', symbol)
       }

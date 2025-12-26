@@ -682,13 +682,14 @@ def reconcile_portfolio_allocations(
     )
 
 
-@router.get("/memberships", response_model=GroupMembershipsRead)
+@router.get("/memberships/by-symbol", response_model=GroupMembershipsRead)
 def get_memberships(
     symbols: List[str] = Query([]),
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user_optional),
 ) -> GroupMembershipsRead:
-    if not symbols:
+    symbols_u = [s.strip().upper() for s in symbols if (s or "").strip()]
+    if not symbols_u:
         return GroupMembershipsRead(memberships={})
 
     group_query = db.query(Group.id, Group.name)
@@ -703,14 +704,17 @@ def get_memberships(
     members = (
         db.query(GroupMember.group_id, GroupMember.symbol)
         .filter(
-            GroupMember.symbol.in_(symbols),
+            func.upper(GroupMember.symbol).in_(symbols_u),
             GroupMember.group_id.in_(list(groups.keys())),
         )
         .all()
     )
-    memberships: dict[str, List[str]] = {symbol: [] for symbol in symbols}
+    memberships: dict[str, List[str]] = {symbol: [] for symbol in symbols_u}
     for group_id, symbol in members:
-        memberships.setdefault(symbol, []).append(groups.get(group_id, ""))
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            continue
+        memberships.setdefault(sym, []).append(groups.get(group_id, ""))
     for symbol, names in list(memberships.items()):
         memberships[symbol] = [n for n in names if n]
     return GroupMembershipsRead(memberships=memberships)

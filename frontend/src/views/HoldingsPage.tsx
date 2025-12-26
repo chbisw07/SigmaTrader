@@ -308,12 +308,20 @@ export function HoldingsPage() {
   const [corrError, setCorrError] = useState<string | null>(null)
 
   const refreshGroupMemberships = async (symbols: string[]) => {
-    if (!symbols.length) return
+    const normalized = Array.from(
+      new Set(
+        (symbols || [])
+          .map((s) => (s || '').trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    )
+    if (!normalized.length) return
     try {
-      const memberships = await fetchGroupMemberships(symbols)
+      const memberships = await fetchGroupMemberships(normalized)
       setHoldings((current) =>
         current.map((row) => {
-          const names = memberships[row.symbol] ?? []
+          const key = (row.symbol || '').trim().toUpperCase()
+          const names = memberships[key] ?? []
           return {
             ...row,
             groupNames: names,
