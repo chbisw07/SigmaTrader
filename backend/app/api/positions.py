@@ -284,13 +284,19 @@ def list_daily_positions(
 
         product = (r.product or "").upper()
 
+        net_qty = float(r.qty or 0.0)
+        # "Remaining" is a legacy UI column; we populate it with holdings qty
+        # (when available) so users can see how much of the day started as a
+        # delivery holding vs intraday activity. The canonical position size is
+        # always `qty` (net qty from broker positions payload).
         if r.holding_qty is not None:
             remaining = float(r.holding_qty)
         else:
-            remaining = float(r.qty)
-            # Delivery products cannot be short.
-            if product in {"CNC", "DELIVERY"} and remaining < 0:
-                remaining = 0.0
+            remaining = net_qty
+        # Delivery products cannot be short; clamp legacy "remaining" to 0 so
+        # it doesn't imply an invalid holding size.
+        if product in {"CNC", "DELIVERY"} and remaining < 0:
+            remaining = 0.0
         item.remaining_qty = remaining
 
         day_buy_qty = float(r.day_buy_qty or 0.0)
@@ -304,10 +310,10 @@ def list_daily_positions(
             order_type = "BUY"
         elif day_sell_qty > 0:
             order_type = "SELL"
-        elif remaining > 0:
-            order_type = "HOLD"
-        elif remaining < 0:
+        elif net_qty < 0:
             order_type = "SHORT"
+        elif net_qty > 0:
+            order_type = "HOLD"
         else:
             order_type = "FLAT"
         item.order_type = order_type
@@ -335,35 +341,34 @@ def list_daily_positions(
         ltp = r.last_price if r.last_price is not None else None
         item.ltp = float(ltp) if ltp is not None else None
 
-        pnl_value: Optional[float] = None
-        pnl_pct: Optional[float] = None
-        today_pnl: Optional[float] = None
-        today_pnl_pct: Optional[float] = None
+        pnl_value: float | None = None
+        pnl_pct: float | None = None
+        today_pnl: float | None = None
+        today_pnl_pct: float | None = None
 
-        if order_type == "SELL" and traded_qty and avg_buy and avg_sell:
-            pnl_value = traded_qty * (avg_sell - avg_buy)
-            pnl_pct = ((avg_sell - avg_buy) / avg_buy * 100.0) if avg_buy else None
-            if item.ltp is not None:
-                today_pnl = traded_qty * (item.ltp - avg_sell)
-                today_pnl_pct = (
-                    ((avg_sell - item.ltp) / avg_sell * 100.0) if avg_sell else None
-                )
-        elif order_type == "BUY":
-            # Treat as open long; use remaining (not traded) for unrealised P&L.
-            if remaining and avg_buy and item.ltp is not None:
-                pnl_value = remaining * (item.ltp - avg_buy)
-                pnl_pct = ((item.ltp - avg_buy) / avg_buy * 100.0) if avg_buy else None
-                today_pnl = traded_qty * (item.ltp - avg_buy) if traded_qty else None
-                today_pnl_pct = (
-                    ((item.ltp - avg_buy) / avg_buy * 100.0) if avg_buy else None
-                )
+        avg_price = float(r.avg_price or 0.0)
+        close_price = float(r.close_price) if r.close_price is not None else None
+
+        # Canonical P&L: use broker net qty + average_price + last_price.
+        # This matches the broker UI (Kite/SmartAPI) semantics: realised +
+        # unrealised P&L is reflected in `average_price` and is therefore
+        # captured by `qty * (last - avg)`.
+        if net_qty and item.ltp is not None and avg_price:
+            pnl_value = net_qty * (item.ltp - avg_price)
+            pnl_pct = (pnl_value / (abs(net_qty) * avg_price)) * 100.0
+
+        # "Today" P&L: mark-to-market vs previous close (if available).
+        if net_qty and item.ltp is not None and close_price:
+            today_pnl = net_qty * (item.ltp - close_price)
+            today_pnl_pct = (today_pnl / (abs(net_qty) * close_price)) * 100.0
 
         item.pnl_value = pnl_value
         item.pnl_pct = pnl_pct
         item.today_pnl = today_pnl
         item.today_pnl_pct = today_pnl_pct
-        # Fallbacks: if we could not derive numbers (common for FLAT positions),
-        # use broker-provided pnl/m2m so the UI doesn't show empty cells.
+
+        # Fallbacks: if we could not derive numbers (missing prices), use
+        # broker-provided fields so the UI doesn't show empty cells.
         broker_pnl = float(r.pnl or 0.0)
         if item.pnl_value is None:
             item.pnl_value = broker_pnl
@@ -392,14 +397,8 @@ def list_daily_positions(
                 return None
             return (pnl / notional) * 100.0
 
-        qty_base = (
-            abs(remaining)
-            if remaining
-            else (item.traded_qty if item.traded_qty else None)
-        )
-        price_base = (
-            avg_buy or (float(r.avg_price) if r.avg_price else None) or avg_sell
-        )
+        qty_base = abs(net_qty) if net_qty else None
+        price_base = avg_price if avg_price else (avg_buy or avg_sell)
 
         if item.pnl_pct is None:
             item.pnl_pct = _pct_from_notional(
