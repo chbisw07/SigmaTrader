@@ -925,7 +925,6 @@ export function HoldingsPage() {
     const keys = [
       'reference_qty',
       'reference_price',
-      'amountRequired',
       'pnlSinceCreation',
       'pnlSinceCreationPct',
     ] as const
@@ -2630,22 +2629,6 @@ export function HoldingsPage() {
     return Number.isFinite(pnl) ? pnl : null
   }
 
-  const getAmountRequiredForUniverse = (row: HoldingRow): number | null => {
-    const qty = getUniverseReferenceQty(row)
-    const current = getDisplayPrice(row)
-    if (
-      qty == null
-      || qty <= 0
-      || current == null
-      || !Number.isFinite(current)
-      || current <= 0
-    ) {
-      return null
-    }
-    const amount = qty * current
-    return Number.isFinite(amount) ? amount : null
-  }
-
   const getBracketPreviewPrice = (): number | null => {
     if (!tradeBracketEnabled) return null
     const mtp = Number(tradeMtpPct)
@@ -2841,27 +2824,6 @@ export function HoldingsPage() {
       },
     },
     {
-      field: 'correlation_cluster',
-      headerName: 'Cluster',
-      sortable: false,
-      width: 100,
-      valueGetter: (_value, row) => (row as HoldingRow).correlationCluster ?? null,
-      renderCell: (params) => {
-        const row = params.row as HoldingRow
-        const label = row.correlationCluster ?? '—'
-        const weight = row.correlationWeight
-        const tooltip =
-          weight != null
-            ? `Approx. portfolio weight in this holding: ${(weight * 100).toFixed(1)}%`
-            : undefined
-        return (
-          <Tooltip title={tooltip ?? ''}>
-            <span>{label}</span>
-          </Tooltip>
-        )
-      },
-    },
-    {
       field: 'groupsLabel',
       headerName: 'Groups',
       flex: 1,
@@ -3023,15 +2985,6 @@ export function HoldingsPage() {
         value != null && Number.isFinite(Number(value))
           ? Number(value).toFixed(2)
           : '—',
-    },
-    {
-      field: 'amountRequired',
-      headerName: 'Amount Required',
-      type: 'number',
-      width: 170,
-      valueGetter: (_value, row) => getAmountRequiredForUniverse(row as HoldingRow),
-      valueFormatter: (value) =>
-        value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—',
     },
     {
       field: 'pnlSinceCreation',
