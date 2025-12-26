@@ -35,6 +35,7 @@ import {
 
 import backtestingHelpText from '../../../docs/backtesting_page_help.md?raw'
 import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_help.md?raw'
+import riskParityBacktestingHelpText from '../../../docs/backtesting_risk_parity_help.md?raw'
 import rotationBacktestingHelpText from '../../../docs/backtesting_rotation_help.md?raw'
 import signalBacktestingHelpText from '../../../docs/backtesting_signal_help.md?raw'
 
@@ -45,7 +46,7 @@ type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION'
 type SignalMode = 'DSL' | 'RANKING'
 type RankingCadence = 'WEEKLY' | 'MONTHLY'
 type PortfolioCadence = 'WEEKLY' | 'MONTHLY'
-type PortfolioMethod = 'TARGET_WEIGHTS' | 'ROTATION'
+type PortfolioMethod = 'TARGET_WEIGHTS' | 'ROTATION' | 'RISK_PARITY'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -98,6 +99,10 @@ export function BacktestingPage() {
   const [rotationTopN, setRotationTopN] = useState(10)
   const [rotationWindow, setRotationWindow] = useState(20)
   const [rotationEligibleDsl, setRotationEligibleDsl] = useState('MA(50) > MA(200)')
+  const [riskWindow, setRiskWindow] = useState(126)
+  const [riskMinObs, setRiskMinObs] = useState(60)
+  const [riskMinWeight, setRiskMinWeight] = useState(0)
+  const [riskMaxWeight, setRiskMaxWeight] = useState(100)
 
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
@@ -276,6 +281,10 @@ export function BacktestingPage() {
                 top_n: rotationTopN,
                 ranking_window: rotationWindow,
                 eligible_dsl: rotationEligibleDsl,
+                risk_window: riskWindow,
+                min_observations: riskMinObs,
+                min_weight: riskMinWeight / 100,
+                max_weight: riskMaxWeight / 100,
               }
           : {
               timeframe: '1d',
@@ -329,6 +338,8 @@ export function BacktestingPage() {
       : tab === 'PORTFOLIO'
         ? portfolioMethod === 'ROTATION'
           ? rotationBacktestingHelpText
+          : portfolioMethod === 'RISK_PARITY'
+            ? riskParityBacktestingHelpText
           : portfolioBacktestingHelpText
         : backtestingHelpText
 
@@ -766,6 +777,7 @@ export function BacktestingPage() {
                   >
                     <MenuItem value="TARGET_WEIGHTS">Target weights</MenuItem>
                     <MenuItem value="ROTATION">Rotation (Top‑N momentum)</MenuItem>
+                    <MenuItem value="RISK_PARITY">Risk parity (equal risk)</MenuItem>
                   </Select>
                 </FormControl>
 
@@ -800,6 +812,51 @@ export function BacktestingPage() {
                       onChange={(e) => setRotationEligibleDsl(e.target.value)}
                       placeholder="Example: MA(50) > MA(200) AND RSI(14) < 80"
                     />
+                  </Stack>
+                )}
+
+                {portfolioMethod === 'RISK_PARITY' && (
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1}>
+                      <TextField
+                        label="Risk window (days)"
+                        size="small"
+                        type="number"
+                        value={riskWindow}
+                        onChange={(e) => setRiskWindow(Number(e.target.value))}
+                        inputProps={{ min: 2, max: 400 }}
+                        fullWidth
+                      />
+                      <TextField
+                        label="Min observations"
+                        size="small"
+                        type="number"
+                        value={riskMinObs}
+                        onChange={(e) => setRiskMinObs(Number(e.target.value))}
+                        inputProps={{ min: 2, max: 400 }}
+                        fullWidth
+                      />
+                    </Stack>
+                    <Stack direction="row" spacing={1}>
+                      <TextField
+                        label="Min weight (%)"
+                        size="small"
+                        type="number"
+                        value={riskMinWeight}
+                        onChange={(e) => setRiskMinWeight(Number(e.target.value))}
+                        inputProps={{ min: 0, max: 100 }}
+                        fullWidth
+                      />
+                      <TextField
+                        label="Max weight (%)"
+                        size="small"
+                        type="number"
+                        value={riskMaxWeight}
+                        onChange={(e) => setRiskMaxWeight(Number(e.target.value))}
+                        inputProps={{ min: 1, max: 100 }}
+                        fullWidth
+                      />
+                    </Stack>
                   </Stack>
                 )}
 
@@ -926,6 +983,25 @@ export function BacktestingPage() {
                     }}
                   >
                     Preset: Rotation (Top‑10 momentum)
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      setPortfolioMethod('RISK_PARITY')
+                      setRiskWindow(126)
+                      setRiskMinObs(60)
+                      setRiskMinWeight(0)
+                      setRiskMaxWeight(30)
+                      setPortfolioCadence('MONTHLY')
+                      setPortfolioBudgetPct(100)
+                      setPortfolioMaxTrades(50)
+                      setPortfolioMinTradeValue(0)
+                      setPortfolioSlippageBps(10)
+                      setPortfolioChargesBps(10)
+                    }}
+                  >
+                    Preset: Risk parity (6M)
                   </Button>
                 </Stack>
               </Stack>

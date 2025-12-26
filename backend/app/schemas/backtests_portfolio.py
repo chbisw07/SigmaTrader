@@ -31,6 +31,12 @@ class PortfolioBacktestConfigIn(BaseModel):
     ranking_window: int = Field(default=20, ge=1, le=400)
     eligible_dsl: str = ""
 
+    # Risk parity (v3): rolling covariance-based weights (equal risk contribution).
+    risk_window: int = Field(default=126, ge=2, le=400)
+    min_observations: int = Field(default=60, ge=2, le=400)
+    min_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_weight: float = Field(default=1.0, ge=0.0, le=1.0)
+
 
 __all__ = [
     "PortfolioBacktestConfigIn",

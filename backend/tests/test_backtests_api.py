@@ -291,6 +291,116 @@ def test_backtests_portfolio_rotation_top_n_momentum() -> None:
     assert series["equity"][-1] == 1080.0
 
 
+def test_backtests_portfolio_risk_parity_weights_sane() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    symbols = ["RR1", "RR2", "RR3"]
+    base = {"RR1": 100.0, "RR2": 200.0, "RR3": 300.0}
+    daily_rets = {
+        "RR1": [
+            0.01,
+            -0.01,
+            0.012,
+            -0.012,
+            0.008,
+            -0.008,
+            0.01,
+            -0.01,
+            0.012,
+            -0.012,
+            0.008,
+            -0.008,
+        ],
+        "RR2": [0.002] * 12,
+        "RR3": [
+            0.005,
+            -0.004,
+            0.006,
+            -0.005,
+            0.004,
+            -0.003,
+            0.005,
+            -0.004,
+            0.006,
+            -0.005,
+            0.004,
+            -0.003,
+        ],
+    }
+
+    with SessionLocal() as session:
+        for sym in symbols:
+            price = base[sym]
+            for i, r in enumerate(daily_rets[sym]):
+                price *= 1.0 + r
+                ts = now - timedelta(days=11 - i)
+                session.add(
+                    Candle(
+                        symbol=sym,
+                        exchange="NSE",
+                        timeframe="1d",
+                        ts=ts,
+                        open=price,
+                        high=price,
+                        low=price,
+                        close=price,
+                        volume=1000.0,
+                    )
+                )
+
+        g = Group(name="PF_RP", kind="PORTFOLIO", description="test")
+        session.add(g)
+        session.commit()
+        session.refresh(g)
+        for sym in symbols:
+            session.add(
+                GroupMember(
+                    group_id=g.id, symbol=sym, exchange="NSE", target_weight=None
+                )
+            )
+        session.commit()
+        group_id = g.id
+
+    start = (now - timedelta(days=4)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "PORTFOLIO",
+            "title": "rp",
+            "universe": {"mode": "GROUP", "group_id": group_id, "symbols": []},
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "method": "RISK_PARITY",
+                "cadence": "MONTHLY",
+                "initial_cash": 100000.0,
+                "budget_pct": 100.0,
+                "max_trades": 50,
+                "min_trade_value": 0.0,
+                "slippage_bps": 0.0,
+                "charges_bps": 0.0,
+                "risk_window": 5,
+                "min_observations": 5,
+                "min_weight": 0.0,
+                "max_weight": 0.7,
+            },
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "COMPLETED", body
+    actions = body["result"]["actions"]
+    assert actions
+    first_targets = actions[0]["targets"]
+    assert first_targets
+    w_sum = sum(float(w) for _k, w in first_targets)
+    assert abs(w_sum - 1.0) < 1e-6
+    assert all(0.0 <= float(w) <= 0.7 + 1e-6 for _k, w in first_targets)
+
+
 def test_backtests_eod_candles_loader() -> None:
     now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     start = (now - timedelta(days=10)).isoformat()

@@ -67,10 +67,10 @@ def create_backtest_run(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid PORTFOLIO backtest config: {exc}",
             ) from exc
-        if pf_cfg_in.method not in {"TARGET_WEIGHTS", "ROTATION"}:
+        if pf_cfg_in.method not in {"TARGET_WEIGHTS", "ROTATION", "RISK_PARITY"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only TARGET_WEIGHTS and ROTATION are supported for PORTFOLIO.",
+                detail="Only TARGET_WEIGHTS/ROTATION/RISK_PARITY are supported.",
             )
         if payload.universe.group_id is None:
             raise HTTPException(

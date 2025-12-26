@@ -23,6 +23,7 @@ from app.services.backtests_signal import (
     _resolve_indicator_series,
     _series_key,
 )
+from app.services.rebalance_risk import solve_risk_parity_erc
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,25 @@ def _forward_fill(series: list[float | None]) -> list[float | None]:
     return out
 
 
+def _compute_covariance(returns: list[list[float]]) -> list[list[float]]:
+    n = len(returns)
+    t = len(returns[0]) if n else 0
+    if n == 0 or t <= 1:
+        raise ValueError("Insufficient returns to compute covariance.")
+
+    means = [sum(r) / t for r in returns]
+    cov = [[0.0 for _ in range(n)] for _ in range(n)]
+    for i in range(n):
+        for j in range(i, n):
+            s = 0.0
+            for k in range(t):
+                s += (returns[i][k] - means[i]) * (returns[j][k] - means[j])
+            v = s / float(t - 1)
+            cov[i][j] = float(v)
+            cov[j][i] = float(v)
+    return cov
+
+
 def _portfolio_value(
     *,
     cash: float,
@@ -175,6 +195,8 @@ def run_portfolio_backtest(
     lookback_days = 0
     if config.method == "ROTATION":
         lookback_days = max(60, int(config.ranking_window) * 3)
+    elif config.method == "RISK_PARITY":
+        lookback_days = max(60, int(config.risk_window) * 3)
     # market_data stores candle timestamps as timezone-naive datetimes; keep
     # backtests consistent by using naive windows as well.
     start_dt = datetime.combine(config.start_date, datetime.min.time()) - timedelta(
@@ -307,6 +329,54 @@ def run_portfolio_backtest(
                     if picks:
                         w = 1.0 / len(picks)
                         target_weights = {k: w for k in picks}
+                elif config.method == "RISK_PARITY":
+                    window = max(2, int(config.risk_window))
+                    min_obs = max(2, min(int(config.min_observations), window))
+                    obs = min(window, i)
+                    start_i = i - obs
+
+                    eligible: list[str] = []
+                    returns: list[list[float]] = []
+                    if obs >= min_obs and start_i >= 0:
+                        for key in keys:
+                            if key not in px_by_key:
+                                continue
+                            series = prices_ff.get(key, [])
+                            if i >= len(series):
+                                continue
+                            ok = True
+                            rets: list[float] = []
+                            for j in range(start_i + 1, i + 1):
+                                p0 = series[j - 1]
+                                p1 = series[j]
+                                if p0 is None or p1 is None or p0 <= 0 or p1 <= 0:
+                                    ok = False
+                                    break
+                                rets.append(float(p1 / p0 - 1.0))
+                            if not ok or len(rets) < min_obs:
+                                continue
+                            eligible.append(key)
+                            returns.append(rets[-min_obs:])
+
+                    if len(eligible) == 1:
+                        target_weights = {eligible[0]: 1.0}
+                    elif len(eligible) >= 2:
+                        try:
+                            cov = _compute_covariance(returns)
+                            rp = solve_risk_parity_erc(
+                                cov,
+                                min_weight=float(config.min_weight),
+                                max_weight=float(config.max_weight),
+                                max_iter=200,
+                                tol=1e-6,
+                            )
+                            target_weights = {
+                                k: float(w)
+                                for k, w in zip(eligible, rp.weights, strict=False)
+                            }
+                        except Exception:
+                            w = 1.0 / len(eligible)
+                            target_weights = {k: w for k in eligible}
 
                 desired_qty: dict[str, int] = {}
                 for key in keys:
@@ -414,7 +484,7 @@ def run_portfolio_backtest(
                                 key=lambda x: x[1],
                                 reverse=True,
                             )
-                            if config.method == "ROTATION"
+                            if config.method in {"ROTATION", "RISK_PARITY"}
                             else None
                         ),
                         "trades": trades,
@@ -466,6 +536,10 @@ def run_portfolio_backtest(
             "top_n": int(config.top_n),
             "ranking_window": int(config.ranking_window),
             "eligible_dsl": (config.eligible_dsl or "").strip() or None,
+            "risk_window": int(config.risk_window),
+            "min_observations": int(config.min_observations),
+            "min_weight": float(config.min_weight),
+            "max_weight": float(config.max_weight),
             "symbols": keys,
             "missing_symbols": missing,
         },
