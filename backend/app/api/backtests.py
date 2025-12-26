@@ -21,7 +21,7 @@ from app.schemas.backtests import (
 from app.schemas.backtests_portfolio import PortfolioBacktestConfigIn
 from app.schemas.backtests_signal import SignalBacktestConfigIn
 from app.services.backtests_data import _norm_symbol_ref, load_eod_close_matrix
-from app.services.backtests_portfolio import run_target_weights_portfolio_backtest
+from app.services.backtests_portfolio import run_portfolio_backtest
 from app.services.backtests_signal import SignalBacktestConfig, run_signal_backtest
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -67,10 +67,10 @@ def create_backtest_run(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid PORTFOLIO backtest config: {exc}",
             ) from exc
-        if pf_cfg_in.method != "TARGET_WEIGHTS":
+        if pf_cfg_in.method not in {"TARGET_WEIGHTS", "ROTATION"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only TARGET_WEIGHTS is supported for PORTFOLIO backtests.",
+                detail="Only TARGET_WEIGHTS and ROTATION are supported for PORTFOLIO.",
             )
         if payload.universe.group_id is None:
             raise HTTPException(
@@ -129,7 +129,7 @@ def create_backtest_run(
         elif kind == "PORTFOLIO":
             assert pf_cfg_in is not None
             group_id = int(payload.universe.group_id)
-            result = run_target_weights_portfolio_backtest(
+            result = run_portfolio_backtest(
                 db,
                 settings,
                 group_id=group_id,

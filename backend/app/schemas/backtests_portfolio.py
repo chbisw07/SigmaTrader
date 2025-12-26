@@ -26,6 +26,11 @@ class PortfolioBacktestConfigIn(BaseModel):
     slippage_bps: float = Field(default=0.0, ge=0.0, le=2000.0)
     charges_bps: float = Field(default=0.0, ge=0.0, le=2000.0)
 
+    # Rotation (v2): Top-N momentum with optional eligibility filter.
+    top_n: int = Field(default=10, ge=1, le=200)
+    ranking_window: int = Field(default=20, ge=1, le=400)
+    eligible_dsl: str = ""
+
 
 __all__ = [
     "PortfolioBacktestConfigIn",

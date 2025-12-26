@@ -209,6 +209,88 @@ def test_backtests_portfolio_target_weights_basic_run() -> None:
     assert series["equity"][-1] == 1005.5
 
 
+def test_backtests_portfolio_rotation_top_n_momentum() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    with SessionLocal() as session:
+        for i, close in enumerate([100.0, 120.0, 130.0]):
+            ts = now - timedelta(days=2 - i)
+            session.add(
+                Candle(
+                    symbol="CCC",
+                    exchange="NSE",
+                    timeframe="1d",
+                    ts=ts,
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=1000.0,
+                )
+            )
+        g = Group(name="PF_ROT", kind="PORTFOLIO", description="test")
+        session.add(g)
+        session.commit()
+        session.refresh(g)
+        session.add_all(
+            [
+                GroupMember(
+                    group_id=g.id,
+                    symbol="AAA",
+                    exchange="NSE",
+                    target_weight=None,
+                ),
+                GroupMember(
+                    group_id=g.id,
+                    symbol="BBB",
+                    exchange="NSE",
+                    target_weight=None,
+                ),
+                GroupMember(
+                    group_id=g.id,
+                    symbol="CCC",
+                    exchange="NSE",
+                    target_weight=None,
+                ),
+            ]
+        )
+        session.commit()
+        group_id = g.id
+
+    start = (now - timedelta(days=1)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "PORTFOLIO",
+            "title": "rot",
+            "universe": {"mode": "GROUP", "group_id": group_id, "symbols": []},
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "method": "ROTATION",
+                "cadence": "MONTHLY",
+                "initial_cash": 1000.0,
+                "budget_pct": 100.0,
+                "max_trades": 50,
+                "min_trade_value": 0.0,
+                "slippage_bps": 0.0,
+                "charges_bps": 0.0,
+                "top_n": 1,
+                "ranking_window": 1,
+            },
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "COMPLETED", body
+    series = body["result"]["series"]
+    assert len(series["dates"]) == 2
+    assert series["equity"][-1] == 1080.0
+
+
 def test_backtests_eod_candles_loader() -> None:
     now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     start = (now - timedelta(days=10)).isoformat()

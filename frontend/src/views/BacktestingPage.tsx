@@ -35,6 +35,7 @@ import {
 
 import backtestingHelpText from '../../../docs/backtesting_page_help.md?raw'
 import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_help.md?raw'
+import rotationBacktestingHelpText from '../../../docs/backtesting_rotation_help.md?raw'
 import signalBacktestingHelpText from '../../../docs/backtesting_signal_help.md?raw'
 
 type UniverseMode = 'HOLDINGS' | 'GROUP' | 'BOTH'
@@ -44,6 +45,7 @@ type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION'
 type SignalMode = 'DSL' | 'RANKING'
 type RankingCadence = 'WEEKLY' | 'MONTHLY'
 type PortfolioCadence = 'WEEKLY' | 'MONTHLY'
+type PortfolioMethod = 'TARGET_WEIGHTS' | 'ROTATION'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -85,6 +87,7 @@ export function BacktestingPage() {
   const [rankingTopN, setRankingTopN] = useState(10)
   const [rankingCadence, setRankingCadence] = useState<RankingCadence>('MONTHLY')
 
+  const [portfolioMethod, setPortfolioMethod] = useState<PortfolioMethod>('TARGET_WEIGHTS')
   const [portfolioCadence, setPortfolioCadence] = useState<PortfolioCadence>('MONTHLY')
   const [portfolioInitialCash, setPortfolioInitialCash] = useState(100000)
   const [portfolioBudgetPct, setPortfolioBudgetPct] = useState(100)
@@ -92,11 +95,16 @@ export function BacktestingPage() {
   const [portfolioMinTradeValue, setPortfolioMinTradeValue] = useState(0)
   const [portfolioSlippageBps, setPortfolioSlippageBps] = useState(0)
   const [portfolioChargesBps, setPortfolioChargesBps] = useState(0)
+  const [rotationTopN, setRotationTopN] = useState(10)
+  const [rotationWindow, setRotationWindow] = useState(20)
+  const [rotationEligibleDsl, setRotationEligibleDsl] = useState('MA(50) > MA(200)')
 
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
   const [selectedRun, setSelectedRun] = useState<BacktestRun | null>(null)
+  const [compareRunId, setCompareRunId] = useState<number | ''>('')
+  const [compareRun, setCompareRun] = useState<BacktestRun | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
 
@@ -174,6 +182,27 @@ export function BacktestingPage() {
     }
   }, [selectedRunId])
 
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      if (compareRunId === '' || typeof compareRunId !== 'number') {
+        setCompareRun(null)
+        return
+      }
+      try {
+        const run = await getBacktestRun(compareRunId)
+        if (!active) return
+        setCompareRun(run)
+      } catch {
+        if (!active) return
+        setCompareRun(null)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [compareRunId])
+
   const buildUniverseSymbols = useCallback(async () => {
     const symSet = new Map<string, { symbol: string; exchange: string }>()
     const add = (symbol: string, exchange: string) => {
@@ -236,7 +265,7 @@ export function BacktestingPage() {
                 timeframe: '1d',
                 start_date: startDate,
                 end_date: endDate,
-                method: 'TARGET_WEIGHTS',
+                method: portfolioMethod,
                 cadence: portfolioCadence,
                 initial_cash: portfolioInitialCash,
                 budget_pct: portfolioBudgetPct,
@@ -244,6 +273,9 @@ export function BacktestingPage() {
                 min_trade_value: portfolioMinTradeValue,
                 slippage_bps: portfolioSlippageBps,
                 charges_bps: portfolioChargesBps,
+                top_n: rotationTopN,
+                ranking_window: rotationWindow,
+                eligible_dsl: rotationEligibleDsl,
               }
           : {
               timeframe: '1d',
@@ -295,7 +327,9 @@ export function BacktestingPage() {
     tab === 'SIGNAL'
       ? signalBacktestingHelpText
       : tab === 'PORTFOLIO'
-        ? portfolioBacktestingHelpText
+        ? portfolioMethod === 'ROTATION'
+          ? rotationBacktestingHelpText
+          : portfolioBacktestingHelpText
         : backtestingHelpText
 
   const signalPresets = useMemo(
@@ -413,6 +447,34 @@ export function BacktestingPage() {
     }
     return candles
   }, [selectedRun, tab])
+
+  const portfolioCompareOverlay = useMemo(() => {
+    if (tab !== 'PORTFOLIO') return []
+    if (!compareRun?.result) return []
+    const r = compareRun.result as Record<string, unknown>
+    const series = r.series as Record<string, unknown> | undefined
+    if (!series) return []
+    const dates = (series.dates as unknown[] | undefined) ?? []
+    const equity = (series.equity as unknown[] | undefined) ?? []
+    const byDate = new Map<string, number>()
+    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      byDate.set(ts, v)
+    }
+    const points = portfolioEquityCandles.map((c) => ({
+      ts: c.ts,
+      value: byDate.get(c.ts) ?? null,
+    }))
+    return [
+      {
+        name: `Compare: run #${compareRun.id}`,
+        color: '#6b7280',
+        points,
+      },
+    ]
+  }, [compareRun, portfolioEquityCandles, tab])
 
   const portfolioDrawdownCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'PORTFOLIO') return []
@@ -696,10 +758,50 @@ export function BacktestingPage() {
               <Stack spacing={1.5}>
                 <FormControl fullWidth size="small">
                   <InputLabel id="bt-pf-method-label">Method</InputLabel>
-                  <Select labelId="bt-pf-method-label" label="Method" value="TARGET_WEIGHTS" disabled>
+                  <Select
+                    labelId="bt-pf-method-label"
+                    label="Method"
+                    value={portfolioMethod}
+                    onChange={(e) => setPortfolioMethod(e.target.value as PortfolioMethod)}
+                  >
                     <MenuItem value="TARGET_WEIGHTS">Target weights</MenuItem>
+                    <MenuItem value="ROTATION">Rotation (Top‑N momentum)</MenuItem>
                   </Select>
                 </FormControl>
+
+                {portfolioMethod === 'ROTATION' && (
+                  <Stack spacing={1}>
+                    <Stack direction="row" spacing={1}>
+                      <TextField
+                        label="Top N"
+                        size="small"
+                        type="number"
+                        value={rotationTopN}
+                        onChange={(e) => setRotationTopN(Number(e.target.value))}
+                        inputProps={{ min: 1, max: 200 }}
+                        fullWidth
+                      />
+                      <TextField
+                        label="Momentum window (days)"
+                        size="small"
+                        type="number"
+                        value={rotationWindow}
+                        onChange={(e) => setRotationWindow(Number(e.target.value))}
+                        inputProps={{ min: 1, max: 400 }}
+                        fullWidth
+                      />
+                    </Stack>
+                    <TextField
+                      label="Eligible DSL (optional)"
+                      size="small"
+                      multiline
+                      minRows={2}
+                      value={rotationEligibleDsl}
+                      onChange={(e) => setRotationEligibleDsl(e.target.value)}
+                      placeholder="Example: MA(50) > MA(200) AND RSI(14) < 80"
+                    />
+                  </Stack>
+                )}
 
                 <Stack direction="row" spacing={1}>
                   <FormControl fullWidth size="small">
@@ -781,6 +883,7 @@ export function BacktestingPage() {
                     size="small"
                     variant="outlined"
                     onClick={() => {
+                      setPortfolioMethod('TARGET_WEIGHTS')
                       setPortfolioCadence('MONTHLY')
                       setPortfolioBudgetPct(100)
                       setPortfolioMaxTrades(50)
@@ -795,6 +898,7 @@ export function BacktestingPage() {
                     size="small"
                     variant="outlined"
                     onClick={() => {
+                      setPortfolioMethod('TARGET_WEIGHTS')
                       setPortfolioCadence('WEEKLY')
                       setPortfolioBudgetPct(10)
                       setPortfolioMaxTrades(10)
@@ -804,6 +908,24 @@ export function BacktestingPage() {
                     }}
                   >
                     Preset: Weekly (tight budget)
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      setPortfolioMethod('ROTATION')
+                      setRotationTopN(10)
+                      setRotationWindow(20)
+                      setRotationEligibleDsl('MA(50) > MA(200)')
+                      setPortfolioCadence('MONTHLY')
+                      setPortfolioBudgetPct(100)
+                      setPortfolioMaxTrades(50)
+                      setPortfolioMinTradeValue(0)
+                      setPortfolioSlippageBps(10)
+                      setPortfolioChargesBps(10)
+                    }}
+                  >
+                    Preset: Rotation (Top‑10 momentum)
                   </Button>
                 </Stack>
               </Stack>
@@ -920,8 +1042,39 @@ export function BacktestingPage() {
                       </Stack>
                     )}
                     <Box sx={{ mt: 1 }}>
-                      <PriceChart candles={portfolioEquityCandles} chartType="line" height={260} />
+                      <PriceChart
+                        candles={portfolioEquityCandles}
+                        chartType="line"
+                        height={260}
+                        overlays={portfolioCompareOverlay}
+                      />
                     </Box>
+                    {runs.length > 1 && (
+                      <Box sx={{ mt: 2 }}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-compare-label">Compare run</InputLabel>
+                          <Select
+                            labelId="bt-compare-label"
+                            label="Compare run"
+                            value={compareRunId}
+                            onChange={(e) =>
+                              setCompareRunId(
+                                e.target.value === '' ? '' : Number(e.target.value),
+                              )
+                            }
+                          >
+                            <MenuItem value="">(none)</MenuItem>
+                            {runs
+                              .filter((r) => r.id !== selectedRun.id && r.status === 'COMPLETED')
+                              .map((r) => (
+                                <MenuItem key={r.id} value={String(r.id)}>
+                                  #{r.id} — {String((r.config as any)?.config?.method ?? r.title ?? '')}
+                                </MenuItem>
+                              ))}
+                          </Select>
+                        </FormControl>
+                      </Box>
+                    )}
                     {portfolioDrawdownCandles.length > 0 && (
                       <Box sx={{ mt: 2 }}>
                         <Typography variant="subtitle2">Drawdown (%)</Typography>
