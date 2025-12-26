@@ -853,18 +853,45 @@ export function HoldingsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
+    const universeKey = encodeURIComponent(universeId)
+    const perUniverseKey = `st_holdings_column_visibility_${viewMode}_${universeKey}_v1`
+    const legacyKey =
+      viewMode === 'risk'
+        ? 'st_holdings_column_visibility_risk_v1'
+        : 'st_holdings_column_visibility_default_v1'
     try {
-      const key =
-        viewMode === 'risk'
-          ? 'st_holdings_column_visibility_risk_v1'
-          : 'st_holdings_column_visibility_default_v1'
-      const raw = window.localStorage.getItem(key)
+      const raw = window.localStorage.getItem(perUniverseKey)
       if (raw) {
         const parsed = JSON.parse(raw) as GridColumnVisibilityModel
         setColumnVisibilityModel(parsed)
-      } else if (viewMode === 'risk') {
-        // Default risk preset: focus on risk metrics, hide some
-        // structural columns; user can override and it will persist.
+      } else {
+        const legacy = window.localStorage.getItem(legacyKey)
+        if (legacy) {
+          const parsed = JSON.parse(legacy) as GridColumnVisibilityModel
+          setColumnVisibilityModel(parsed)
+        } else if (viewMode === 'risk') {
+          setColumnVisibilityModel({
+            chart: false,
+            average_price: false,
+            invested: false,
+            indicator_rsi14: false,
+            perf_1m_pct: false,
+            perf_1y_pct: false,
+            volume_vs_20d_avg: false,
+            maxPnlPct: true,
+            drawdownFromPeakPct: true,
+          })
+        } else {
+          setColumnVisibilityModel({
+            maxPnlPct: false,
+            drawdownFromPeakPct: false,
+          })
+        }
+      }
+    } catch {
+      // Ignore JSON/Storage errors but ensure we don't keep the previous
+      // universe's visibility state.
+      if (viewMode === 'risk') {
         setColumnVisibilityModel({
           chart: false,
           average_price: false,
@@ -877,19 +904,21 @@ export function HoldingsPage() {
           drawdownFromPeakPct: true,
         })
       } else {
-        // Default view: show everything except the advanced drawdown
-        // metrics unless the user has chosen otherwise.
         setColumnVisibilityModel({
           maxPnlPct: false,
           drawdownFromPeakPct: false,
         })
       }
-    } catch {
-      // Ignore JSON/Storage errors and fall back to defaults.
     }
-  }, [viewMode])
+  }, [universeId, viewMode])
 
   useEffect(() => {
+    const isGroupUniverse = universeId.startsWith('group:')
+    // When switching group universes, `activeGroup` is cleared while the new
+    // group loads. Avoid applying defaults during that transient "unknown kind"
+    // state because it can lock in the wrong visibility for this universe.
+    if (isGroupUniverse && activeGroup?.kind == null) return
+
     const basketLike =
       activeGroup?.kind === 'MODEL_PORTFOLIO' || activeGroup?.kind === 'PORTFOLIO'
     const desired = basketLike
@@ -904,13 +933,15 @@ export function HoldingsPage() {
       let changed = false
       const next: GridColumnVisibilityModel = { ...prev }
       for (const key of keys) {
-        if (next[key] === desired) continue
+        // Only apply defaults when a field hasn't been explicitly configured
+        // for this universe yet.
+        if (next[key] !== undefined) continue
         next[key] = desired
         changed = true
       }
       return changed ? next : prev
     })
-  }, [activeGroup?.kind])
+  }, [activeGroup?.kind, universeId])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -4366,14 +4397,19 @@ export function HoldingsPage() {
         onColumnVisibilityModelChange={(model) => {
           setColumnVisibilityModel(model)
           try {
-            const key =
+            const universeKey = encodeURIComponent(universeId)
+            const perUniverseKey = `st_holdings_column_visibility_${viewMode}_${universeKey}_v1`
+            window.localStorage.setItem(perUniverseKey, JSON.stringify(model))
+
+            // Keep the legacy keys updated for backwards-compatible defaults
+            // (these are used only as fallbacks).
+            const legacyKey =
               viewMode === 'risk'
                 ? 'st_holdings_column_visibility_risk_v1'
                 : 'st_holdings_column_visibility_default_v1'
-            window.localStorage.setItem(
-              key,
-              JSON.stringify(model),
-            )
+            if (universeId === 'holdings' || universeId === 'holdings:angelone') {
+              window.localStorage.setItem(legacyKey, JSON.stringify(model))
+            }
           } catch {
             // Ignore persistence errors.
           }
