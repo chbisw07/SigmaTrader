@@ -2,6 +2,7 @@ import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
 import EditIcon from '@mui/icons-material/Edit'
 import PlayListAddIcon from '@mui/icons-material/PlaylistAdd'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
@@ -271,6 +272,7 @@ export function GroupsPage() {
 
   // Portfolio allocation health (PORTFOLIO groups only).
   const [compareBroker, setCompareBroker] = useState<'zerodha' | 'angelone'>('zerodha')
+  const [holdingsReloadNonce, setHoldingsReloadNonce] = useState(0)
   const [holdingsByKey, setHoldingsByKey] = useState<
     Record<string, { qty: number; avgPrice: number | null }>
   >({})
@@ -517,7 +519,11 @@ export function GroupsPage() {
     return () => {
       active = false
     }
-  }, [compareBroker, selectedGroup])
+  }, [compareBroker, holdingsReloadNonce, selectedGroup])
+
+  const refreshHoldingsSnapshot = useCallback(() => {
+    setHoldingsReloadNonce((n) => n + 1)
+  }, [])
 
   const groupsById = useMemo(() => {
     const m = new Map<number, Group>()
@@ -1627,6 +1633,14 @@ export function GroupsPage() {
                     <MenuItem value="angelone">AngelOne</MenuItem>
                   </Select>
                 </FormControl>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<RefreshIcon />}
+                  onClick={refreshHoldingsSnapshot}
+                >
+                  Refresh (Y)
+                </Button>
                 <Typography variant="caption" color="text.secondary">
                   Used only for X/Y display and allocation health.
                 </Typography>
@@ -2206,7 +2220,7 @@ export function GroupsPage() {
                   onChange={(e) =>
                     setMemberDraft((prev) => ({ ...prev, refQty: e.target.value }))
                   }
-                  helperText="Optional. Used for basket/portfolio 'amount required' and 'since creation' P&L."
+                  helperText="Optional. Portfolio baseline qty (X). Used for 'amount required' and 'since creation' P&L."
                 />
                 <TextField
                   label="Reference price"
@@ -2214,10 +2228,81 @@ export function GroupsPage() {
                   onChange={(e) =>
                     setMemberDraft((prev) => ({ ...prev, refPrice: e.target.value }))
                   }
-                  helperText="Optional. Reference buy price at basket/portfolio creation."
+                  helperText="Optional. Portfolio baseline price (X). Typically the baseline cost basis."
                 />
               </>
             )}
+            {selectedGroup?.kind === 'PORTFOLIO' && (() => {
+              const sym = memberDraft.symbol.trim().toUpperCase()
+              const exch = (memberDraft.exchange || 'NSE').trim().toUpperCase()
+              const key = `${exch}:${sym}`
+              const hold = holdingsByKey[key]
+              const holdQty = hold?.qty ?? null
+              const holdAvg = hold?.avgPrice ?? null
+              const currentRefQty = Math.max(0, Math.trunc(Number(memberDraft.refQty || 0)))
+              const allocatedTotal = Math.max(0, Math.trunc(Number(allocationTotalsByKey[key] ?? 0)))
+              const otherAllocated = Math.max(0, allocatedTotal - currentRefQty)
+              const canAutoSetQty =
+                holdQty != null &&
+                Number.isFinite(holdQty) &&
+                holdQty >= 0 &&
+                otherAllocated <= 0
+
+              return (
+                <Paper variant="outlined" sx={{ p: 1.5 }}>
+                  <Stack spacing={1}>
+                    <Typography variant="subtitle2">Broker snapshot (Y)</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Broker: {compareBroker} | Holdings qty (Y): {holdQty != null ? Math.trunc(holdQty) : '—'}
+                      {' | '}
+                      Avg price (Y): {holdAvg != null ? holdAvg.toFixed(2) : '—'}
+                    </Typography>
+                    {otherAllocated > 0 && (
+                      <Alert severity="info">
+                        This symbol has allocations in other portfolios (ΣX includes other groups). Use Reconcile for a clean fix.
+                      </Alert>
+                    )}
+                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={!canAutoSetQty}
+                        onClick={() => {
+                          if (holdQty == null || !Number.isFinite(holdQty) || holdQty < 0) return
+                          setMemberDraft((prev) => ({ ...prev, refQty: String(Math.trunc(holdQty)) }))
+                        }}
+                      >
+                        Use holdings qty (X ← Y)
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={holdAvg == null || !Number.isFinite(holdAvg) || holdAvg <= 0}
+                        onClick={() => {
+                          if (holdAvg == null || !Number.isFinite(holdAvg) || holdAvg <= 0) return
+                          setMemberDraft((prev) => ({ ...prev, refPrice: holdAvg.toFixed(2) }))
+                        }}
+                      >
+                        Use holdings avg (X ← Y)
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<RefreshIcon />}
+                        onClick={refreshHoldingsSnapshot}
+                      >
+                        Refresh (Y)
+                      </Button>
+                    </Stack>
+                    {!canAutoSetQty && holdQty != null && otherAllocated > 0 && (
+                      <Typography variant="caption" color="text.secondary">
+                        “Use holdings qty” is disabled because this would immediately violate ΣX ≤ Y when other portfolios also allocate this symbol.
+                      </Typography>
+                    )}
+                  </Stack>
+                </Paper>
+              )
+            })()}
             <TextField
               label="Notes"
               value={memberDraft.notes}
