@@ -54,6 +54,11 @@ function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
+function fmtPct(value: unknown, digits = 2): string {
+  const n = Number(value)
+  return Number.isFinite(n) ? `${n.toFixed(digits)}%` : '—'
+}
+
 function daysBetweenIsoDates(startIso: string, endIso: string): number | null {
   const a = Date.parse(startIso)
   const b = Date.parse(endIso)
@@ -582,9 +587,11 @@ export function BacktestingPage() {
     if (!byWindow) return []
     return Object.entries(byWindow).map(([w, v]) => {
       const row = (v ?? {}) as Record<string, unknown>
+      const windowDays = Number(w)
       return {
         id: w,
         window: `${w}D`,
+        windowDays,
         count: Number(row.count ?? 0),
         win_rate_pct: row.win_rate_pct ?? null,
         avg_return_pct: row.avg_return_pct ?? null,
@@ -596,8 +603,41 @@ export function BacktestingPage() {
   }, [selectedRun, tab])
 
   const signalSummaryColumns = useMemo((): GridColDef[] => {
-    const fmtPct = (value: unknown, digits: number) =>
-      value == null || value === '' ? '' : `${Number(value).toFixed(digits)}%`
+    const infer = (r: Record<string, unknown>): string[] => {
+      const win = Number(r.win_rate_pct)
+      const avg = Number(r.avg_return_pct)
+      const p10 = Number(r.p10)
+      const p50 = Number(r.p50)
+      const p90 = Number(r.p90)
+      const count = Number(r.count)
+      const windowDays = Number(r.windowDays)
+
+      const bullets: string[] = []
+
+      if (Number.isFinite(win) && Number.isFinite(avg) && Number.isFinite(count)) {
+        const edgeWord =
+          avg > 0 && win >= 50 ? 'Edge: positive bias' : avg < 0 && win < 50 ? 'Edge: negative bias' : 'Edge: mixed'
+        bullets.push(`${edgeWord} (win ${win.toFixed(1)}%, avg ${fmtPct(avg, 2)}, n=${count})`)
+      } else if (Number.isFinite(count)) {
+        bullets.push(`Events: n=${count}`)
+      }
+
+      if (Number.isFinite(p50) && Number.isFinite(p90) && Number.isFinite(windowDays)) {
+        bullets.push(
+          `Typical: median ${fmtPct(p50, 2)}; upside (top 10%) ≥ ${fmtPct(p90, 2)} over ${windowDays} trading days`,
+        )
+      } else if (Number.isFinite(p50) && Number.isFinite(windowDays)) {
+        bullets.push(`Typical: median ${fmtPct(p50, 2)} over ${windowDays} trading days`)
+      }
+
+      if (Number.isFinite(p10) && Number.isFinite(windowDays)) {
+        const riskWord = p10 < 0 ? 'Risk' : 'Downside'
+        bullets.push(`${riskWord}: worst 10% ≤ ${fmtPct(p10, 2)} over ${windowDays} trading days`)
+      }
+
+      return bullets.slice(0, 3)
+    }
+
     return [
       { field: 'window', headerName: 'Window', width: 90 },
       { field: 'count', headerName: 'Count', width: 90 },
@@ -635,6 +675,37 @@ export function BacktestingPage() {
         width: 110,
         valueFormatter: (value) =>
           fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'inference',
+        headerName: 'Inference',
+        flex: 1,
+        minWidth: 360,
+        sortable: false,
+        renderCell: (params) => {
+          const bullets = infer(params.row as Record<string, unknown>)
+          if (!bullets.length) return '—'
+          return (
+            <Box sx={{ py: 0.5 }}>
+              <Box
+                component="ul"
+                sx={{
+                  pl: 2,
+                  m: 0,
+                  '& li': { lineHeight: 1.25 },
+                }}
+              >
+                {bullets.map((b, idx) => (
+                  <li key={idx}>
+                    <Typography variant="caption" color="text.secondary">
+                      {b}
+                    </Typography>
+                  </li>
+                ))}
+              </Box>
+            </Box>
+          )
+        },
       },
     ]
   }, [])
@@ -1445,6 +1516,7 @@ export function BacktestingPage() {
                         density="compact"
                         disableRowSelectionOnClick
                         hideFooter
+                        getRowHeight={() => 'auto'}
                       />
                     </Box>
                   </Box>
