@@ -6,7 +6,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-BacktestKind = Literal["SIGNAL", "PORTFOLIO", "EXECUTION"]
+BacktestKind = Literal["SIGNAL", "PORTFOLIO", "EXECUTION", "STRATEGY"]
 BacktestStatus = Literal["PENDING", "RUNNING", "COMPLETED", "FAILED"]
 
 

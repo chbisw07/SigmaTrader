@@ -1,4 +1,4 @@
-export type BacktestKind = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION'
+export type BacktestKind = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION' | 'STRATEGY'
 export type BacktestStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
 
 export type UniverseSymbol = {

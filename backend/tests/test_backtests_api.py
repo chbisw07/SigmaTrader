@@ -149,6 +149,55 @@ def test_backtests_signal_backtest_basic_metrics() -> None:
     assert win["win_rate_pct"] == 50.0
 
 
+def test_backtests_strategy_backtest_entry_exit_single_symbol() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "STRATEGY",
+            "title": "strategy",
+            "universe": {
+                "mode": "GROUP",
+                "group_id": 123,
+                "symbols": [{"symbol": "AAA", "exchange": "NSE"}],
+            },
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "entry_dsl": "PRICE() > 0",
+                "exit_dsl": "PRICE() > 1000000",
+                "product": "CNC",
+                "direction": "LONG",
+                "initial_cash": 1000.0,
+                "position_size_pct": 100.0,
+                "stop_loss_pct": 0.0,
+                "take_profit_pct": 0.0,
+                "trailing_stop_pct": 0.0,
+                "slippage_bps": 0.0,
+                "charges_model": "BPS",
+                "charges_bps": 0.0,
+                "charges_broker": "zerodha",
+                "include_dp_charges": False,
+            },
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["kind"] == "STRATEGY"
+    assert body["status"] == "COMPLETED", body
+    result = body["result"]
+    assert "series" in result
+    assert len(result["series"]["ts"]) == 3
+    assert len(result["series"]["equity"]) == 3
+    assert "metrics" in result
+    assert "baselines" in result
+    assert "start_to_end" in result["baselines"]
+
+
 def test_backtests_portfolio_target_weights_basic_run() -> None:
     now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     start = (now - timedelta(days=2)).date().isoformat()

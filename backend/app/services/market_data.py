@@ -23,12 +23,13 @@ from app.models import (
 )
 from app.services.broker_secrets import get_broker_secret
 
-Timeframe = Literal["1m", "5m", "15m", "1h", "1d", "1mo", "1y"]
+Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1mo", "1y"]
 
 BASE_TIMEFRAME_MAP: dict[Timeframe, str] = {
     "1m": "1m",
     "5m": "1m",
     "15m": "1m",
+    "30m": "1m",
     "1h": "1m",
     "1d": "1d",
     "1mo": "1d",
@@ -984,8 +985,8 @@ def load_series(
             for c in candles
         ]
 
-    if timeframe in {"5m", "15m", "1h"}:
-        minutes = {"5m": 5, "15m": 15, "1h": 60}[timeframe]
+    if timeframe in {"5m", "15m", "30m", "1h"}:
+        minutes = {"5m": 5, "15m": 15, "30m": 30, "1h": 60}[timeframe]
         return _aggregate_intraday(candles, minutes=minutes)
 
     if timeframe in {"1mo", "1y"}:

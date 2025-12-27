@@ -5,7 +5,7 @@ SigmaTrader backtesting is designed to help you answer:
 > “If I had followed these rules in the past, what would have happened?”
 
 The Backtesting page is split into **Inputs** (left) and **Results** (right).  
-You can run three kinds of backtests:
+You can run four kinds of backtests:
 
 ## 1) Signal backtest
 
@@ -65,6 +65,28 @@ Inputs:
 Outputs:
 - “Ideal vs realistic” comparison
 - Cost impact summary
+
+## 4) Strategy backtest (Entry/Exit)
+
+Goal: test a TradingView‑style “entry + exit” trading rule on a **single symbol**.
+
+Inputs:
+- Universe (used to choose the symbol)
+- Symbol (exactly one)
+- Timeframe (1m…1d)
+- Entry DSL + Exit DSL
+- Position sizing, optional stops/targets/trailing
+- Slippage (bps)
+- Charges:
+  - Broker estimate (India equity) **or**
+  - Manual (bps)
+
+Outputs:
+- Equity curve and drawdowns
+- Trade list (entry/exit pairs, reasons)
+- Baseline comparison:
+  - buy & hold (start→end)
+  - buy & hold (first entry→end)
 
 ## Universe selector (important)
 

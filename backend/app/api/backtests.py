@@ -22,10 +22,12 @@ from app.schemas.backtests import (
 )
 from app.schemas.backtests_portfolio import PortfolioBacktestConfigIn
 from app.schemas.backtests_signal import SignalBacktestConfigIn
+from app.schemas.backtests_strategy import StrategyBacktestConfigIn
 from app.services.backtests_data import _norm_symbol_ref, load_eod_close_matrix
 from app.services.backtests_execution import run_execution_backtest
 from app.services.backtests_portfolio import run_portfolio_backtest
 from app.services.backtests_signal import SignalBacktestConfig, run_signal_backtest
+from app.services.backtests_strategy import run_strategy_backtest
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -40,15 +42,16 @@ def create_backtest_run(
     settings: Settings = Depends(get_settings),
 ) -> BacktestRunRead:
     kind = (payload.kind or "").strip().upper()
-    if kind not in {"SIGNAL", "PORTFOLIO", "EXECUTION"}:
+    if kind not in {"SIGNAL", "PORTFOLIO", "EXECUTION", "STRATEGY"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="kind must be SIGNAL, PORTFOLIO, or EXECUTION.",
+            detail="kind must be SIGNAL, PORTFOLIO, EXECUTION, or STRATEGY.",
         )
     title = payload.title.strip() if payload.title and payload.title.strip() else None
 
     cfg_in: SignalBacktestConfigIn | None = None
     pf_cfg_in: PortfolioBacktestConfigIn | None = None
+    st_cfg_in: StrategyBacktestConfigIn | None = None
     exec_cfg_in = None
     if kind == "SIGNAL":
         try:
@@ -80,6 +83,26 @@ def create_backtest_run(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="PORTFOLIO backtests require universe.group_id.",
+            )
+    elif kind == "STRATEGY":
+        try:
+            st_cfg_in = StrategyBacktestConfigIn.parse_obj(payload.config)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid STRATEGY backtest config: {exc}",
+            ) from exc
+        if len(payload.universe.symbols) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="STRATEGY backtests require exactly one universe.symbols entry.",
+            )
+        entry_ok = bool((st_cfg_in.entry_dsl or "").strip())
+        exit_ok = bool((st_cfg_in.exit_dsl or "").strip())
+        if not entry_ok or not exit_ok:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="entry_dsl and exit_dsl are required for STRATEGY backtests.",
             )
     else:
         from app.schemas.backtests_execution import ExecutionBacktestConfigIn
@@ -188,6 +211,17 @@ def create_backtest_run(
                 settings,
                 base_run=base_run,
                 config=exec_cfg_in,
+                allow_fetch=True,
+            )
+        elif kind == "STRATEGY":
+            assert st_cfg_in is not None
+            sym = payload.universe.symbols[0]
+            sym_ref = _norm_symbol_ref(sym.exchange, sym.symbol)
+            result = run_strategy_backtest(
+                db,
+                settings,
+                symbol=sym_ref,
+                config=payload.config,
                 allow_fetch=True,
             )
 

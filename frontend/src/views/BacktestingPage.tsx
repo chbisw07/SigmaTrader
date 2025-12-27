@@ -39,11 +39,12 @@ import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_he
 import riskParityBacktestingHelpText from '../../../docs/backtesting_risk_parity_help.md?raw'
 import rotationBacktestingHelpText from '../../../docs/backtesting_rotation_help.md?raw'
 import signalBacktestingHelpText from '../../../docs/backtesting_signal_help.md?raw'
+import strategyBacktestingHelpText from '../../../docs/backtesting_strategy_help.md?raw'
 import executionBacktestingHelpText from '../../../docs/backtesting_execution_help.md?raw'
 
 type UniverseMode = 'HOLDINGS' | 'GROUP' | 'BOTH'
 
-type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION'
+type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION' | 'STRATEGY'
 
 type SignalMode = 'DSL' | 'RANKING'
 type RankingCadence = 'WEEKLY' | 'MONTHLY'
@@ -53,6 +54,8 @@ type FillTiming = 'CLOSE' | 'NEXT_OPEN'
 type ChargesModel = 'BPS' | 'BROKER'
 type ProductType = 'CNC' | 'MIS'
 type BrokerName = 'zerodha' | 'angelone'
+type StrategyTimeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '1d'
+type StrategyDirection = 'LONG' | 'SHORT'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -76,6 +79,12 @@ function fmtInr(value: unknown, digits = 0): string {
   } catch {
     return `₹${n.toFixed(digits)}`
   }
+}
+
+function downsample<T>(values: T[], maxPoints: number): T[] {
+  if (values.length <= maxPoints) return values
+  const step = Math.ceil(values.length / maxPoints)
+  return values.filter((_v, i) => i % step === 0 || i === values.length - 1)
 }
 
 function daysBetweenIsoDates(startIso: string, endIso: string): number | null {
@@ -153,6 +162,24 @@ export function BacktestingPage() {
   const [executionProduct, setExecutionProduct] = useState<ProductType>('CNC')
   const [executionIncludeDpCharges, setExecutionIncludeDpCharges] = useState(true)
 
+  const [strategySymbolKey, setStrategySymbolKey] = useState<string>('')
+  const [strategyTimeframe, setStrategyTimeframe] = useState<StrategyTimeframe>('1d')
+  const [strategyEntryDsl, setStrategyEntryDsl] = useState('RSI(14) < 30')
+  const [strategyExitDsl, setStrategyExitDsl] = useState('RSI(14) > 70')
+  const [strategyProduct, setStrategyProduct] = useState<ProductType>('CNC')
+  const [strategyDirection, setStrategyDirection] = useState<StrategyDirection>('LONG')
+  const [strategyInitialCash, setStrategyInitialCash] = useState(100000)
+  const [strategyPositionSizePct, setStrategyPositionSizePct] = useState(100)
+  const [strategyStopLossPct, setStrategyStopLossPct] = useState(0)
+  const [strategyTakeProfitPct, setStrategyTakeProfitPct] = useState(0)
+  const [strategyTrailingStopPct, setStrategyTrailingStopPct] = useState(0)
+  const [strategySlippageBps, setStrategySlippageBps] = useState(0)
+  const [strategyChargesModel, setStrategyChargesModel] = useState<ChargesModel>('BROKER')
+  const [strategyChargesBps, setStrategyChargesBps] = useState(0)
+  const [strategyIncludeDpCharges, setStrategyIncludeDpCharges] = useState(true)
+
+  const [holdingsSymbols, setHoldingsSymbols] = useState<Array<{ symbol: string; exchange: string }>>([])
+
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
@@ -218,32 +245,41 @@ export function BacktestingPage() {
         return `Ranking: ${window || '?'}D, Top ${topN || '?'}, ${cadence || '—'}`
       }
       if (run.kind === 'PORTFOLIO') {
-      const method = String(cfg.method ?? '')
-      const cadence = String(cfg.cadence ?? '')
-      const fill = String(cfg.fill_timing ?? '')
-      const budget = cfg.budget_pct != null ? `${Number(cfg.budget_pct).toFixed(0)}%` : '—'
-      const maxTrades = cfg.max_trades != null ? String(cfg.max_trades) : '—'
-      const chargesModel = String(cfg.charges_model ?? 'BPS')
-      const dpTxt = cfg.include_dp_charges === false ? 'no-DP' : 'DP'
-      const charges =
-        chargesModel === 'BROKER'
-          ? `charges broker (${String(cfg.charges_broker ?? '—')}/${String(cfg.product ?? 'CNC')}, ${dpTxt})`
-          : `charges ${cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'}`
-      const fillTxt = fill ? ` • ${fill}` : ''
-      return `${method || 'Portfolio'} • ${cadence || '—'}${fillTxt} • budget ${budget} • max ${maxTrades} • ${charges}`
-    }
-    if (run.kind === 'EXECUTION') {
-      const base = cfg.base_run_id != null ? `Base #${cfg.base_run_id}` : 'Base —'
-      const fill = String(cfg.fill_timing ?? '—')
-      const slip = cfg.slippage_bps != null ? `${Number(cfg.slippage_bps).toFixed(0)}bps` : '—'
-      const chargesModel = String(cfg.charges_model ?? 'BPS')
-      const dpTxt = cfg.include_dp_charges === false ? 'no-DP' : 'DP'
-      const charges =
-        chargesModel === 'BROKER'
-          ? `broker (${String(cfg.charges_broker ?? '—')}/${String(cfg.product ?? 'CNC')}, ${dpTxt})`
-          : `${cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'}`
-      return `${base} • ${fill} • slip ${slip} • charges ${charges}`
-    }
+        const method = String(cfg.method ?? '')
+        const cadence = String(cfg.cadence ?? '')
+        const fill = String(cfg.fill_timing ?? '')
+        const budget = cfg.budget_pct != null ? `${Number(cfg.budget_pct).toFixed(0)}%` : '—'
+        const maxTrades = cfg.max_trades != null ? String(cfg.max_trades) : '—'
+        const chargesModel = String(cfg.charges_model ?? 'BPS')
+        const dpTxt = cfg.include_dp_charges === false ? 'no-DP' : 'DP'
+        const charges =
+          chargesModel === 'BROKER'
+            ? `charges broker (${String(cfg.charges_broker ?? '—')}/${String(cfg.product ?? 'CNC')}, ${dpTxt})`
+            : `charges ${cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'}`
+        const fillTxt = fill ? ` • ${fill}` : ''
+        return `${method || 'Portfolio'} • ${cadence || '—'}${fillTxt} • budget ${budget} • max ${maxTrades} • ${charges}`
+      }
+      if (run.kind === 'STRATEGY') {
+        const timeframe = String(cfg.timeframe ?? '')
+        const product = String(cfg.product ?? 'CNC')
+        const direction = String(cfg.direction ?? 'LONG')
+        const entry = String(cfg.entry_dsl ?? '').trim()
+        const exit = String(cfg.exit_dsl ?? '').trim()
+        const shorten = (s: string) => (s.length > 48 ? `${s.slice(0, 45)}…` : s)
+        return `${timeframe || '—'} • ${product}/${direction} • entry: ${shorten(entry)} • exit: ${shorten(exit)}`
+      }
+      if (run.kind === 'EXECUTION') {
+        const base = cfg.base_run_id != null ? `Base #${cfg.base_run_id}` : 'Base —'
+        const fill = String(cfg.fill_timing ?? '—')
+        const slip = cfg.slippage_bps != null ? `${Number(cfg.slippage_bps).toFixed(0)}bps` : '—'
+        const chargesModel = String(cfg.charges_model ?? 'BPS')
+        const dpTxt = cfg.include_dp_charges === false ? 'no-DP' : 'DP'
+        const charges =
+          chargesModel === 'BROKER'
+            ? `broker (${String(cfg.charges_broker ?? '—')}/${String(cfg.product ?? 'CNC')}, ${dpTxt})`
+            : `${cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'}`
+        return `${base} • ${fill} • slip ${slip} • charges ${charges}`
+      }
       return run.title ?? ''
     },
     [getRunConfig],
@@ -352,6 +388,48 @@ export function BacktestingPage() {
   useEffect(() => {
     let active = true
     void (async () => {
+      if (tab !== 'STRATEGY') return
+      if (universeMode !== 'HOLDINGS' && universeMode !== 'BOTH') {
+        setHoldingsSymbols([])
+        return
+      }
+      try {
+        const holdings = await fetchHoldings(brokerName)
+        if (!active) return
+        const symbols = holdings
+          .map((h) => ({
+            symbol: String(h.symbol ?? '').trim().toUpperCase(),
+            exchange: String(h.exchange ?? 'NSE').trim().toUpperCase(),
+          }))
+          .filter((x) => x.symbol)
+        setHoldingsSymbols(symbols)
+      } catch {
+        if (!active) return
+        setHoldingsSymbols([])
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [brokerName, tab, universeMode])
+
+  useEffect(() => {
+    if (tab !== 'STRATEGY') return
+    if (strategyProduct === 'CNC' && strategyDirection !== 'LONG') {
+      setStrategyDirection('LONG')
+    }
+  }, [strategyDirection, strategyProduct, tab])
+
+  useEffect(() => {
+    if (tab !== 'STRATEGY') return
+    if (strategyProduct === 'MIS' && strategyTimeframe === '1d') {
+      setStrategyTimeframe('1h')
+    }
+  }, [strategyProduct, strategyTimeframe, tab])
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
       if (selectedRunId == null) {
         setSelectedRun(null)
         return
@@ -422,14 +500,54 @@ export function BacktestingPage() {
     return Array.from(symSet.values())
   }, [brokerName, groupDetail, universeMode])
 
+  const strategySymbolOptions = useMemo(() => {
+    const symSet = new Map<string, { symbol: string; exchange: string }>()
+    const add = (symbol: string, exchange: string) => {
+      const s = symbol.trim().toUpperCase()
+      const e = (exchange || 'NSE').trim().toUpperCase()
+      if (!s) return
+      symSet.set(`${e}:${s}`, { symbol: s, exchange: e })
+    }
+    if (universeMode === 'HOLDINGS' || universeMode === 'BOTH') {
+      for (const h of holdingsSymbols) add(h.symbol, h.exchange)
+    }
+    if (universeMode === 'GROUP' || universeMode === 'BOTH') {
+      for (const m of groupDetail?.members ?? []) add(m.symbol, m.exchange ?? 'NSE')
+    }
+    return Array.from(symSet.entries())
+      .map(([key, val]) => ({ key, ...val }))
+      .sort((a, b) => a.key.localeCompare(b.key))
+  }, [groupDetail, holdingsSymbols, universeMode])
+
+  useEffect(() => {
+    if (tab !== 'STRATEGY') return
+    if (!strategySymbolKey && strategySymbolOptions.length > 0) {
+      setStrategySymbolKey(strategySymbolOptions[0].key)
+    }
+  }, [strategySymbolKey, strategySymbolOptions, tab])
+
   const handleRun = async () => {
     setError(null)
     setRunning(true)
     try {
-      const symbols = kind === 'EXECUTION' ? [] : await buildUniverseSymbols()
+      const symbols =
+        kind === 'EXECUTION'
+          ? []
+          : kind === 'STRATEGY'
+            ? strategySymbolKey
+              ? [
+                  {
+                    symbol: strategySymbolKey.split(':', 2)[1] ?? strategySymbolKey,
+                    exchange: strategySymbolKey.split(':', 2)[0] ?? 'NSE',
+                  },
+                ]
+              : []
+            : await buildUniverseSymbols()
       const title =
         kind === 'EXECUTION'
           ? `EXECUTION backtest (base #${executionBaseRunId || '?'})`
+          : kind === 'STRATEGY'
+            ? `STRATEGY backtest (${strategyTimeframe})`
           : `${kind} backtest`
       if (kind === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim()) {
         throw new Error('DSL is required for Signal backtest (DSL mode).')
@@ -445,6 +563,18 @@ export function BacktestingPage() {
       if (kind === 'EXECUTION') {
         if (executionBaseRunId === '' || typeof executionBaseRunId !== 'number') {
           throw new Error('Please select a base Portfolio run for Execution backtests.')
+        }
+      }
+      if (kind === 'STRATEGY') {
+        if (!strategySymbolKey) throw new Error('Please select a symbol for Strategy backtests.')
+        if (!strategyEntryDsl.trim() || !strategyExitDsl.trim()) {
+          throw new Error('Both entry and exit DSL are required for Strategy backtests.')
+        }
+        if (strategyProduct === 'CNC' && strategyDirection !== 'LONG') {
+          throw new Error('CNC does not allow short selling. Use direction LONG or switch to MIS.')
+        }
+        if (strategyProduct === 'MIS' && strategyTimeframe === '1d') {
+          throw new Error('MIS requires an intraday timeframe (<= 1h).')
         }
       }
 
@@ -487,6 +617,26 @@ export function BacktestingPage() {
                 min_observations: riskMinObs,
                 min_weight: riskMinWeight / 100,
                 max_weight: riskMaxWeight / 100,
+              }
+          : kind === 'STRATEGY'
+            ? {
+                timeframe: strategyTimeframe,
+                start_date: startDate,
+                end_date: endDate,
+                entry_dsl: strategyEntryDsl,
+                exit_dsl: strategyExitDsl,
+                product: strategyProduct,
+                direction: strategyDirection,
+                initial_cash: strategyInitialCash,
+                position_size_pct: strategyPositionSizePct,
+                stop_loss_pct: strategyStopLossPct,
+                take_profit_pct: strategyTakeProfitPct,
+                trailing_stop_pct: strategyTrailingStopPct,
+                slippage_bps: strategySlippageBps,
+                charges_model: strategyChargesModel,
+                charges_bps: strategyChargesBps,
+                charges_broker: 'zerodha',
+                include_dp_charges: strategyIncludeDpCharges,
               }
           : {
               base_run_id: executionBaseRunId,
@@ -576,14 +726,18 @@ export function BacktestingPage() {
           : portfolioBacktestingHelpText
         : tab === 'EXECUTION'
           ? executionBacktestingHelpText
-          : backtestingHelpText
+          : tab === 'STRATEGY'
+            ? strategyBacktestingHelpText
+            : backtestingHelpText
 
   const runDisabled =
     running ||
     (tab === 'PORTFOLIO' && typeof groupId !== 'number') ||
     (tab === 'EXECUTION' &&
       (executionBaseRunId === '' || typeof executionBaseRunId !== 'number')) ||
-    (tab === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim())
+    (tab === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim()) ||
+    (tab === 'STRATEGY' &&
+      (!strategySymbolKey || !strategyEntryDsl.trim() || !strategyExitDsl.trim()))
 
   const signalPresets = useMemo(
     () => [
@@ -662,6 +816,88 @@ export function BacktestingPage() {
     },
     [executionPresets],
   )
+
+  const strategyPresets = useMemo(
+    () => [
+      {
+        id: 'SWING_RSI_30_70',
+        label: 'Swing: RSI oversold→overbought (Long, 1d)',
+        timeframe: '1d' as const,
+        product: 'CNC' as const,
+        direction: 'LONG' as const,
+        entry_dsl: 'RSI(14) < 30',
+        exit_dsl: 'RSI(14) > 70',
+        stop_loss_pct: 0,
+        take_profit_pct: 0,
+        trailing_stop_pct: 0,
+      },
+      {
+        id: 'SWING_TREND_MA_CROSS',
+        label: 'Swing: Trend follow (MA20 cross MA50, Long, 1d)',
+        timeframe: '1d' as const,
+        product: 'CNC' as const,
+        direction: 'LONG' as const,
+        entry_dsl: 'MA(20) CROSS_ABOVE MA(50)',
+        exit_dsl: 'MA(20) CROSS_BELOW MA(50)',
+        stop_loss_pct: 8,
+        take_profit_pct: 0,
+        trailing_stop_pct: 6,
+      },
+      {
+        id: 'INTRADAY_VWAP_RECLAIM_LONG',
+        label: 'Intraday: VWAP reclaim (Long, 15m, MIS)',
+        timeframe: '15m' as const,
+        product: 'MIS' as const,
+        direction: 'LONG' as const,
+        entry_dsl: 'PRICE() CROSS_ABOVE VWAP(20) AND RSI(14) > 50',
+        exit_dsl: 'PRICE() < VWAP(20) OR RSI(14) < 45',
+        stop_loss_pct: 1,
+        take_profit_pct: 2,
+        trailing_stop_pct: 1,
+      },
+      {
+        id: 'INTRADAY_VWAP_BREAKDOWN_SHORT',
+        label: 'Intraday: VWAP breakdown (Short, 15m, MIS)',
+        timeframe: '15m' as const,
+        product: 'MIS' as const,
+        direction: 'SHORT' as const,
+        entry_dsl: 'PRICE() CROSS_BELOW VWAP(20) AND RSI(14) < 50',
+        exit_dsl: 'PRICE() > VWAP(20) OR RSI(14) > 55',
+        stop_loss_pct: 1,
+        take_profit_pct: 2,
+        trailing_stop_pct: 1,
+      },
+      {
+        id: 'SIDEWAYS_MEAN_REVERT_LONG',
+        label: 'Sideways: Mean reversion (Long, 30m, MIS)',
+        timeframe: '30m' as const,
+        product: 'MIS' as const,
+        direction: 'LONG' as const,
+        entry_dsl: 'RSI(14) < 30',
+        exit_dsl: 'RSI(14) > 55',
+        stop_loss_pct: 1.5,
+        take_profit_pct: 2.5,
+        trailing_stop_pct: 1.5,
+      },
+    ],
+    [],
+  )
+
+  const applyStrategyPreset = useCallback((presetId: string) => {
+    const p = strategyPresets.find((x) => x.id === presetId)
+    if (!p) return
+    setStrategyTimeframe(p.timeframe)
+    setStrategyProduct(p.product)
+    setStrategyDirection(p.direction)
+    setStrategyEntryDsl(p.entry_dsl)
+    setStrategyExitDsl(p.exit_dsl)
+    setStrategyStopLossPct(p.stop_loss_pct)
+    setStrategyTakeProfitPct(p.take_profit_pct)
+    setStrategyTrailingStopPct(p.trailing_stop_pct)
+    setStrategySlippageBps(0)
+    setStrategyChargesModel('BROKER')
+    setStrategyChargesBps(0)
+  }, [strategyPresets])
 
   const signalSummaryRows = useMemo(() => {
     const result = selectedRun?.result as Record<string, unknown> | null | undefined
@@ -894,6 +1130,137 @@ export function BacktestingPage() {
     return (result.delta as Record<string, unknown> | undefined) ?? null
   }, [selectedRun, tab])
 
+  const strategySeries = useMemo(() => {
+    if (tab !== 'STRATEGY') return null
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return null
+    return (result.series as Record<string, unknown> | undefined) ?? null
+  }, [selectedRun, tab])
+
+  const strategyEquityCandles = useMemo((): PriceCandle[] => {
+    if (tab !== 'STRATEGY') return []
+    if (!strategySeries) return []
+    const ts = (strategySeries.ts as unknown[] | undefined) ?? []
+    const equity = (strategySeries.equity as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(ts.length, equity.length); i++) {
+      const t = String(ts[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!t || !Number.isFinite(v)) continue
+      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return downsample(candles, 2500)
+  }, [strategySeries, tab])
+
+  const strategyDrawdownCandles = useMemo((): PriceCandle[] => {
+    if (tab !== 'STRATEGY') return []
+    if (!strategySeries) return []
+    const ts = (strategySeries.ts as unknown[] | undefined) ?? []
+    const dd = (strategySeries.drawdown_pct as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(ts.length, dd.length); i++) {
+      const t = String(ts[i] ?? '')
+      const v = Number(dd[i] ?? NaN)
+      if (!t || !Number.isFinite(v)) continue
+      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return downsample(candles, 2500)
+  }, [strategySeries, tab])
+
+  const strategyMetrics = useMemo(() => {
+    if (tab !== 'STRATEGY') return null
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return null
+    return (result.metrics as Record<string, unknown> | undefined) ?? null
+  }, [selectedRun, tab])
+
+  const strategyTradeStats = useMemo(() => {
+    if (tab !== 'STRATEGY') return null
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return null
+    return (result.trade_stats as Record<string, unknown> | undefined) ?? null
+  }, [selectedRun, tab])
+
+  const strategyBaselines = useMemo(() => {
+    if (tab !== 'STRATEGY') return null
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return null
+    return (result.baselines as Record<string, unknown> | undefined) ?? null
+  }, [selectedRun, tab])
+
+  const strategyBaselineOverlays = useMemo(() => {
+    if (tab !== 'STRATEGY') return []
+    if (!strategyBaselines || !strategySeries) return []
+    const ts = (strategySeries.ts as unknown[] | undefined) ?? []
+    if (!ts.length) return []
+
+    const overlays: Array<{ name: string; color: string; points: Array<{ ts: string; value: number | null }> }> = []
+
+    const addOverlay = (name: string, color: string, curve: unknown) => {
+      const row = (curve ?? {}) as Record<string, unknown>
+      const equity = (row.equity as unknown[] | undefined) ?? []
+      const byTs = new Map<string, number>()
+      for (let i = 0; i < Math.min(ts.length, equity.length); i++) {
+        const t = String(ts[i] ?? '')
+        const v = Number(equity[i] ?? NaN)
+        if (!t || !Number.isFinite(v)) continue
+        byTs.set(t, v)
+      }
+      const points = strategyEquityCandles.map((c) => ({ ts: c.ts, value: byTs.get(c.ts) ?? null }))
+      overlays.push({ name, color, points })
+    }
+
+    addOverlay(
+      'Buy & hold (start→end)',
+      '#6b7280',
+      (strategyBaselines.start_to_end as unknown) ?? null,
+    )
+    if (strategyBaselines.first_entry_to_end) {
+      addOverlay(
+        'Buy & hold (first entry→end)',
+        '#9ca3af',
+        strategyBaselines.first_entry_to_end,
+      )
+    }
+
+    return overlays
+  }, [strategyBaselines, strategyEquityCandles, strategySeries, tab])
+
+  const strategyTradesRows = useMemo(() => {
+    if (tab !== 'STRATEGY') return []
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return []
+    const trades = (result.trades as unknown[] | undefined) ?? []
+    return trades.map((t, idx) => {
+      const row = (t ?? {}) as Record<string, unknown>
+      return {
+        id: idx,
+        entry_ts: String(row.entry_ts ?? ''),
+        exit_ts: String(row.exit_ts ?? ''),
+        side: String(row.side ?? ''),
+        qty: row.qty ?? null,
+        pnl_pct: row.pnl_pct ?? null,
+        reason: String(row.reason ?? ''),
+      }
+    })
+  }, [selectedRun, tab])
+
+  const strategyTradesColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'entry_ts', headerName: 'Entry', width: 200 },
+      { field: 'exit_ts', headerName: 'Exit', width: 200 },
+      { field: 'side', headerName: 'Side', width: 110 },
+      { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
+      {
+        field: 'pnl_pct',
+        headerName: 'P&L %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      { field: 'reason', headerName: 'Reason', minWidth: 160, flex: 1 },
+    ]
+  }, [])
+
   const portfolioDrawdownCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'PORTFOLIO') return []
     if (!selectedRun?.result) return []
@@ -984,16 +1351,17 @@ export function BacktestingPage() {
           flexWrap: 'wrap',
         }}
       >
-        <Box>
-          <Typography variant="h4" gutterBottom>
-            Backtesting
-          </Typography>
-          <Tabs value={tab} onChange={(_e, v) => setTab(v as BacktestTab)} sx={{ mt: -1 }}>
-            <Tab value="SIGNAL" label="Signal backtest" />
-            <Tab value="PORTFOLIO" label="Portfolio backtest" />
-            <Tab value="EXECUTION" label="Execution backtest" />
-          </Tabs>
-        </Box>
+	        <Box>
+	          <Typography variant="h4" sx={{ mb: 0.5 }}>
+	            Backtesting
+	          </Typography>
+	          <Tabs value={tab} onChange={(_e, v) => setTab(v as BacktestTab)} sx={{ mt: 0 }}>
+	            <Tab value="SIGNAL" label="Signal backtest" />
+	            <Tab value="PORTFOLIO" label="Portfolio backtest" />
+	            <Tab value="EXECUTION" label="Execution backtest" />
+	            <Tab value="STRATEGY" label="Strategy backtest" />
+	          </Tabs>
+	        </Box>
 
         <Tooltip title="Help">
           <IconButton size="small" onClick={() => setHelpOpen(true)}>
@@ -1711,6 +2079,228 @@ export function BacktestingPage() {
               </Stack>
             )}
 
+            {tab === 'STRATEGY' && (
+              <Stack spacing={1.5}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="bt-strategy-symbol-label">Symbol</InputLabel>
+                  <Select
+                    labelId="bt-strategy-symbol-label"
+                    label="Symbol"
+                    value={strategySymbolKey}
+                    onChange={(e) => setStrategySymbolKey(String(e.target.value))}
+                  >
+                    <MenuItem value="">(select)</MenuItem>
+                    {strategySymbolOptions.map((s) => (
+                      <MenuItem key={s.key} value={s.key}>
+                        {s.exchange}:{s.symbol}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Stack direction="row" spacing={1}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-strategy-timeframe-label">Timeframe</InputLabel>
+                    <Select
+                      labelId="bt-strategy-timeframe-label"
+                      label="Timeframe"
+                      value={strategyTimeframe}
+                      onChange={(e) => setStrategyTimeframe(e.target.value as StrategyTimeframe)}
+                    >
+                      <MenuItem value="1m">1m</MenuItem>
+                      <MenuItem value="5m">5m</MenuItem>
+                      <MenuItem value="15m">15m</MenuItem>
+                      <MenuItem value="30m">30m</MenuItem>
+                      <MenuItem value="1h">1h</MenuItem>
+                      <MenuItem value="1d" disabled={strategyProduct === 'MIS'}>
+                        1d
+                      </MenuItem>
+                    </Select>
+                  </FormControl>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-strategy-preset-label">Preset</InputLabel>
+                    <Select
+                      labelId="bt-strategy-preset-label"
+                      label="Preset"
+                      value=""
+                      onChange={(e) => applyStrategyPreset(String(e.target.value))}
+                    >
+                      <MenuItem value="">(choose)</MenuItem>
+                      {strategyPresets.map((p) => (
+                        <MenuItem key={p.id} value={p.id}>
+                          {p.label}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-strategy-product-label">Product</InputLabel>
+                    <Select
+                      labelId="bt-strategy-product-label"
+                      label="Product"
+                      value={strategyProduct}
+                      onChange={(e) => setStrategyProduct(e.target.value as ProductType)}
+                    >
+                      <MenuItem value="CNC">CNC (delivery)</MenuItem>
+                      <MenuItem value="MIS">MIS (intraday)</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-strategy-direction-label">Direction</InputLabel>
+                    <Select
+                      labelId="bt-strategy-direction-label"
+                      label="Direction"
+                      value={strategyDirection}
+                      onChange={(e) => setStrategyDirection(e.target.value as StrategyDirection)}
+                      disabled={strategyProduct === 'CNC'}
+                    >
+                      <MenuItem value="LONG">Long</MenuItem>
+                      <MenuItem value="SHORT">Short</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                <TextField
+                  label="Entry DSL (evaluate at close)"
+                  size="small"
+                  multiline
+                  minRows={2}
+                  value={strategyEntryDsl}
+                  onChange={(e) => setStrategyEntryDsl(e.target.value)}
+                  placeholder="Example: RSI(14) < 30"
+                />
+                <TextField
+                  label="Exit DSL (evaluate at close)"
+                  size="small"
+                  multiline
+                  minRows={2}
+                  value={strategyExitDsl}
+                  onChange={(e) => setStrategyExitDsl(e.target.value)}
+                  placeholder="Example: RSI(14) > 70"
+                />
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Initial cash"
+                    size="small"
+                    type="number"
+                    value={strategyInitialCash}
+                    onChange={(e) => setStrategyInitialCash(Number(e.target.value))}
+                    inputProps={{ min: 0 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Position size (%)"
+                    size="small"
+                    type="number"
+                    value={strategyPositionSizePct}
+                    onChange={(e) => setStrategyPositionSizePct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Stop loss (%)"
+                    size="small"
+                    type="number"
+                    value={strategyStopLossPct}
+                    onChange={(e) => setStrategyStopLossPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Take profit (%)"
+                    size="small"
+                    type="number"
+                    value={strategyTakeProfitPct}
+                    onChange={(e) => setStrategyTakeProfitPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Trailing stop (%)"
+                    size="small"
+                    type="number"
+                    value={strategyTrailingStopPct}
+                    onChange={(e) => setStrategyTrailingStopPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Slippage (bps)"
+                    size="small"
+                    type="number"
+                    value={strategySlippageBps}
+                    onChange={(e) => setStrategySlippageBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-strategy-charges-model-label">Charges</InputLabel>
+                    <Select
+                      labelId="bt-strategy-charges-model-label"
+                      label="Charges"
+                      value={strategyChargesModel}
+                      onChange={(e) => setStrategyChargesModel(e.target.value as ChargesModel)}
+                    >
+                      <MenuItem value="BROKER">Broker estimate (India equity)</MenuItem>
+                      <MenuItem value="BPS">Manual (bps)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                {strategyChargesModel === 'BPS' ? (
+                  <TextField
+                    label="Charges (bps)"
+                    size="small"
+                    type="number"
+                    value={strategyChargesBps}
+                    onChange={(e) => setStrategyChargesBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                ) : (
+                  <Stack spacing={1}>
+                    <FormControl fullWidth size="small" disabled>
+                      <InputLabel id="bt-strategy-broker-label">Broker</InputLabel>
+                      <Select labelId="bt-strategy-broker-label" label="Broker" value="zerodha">
+                        <MenuItem value="zerodha">Zerodha</MenuItem>
+                      </Select>
+                    </FormControl>
+                    {strategyProduct === 'CNC' && (
+                      <FormControl fullWidth size="small">
+                        <InputLabel id="bt-strategy-dp-label">DP charges</InputLabel>
+                        <Select
+                          labelId="bt-strategy-dp-label"
+                          label="DP charges"
+                          value={strategyIncludeDpCharges ? 'ON' : 'OFF'}
+                          onChange={(e) => setStrategyIncludeDpCharges(e.target.value === 'ON')}
+                        >
+                          <MenuItem value="ON">Include DP (delivery sell)</MenuItem>
+                          <MenuItem value="OFF">Exclude DP</MenuItem>
+                        </Select>
+                      </FormControl>
+                    )}
+                    <Typography variant="caption" color="text.secondary">
+                      Evaluates entry/exit at close and fills at next open. CNC is long-only. MIS positions are squared off at end of day.
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Broker model estimates India equity charges (brokerage + STT + exchange + SEBI + stamp duty (WB buy-side) + GST and optional DP on
+                      delivery sell). Rates are approximate.
+                    </Typography>
+                  </Stack>
+                )}
+              </Stack>
+            )}
+
             <Stack direction="row" spacing={1} flexWrap="wrap">
               {tab !== 'EXECUTION' &&
                 (['6M', '1Y', '2Y'] as const).map((p) => (
@@ -1787,8 +2377,8 @@ export function BacktestingPage() {
             </Box>
 
             <DividerBlock title="Selected run" />
-            {selectedRun ? (
-              <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
+	            {selectedRun ? (
+	              <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
                 <Typography variant="body2" color="text.secondary">
                   Run #{selectedRun.id} • {selectedRun.kind} • {selectedRun.status}
                 </Typography>
@@ -1809,97 +2399,166 @@ export function BacktestingPage() {
                   </Box>
                 )}
 
-                {tab === 'PORTFOLIO' && selectedRun.status === 'COMPLETED' && portfolioEquityCandles.length > 0 && (
-                  <Box sx={{ mt: 1 }}>
-                    <Typography variant="subtitle2">Equity curve</Typography>
-                    {portfolioMetrics && (
-                      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
-                        <Chip
-                          size="small"
-                          label={`Total: ${Number(portfolioMetrics.total_return_pct ?? 0).toFixed(2)}%`}
-                        />
-                        <Chip
-                          size="small"
-                          label={`CAGR: ${Number(portfolioMetrics.cagr_pct ?? 0).toFixed(2)}%`}
-                        />
-                        <Chip
-                          size="small"
-                          label={`Max DD: ${Number(portfolioMetrics.max_drawdown_pct ?? 0).toFixed(2)}%`}
-                        />
-	                        <Chip
-	                          size="small"
-	                          label={`Turnover: ${Number(portfolioMetrics.turnover_pct_total ?? 0).toFixed(1)}%`}
-	                        />
-	                        {Number.isFinite(Number(portfolioMetrics.total_charges)) && (
-	                          <Chip
-	                            size="small"
-	                            label={`Charges: ${fmtInr(Number(portfolioMetrics.total_charges ?? 0), 0)}`}
-	                          />
-	                        )}
-	                        <Chip
-	                          size="small"
-	                          label={`Rebalances: ${Number(portfolioMetrics.rebalance_count ?? 0)}`}
-	                        />
-	                      </Stack>
-                    )}
+                {tab === 'PORTFOLIO' &&
+                  selectedRun.status === 'COMPLETED' &&
+                  portfolioEquityCandles.length > 0 && (
                     <Box sx={{ mt: 1 }}>
-                      <PriceChart
-                        candles={portfolioEquityCandles}
-                        chartType="line"
-                        height={260}
-                        overlays={portfolioCompareOverlay}
-                      />
-                    </Box>
-                    {runs.length > 1 && (
-                      <Box sx={{ mt: 2 }}>
-                        <FormControl fullWidth size="small">
-                          <InputLabel id="bt-compare-label">Compare run</InputLabel>
-                          <Select
-                            labelId="bt-compare-label"
-                            label="Compare run"
-                            value={compareRunId}
-                            onChange={(e) =>
-                              setCompareRunId(
-                                e.target.value === '' ? '' : Number(e.target.value),
-                              )
-                            }
-                          >
-                            <MenuItem value="">(none)</MenuItem>
-                            {runs
-                              .filter((r) => r.id !== selectedRun.id && r.status === 'COMPLETED')
-                              .map((r) => (
-                                <MenuItem key={r.id} value={String(r.id)}>
-                                  #{r.id} — {String((r.config as any)?.config?.method ?? r.title ?? '')}
-                                </MenuItem>
-                              ))}
-                          </Select>
-                        </FormControl>
-                      </Box>
-                    )}
-                    {portfolioDrawdownCandles.length > 0 && (
-                      <Box sx={{ mt: 2 }}>
-                        <Typography variant="subtitle2">Drawdown (%)</Typography>
-                        <Box sx={{ mt: 1 }}>
-                          <PriceChart candles={portfolioDrawdownCandles} chartType="line" height={180} />
-                        </Box>
-                      </Box>
-                    )}
-                    {portfolioActionsRows.length > 0 && (
-                      <Box sx={{ mt: 2 }}>
-                        <Typography variant="subtitle2">Rebalance actions</Typography>
-                        <Box sx={{ height: 220, mt: 1 }}>
-                          <DataGrid
-                            rows={portfolioActionsRows}
-                            columns={portfolioActionsColumns}
-                            density="compact"
-                            disableRowSelectionOnClick
-                            hideFooter
+                      <Typography variant="subtitle2">Equity curve</Typography>
+                      {portfolioMetrics ? (
+                        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+                          <Chip
+                            size="small"
+                            label={`Total: ${Number(portfolioMetrics.total_return_pct ?? 0).toFixed(2)}%`}
                           />
-                        </Box>
+                          <Chip size="small" label={`CAGR: ${Number(portfolioMetrics.cagr_pct ?? 0).toFixed(2)}%`} />
+                          <Chip
+                            size="small"
+                            label={`Max DD: ${Number(portfolioMetrics.max_drawdown_pct ?? 0).toFixed(2)}%`}
+                          />
+                          <Chip
+                            size="small"
+                            label={`Turnover: ${Number(portfolioMetrics.turnover_pct_total ?? 0).toFixed(1)}%`}
+                          />
+                          {Number.isFinite(Number(portfolioMetrics.total_charges)) && (
+                            <Chip
+                              size="small"
+                              label={`Charges: ${fmtInr(Number(portfolioMetrics.total_charges ?? 0), 0)}`}
+                            />
+                          )}
+                          <Chip size="small" label={`Rebalances: ${Number(portfolioMetrics.rebalance_count ?? 0)}`} />
+                        </Stack>
+                      ) : null}
+
+                      <Box sx={{ mt: 1 }}>
+                        <PriceChart
+                          candles={portfolioEquityCandles}
+                          chartType="line"
+                          height={260}
+                          overlays={portfolioCompareOverlay}
+                        />
                       </Box>
-                    )}
-                  </Box>
-                )}
+
+                      {runs.length > 1 ? (
+                        <Box sx={{ mt: 2 }}>
+                          <FormControl fullWidth size="small">
+                            <InputLabel id="bt-compare-label">Compare run</InputLabel>
+                            <Select
+                              labelId="bt-compare-label"
+                              label="Compare run"
+                              value={compareRunId}
+                              onChange={(e) =>
+                                setCompareRunId(e.target.value === '' ? '' : Number(e.target.value))
+                              }
+                            >
+                              <MenuItem value="">(none)</MenuItem>
+                              {runs
+                                .filter((r) => r.id !== selectedRun.id && r.status === 'COMPLETED')
+                                .map((r) => (
+                                  <MenuItem key={r.id} value={String(r.id)}>
+                                    #{r.id} — {String((r.config as any)?.config?.method ?? r.title ?? '')}
+                                  </MenuItem>
+                                ))}
+                            </Select>
+                          </FormControl>
+                        </Box>
+                      ) : null}
+
+                      {portfolioDrawdownCandles.length > 0 ? (
+                        <Box sx={{ mt: 2 }}>
+                          <Typography variant="subtitle2">Drawdown (%)</Typography>
+                          <Box sx={{ mt: 1 }}>
+                            <PriceChart candles={portfolioDrawdownCandles} chartType="line" height={180} />
+                          </Box>
+                        </Box>
+                      ) : null}
+
+                      {portfolioActionsRows.length > 0 ? (
+                        <Box sx={{ mt: 2 }}>
+                          <Typography variant="subtitle2">Rebalance actions</Typography>
+                          <Box sx={{ height: 220, mt: 1 }}>
+                            <DataGrid
+                              rows={portfolioActionsRows}
+                              columns={portfolioActionsColumns}
+                              density="compact"
+                              disableRowSelectionOnClick
+                              hideFooter
+                            />
+                          </Box>
+                        </Box>
+                      ) : null}
+                    </Box>
+                  )}
+
+                {tab === 'STRATEGY' &&
+                  selectedRun.status === 'COMPLETED' &&
+                  strategyEquityCandles.length > 0 && (
+                    <Box sx={{ mt: 1 }}>
+                      <Typography variant="subtitle2">Equity curve</Typography>
+                      {strategyMetrics ? (
+                        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+                          <Chip size="small" label={`Total: ${Number(strategyMetrics.total_return_pct ?? 0).toFixed(2)}%`} />
+                          <Chip size="small" label={`CAGR: ${Number(strategyMetrics.cagr_pct ?? 0).toFixed(2)}%`} />
+                          <Chip size="small" label={`Max DD: ${Number(strategyMetrics.max_drawdown_pct ?? 0).toFixed(2)}%`} />
+                          <Chip size="small" label={`Turnover: ${Number(strategyMetrics.turnover_pct_total ?? 0).toFixed(1)}%`} />
+                          <Chip size="small" label={`Charges: ${fmtInr(Number(strategyMetrics.total_charges ?? 0), 0)}`} />
+                          {strategyBaselines?.start_to_end ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Buy&hold: ${Number((strategyBaselines.start_to_end as any)?.total_return_pct ?? 0).toFixed(2)}%`}
+                            />
+                          ) : null}
+                          {strategyBaselines?.first_entry_to_end ? (
+                            <Chip
+                              size="small"
+                              variant="outlined"
+                              label={`Hold from 1st entry: ${Number((strategyBaselines.first_entry_to_end as any)?.total_return_pct ?? 0).toFixed(2)}%`}
+                            />
+                          ) : null}
+                          {strategyTradeStats ? (
+                            <>
+                              <Chip size="small" label={`Trades: ${Number(strategyTradeStats.count ?? 0)}`} />
+                              <Chip size="small" label={`Win: ${Number(strategyTradeStats.win_rate_pct ?? 0).toFixed(1)}%`} />
+                            </>
+                          ) : null}
+                        </Stack>
+                      ) : null}
+
+                      <Box sx={{ mt: 1 }}>
+                        <PriceChart
+                          candles={strategyEquityCandles}
+                          chartType="line"
+                          height={260}
+                          overlays={strategyBaselineOverlays}
+                        />
+                      </Box>
+
+                      {strategyDrawdownCandles.length > 0 ? (
+                        <Box sx={{ mt: 2 }}>
+                          <Typography variant="subtitle2">Drawdown (%)</Typography>
+                          <Box sx={{ mt: 1 }}>
+                            <PriceChart candles={strategyDrawdownCandles} chartType="line" height={180} />
+                          </Box>
+                        </Box>
+                      ) : null}
+
+                      {strategyTradesRows.length > 0 ? (
+                        <Box sx={{ mt: 2 }}>
+                          <Typography variant="subtitle2">Trades</Typography>
+                          <Box sx={{ height: 260, mt: 1 }}>
+                            <DataGrid
+                              rows={strategyTradesRows}
+                              columns={strategyTradesColumns}
+                              density="compact"
+                              disableRowSelectionOnClick
+                              pageSizeOptions={[5, 10, 25]}
+                              initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+                            />
+                          </Box>
+                        </Box>
+                      ) : null}
+                    </Box>
+                  )}
 
                 {tab === 'EXECUTION' && selectedRun.status === 'COMPLETED' && executionEquityCandles.length > 0 && (
                   <Box sx={{ mt: 1 }}>

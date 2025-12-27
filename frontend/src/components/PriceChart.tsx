@@ -11,13 +11,14 @@ import {
   type LineData,
   type LineSeriesPartialOptions,
   type LineWidth,
+  type UTCTimestamp,
   type Time,
 } from 'lightweight-charts'
 
 export type PriceChartType = 'line' | 'candles'
 
 export type PriceCandle = {
-  ts: string // YYYY-MM-DD
+  ts: string // YYYY-MM-DD or ISO datetime
   open: number
   high: number
   low: number
@@ -26,7 +27,7 @@ export type PriceCandle = {
 }
 
 export type PriceOverlayPoint = {
-  ts: string // YYYY-MM-DD
+  ts: string // YYYY-MM-DD or ISO datetime
   value: number | null
 }
 
@@ -38,9 +39,19 @@ export type PriceOverlay = {
 }
 
 export type PriceSignalMarker = {
-  ts: string // YYYY-MM-DD
+  ts: string // YYYY-MM-DD or ISO datetime
   kind: string
   text?: string | null
+}
+
+function toChartTime(ts: string): Time {
+  if (!ts) return toBusinessDay('1970-01-01') as unknown as Time
+  if (ts.includes('T')) {
+    const ms = Date.parse(ts)
+    const sec = Number.isFinite(ms) ? Math.floor(ms / 1000) : 0
+    return sec as UTCTimestamp as unknown as Time
+  }
+  return toBusinessDay(ts) as unknown as Time
 }
 
 function toBusinessDay(dateIso: string): BusinessDay {
@@ -89,13 +100,13 @@ export function PriceChart({
       return normalizedCandles.map(
         (c) =>
           ({
-            time: toBusinessDay(c.ts) as unknown as Time,
+            time: toChartTime(c.ts),
             value: c.close,
           }) satisfies LineData,
       )
     }
     return normalizedCandles.map((c) => ({
-      time: toBusinessDay(c.ts) as unknown as Time,
+      time: toChartTime(c.ts),
       open: c.open,
       high: c.high,
       low: c.low,
@@ -196,7 +207,7 @@ export function PriceChart({
         const data = Array.from(byDate.entries())
           .sort((a, b) => a[0].localeCompare(b[0]))
           .map(([ts, value]) => ({
-            time: toBusinessDay(ts) as unknown as Time,
+            time: toChartTime(ts),
             value,
           }))
         return { ...o, data }
@@ -246,7 +257,8 @@ export function PriceChart({
         const isCrossDown = kind === 'CROSSUNDER'
         const isTrue = kind === 'TRUE'
         return {
-          time: toBusinessDay(m.ts) as unknown as Time,
+          time: toChartTime(m.ts),
+          tsRaw: String(m.ts),
           position: isCrossDown ? 'aboveBar' : 'belowBar',
           color: isCrossUp
             ? theme.palette.success.main
@@ -257,16 +269,8 @@ export function PriceChart({
           text: m.text ? String(m.text) : undefined,
         }
       })
-      .sort((a, b) => {
-        // Sort by YYYY-MM-DD.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const ta = (a.time as any) as { year: number; month: number; day: number }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const tb = (b.time as any) as { year: number; month: number; day: number }
-        const sa = `${ta.year}-${String(ta.month).padStart(2, '0')}-${String(ta.day).padStart(2, '0')}`
-        const sb = `${tb.year}-${String(tb.month).padStart(2, '0')}-${String(tb.day).padStart(2, '0')}`
-        return sa.localeCompare(sb)
-      })
+      .sort((a, b) => String((a as any).tsRaw ?? '').localeCompare(String((b as any).tsRaw ?? '')))
+      .map(({ tsRaw, ...rest }) => rest)
 
     try {
       baseSeries.setMarkers(markerData)
