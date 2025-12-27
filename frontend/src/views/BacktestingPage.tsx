@@ -973,26 +973,38 @@ export function BacktestingPage() {
   }, [])
 
   return (
-    <Box sx={{ p: 2 }}>
-      <Stack direction="row" spacing={1} alignItems="center">
-        <Typography variant="h5">Backtesting</Typography>
-        <Box sx={{ flexGrow: 1 }} />
+    <Box>
+      <Box
+        sx={{
+          mb: 1,
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 2,
+          flexWrap: 'wrap',
+        }}
+      >
+        <Box>
+          <Typography variant="h4" gutterBottom>
+            Backtesting
+          </Typography>
+          <Tabs value={tab} onChange={(_e, v) => setTab(v as BacktestTab)} sx={{ mt: -1 }}>
+            <Tab value="SIGNAL" label="Signal backtest" />
+            <Tab value="PORTFOLIO" label="Portfolio backtest" />
+            <Tab value="EXECUTION" label="Execution backtest" />
+          </Tabs>
+        </Box>
+
         <Tooltip title="Help">
           <IconButton size="small" onClick={() => setHelpOpen(true)}>
             <HelpOutlineIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-      </Stack>
-
-      <Tabs value={tab} onChange={(_e, v) => setTab(v as BacktestTab)} sx={{ mt: 1 }}>
-        <Tab value="SIGNAL" label="Signal backtest" />
-        <Tab value="PORTFOLIO" label="Portfolio backtest" />
-        <Tab value="EXECUTION" label="Execution backtest" />
-      </Tabs>
+      </Box>
 
       <Box
         sx={{
-          mt: 2,
+          mt: 1,
           display: 'grid',
           gridTemplateColumns: { xs: '1fr', lg: '420px 1fr' },
           gap: 2,
