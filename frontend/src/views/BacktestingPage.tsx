@@ -503,31 +503,36 @@ export function BacktestingPage() {
         field: 'win_rate_pct',
         headerName: 'Win %',
         width: 110,
-        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 1),
+        valueFormatter: (value) =>
+          fmtPct((value as { value?: unknown })?.value ?? value, 1),
       },
       {
         field: 'avg_return_pct',
         headerName: 'Avg %',
         width: 110,
-        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+        valueFormatter: (value) =>
+          fmtPct((value as { value?: unknown })?.value ?? value, 2),
       },
       {
         field: 'p10',
         headerName: 'P10',
         width: 110,
-        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+        valueFormatter: (value) =>
+          fmtPct((value as { value?: unknown })?.value ?? value, 2),
       },
       {
         field: 'p50',
         headerName: 'P50',
         width: 110,
-        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+        valueFormatter: (value) =>
+          fmtPct((value as { value?: unknown })?.value ?? value, 2),
       },
       {
         field: 'p90',
         headerName: 'P90',
         width: 110,
-        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value, 2),
+        valueFormatter: (value) =>
+          fmtPct((value as { value?: unknown })?.value ?? value, 2),
       },
     ]
   }, [])
@@ -688,13 +693,15 @@ export function BacktestingPage() {
         field: 'turnover_pct',
         headerName: 'Turnover %',
         width: 120,
-        valueFormatter: (params) => fmtPct((params as { value?: unknown }).value),
+        valueFormatter: (value) =>
+          fmtPct((value as { value?: unknown })?.value ?? value),
       },
       {
         field: 'budget_used',
         headerName: 'Budget used',
         width: 140,
-        valueFormatter: (params) => fmtNum0((params as { value?: unknown }).value),
+        valueFormatter: (value) =>
+          fmtNum0((value as { value?: unknown })?.value ?? value),
       },
     ]
   }, [])
@@ -1453,9 +1460,6 @@ export function BacktestingPage() {
                   </Box>
                 )}
 
-                <pre style={{ margin: 0, fontSize: 12, overflow: 'auto' }}>
-                  {JSON.stringify(selectedRun, null, 2)}
-                </pre>
                 <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
                   <Button
                     size="small"
