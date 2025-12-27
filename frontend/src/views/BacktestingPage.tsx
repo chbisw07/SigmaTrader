@@ -54,6 +54,14 @@ function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
+function daysBetweenIsoDates(startIso: string, endIso: string): number | null {
+  const a = Date.parse(startIso)
+  const b = Date.parse(endIso)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  const days = Math.round((b - a) / (24 * 60 * 60 * 1000))
+  return days >= 0 ? days : null
+}
+
 function addDays(d: Date, days: number): Date {
   const out = new Date(d)
   out.setDate(out.getDate() + days)
@@ -120,6 +128,78 @@ export function BacktestingPage() {
   const [compareRun, setCompareRun] = useState<BacktestRun | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+
+  const getRunUniverse = useCallback((run: BacktestRun) => {
+    return ((run.config as any)?.universe ?? {}) as Record<string, unknown>
+  }, [])
+
+  const getRunConfig = useCallback((run: BacktestRun) => {
+    return ((run.config as any)?.config ?? {}) as Record<string, unknown>
+  }, [])
+
+  const renderGroupLabel = useCallback(
+    (run: BacktestRun): string => {
+      const u = getRunUniverse(run)
+      const mode = String(u.mode ?? '')
+      const groupId = u.group_id
+      if (mode === 'GROUP' || mode === 'BOTH') {
+        if (typeof groupId === 'number') {
+          return groups.find((g) => g.id === groupId)?.name ?? `Group #${groupId}`
+        }
+        return '(select group)'
+      }
+      if (mode === 'HOLDINGS') {
+        return `Holdings (${String(u.broker_name ?? 'zerodha')})`
+      }
+      return mode || '—'
+    },
+    [getRunUniverse, groups],
+  )
+
+  const renderDuration = useCallback(
+    (run: BacktestRun): string => {
+      const cfg = getRunConfig(run)
+      const start = String(cfg.start_date ?? '')
+      const end = String(cfg.end_date ?? '')
+      if (!start || !end) return '—'
+      const days = daysBetweenIsoDates(start, end)
+      return days == null ? `${start} → ${end}` : `${start} → ${end} (${days}d)`
+    },
+    [getRunConfig],
+  )
+
+  const renderDetails = useCallback(
+    (run: BacktestRun): string => {
+      const cfg = getRunConfig(run)
+      if (run.kind === 'SIGNAL') {
+        const mode = String(cfg.mode ?? '')
+        if (mode === 'DSL') {
+          const dsl = String(cfg.dsl ?? '').trim()
+          return dsl ? `DSL: ${dsl}` : 'DSL'
+        }
+        const window = Number(cfg.ranking_window ?? cfg.window ?? 0)
+        const topN = Number(cfg.top_n ?? 0)
+        const cadence = String(cfg.cadence ?? '')
+        return `Ranking: ${window || '?'}D, Top ${topN || '?'}, ${cadence || '—'}`
+      }
+      if (run.kind === 'PORTFOLIO') {
+        const method = String(cfg.method ?? '')
+        const cadence = String(cfg.cadence ?? '')
+        const budget = cfg.budget_pct != null ? `${Number(cfg.budget_pct).toFixed(0)}%` : '—'
+        const maxTrades = cfg.max_trades != null ? String(cfg.max_trades) : '—'
+        return `${method || 'Portfolio'} • ${cadence || '—'} • budget ${budget} • max ${maxTrades}`
+      }
+      if (run.kind === 'EXECUTION') {
+        const base = cfg.base_run_id != null ? `Base #${cfg.base_run_id}` : 'Base —'
+        const fill = String(cfg.fill_timing ?? '—')
+        const slip = cfg.slippage_bps != null ? `${Number(cfg.slippage_bps).toFixed(0)}bps` : '—'
+        const charges = cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'
+        return `${base} • ${fill} • slip ${slip} • charges ${charges}`
+      }
+      return run.title ?? ''
+    },
+    [getRunConfig],
+  )
 
   const refreshRuns = useCallback(async () => {
     setRunsLoading(true)
@@ -364,10 +444,32 @@ export function BacktestingPage() {
       { field: 'id', headerName: 'Run', width: 90 },
       { field: 'created_at', headerName: 'Created', width: 180 },
       { field: 'status', headerName: 'Status', width: 120 },
-      { field: 'title', headerName: 'Title', flex: 1, minWidth: 180 },
+      {
+        field: 'group',
+        headerName: 'Group',
+        minWidth: 180,
+        flex: 1,
+        sortable: false,
+        renderCell: (params) => renderGroupLabel(params.row as BacktestRun),
+      },
+      {
+        field: 'duration',
+        headerName: 'Duration',
+        width: 240,
+        sortable: false,
+        renderCell: (params) => renderDuration(params.row as BacktestRun),
+      },
+      {
+        field: 'details',
+        headerName: 'DSL / Ranking',
+        minWidth: 260,
+        flex: 2,
+        sortable: false,
+        renderCell: (params) => renderDetails(params.row as BacktestRun),
+      },
     ]
     return cols
-  }, [])
+  }, [renderDetails, renderDuration, renderGroupLabel])
 
   const selectedUniverseSummary = useMemo(() => {
     if (universeMode === 'HOLDINGS') return `Holdings (${brokerName})`
