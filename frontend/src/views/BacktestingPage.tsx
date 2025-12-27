@@ -27,6 +27,7 @@ import { fetchHoldings } from '../services/positions'
 import { fetchGroup, listGroups, type Group, type GroupDetail } from '../services/groups'
 import {
   createBacktestRun,
+  deleteBacktestRuns,
   getBacktestRun,
   listBacktestRuns,
   type BacktestKind,
@@ -133,6 +134,8 @@ export function BacktestingPage() {
   const [compareRun, setCompareRun] = useState<BacktestRun | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [selectedRunIds, setSelectedRunIds] = useState<number[]>([])
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   const getRunUniverse = useCallback((run: BacktestRun) => {
     return ((run.config as any)?.universe ?? {}) as Record<string, unknown>
@@ -214,6 +217,36 @@ export function BacktestingPage() {
     } finally {
       setRunsLoading(false)
     }
+  }, [kind])
+
+  const handleDeleteSelected = useCallback(async () => {
+    const ids = selectedRunIds.slice()
+    if (!ids.length) return
+    setError(null)
+    setRunning(true)
+    try {
+      const res = await deleteBacktestRuns(ids)
+      const deleted = res.deleted_ids ?? []
+      setSelectedRunIds((prev) => prev.filter((id) => !deleted.includes(id)))
+      if (selectedRunId != null && deleted.includes(selectedRunId)) {
+        setSelectedRunId(null)
+      }
+      if (compareRunId !== '' && typeof compareRunId === 'number' && deleted.includes(compareRunId)) {
+        setCompareRunId('')
+      }
+      await refreshRuns()
+      if ((res.forbidden_ids ?? []).length) {
+        setError(`Some runs could not be deleted: ${res.forbidden_ids.join(', ')}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete runs')
+    } finally {
+      setRunning(false)
+    }
+  }, [compareRunId, refreshRuns, selectedRunId, selectedRunIds])
+
+  useEffect(() => {
+    setSelectedRunIds([])
   }, [kind])
 
   useEffect(() => {
@@ -1478,6 +1511,15 @@ export function BacktestingPage() {
             <Stack direction="row" spacing={1} alignItems="center">
               <Typography variant="subtitle1">Results</Typography>
               <Box sx={{ flexGrow: 1 }} />
+              <Button
+                size="small"
+                color="error"
+                variant="outlined"
+                onClick={() => setDeleteConfirmOpen(true)}
+                disabled={running || selectedRunIds.length === 0}
+              >
+                Delete selected
+              </Button>
               <Button size="small" variant="outlined" onClick={() => void refreshRuns()} disabled={runsLoading}>
                 Refresh runs
               </Button>
@@ -1490,6 +1532,15 @@ export function BacktestingPage() {
                 getRowId={(r) => (r as BacktestRun).id}
                 loading={runsLoading}
                 density="compact"
+                checkboxSelection
+                rowSelectionModel={selectedRunIds}
+                onRowSelectionModelChange={(model) =>
+                  setSelectedRunIds(
+                    (model as Array<string | number>)
+                      .map((x) => Number(x))
+                      .filter((x) => Number.isFinite(x)),
+                  )
+                }
                 disableRowSelectionOnClick
                 onRowClick={(p) => setSelectedRunId((p.row as BacktestRun).id)}
                 initialState={{
@@ -1694,6 +1745,31 @@ export function BacktestingPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHelpOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Delete backtest runs</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            Delete {selectedRunIds.length} selected run(s)? This cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteConfirmOpen(false)} disabled={running}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              setDeleteConfirmOpen(false)
+              void handleDeleteSelected()
+            }}
+            disabled={running || selectedRunIds.length === 0}
+          >
+            Delete
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

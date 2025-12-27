@@ -96,3 +96,25 @@ export async function getBacktestRun(id: number): Promise<BacktestRun> {
   return (await res.json()) as BacktestRun
 }
 
+export async function deleteBacktestRuns(ids: number[]): Promise<{
+  deleted_ids: number[]
+  forbidden_ids: number[]
+  missing_ids: number[]
+}> {
+  const res = await fetch('/api/backtests/runs', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to delete backtest runs (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as {
+    deleted_ids: number[]
+    forbidden_ids: number[]
+    missing_ids: number[]
+  }
+}

@@ -86,10 +86,22 @@ class EodCandleLoadResponse(BaseModel):
     missing_symbols: list[str] = Field(default_factory=list)
 
 
+class BacktestRunsDeleteRequest(BaseModel):
+    ids: list[int] = Field(min_items=1)
+
+
+class BacktestRunsDeleteResponse(BaseModel):
+    deleted_ids: list[int] = Field(default_factory=list)
+    forbidden_ids: list[int] = Field(default_factory=list)
+    missing_ids: list[int] = Field(default_factory=list)
+
+
 __all__ = [
     "BacktestKind",
     "BacktestRunCreate",
     "BacktestRunRead",
+    "BacktestRunsDeleteRequest",
+    "BacktestRunsDeleteResponse",
     "BacktestStatus",
     "BacktestUniverse",
     "EodCandleLoadRequest",

@@ -8,13 +8,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.api.auth import get_current_user_optional
+from app.api.auth import get_current_user, get_current_user_optional
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import BacktestRun, User
 from app.schemas.backtests import (
     BacktestRunCreate,
     BacktestRunRead,
+    BacktestRunsDeleteRequest,
+    BacktestRunsDeleteResponse,
     EodCandleLoadRequest,
     EodCandleLoadResponse,
 )
@@ -269,6 +271,47 @@ def load_eod_candles(
         dates=[d.isoformat() for d in dates],
         prices=matrix,
         missing_symbols=missing,
+    )
+
+
+@router.delete("/runs", response_model=BacktestRunsDeleteResponse)
+def delete_backtest_runs(
+    payload: BacktestRunsDeleteRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> BacktestRunsDeleteResponse:
+    ids_in = [int(x) for x in (payload.ids or []) if int(x) > 0]
+    ids = sorted(set(ids_in))
+    if not ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ids is required.",
+        )
+
+    rows = db.query(BacktestRun).filter(BacktestRun.id.in_(ids)).all()
+    by_id = {r.id: r for r in rows}
+
+    deleted: list[int] = []
+    forbidden: list[int] = []
+    missing: list[int] = []
+
+    for rid in ids:
+        run = by_id.get(rid)
+        if run is None:
+            missing.append(rid)
+            continue
+        allowed = user.role == "ADMIN" or run.owner_id in (None, user.id)
+        if not allowed:
+            forbidden.append(rid)
+            continue
+        db.delete(run)
+        deleted.append(rid)
+
+    db.commit()
+    return BacktestRunsDeleteResponse(
+        deleted_ids=deleted,
+        forbidden_ids=forbidden,
+        missing_ids=missing,
     )
 
 

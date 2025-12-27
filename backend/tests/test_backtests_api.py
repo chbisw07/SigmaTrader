@@ -504,3 +504,61 @@ def test_backtests_eod_candles_loader() -> None:
     assert len(body["dates"]) == 3
     assert body["prices"]["NSE:AAA"] == [100.0, 101.0, 99.5]
     assert body["prices"]["NSE:BBB"] == [200.0, 202.0, 204.0]
+
+
+def test_backtests_delete_runs_requires_auth_and_deletes_owned() -> None:
+    client.cookies.clear()
+    resp_register = client.post(
+        "/api/auth/register",
+        json={"username": "bt_del", "password": "pw123456", "display_name": "BT Del"},
+    )
+    assert resp_register.status_code == 201
+    resp_login = client.post(
+        "/api/auth/login",
+        json={"username": "bt_del", "password": "pw123456"},
+    )
+    assert resp_login.status_code == 200
+    client.cookies.clear()
+    client.cookies.update(resp_login.cookies)
+
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "SIGNAL",
+            "title": "to_delete",
+            "universe": {
+                "mode": "GROUP",
+                "group_id": 123,
+                "symbols": [
+                    {"symbol": "AAA", "exchange": "NSE"},
+                    {"symbol": "BBB", "exchange": "NSE"},
+                ],
+            },
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "mode": "DSL",
+                "dsl": "PRICE() > 0",
+                "forward_windows": [1],
+            },
+        },
+    )
+    assert res.status_code == 200
+    run_id = int(res.json()["id"])
+
+    del_res = client.request(
+        "DELETE",
+        "/api/backtests/runs",
+        json={"ids": [run_id]},
+    )
+    assert del_res.status_code == 200
+    body = del_res.json()
+    assert body["deleted_ids"] == [run_id]
+
+    get_res = client.get(f"/api/backtests/runs/{run_id}")
+    assert get_res.status_code == 404
