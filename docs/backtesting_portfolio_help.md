@@ -61,7 +61,28 @@ A simple execution penalty applied to fills:
 Example:
 - `10 bps` = 0.10% slippage
 
-### Charges (bps)
+### Charges
+SigmaTrader supports two charge models:
+
+#### A) Broker estimate (recommended)
+Estimates **India equity** trading costs based on:
+- Product: `CNC` (delivery) or `MIS` (intraday)
+- Side: BUY vs SELL
+- Broker: `Zerodha` / `AngelOne`
+- Optional: include **DP charges** on delivery sells
+
+Includes (approx):
+- Brokerage (broker plan)
+- STT
+- Exchange transaction charges
+- SEBI charges
+- Stamp duty (buy-side; **West Bengal** defaults)
+- GST (on brokerage + exchange + SEBI)
+- DP charge (delivery sell only; optional)
+
+Rates can change; treat this as an estimate for backtesting.
+
+#### B) Manual (bps)
 A simple cost model applied to the traded notional:
 - charges = `abs(trade_notional) × (charges_bps/10000)`
 
@@ -89,4 +110,7 @@ Turnover here is measured as:
 - Uses **integer quantities** (no fractional shares).
 - Missing prices are handled conservatively (a symbol can’t be traded on days where its price is missing).
 - This is a portfolio simulation (not a broker simulator). For realistic fills/delays, use **Execution backtest** (S28/G06).
-
+- `MIS` is an **EOD approximation**:
+  - Requires fill timing `NEXT_OPEN`
+  - Positions are **squared off at the close** every day (no overnight holding)
+  - Useful for “same-day” turnover/cost sensitivity, but not a full intraday simulator.

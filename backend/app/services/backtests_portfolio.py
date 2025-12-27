@@ -23,6 +23,7 @@ from app.services.backtests_signal import (
     _resolve_indicator_series,
     _series_key,
 )
+from app.services.charges_india import estimate_india_equity_charges
 from app.services.rebalance_risk import solve_risk_parity_erc
 
 
@@ -156,7 +157,11 @@ def _execute_trade_candidates(
     cash: float,
     budget_cap: float,
     slip: float,
-    charges_rate: float,
+    charges_rate: float | None,
+    charges_model: str,
+    charges_broker: str,
+    product: str,
+    include_dp_charges: bool,
 ) -> tuple[float, float, list[dict[str, Any]], float]:
     """Execute a list of trade candidates.
 
@@ -175,7 +180,24 @@ def _execute_trade_candidates(
         fill_px = px_fill_by_key.get(key)
         if fill_px is None or fill_px <= 0:
             continue
-        charge = float(decision_notional) * charges_rate
+        exchange = key.split(":", 1)[0].upper() if ":" in key else "NSE"
+        if charges_rate is not None:
+            charge = float(decision_notional) * float(charges_rate)
+        else:
+            est = estimate_india_equity_charges(
+                broker=str(charges_broker).lower() or "zerodha",
+                product=(
+                    str(product).upper()
+                    if str(product).upper() in {"CNC", "MIS"}
+                    else "CNC"
+                ),
+                side="BUY" if delta > 0 else "SELL",
+                exchange="BSE" if exchange == "BSE" else "NSE",
+                turnover=float(decision_notional),
+                stamp_state="WEST_BENGAL",
+                include_dp=bool(include_dp_charges),
+            )
+            charge = float(est.total)
 
         if delta > 0:
             eff_px = fill_px * (1.0 + slip)
@@ -186,7 +208,34 @@ def _execute_trade_candidates(
             if qty <= 0:
                 continue
             exec_notional = qty * decision_px
-            exec_charge = exec_notional * charges_rate
+            if charges_rate is not None:
+                exec_charge = exec_notional * float(charges_rate)
+                exec_breakdown = None
+            else:
+                est = estimate_india_equity_charges(
+                    broker=str(charges_broker).lower() or "zerodha",
+                    product=(
+                        str(product).upper()
+                        if str(product).upper() in {"CNC", "MIS"}
+                        else "CNC"
+                    ),
+                    side="BUY",
+                    exchange="BSE" if exchange == "BSE" else "NSE",
+                    turnover=float(exec_notional),
+                    stamp_state="WEST_BENGAL",
+                    include_dp=bool(include_dp_charges),
+                )
+                exec_charge = float(est.total)
+                exec_breakdown = {
+                    "brokerage": est.brokerage,
+                    "stt": est.stt,
+                    "exchange_txn": est.exchange_txn,
+                    "sebi": est.sebi,
+                    "stamp_duty": est.stamp_duty,
+                    "gst": est.gst,
+                    "dp": est.dp,
+                }
+
             cash -= qty * eff_px + exec_charge
             positions[key] = int(positions.get(key, 0) or 0) + qty
             used += exec_notional
@@ -200,6 +249,8 @@ def _execute_trade_candidates(
                     "fill_price": eff_px,
                     "notional": exec_notional,
                     "charges": exec_charge,
+                    "charges_model": charges_model,
+                    "charges_breakdown": exec_breakdown,
                 }
             )
         else:
@@ -209,7 +260,34 @@ def _execute_trade_candidates(
                 continue
             eff_px = fill_px * (1.0 - slip)
             exec_notional = qty * decision_px
-            exec_charge = exec_notional * charges_rate
+            if charges_rate is not None:
+                exec_charge = exec_notional * float(charges_rate)
+                exec_breakdown = None
+            else:
+                est = estimate_india_equity_charges(
+                    broker=str(charges_broker).lower() or "zerodha",
+                    product=(
+                        str(product).upper()
+                        if str(product).upper() in {"CNC", "MIS"}
+                        else "CNC"
+                    ),
+                    side="SELL",
+                    exchange="BSE" if exchange == "BSE" else "NSE",
+                    turnover=float(exec_notional),
+                    stamp_state="WEST_BENGAL",
+                    include_dp=bool(include_dp_charges),
+                )
+                exec_charge = float(est.total)
+                exec_breakdown = {
+                    "brokerage": est.brokerage,
+                    "stt": est.stt,
+                    "exchange_txn": est.exchange_txn,
+                    "sebi": est.sebi,
+                    "stamp_duty": est.stamp_duty,
+                    "gst": est.gst,
+                    "dp": est.dp,
+                }
+
             cash += qty * eff_px - exec_charge
             positions[key] = qty_avail - qty
             used += exec_notional
@@ -223,6 +301,8 @@ def _execute_trade_candidates(
                     "fill_price": eff_px,
                     "notional": exec_notional,
                     "charges": exec_charge,
+                    "charges_model": charges_model,
+                    "charges_breakdown": exec_breakdown,
                 }
             )
 
@@ -256,6 +336,11 @@ def run_portfolio_backtest(
     config: PortfolioBacktestConfigIn,
     allow_fetch: bool = True,
 ) -> dict[str, Any]:
+    if config.product == "MIS" and config.fill_timing != "NEXT_OPEN":
+        raise ValueError(
+            "MIS product requires fill_timing NEXT_OPEN (intraday simulation)."
+        )
+
     group = db.get(Group, group_id)
     if group is None:
         raise ValueError("Group not found.")
@@ -373,9 +458,12 @@ def run_portfolio_backtest(
     drawdown_pct: list[float] = []
     actions: list[dict[str, Any]] = []
     total_turnover = 0.0
+    total_charges = 0.0
 
     slip = float(config.slippage_bps) / 10000.0
-    charges_rate = float(config.charges_bps) / 10000.0
+    charges_rate = (
+        float(config.charges_bps) / 10000.0 if config.charges_model == "BPS" else None
+    )
 
     pending: dict[int, list[dict[str, Any]]] = {}
     peak = -math.inf
@@ -404,7 +492,12 @@ def run_portfolio_backtest(
                     budget_cap=float(plan["budget_cap"]),
                     slip=slip,
                     charges_rate=charges_rate,
+                    charges_model=config.charges_model,
+                    charges_broker=config.charges_broker,
+                    product=config.product,
+                    include_dp_charges=bool(config.include_dp_charges),
                 )
+                total_charges += sum(float(t.get("charges") or 0.0) for t in trades)
                 total_turnover += turnover
                 value_after = _portfolio_value(
                     cash=cash, positions=positions, px_by_key=px_close_by_key
@@ -555,7 +648,12 @@ def run_portfolio_backtest(
                         budget_cap=budget_cap,
                         slip=slip,
                         charges_rate=charges_rate,
+                        charges_model=config.charges_model,
+                        charges_broker=config.charges_broker,
+                        product=config.product,
+                        include_dp_charges=bool(config.include_dp_charges),
                     )
+                    total_charges += sum(float(t.get("charges") or 0.0) for t in trades)
                     total_turnover += turnover
                     value_after = _portfolio_value(
                         cash=cash, positions=positions, px_by_key=px_close_by_key
@@ -588,6 +686,34 @@ def run_portfolio_backtest(
                                 "trade_candidates": trade_candidates,
                             }
                         )
+
+        if config.product == "MIS":
+            # Intraday approximation: flatten all positions at close.
+            sells: list[tuple[str, int, float, float]] = []
+            for key, qty in positions.items():
+                if qty <= 0:
+                    continue
+                px = px_close_by_key.get(key)
+                if px is None or px <= 0:
+                    continue
+                notional = float(qty) * float(px)
+                sells.append((key, -int(qty), float(px), float(notional)))
+            if sells:
+                cash, used, trades, turnover = _execute_trade_candidates(
+                    trade_candidates=sells,
+                    px_fill_by_key=px_close_by_key,
+                    positions=positions,
+                    cash=cash,
+                    budget_cap=float("inf"),
+                    slip=slip,
+                    charges_rate=charges_rate,
+                    charges_model=config.charges_model,
+                    charges_broker=config.charges_broker,
+                    product=config.product,
+                    include_dp_charges=bool(config.include_dp_charges),
+                )
+                total_charges += sum(float(t.get("charges") or 0.0) for t in trades)
+                total_turnover += turnover
 
         v = _portfolio_value(cash=cash, positions=positions, px_by_key=px_close_by_key)
         equity.append(v)
@@ -632,6 +758,10 @@ def run_portfolio_backtest(
             "min_trade_value": float(config.min_trade_value),
             "slippage_bps": float(config.slippage_bps),
             "charges_bps": float(config.charges_bps),
+            "charges_model": config.charges_model,
+            "charges_broker": config.charges_broker,
+            "product": config.product,
+            "include_dp_charges": bool(config.include_dp_charges),
             "top_n": int(config.top_n),
             "ranking_window": int(config.ranking_window),
             "eligible_dsl": (config.eligible_dsl or "").strip() or None,
@@ -654,6 +784,7 @@ def run_portfolio_backtest(
             "max_drawdown_pct": max_drawdown_pct,
             "turnover_pct_total": turnover_pct_total,
             "rebalance_count": len(actions),
+            "total_charges": float(total_charges),
         },
         "actions": actions,
     }

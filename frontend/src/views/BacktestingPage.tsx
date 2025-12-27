@@ -50,6 +50,9 @@ type RankingCadence = 'WEEKLY' | 'MONTHLY'
 type PortfolioCadence = 'WEEKLY' | 'MONTHLY'
 type PortfolioMethod = 'TARGET_WEIGHTS' | 'ROTATION' | 'RISK_PARITY'
 type FillTiming = 'CLOSE' | 'NEXT_OPEN'
+type ChargesModel = 'BPS' | 'BROKER'
+type ProductType = 'CNC' | 'MIS'
+type BrokerName = 'zerodha' | 'angelone'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -58,6 +61,21 @@ function toIsoDate(d: Date): string {
 function fmtPct(value: unknown, digits = 2): string {
   const n = Number(value)
   return Number.isFinite(n) ? `${n.toFixed(digits)}%` : '—'
+}
+
+function fmtInr(value: unknown, digits = 0): string {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  try {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: digits,
+      minimumFractionDigits: digits,
+    }).format(n)
+  } catch {
+    return `₹${n.toFixed(digits)}`
+  }
 }
 
 function daysBetweenIsoDates(startIso: string, endIso: string): number | null {
@@ -106,12 +124,17 @@ export function BacktestingPage() {
 
   const [portfolioMethod, setPortfolioMethod] = useState<PortfolioMethod>('TARGET_WEIGHTS')
   const [portfolioCadence, setPortfolioCadence] = useState<PortfolioCadence>('MONTHLY')
+  const [portfolioFillTiming, setPortfolioFillTiming] = useState<FillTiming>('CLOSE')
   const [portfolioInitialCash, setPortfolioInitialCash] = useState(100000)
   const [portfolioBudgetPct, setPortfolioBudgetPct] = useState(100)
   const [portfolioMaxTrades, setPortfolioMaxTrades] = useState(20)
   const [portfolioMinTradeValue, setPortfolioMinTradeValue] = useState(0)
   const [portfolioSlippageBps, setPortfolioSlippageBps] = useState(0)
   const [portfolioChargesBps, setPortfolioChargesBps] = useState(0)
+  const [portfolioChargesModel, setPortfolioChargesModel] = useState<ChargesModel>('BROKER')
+  const [portfolioChargesBroker, setPortfolioChargesBroker] = useState<BrokerName>('zerodha')
+  const [portfolioProduct, setPortfolioProduct] = useState<ProductType>('CNC')
+  const [portfolioIncludeDpCharges, setPortfolioIncludeDpCharges] = useState(true)
   const [rotationTopN, setRotationTopN] = useState(10)
   const [rotationWindow, setRotationWindow] = useState(20)
   const [rotationEligibleDsl, setRotationEligibleDsl] = useState('MA(50) > MA(200)')
@@ -125,6 +148,10 @@ export function BacktestingPage() {
   const [executionFillTiming, setExecutionFillTiming] = useState<FillTiming>('NEXT_OPEN')
   const [executionSlippageBps, setExecutionSlippageBps] = useState(10)
   const [executionChargesBps, setExecutionChargesBps] = useState(5)
+  const [executionChargesModel, setExecutionChargesModel] = useState<ChargesModel>('BROKER')
+  const [executionChargesBroker, setExecutionChargesBroker] = useState<BrokerName>('zerodha')
+  const [executionProduct, setExecutionProduct] = useState<ProductType>('CNC')
+  const [executionIncludeDpCharges, setExecutionIncludeDpCharges] = useState(true)
 
   const [runs, setRuns] = useState<BacktestRun[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
@@ -191,19 +218,32 @@ export function BacktestingPage() {
         return `Ranking: ${window || '?'}D, Top ${topN || '?'}, ${cadence || '—'}`
       }
       if (run.kind === 'PORTFOLIO') {
-        const method = String(cfg.method ?? '')
-        const cadence = String(cfg.cadence ?? '')
-        const budget = cfg.budget_pct != null ? `${Number(cfg.budget_pct).toFixed(0)}%` : '—'
-        const maxTrades = cfg.max_trades != null ? String(cfg.max_trades) : '—'
-        return `${method || 'Portfolio'} • ${cadence || '—'} • budget ${budget} • max ${maxTrades}`
-      }
-      if (run.kind === 'EXECUTION') {
-        const base = cfg.base_run_id != null ? `Base #${cfg.base_run_id}` : 'Base —'
-        const fill = String(cfg.fill_timing ?? '—')
-        const slip = cfg.slippage_bps != null ? `${Number(cfg.slippage_bps).toFixed(0)}bps` : '—'
-        const charges = cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'
-        return `${base} • ${fill} • slip ${slip} • charges ${charges}`
-      }
+      const method = String(cfg.method ?? '')
+      const cadence = String(cfg.cadence ?? '')
+      const fill = String(cfg.fill_timing ?? '')
+      const budget = cfg.budget_pct != null ? `${Number(cfg.budget_pct).toFixed(0)}%` : '—'
+      const maxTrades = cfg.max_trades != null ? String(cfg.max_trades) : '—'
+      const chargesModel = String(cfg.charges_model ?? 'BPS')
+      const dpTxt = cfg.include_dp_charges === false ? 'no-DP' : 'DP'
+      const charges =
+        chargesModel === 'BROKER'
+          ? `charges broker (${String(cfg.charges_broker ?? '—')}/${String(cfg.product ?? 'CNC')}, ${dpTxt})`
+          : `charges ${cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'}`
+      const fillTxt = fill ? ` • ${fill}` : ''
+      return `${method || 'Portfolio'} • ${cadence || '—'}${fillTxt} • budget ${budget} • max ${maxTrades} • ${charges}`
+    }
+    if (run.kind === 'EXECUTION') {
+      const base = cfg.base_run_id != null ? `Base #${cfg.base_run_id}` : 'Base —'
+      const fill = String(cfg.fill_timing ?? '—')
+      const slip = cfg.slippage_bps != null ? `${Number(cfg.slippage_bps).toFixed(0)}bps` : '—'
+      const chargesModel = String(cfg.charges_model ?? 'BPS')
+      const dpTxt = cfg.include_dp_charges === false ? 'no-DP' : 'DP'
+      const charges =
+        chargesModel === 'BROKER'
+          ? `broker (${String(cfg.charges_broker ?? '—')}/${String(cfg.product ?? 'CNC')}, ${dpTxt})`
+          : `${cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'}`
+      return `${base} • ${fill} • slip ${slip} • charges ${charges}`
+    }
       return run.title ?? ''
     },
     [getRunConfig],
@@ -429,12 +469,17 @@ export function BacktestingPage() {
                 end_date: endDate,
                 method: portfolioMethod,
                 cadence: portfolioCadence,
+                fill_timing: portfolioFillTiming,
                 initial_cash: portfolioInitialCash,
                 budget_pct: portfolioBudgetPct,
                 max_trades: portfolioMaxTrades,
                 min_trade_value: portfolioMinTradeValue,
                 slippage_bps: portfolioSlippageBps,
                 charges_bps: portfolioChargesBps,
+                charges_model: portfolioChargesModel,
+                charges_broker: portfolioChargesBroker,
+                product: portfolioProduct,
+                include_dp_charges: portfolioIncludeDpCharges,
                 top_n: rotationTopN,
                 ranking_window: rotationWindow,
                 eligible_dsl: rotationEligibleDsl,
@@ -448,6 +493,10 @@ export function BacktestingPage() {
               fill_timing: executionFillTiming,
               slippage_bps: executionSlippageBps,
               charges_bps: executionChargesBps,
+              charges_model: executionChargesModel,
+              charges_broker: executionChargesBroker,
+              product: executionProduct,
+              include_dp_charges: executionIncludeDpCharges,
             }
 
       const baseGroupId =
@@ -609,6 +658,7 @@ export function BacktestingPage() {
       setExecutionFillTiming(p.fill_timing)
       setExecutionSlippageBps(p.slippage_bps)
       setExecutionChargesBps(p.charges_bps)
+      setExecutionChargesModel('BPS')
     },
     [executionPresets],
   )
@@ -877,12 +927,17 @@ export function BacktestingPage() {
     return actions.map((a, idx) => {
       const row = (a ?? {}) as Record<string, unknown>
       const trades = (row.trades as unknown[] | undefined) ?? []
+      const charges = trades.reduce<number>(
+        (acc, t) => acc + Number((t as any)?.charges ?? 0),
+        0,
+      )
       return {
         id: idx,
         date: String(row.date ?? ''),
         trades: trades.length,
         turnover_pct: row.turnover_pct ?? null,
         budget_used: row.budget_used ?? null,
+        charges: Number.isFinite(charges) ? charges : null,
       }
     })
   }, [selectedRun, tab])
@@ -890,8 +945,6 @@ export function BacktestingPage() {
   const portfolioActionsColumns = useMemo((): GridColDef[] => {
     const fmtPct = (value: unknown) =>
       value == null || value === '' ? '' : `${Number(value).toFixed(1)}%`
-    const fmtNum0 = (value: unknown) =>
-      value == null || value === '' ? '' : Number(value).toFixed(0)
     return [
       { field: 'date', headerName: 'Date', width: 120 },
       { field: 'trades', headerName: 'Trades', width: 90 },
@@ -907,7 +960,14 @@ export function BacktestingPage() {
         headerName: 'Budget used',
         width: 140,
         valueFormatter: (value) =>
-          fmtNum0((value as { value?: unknown })?.value ?? value),
+          fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'charges',
+        headerName: 'Charges',
+        width: 140,
+        valueFormatter: (value) =>
+          fmtInr((value as { value?: unknown })?.value ?? value, 0),
       },
     ]
   }, [])
@@ -1093,19 +1153,21 @@ export function BacktestingPage() {
                 </FormControl>
 
                 <Stack direction="row" spacing={1}>
-                  <FormControl fullWidth size="small">
-                    <InputLabel id="bt-exec-fill-label">Fill timing</InputLabel>
-                    <Select
-                      labelId="bt-exec-fill-label"
-                      label="Fill timing"
-                      value={executionFillTiming}
-                      onChange={(e) => setExecutionFillTiming(e.target.value as FillTiming)}
-                    >
-                      <MenuItem value="CLOSE">Same day close</MenuItem>
-                      <MenuItem value="NEXT_OPEN">Next day open</MenuItem>
-                    </Select>
-                  </FormControl>
-                </Stack>
+	                  <FormControl fullWidth size="small">
+	                    <InputLabel id="bt-exec-fill-label">Fill timing</InputLabel>
+	                    <Select
+	                      labelId="bt-exec-fill-label"
+	                      label="Fill timing"
+	                      value={executionFillTiming}
+	                      onChange={(e) => setExecutionFillTiming(e.target.value as FillTiming)}
+	                    >
+	                      <MenuItem value="CLOSE" disabled={executionProduct === 'MIS'}>
+	                        Same day close
+	                      </MenuItem>
+	                      <MenuItem value="NEXT_OPEN">Next day open</MenuItem>
+	                    </Select>
+	                  </FormControl>
+	                </Stack>
 
                 <Stack direction="row" spacing={1}>
                   <TextField
@@ -1117,18 +1179,90 @@ export function BacktestingPage() {
                     inputProps={{ min: 0, max: 2000 }}
                     fullWidth
                   />
-                  <TextField
-                    label="Charges (bps)"
-                    size="small"
-                    type="number"
-                    value={executionChargesBps}
-                    onChange={(e) => setExecutionChargesBps(Number(e.target.value))}
-                    inputProps={{ min: 0, max: 2000 }}
-                    fullWidth
-                  />
                 </Stack>
-              </Stack>
-            )}
+
+                <Stack spacing={1}>
+                  <Stack direction="row" spacing={1}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="bt-exec-product-label">Product</InputLabel>
+                      <Select
+                        labelId="bt-exec-product-label"
+                        label="Product"
+                        value={executionProduct}
+                        onChange={(e) => {
+                          const next = e.target.value as ProductType
+                          setExecutionProduct(next)
+                          if (next === 'MIS') setExecutionFillTiming('NEXT_OPEN')
+                        }}
+                      >
+                        <MenuItem value="CNC">CNC (delivery)</MenuItem>
+                        <MenuItem value="MIS">MIS (intraday)</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="bt-exec-charges-model-label">Charges</InputLabel>
+                      <Select
+                        labelId="bt-exec-charges-model-label"
+                        label="Charges"
+                        value={executionChargesModel}
+                        onChange={(e) => setExecutionChargesModel(e.target.value as ChargesModel)}
+                      >
+                        <MenuItem value="BROKER">Broker estimate (India equity)</MenuItem>
+                        <MenuItem value="BPS">Manual (bps)</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Stack>
+
+                  <Stack direction="row" spacing={1}>
+                    {executionChargesModel === 'BPS' ? (
+                      <TextField
+                        label="Charges (bps)"
+                        size="small"
+                        type="number"
+                        value={executionChargesBps}
+                        onChange={(e) => setExecutionChargesBps(Number(e.target.value))}
+                        inputProps={{ min: 0, max: 2000 }}
+                        fullWidth
+                      />
+                    ) : (
+                      <FormControl fullWidth size="small">
+                        <InputLabel id="bt-exec-charges-broker-label">Broker</InputLabel>
+                        <Select
+                          labelId="bt-exec-charges-broker-label"
+                          label="Broker"
+                          value={executionChargesBroker}
+                          onChange={(e) => setExecutionChargesBroker(e.target.value as BrokerName)}
+                        >
+                          <MenuItem value="zerodha">Zerodha</MenuItem>
+                          <MenuItem value="angelone">AngelOne</MenuItem>
+                        </Select>
+                      </FormControl>
+                    )}
+
+	                    {executionChargesModel === 'BROKER' && executionProduct === 'CNC' && (
+	                      <FormControl fullWidth size="small">
+	                        <InputLabel id="bt-exec-dp-label">DP charges</InputLabel>
+	                        <Select
+                          labelId="bt-exec-dp-label"
+                          label="DP charges"
+                          value={executionIncludeDpCharges ? 'ON' : 'OFF'}
+                          onChange={(e) => setExecutionIncludeDpCharges(e.target.value === 'ON')}
+                        >
+                          <MenuItem value="ON">Include DP (delivery sell)</MenuItem>
+                          <MenuItem value="OFF">Exclude DP</MenuItem>
+                        </Select>
+	                      </FormControl>
+	                    )}
+	                  </Stack>
+	                  {executionChargesModel === 'BROKER' && (
+	                    <Typography variant="caption" color="text.secondary">
+	                      Estimates India equity charges (brokerage + STT + exchange + SEBI + stamp duty (WB buy-side) + GST
+	                      and optional DP on delivery sell). Rates are approximate.
+	                    </Typography>
+	                  )}
+	                </Stack>
+	              </Stack>
+	            )}
 
             {tab === 'SIGNAL' && (
               <Stack spacing={1.5}>
@@ -1347,7 +1481,7 @@ export function BacktestingPage() {
                     type="number"
                     value={portfolioInitialCash}
                     onChange={(e) => setPortfolioInitialCash(Number(e.target.value))}
-                    inputProps={{ min: 1 }}
+                    inputProps={{ min: 0 }}
                     fullWidth
                   />
                 </Stack>
@@ -1392,85 +1526,175 @@ export function BacktestingPage() {
                     inputProps={{ min: 0, max: 2000 }}
                     fullWidth
                   />
-                  <TextField
-                    label="Charges (bps)"
-                    size="small"
-                    type="number"
-                    value={portfolioChargesBps}
-                    onChange={(e) => setPortfolioChargesBps(Number(e.target.value))}
-                    inputProps={{ min: 0, max: 2000 }}
-                    fullWidth
-                  />
                 </Stack>
 
+                <Stack spacing={1}>
+                  <Stack direction="row" spacing={1}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="bt-pf-fill-label">Fill timing</InputLabel>
+	                      <Select
+	                        labelId="bt-pf-fill-label"
+	                        label="Fill timing"
+	                        value={portfolioFillTiming}
+	                        onChange={(e) => setPortfolioFillTiming(e.target.value as FillTiming)}
+	                      >
+	                        <MenuItem value="CLOSE" disabled={portfolioProduct === 'MIS'}>
+	                          Same day close
+	                        </MenuItem>
+	                        <MenuItem value="NEXT_OPEN">Next day open</MenuItem>
+	                      </Select>
+	                    </FormControl>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="bt-pf-product-label">Product</InputLabel>
+                      <Select
+                        labelId="bt-pf-product-label"
+                        label="Product"
+                        value={portfolioProduct}
+                        onChange={(e) => {
+                          const next = e.target.value as ProductType
+                          setPortfolioProduct(next)
+                          if (next === 'MIS') setPortfolioFillTiming('NEXT_OPEN')
+                        }}
+                      >
+                        <MenuItem value="CNC">CNC (delivery)</MenuItem>
+                        <MenuItem value="MIS">MIS (intraday)</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Stack>
+
+                  <Stack direction="row" spacing={1}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="bt-pf-charges-model-label">Charges</InputLabel>
+                      <Select
+                        labelId="bt-pf-charges-model-label"
+                        label="Charges"
+                        value={portfolioChargesModel}
+                        onChange={(e) => setPortfolioChargesModel(e.target.value as ChargesModel)}
+                      >
+                        <MenuItem value="BROKER">Broker estimate (India equity)</MenuItem>
+                        <MenuItem value="BPS">Manual (bps)</MenuItem>
+                      </Select>
+                    </FormControl>
+                    {portfolioChargesModel === 'BPS' ? (
+                      <TextField
+                        label="Charges (bps)"
+                        size="small"
+                        type="number"
+                        value={portfolioChargesBps}
+                        onChange={(e) => setPortfolioChargesBps(Number(e.target.value))}
+                        inputProps={{ min: 0, max: 2000 }}
+                        fullWidth
+                      />
+                    ) : (
+                      <FormControl fullWidth size="small">
+                        <InputLabel id="bt-pf-charges-broker-label">Broker</InputLabel>
+                        <Select
+                          labelId="bt-pf-charges-broker-label"
+                          label="Broker"
+                          value={portfolioChargesBroker}
+                          onChange={(e) => setPortfolioChargesBroker(e.target.value as BrokerName)}
+                        >
+                          <MenuItem value="zerodha">Zerodha</MenuItem>
+                          <MenuItem value="angelone">AngelOne</MenuItem>
+                        </Select>
+                      </FormControl>
+                    )}
+                  </Stack>
+
+	                  {portfolioChargesModel === 'BROKER' && portfolioProduct === 'CNC' && (
+	                    <FormControl fullWidth size="small">
+	                      <InputLabel id="bt-pf-dp-label">DP charges</InputLabel>
+                      <Select
+                        labelId="bt-pf-dp-label"
+                        label="DP charges"
+                        value={portfolioIncludeDpCharges ? 'ON' : 'OFF'}
+                        onChange={(e) => setPortfolioIncludeDpCharges(e.target.value === 'ON')}
+                      >
+                        <MenuItem value="ON">Include DP (delivery sell)</MenuItem>
+                        <MenuItem value="OFF">Exclude DP</MenuItem>
+                      </Select>
+	                    </FormControl>
+	                  )}
+	                  {portfolioChargesModel === 'BROKER' && (
+	                    <Typography variant="caption" color="text.secondary">
+	                      Estimates India equity charges (brokerage + STT + exchange + SEBI + stamp duty (WB buy-side) + GST
+	                      and optional DP on delivery sell). Rates are approximate.
+	                    </Typography>
+	                  )}
+	                </Stack>
+
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      setPortfolioMethod('TARGET_WEIGHTS')
-                      setPortfolioCadence('MONTHLY')
-                      setPortfolioBudgetPct(100)
-                      setPortfolioMaxTrades(50)
-                      setPortfolioMinTradeValue(0)
-                      setPortfolioSlippageBps(0)
-                      setPortfolioChargesBps(0)
-                    }}
-                  >
-                    Preset: Monthly (no costs)
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      setPortfolioMethod('TARGET_WEIGHTS')
-                      setPortfolioCadence('WEEKLY')
-                      setPortfolioBudgetPct(10)
-                      setPortfolioMaxTrades(10)
-                      setPortfolioMinTradeValue(2000)
-                      setPortfolioSlippageBps(10)
-                      setPortfolioChargesBps(10)
-                    }}
-                  >
-                    Preset: Weekly (tight budget)
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      setPortfolioMethod('ROTATION')
-                      setRotationTopN(10)
-                      setRotationWindow(20)
-                      setRotationEligibleDsl('MA(50) > MA(200)')
-                      setPortfolioCadence('MONTHLY')
-                      setPortfolioBudgetPct(100)
-                      setPortfolioMaxTrades(50)
-                      setPortfolioMinTradeValue(0)
-                      setPortfolioSlippageBps(10)
-                      setPortfolioChargesBps(10)
-                    }}
-                  >
-                    Preset: Rotation (Top‑10 momentum)
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      setPortfolioMethod('RISK_PARITY')
-                      setRiskWindow(126)
-                      setRiskMinObs(60)
-                      setRiskMinWeight(0)
-                      setRiskMaxWeight(30)
-                      setPortfolioCadence('MONTHLY')
-                      setPortfolioBudgetPct(100)
-                      setPortfolioMaxTrades(50)
-                      setPortfolioMinTradeValue(0)
-                      setPortfolioSlippageBps(10)
-                      setPortfolioChargesBps(10)
-                    }}
-                  >
-                    Preset: Risk parity (6M)
-                  </Button>
+	                  <Button
+	                    size="small"
+	                    variant="outlined"
+	                    onClick={() => {
+	                      setPortfolioMethod('TARGET_WEIGHTS')
+	                      setPortfolioCadence('MONTHLY')
+	                      setPortfolioBudgetPct(100)
+	                      setPortfolioMaxTrades(50)
+	                      setPortfolioMinTradeValue(0)
+	                      setPortfolioSlippageBps(0)
+	                      setPortfolioChargesBps(0)
+	                      setPortfolioChargesModel('BPS')
+	                    }}
+	                  >
+	                    Preset: Monthly (no costs)
+	                  </Button>
+	                  <Button
+	                    size="small"
+	                    variant="outlined"
+	                    onClick={() => {
+	                      setPortfolioMethod('TARGET_WEIGHTS')
+	                      setPortfolioCadence('WEEKLY')
+	                      setPortfolioBudgetPct(10)
+	                      setPortfolioMaxTrades(10)
+	                      setPortfolioMinTradeValue(2000)
+	                      setPortfolioSlippageBps(10)
+	                      setPortfolioChargesBps(10)
+	                      setPortfolioChargesModel('BROKER')
+	                    }}
+	                  >
+	                    Preset: Weekly (tight budget)
+	                  </Button>
+	                  <Button
+	                    size="small"
+	                    variant="outlined"
+	                    onClick={() => {
+	                      setPortfolioMethod('ROTATION')
+	                      setRotationTopN(10)
+	                      setRotationWindow(20)
+	                      setRotationEligibleDsl('MA(50) > MA(200)')
+	                      setPortfolioCadence('MONTHLY')
+	                      setPortfolioBudgetPct(100)
+	                      setPortfolioMaxTrades(50)
+	                      setPortfolioMinTradeValue(0)
+	                      setPortfolioSlippageBps(10)
+	                      setPortfolioChargesBps(10)
+	                      setPortfolioChargesModel('BROKER')
+	                    }}
+	                  >
+	                    Preset: Rotation (Top‑10 momentum)
+	                  </Button>
+	                  <Button
+	                    size="small"
+	                    variant="outlined"
+	                    onClick={() => {
+	                      setPortfolioMethod('RISK_PARITY')
+	                      setRiskWindow(126)
+	                      setRiskMinObs(60)
+	                      setRiskMinWeight(0)
+	                      setRiskMaxWeight(30)
+	                      setPortfolioCadence('MONTHLY')
+	                      setPortfolioBudgetPct(100)
+	                      setPortfolioMaxTrades(50)
+	                      setPortfolioMinTradeValue(0)
+	                      setPortfolioSlippageBps(10)
+	                      setPortfolioChargesBps(10)
+	                      setPortfolioChargesModel('BROKER')
+	                    }}
+	                  >
+	                    Preset: Risk parity (6M)
+	                  </Button>
                 </Stack>
               </Stack>
             )}
@@ -1590,15 +1814,21 @@ export function BacktestingPage() {
                           size="small"
                           label={`Max DD: ${Number(portfolioMetrics.max_drawdown_pct ?? 0).toFixed(2)}%`}
                         />
-                        <Chip
-                          size="small"
-                          label={`Turnover: ${Number(portfolioMetrics.turnover_pct_total ?? 0).toFixed(1)}%`}
-                        />
-                        <Chip
-                          size="small"
-                          label={`Rebalances: ${Number(portfolioMetrics.rebalance_count ?? 0)}`}
-                        />
-                      </Stack>
+	                        <Chip
+	                          size="small"
+	                          label={`Turnover: ${Number(portfolioMetrics.turnover_pct_total ?? 0).toFixed(1)}%`}
+	                        />
+	                        {Number.isFinite(Number(portfolioMetrics.total_charges)) && (
+	                          <Chip
+	                            size="small"
+	                            label={`Charges: ${fmtInr(Number(portfolioMetrics.total_charges ?? 0), 0)}`}
+	                          />
+	                        )}
+	                        <Chip
+	                          size="small"
+	                          label={`Rebalances: ${Number(portfolioMetrics.rebalance_count ?? 0)}`}
+	                        />
+	                      </Stack>
                     )}
                     <Box sx={{ mt: 1 }}>
                       <PriceChart

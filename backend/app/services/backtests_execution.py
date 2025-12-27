@@ -55,6 +55,7 @@ def run_execution_backtest(
             "fill_timing": "CLOSE",
             "slippage_bps": 0.0,
             "charges_bps": 0.0,
+            "charges_model": "BPS",
         }
     )
     realistic_cfg = base_pf_cfg.copy(
@@ -62,6 +63,10 @@ def run_execution_backtest(
             "fill_timing": config.fill_timing,
             "slippage_bps": float(config.slippage_bps),
             "charges_bps": float(config.charges_bps),
+            "charges_model": config.charges_model,
+            "charges_broker": config.charges_broker,
+            "product": config.product,
+            "include_dp_charges": bool(config.include_dp_charges),
         }
     )
 
@@ -108,11 +113,16 @@ def run_execution_backtest(
                 "fill_timing": "CLOSE",
                 "slippage_bps": 0.0,
                 "charges_bps": 0.0,
+                "charges_model": "BPS",
             },
             "realistic": {
                 "fill_timing": config.fill_timing,
                 "slippage_bps": float(config.slippage_bps),
                 "charges_bps": float(config.charges_bps),
+                "charges_model": config.charges_model,
+                "charges_broker": config.charges_broker,
+                "product": config.product,
+                "include_dp_charges": bool(config.include_dp_charges),
             },
         },
         "ideal": ideal,

@@ -39,7 +39,10 @@ Inputs:
   - Risk parity
 - Rebalance cadence (weekly/monthly)
 - Constraints (budget %, max trades, minimum trade value)
-- Simple costs/slippage (optional)
+- Slippage (bps)
+- Charges:
+  - Broker estimate (India equity) **or**
+  - Manual (bps)
 
 Outputs:
 - Equity curve and drawdowns
@@ -55,7 +58,9 @@ Inputs:
 - Execution assumptions:
   - Fill timing (close vs next open)
   - Slippage (bps)
-  - Charges (simple approximation)
+  - Charges:
+    - Broker estimate (India equity) **or**
+    - Manual (bps)
 
 Outputs:
 - “Ideal vs realistic” comparison
@@ -70,4 +75,3 @@ Universe decides which symbols are eligible:
 
 If you changed your portfolio in the broker directly, the universe and results can change.  
 For consistency, prefer testing on a **Group universe**.
-

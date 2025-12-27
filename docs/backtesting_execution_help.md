@@ -17,9 +17,9 @@ SigmaTrader will take the base run’s portfolio config (method, cadence, window
 - **Ideal**
   - Fill timing: `CLOSE`
   - Slippage: `0`
-  - Charges: `0`
+  - Charges: `0` (manual/bps mode)
 - **Realistic**
-  - Uses the inputs you set in this dialog (fill timing + slippage + charges)
+  - Uses the inputs you set in this dialog (fill timing + slippage + charges model)
 
 So, you can see how much performance is “real” vs “backtest optimism”.
 
@@ -31,7 +31,7 @@ So, you can see how much performance is “real” vs “backtest optimism”.
 Quickly sets a reasonable combination of:
 - Fill timing
 - Slippage (bps)
-- Charges (bps)
+- Charges (bps) (manual mode)
 
 Use presets when you want a fast sanity-check without tuning numbers.
 
@@ -54,11 +54,24 @@ An additional price impact on each trade:
 **bps** = basis points. `10 bps = 0.10%`.
 
 ### Charges (bps)
-Simple cost model applied per trade notional (commission/fees approximation).
+SigmaTrader supports two charge models:
+
+#### A) Broker estimate (recommended)
+Estimates **India equity** charges per trade based on:
+- Broker (`Zerodha` / `AngelOne`)
+- Product (`CNC` delivery / `MIS` intraday)
+- Side (BUY/SELL)
+- Optional DP charges (delivery sells)
+
+Includes (approx): brokerage, STT, exchange charges, SEBI, stamp duty (WB buy-side), GST, and optional DP.
+
+#### B) Manual (bps)
+Simple cost model applied per trade notional:
+- charges = `abs(trade_notional) × (charges_bps/10000)`
 
 Notes:
-- Real broker charges may be more complex (fixed fees, taxes, brokerage caps).
-- This model is intentionally simple so you can quickly see “how sensitive is my strategy to costs”.
+- Broker estimates are still approximations and rates can change.
+- Manual bps is intentionally simple for quick sensitivity checks.
 
 ---
 
@@ -109,4 +122,3 @@ Then:
 
 Interpretation:
 - About **2.5%** of the backtest performance may be “lost” to execution assumptions and costs.
-
