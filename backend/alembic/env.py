@@ -25,7 +25,11 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return get_settings().database_url
+    # Prefer Alembic CLI / programmatic overrides when present (e.g. when the
+    # app sets sqlalchemy.url before calling `command.upgrade`), otherwise fall
+    # back to the app settings.
+    url = (config.get_main_option("sqlalchemy.url") or "").strip()
+    return url or get_settings().database_url
 
 
 def run_migrations_offline() -> None:

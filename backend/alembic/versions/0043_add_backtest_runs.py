@@ -1,7 +1,7 @@
 """Add backtest runs table.
 
 Revision ID: 0043_add_backtest_runs
-Revises: 0042_add_orders_portfolio_group_id
+Revises: 0042
 Create Date: 2025-12-27
 """
 
@@ -11,12 +11,17 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0043_add_backtest_runs"
-down_revision = "0042_add_orders_portfolio_group_id"
+down_revision = "0042"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "backtest_runs" in inspector.get_table_names():
+        return
+
     op.create_table(
         "backtest_runs",
         sa.Column("id", sa.Integer(), primary_key=True),
