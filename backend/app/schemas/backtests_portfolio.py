@@ -11,6 +11,7 @@ FillTiming = Literal["CLOSE", "NEXT_OPEN"]
 ProductType = Literal["CNC", "MIS"]
 ChargesModel = Literal["BPS", "BROKER"]
 BrokerName = Literal["zerodha", "angelone"]
+GateSource = Literal["NONE", "GROUP_INDEX", "SYMBOL"]
 
 
 class PortfolioBacktestConfigIn(BaseModel):
@@ -35,6 +36,14 @@ class PortfolioBacktestConfigIn(BaseModel):
     product: ProductType = "CNC"
     include_dp_charges: bool = True
 
+    # Gate/regime filter (v2): optionally skip rebalances unless a condition is true.
+    gate_source: GateSource = "NONE"
+    gate_dsl: str = ""
+    gate_symbol_exchange: str = "NSE"
+    gate_symbol: str = ""
+    gate_group_id: int | None = None
+    gate_min_coverage_pct: float = Field(default=90.0, ge=0.0, le=100.0)
+
     # Rotation (v2): Top-N momentum with optional eligibility filter.
     top_n: int = Field(default=10, ge=1, le=200)
     ranking_window: int = Field(default=20, ge=1, le=400)
@@ -51,6 +60,7 @@ __all__ = [
     "BrokerName",
     "ChargesModel",
     "FillTiming",
+    "GateSource",
     "PortfolioBacktestConfigIn",
     "PortfolioBacktestMethod",
     "ProductType",

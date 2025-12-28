@@ -54,6 +54,7 @@ type FillTiming = 'CLOSE' | 'NEXT_OPEN'
 type ChargesModel = 'BPS' | 'BROKER'
 type ProductType = 'CNC' | 'MIS'
 type BrokerName = 'zerodha' | 'angelone'
+type GateSource = 'NONE' | 'GROUP_INDEX' | 'SYMBOL'
 type StrategyTimeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '1d'
 type StrategyDirection = 'LONG' | 'SHORT'
 
@@ -144,6 +145,12 @@ export function BacktestingPage() {
   const [portfolioChargesBroker, setPortfolioChargesBroker] = useState<BrokerName>('zerodha')
   const [portfolioProduct, setPortfolioProduct] = useState<ProductType>('CNC')
   const [portfolioIncludeDpCharges, setPortfolioIncludeDpCharges] = useState(true)
+  const [portfolioGateSource, setPortfolioGateSource] = useState<GateSource>('NONE')
+  const [portfolioGateDsl, setPortfolioGateDsl] = useState('RSI(14) < 30')
+  const [portfolioGateGroupId, setPortfolioGateGroupId] = useState<number | ''>('')
+  const [portfolioGateSymbolExchange, setPortfolioGateSymbolExchange] = useState('NSE')
+  const [portfolioGateSymbol, setPortfolioGateSymbol] = useState('')
+  const [portfolioGateMinCoveragePct, setPortfolioGateMinCoveragePct] = useState(90)
   const [rotationTopN, setRotationTopN] = useState(10)
   const [rotationWindow, setRotationWindow] = useState(20)
   const [rotationEligibleDsl, setRotationEligibleDsl] = useState('MA(50) > MA(200)')
@@ -257,7 +264,14 @@ export function BacktestingPage() {
             ? `charges broker (${String(cfg.charges_broker ?? '—')}/${String(cfg.product ?? 'CNC')}, ${dpTxt})`
             : `charges ${cfg.charges_bps != null ? `${Number(cfg.charges_bps).toFixed(0)}bps` : '—'}`
         const fillTxt = fill ? ` • ${fill}` : ''
-        return `${method || 'Portfolio'} • ${cadence || '—'}${fillTxt} • budget ${budget} • max ${maxTrades} • ${charges}`
+        const gateSource = String(cfg.gate_source ?? 'NONE').toUpperCase()
+        const gateDsl = String(cfg.gate_dsl ?? '').trim()
+        const shorten = (s: string) => (s.length > 42 ? `${s.slice(0, 39)}…` : s)
+        const gateTxt =
+          gateSource !== 'NONE' && gateDsl
+            ? ` • gate ${gateSource}: ${shorten(gateDsl)}`
+            : ''
+        return `${method || 'Portfolio'} • ${cadence || '—'}${fillTxt} • budget ${budget} • max ${maxTrades} • ${charges}${gateTxt}`
       }
       if (run.kind === 'STRATEGY') {
         const timeframe = String(cfg.timeframe ?? '')
@@ -559,6 +573,14 @@ export function BacktestingPage() {
         if (typeof groupId !== 'number') {
           throw new Error('Please select a portfolio group for Portfolio backtests.')
         }
+        if (portfolioGateSource !== 'NONE') {
+          if (!portfolioGateDsl.trim()) {
+            throw new Error('Gate DSL is required when Gate is enabled.')
+          }
+          if (portfolioGateSource === 'SYMBOL' && !portfolioGateSymbol.trim()) {
+            throw new Error('Gate symbol is required when Gate source = Symbol.')
+          }
+        }
       }
       if (kind === 'EXECUTION') {
         if (executionBaseRunId === '' || typeof executionBaseRunId !== 'number') {
@@ -592,32 +614,42 @@ export function BacktestingPage() {
               top_n: rankingTopN,
               cadence: rankingCadence,
             }
-          : kind === 'PORTFOLIO'
-            ? {
-                timeframe: '1d',
-                start_date: startDate,
-                end_date: endDate,
-                method: portfolioMethod,
-                cadence: portfolioCadence,
-                fill_timing: portfolioFillTiming,
-                initial_cash: portfolioInitialCash,
-                budget_pct: portfolioBudgetPct,
-                max_trades: portfolioMaxTrades,
-                min_trade_value: portfolioMinTradeValue,
-                slippage_bps: portfolioSlippageBps,
-                charges_bps: portfolioChargesBps,
-                charges_model: portfolioChargesModel,
-                charges_broker: portfolioChargesBroker,
-                product: portfolioProduct,
-                include_dp_charges: portfolioIncludeDpCharges,
-                top_n: rotationTopN,
-                ranking_window: rotationWindow,
-                eligible_dsl: rotationEligibleDsl,
-                risk_window: riskWindow,
-                min_observations: riskMinObs,
-                min_weight: riskMinWeight / 100,
-                max_weight: riskMaxWeight / 100,
-              }
+              : kind === 'PORTFOLIO'
+                ? {
+                    timeframe: '1d',
+                    start_date: startDate,
+                    end_date: endDate,
+                    method: portfolioMethod,
+                    cadence: portfolioCadence,
+                    fill_timing: portfolioFillTiming,
+                    initial_cash: portfolioInitialCash,
+                    budget_pct: portfolioBudgetPct,
+                    max_trades: portfolioMaxTrades,
+                    min_trade_value: portfolioMinTradeValue,
+                    slippage_bps: portfolioSlippageBps,
+                    charges_bps: portfolioChargesBps,
+                    charges_model: portfolioChargesModel,
+                    charges_broker: portfolioChargesBroker,
+                    product: portfolioProduct,
+                    include_dp_charges: portfolioIncludeDpCharges,
+                    gate_source: portfolioGateSource,
+                    gate_dsl: portfolioGateSource === 'NONE' ? '' : portfolioGateDsl,
+                    gate_symbol_exchange:
+                      portfolioGateSource === 'SYMBOL' ? portfolioGateSymbolExchange : 'NSE',
+                    gate_symbol: portfolioGateSource === 'SYMBOL' ? portfolioGateSymbol : '',
+                    gate_group_id:
+                      portfolioGateSource === 'GROUP_INDEX' && typeof portfolioGateGroupId === 'number'
+                        ? portfolioGateGroupId
+                        : null,
+                    gate_min_coverage_pct: portfolioGateMinCoveragePct,
+                    top_n: rotationTopN,
+                    ranking_window: rotationWindow,
+                    eligible_dsl: rotationEligibleDsl,
+                    risk_window: riskWindow,
+                    min_observations: riskMinObs,
+                    min_weight: riskMinWeight / 100,
+                    max_weight: riskMaxWeight / 100,
+                  }
           : kind === 'STRATEGY'
             ? {
                 timeframe: strategyTimeframe,
@@ -1286,6 +1318,13 @@ export function BacktestingPage() {
     return (result.metrics as Record<string, unknown> | undefined) ?? null
   }, [selectedRun, tab])
 
+  const portfolioMeta = useMemo(() => {
+    if (tab !== 'PORTFOLIO') return null
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return null
+    return (result.meta as Record<string, unknown> | undefined) ?? null
+  }, [selectedRun, tab])
+
   const portfolioActionsRows = useMemo(() => {
     if (tab !== 'PORTFOLIO') return []
     const result = selectedRun?.result as Record<string, unknown> | null | undefined
@@ -1294,6 +1333,7 @@ export function BacktestingPage() {
     return actions.map((a, idx) => {
       const row = (a ?? {}) as Record<string, unknown>
       const trades = (row.trades as unknown[] | undefined) ?? []
+      const skipped = Boolean(row.skipped)
       const charges = trades.reduce<number>(
         (acc, t) => acc + Number((t as any)?.charges ?? 0),
         0,
@@ -1301,6 +1341,8 @@ export function BacktestingPage() {
       return {
         id: idx,
         date: String(row.date ?? ''),
+        status: skipped ? 'SKIPPED' : 'OK',
+        note: skipped ? String(row.skip_reason ?? '') : '',
         trades: trades.length,
         turnover_pct: row.turnover_pct ?? null,
         budget_used: row.budget_used ?? null,
@@ -1314,6 +1356,8 @@ export function BacktestingPage() {
       value == null || value === '' ? '' : `${Number(value).toFixed(1)}%`
     return [
       { field: 'date', headerName: 'Date', width: 120 },
+      { field: 'status', headerName: 'Status', width: 110 },
+      { field: 'note', headerName: 'Note', minWidth: 160, flex: 1 },
       { field: 'trades', headerName: 'Trades', width: 90 },
       {
         field: 'turnover_pct',
@@ -1841,6 +1885,105 @@ export function BacktestingPage() {
                     </Stack>
                   </Stack>
                 )}
+
+                <Paper variant="outlined" sx={{ p: 1 }}>
+                  <Stack spacing={1}>
+                    <Typography variant="caption" color="text.secondary">
+                      Gate / regime filter (optional): skip rebalances unless the condition is true.
+                    </Typography>
+                    <Stack direction="row" spacing={1}>
+                      <FormControl fullWidth size="small">
+                        <InputLabel id="bt-pf-gate-source-label">Gate</InputLabel>
+                        <Select
+                          labelId="bt-pf-gate-source-label"
+                          label="Gate"
+                          value={portfolioGateSource}
+                          onChange={(e) => setPortfolioGateSource(e.target.value as GateSource)}
+                        >
+                          <MenuItem value="NONE">(none)</MenuItem>
+                          <MenuItem value="GROUP_INDEX">Group index (synthetic)</MenuItem>
+                          <MenuItem value="SYMBOL">Symbol</MenuItem>
+                        </Select>
+                      </FormControl>
+                      {portfolioGateSource === 'GROUP_INDEX' && (
+                        <TextField
+                          label="Min coverage (%)"
+                          size="small"
+                          type="number"
+                          value={portfolioGateMinCoveragePct}
+                          onChange={(e) => setPortfolioGateMinCoveragePct(Number(e.target.value))}
+                          inputProps={{ min: 0, max: 100 }}
+                          sx={{ width: 160 }}
+                        />
+                      )}
+                    </Stack>
+
+                    {portfolioGateSource !== 'NONE' && (
+                      <>
+                        <TextField
+                          label="Gate DSL (indicators only, 1d)"
+                          size="small"
+                          multiline
+                          minRows={2}
+                          value={portfolioGateDsl}
+                          onChange={(e) => setPortfolioGateDsl(e.target.value)}
+                          placeholder="Example: MA(50) > MA(200) AND RSI(14) < 35"
+                        />
+
+                        {portfolioGateSource === 'GROUP_INDEX' && (
+                          <FormControl fullWidth size="small">
+                            <InputLabel id="bt-pf-gate-group-label">Gate group</InputLabel>
+                            <Select
+                              labelId="bt-pf-gate-group-label"
+                              label="Gate group"
+                              value={portfolioGateGroupId}
+                              onChange={(e) => {
+                                const raw = e.target.value
+                                setPortfolioGateGroupId(raw === '' ? '' : Number(raw))
+                              }}
+                            >
+                              <MenuItem value="">(use selected group)</MenuItem>
+                              {groups.map((g) => (
+                                <MenuItem key={g.id} value={String(g.id)}>
+                                  {g.name}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                        )}
+
+                        {portfolioGateSource === 'SYMBOL' && (
+                          <Stack direction="row" spacing={1}>
+                            <FormControl size="small" sx={{ minWidth: 120 }}>
+                              <InputLabel id="bt-pf-gate-exch-label">Exchange</InputLabel>
+                              <Select
+                                labelId="bt-pf-gate-exch-label"
+                                label="Exchange"
+                                value={portfolioGateSymbolExchange}
+                                onChange={(e) => setPortfolioGateSymbolExchange(String(e.target.value))}
+                              >
+                                <MenuItem value="NSE">NSE</MenuItem>
+                                <MenuItem value="BSE">BSE</MenuItem>
+                              </Select>
+                            </FormControl>
+                            <TextField
+                              label="Symbol"
+                              size="small"
+                              value={portfolioGateSymbol}
+                              onChange={(e) => setPortfolioGateSymbol(e.target.value.toUpperCase())}
+                              placeholder="Example: NIFTY50 or RELIANCE"
+                              fullWidth
+                            />
+                          </Stack>
+                        )}
+
+                        <Typography variant="caption" color="text.secondary">
+                          Coverage applies only to Group index gates (dynamic availability set; default 90%).
+                        </Typography>
+                      </>
+                    )}
+                  </Stack>
+                </Paper>
 
                 <Stack direction="row" spacing={1}>
                   <FormControl fullWidth size="small">
@@ -2426,6 +2569,21 @@ export function BacktestingPage() {
                             />
                           )}
                           <Chip size="small" label={`Rebalances: ${Number(portfolioMetrics.rebalance_count ?? 0)}`} />
+                          {Number(portfolioMetrics.rebalance_skipped_count ?? 0) > 0 && (
+                            <Tooltip
+                              title={
+                                portfolioMeta?.gate
+                                  ? `Gate blocked ${Number(portfolioMetrics.rebalance_skipped_count ?? 0)} rebalance(s).`
+                                  : `Skipped ${Number(portfolioMetrics.rebalance_skipped_count ?? 0)} rebalance(s).`
+                              }
+                            >
+                              <Chip
+                                size="small"
+                                color="warning"
+                                label={`Skipped: ${Number(portfolioMetrics.rebalance_skipped_count ?? 0)}`}
+                              />
+                            </Tooltip>
+                          )}
                         </Stack>
                       ) : null}
 

@@ -14,7 +14,12 @@ from app.services.alert_expression_dsl import parse_expression
 from app.services.backtests_data import (
     UniverseSymbolRef,
     _norm_symbol_ref,
+    load_eod_close_matrix,
     load_eod_open_close_matrix,
+)
+from app.services.backtests_group_index import (
+    compute_equal_weight_returns_index,
+    compute_weighted_returns_index,
 )
 from app.services.backtests_signal import (
     _eval_expr_at,
@@ -391,6 +396,200 @@ def run_portfolio_backtest(
     if sim_start is None or sim_end is None or sim_start > sim_end:
         raise ValueError("No candles in the selected window.")
 
+    # Gate / regime filter (Backtesting v2)
+    gate_expr = None
+    gate_series_map: dict[tuple[str, str, int], list[float | None]] = {}
+    gate_pass_by_i: dict[int, bool] = {}
+    gate_cov_by_i: dict[int, float] = {}
+    gate_members_used_by_i: dict[int, int] = {}
+    gate_meta: dict[str, Any] | None = None
+    gate_rebalance_points = 0
+    gate_rebalance_passed = 0
+    gate_rebalance_blocked = 0
+
+    gate_source = (config.gate_source or "NONE").strip().upper()
+    gate_dsl = (config.gate_dsl or "").strip()
+    if gate_source != "NONE" and gate_dsl:
+        gate_expr = parse_expression(gate_dsl)
+        if list(_iter_field_operands(gate_expr)):
+            raise ValueError(
+                "gate_dsl does not support FIELD operands (indicators only)."
+            )
+        needed = sorted({_series_key(o) for o in _iter_indicator_operands(gate_expr)})
+        if any(tf != "1d" for _kind, tf, _p in needed):
+            raise ValueError("Gate DSL currently supports EOD (1d) indicators only.")
+
+        threshold = float(config.gate_min_coverage_pct or 0.0) / 100.0
+        threshold = min(max(threshold, 0.0), 1.0)
+
+        if gate_source == "SYMBOL":
+            gate_sym = (config.gate_symbol or "").strip().upper()
+            if not gate_sym:
+                raise ValueError("gate_symbol is required when gate_source=SYMBOL.")
+            gate_ex = (config.gate_symbol_exchange or "NSE").strip().upper() or "NSE"
+            gate_ref = _norm_symbol_ref(gate_ex, gate_sym)
+
+            gate_dates, gate_close_raw, _missing_gate = load_eod_close_matrix(
+                db,
+                settings,
+                symbols=[gate_ref],
+                start=start_dt,
+                end=end_dt,
+                allow_fetch=allow_fetch,
+            )
+            gate_by_date: dict[date, float | None] = {}
+            for d, v in zip(
+                gate_dates,
+                gate_close_raw.get(gate_ref.key, []),
+                strict=False,
+            ):
+                gate_by_date[d] = v
+
+            gate_closes: list[float | None] = [gate_by_date.get(d) for d in dates]
+            first_valid: float | None = None
+            for v in gate_closes:
+                if v is not None and float(v) > 0:
+                    first_valid = float(v)
+                    break
+            gate_cov: list[float] = []
+            gate_used: list[int] = []
+            closes_filled: list[float] = []
+            last: float | None = None
+            for i, v in enumerate(gate_closes):
+                if v is None or float(v) <= 0:
+                    if last is not None:
+                        closes_filled.append(float(last))
+                    elif first_valid is not None:
+                        closes_filled.append(float(first_valid))
+                    else:
+                        closes_filled.append(100.0)
+                    gate_cov.append(0.0)
+                    gate_used.append(0)
+                    continue
+                vv = float(v)
+                last = vv
+                closes_filled.append(vv)
+                if i == 0:
+                    gate_cov.append(1.0)
+                    gate_used.append(1)
+                else:
+                    prev = gate_closes[i - 1]
+                    ok = prev is not None and float(prev) > 0
+                    gate_cov.append(1.0 if ok else 0.0)
+                    gate_used.append(1 if ok else 0)
+
+            for kind, tf, period in needed:
+                gate_series_map[(kind, tf, period)] = _resolve_indicator_series(
+                    kind,
+                    tf,
+                    period,
+                    closes_filled,
+                )
+
+            for i in range(sim_start, sim_end + 1):
+                c = gate_cov[i] if i < len(gate_cov) else 0.0
+                gate_cov_by_i[i] = float(c)
+                gate_members_used_by_i[i] = (
+                    int(gate_used[i]) if i < len(gate_used) else 0
+                )
+                gate_pass_by_i[i] = bool(
+                    c >= threshold and _eval_expr_at(gate_expr, gate_series_map, i)
+                )
+
+            gate_meta = {
+                "source": "SYMBOL",
+                "dsl": gate_dsl,
+                "min_coverage_pct": float(config.gate_min_coverage_pct),
+                "symbol": gate_ref.key,
+            }
+
+        elif gate_source == "GROUP_INDEX":
+            gate_group_id = (
+                int(config.gate_group_id) if config.gate_group_id else group_id
+            )
+            gate_group = db.get(Group, gate_group_id)
+            if gate_group is None:
+                raise ValueError("gate_group_id not found.")
+
+            gate_members: list[GroupMember] = (
+                db.query(GroupMember)
+                .filter(GroupMember.group_id == gate_group_id)
+                .all()
+            )
+            if not gate_members:
+                raise ValueError("gate_group_id has no members.")
+
+            gate_weights = _normalize_weights(gate_members)
+            gate_refs = [_norm_symbol_ref(m.exchange, m.symbol) for m in gate_members]
+            gate_keys = [r.key for r in gate_refs]
+
+            if gate_group_id == group_id:
+                gate_closes_all = {
+                    k: closes_raw.get(k, [None] * len(dates)) for k in gate_keys
+                }
+            else:
+                gate_dates, gate_close_raw, _missing_gate = load_eod_close_matrix(
+                    db,
+                    settings,
+                    symbols=gate_refs,
+                    start=start_dt,
+                    end=end_dt,
+                    allow_fetch=allow_fetch,
+                )
+                by_key_by_date = {
+                    k: {d: v for d, v in zip(gate_dates, vs, strict=False)}
+                    for k, vs in gate_close_raw.items()
+                }
+                gate_closes_all = {
+                    k: [by_key_by_date.get(k, {}).get(d) for d in dates]
+                    for k in gate_keys
+                }
+
+            if gate_group.kind in {"PORTFOLIO", "HOLDINGS_VIEW"}:
+                index_series = compute_weighted_returns_index(
+                    closes_by_key=gate_closes_all,
+                    weights_by_key=gate_weights,
+                    base=100.0,
+                )
+            else:
+                index_series = compute_equal_weight_returns_index(
+                    closes_by_key=gate_closes_all,
+                    members_total=len(gate_keys),
+                    base=100.0,
+                )
+
+            for kind, tf, period in needed:
+                gate_series_map[(kind, tf, period)] = _resolve_indicator_series(
+                    kind,
+                    tf,
+                    period,
+                    index_series.close,
+                )
+
+            for i in range(sim_start, sim_end + 1):
+                c = index_series.coverage[i] if i < len(index_series.coverage) else 0.0
+                gate_cov_by_i[i] = float(c)
+                gate_members_used_by_i[i] = (
+                    int(index_series.members_used[i])
+                    if i < len(index_series.members_used)
+                    else 0
+                )
+                gate_pass_by_i[i] = bool(
+                    c >= threshold and _eval_expr_at(gate_expr, gate_series_map, i)
+                )
+
+            gate_meta = {
+                "source": "GROUP_INDEX",
+                "dsl": gate_dsl,
+                "min_coverage_pct": float(config.gate_min_coverage_pct),
+                "gate_group_id": gate_group_id,
+                "gate_group_name": gate_group.name,
+                "coverage_kind": index_series.coverage_kind,
+                "members_total": index_series.members_total,
+            }
+        else:
+            raise ValueError("gate_source must be NONE, GROUP_INDEX, or SYMBOL.")
+
     close_ff: dict[str, list[float | None]] = {
         key: _forward_fill(series) for key, series in closes_raw.items()
     }
@@ -522,6 +721,38 @@ def run_portfolio_backtest(
                 )
 
         if i in rebalance_ix:
+            if gate_expr is not None:
+                gate_rebalance_points += 1
+                if gate_pass_by_i.get(i, False):
+                    gate_rebalance_passed += 1
+                else:
+                    gate_rebalance_blocked += 1
+
+            if gate_expr is not None and not gate_pass_by_i.get(i, False):
+                value = _portfolio_value(
+                    cash=cash, positions=positions, px_by_key=px_close_by_key
+                )
+                actions.append(
+                    {
+                        "date": d.isoformat(),
+                        "executed_on": None,
+                        "fill_timing": config.fill_timing,
+                        "value_before": value,
+                        "value_after": value,
+                        "budget_cap": 0.0,
+                        "budget_used": 0.0,
+                        "turnover_pct": 0.0,
+                        "targets": None,
+                        "trades": [],
+                        "skipped": True,
+                        "skip_reason": "GATE_BLOCKED",
+                        "gate": {
+                            "coverage": float(gate_cov_by_i.get(i, 0.0)),
+                            "members_used": int(gate_members_used_by_i.get(i, 0)),
+                        },
+                    }
+                )
+                continue
             value_before = _portfolio_value(
                 cash=cash, positions=positions, px_by_key=px_close_by_key
             )
@@ -742,6 +973,9 @@ def run_portfolio_backtest(
         (total_turnover / avg_equity * 100.0) if avg_equity > 0 else 0.0
     )
 
+    rebalance_executed_count = sum(1 for a in actions if not a.get("skipped"))
+    rebalance_skipped_count = sum(1 for a in actions if a.get("skipped"))
+
     return {
         "meta": {
             "group_id": group_id,
@@ -771,6 +1005,10 @@ def run_portfolio_backtest(
             "max_weight": float(config.max_weight),
             "symbols": keys,
             "missing_symbols": missing,
+            "gate": gate_meta,
+            "gate_rebalance_points": int(gate_rebalance_points),
+            "gate_rebalance_passed": int(gate_rebalance_passed),
+            "gate_rebalance_blocked": int(gate_rebalance_blocked),
         },
         "series": {
             "dates": [d.isoformat() for d in sim_dates],
@@ -784,6 +1022,8 @@ def run_portfolio_backtest(
             "max_drawdown_pct": max_drawdown_pct,
             "turnover_pct_total": turnover_pct_total,
             "rebalance_count": len(actions),
+            "rebalance_executed_count": int(rebalance_executed_count),
+            "rebalance_skipped_count": int(rebalance_skipped_count),
             "total_charges": float(total_charges),
         },
         "actions": actions,

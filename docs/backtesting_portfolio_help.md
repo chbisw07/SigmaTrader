@@ -30,6 +30,44 @@ So in v1:
 - Universe must be **Group**
 - `Group` should be a **Portfolio** group (with target weights)
 
+### Gate / regime filter (optional, v2)
+Sometimes you don’t want to rebalance on *every* scheduled date.
+You may want to rebalance only when the market regime is favorable (e.g., “uptrend”).
+
+SigmaTrader supports this via a **Gate**:
+- If the Gate condition is **true** → the rebalance proceeds.
+- If the Gate condition is **false** (or data coverage is too low) → the rebalance is **skipped**.
+
+#### Gate source
+You can choose what time series generates the gate signal:
+
+**A) Group index (synthetic)**
+- SigmaTrader builds a deterministic “index-like” close series from the group’s constituents.
+- **Basket/Watchlist groups** use an **equal-weight returns index**.
+- **Portfolio/Holdings groups** use a **weight-based returns index**.
+
+**B) Symbol**
+- Use a single symbol’s EOD data (e.g., an index/ETF symbol or any stock).
+
+#### Gate DSL (indicators only)
+The gate DSL uses the same indicator DSL style as Signal backtests, e.g.:
+- `MA(50) > MA(200)` (trend filter)
+- `RSI(14) < 30` (oversold)
+
+Current limitation:
+- Gate DSL supports **EOD (1d) indicators only**.
+
+#### Min coverage (%) — for Group index gates
+Synthetic group indices have a real-world issue: some constituents may have missing OHLCV for part of history.
+
+To prevent misleading signals, SigmaTrader uses a **minimum coverage threshold** (default **90%**):
+- If coverage ≥ threshold → evaluate the gate DSL.
+- If coverage < threshold → skip the gate for that bar (and the rebalance will be skipped).
+
+Coverage definition:
+- Equal-weight index: `available_members / total_members`
+- Weight-based index: `sum(weights of available members)`
+
 ### Cadence (rebalance frequency)
 - **Weekly**: rebalance on the last trading day of each week
 - **Monthly**: rebalance on the last trading day of each month
@@ -102,9 +140,13 @@ Each action is one rebalance date, showing:
 Turnover here is measured as:
 - `sum(abs(trade_notional)) / portfolio_value` (for that rebalance date)
 
+If a rebalance is blocked by the Gate, the action will show:
+- `Status = SKIPPED`
+- a `Note` such as `GATE_BLOCKED`
+
 ---
 
-## 4) Important notes and limitations (v1)
+## 4) Important notes and limitations
 
 - Uses **EOD close prices** for rebalance sizing and valuation.
 - Uses **integer quantities** (no fractional shares).

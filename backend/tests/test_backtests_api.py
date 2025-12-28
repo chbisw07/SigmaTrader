@@ -258,6 +258,163 @@ def test_backtests_portfolio_target_weights_basic_run() -> None:
     assert series["equity"][-1] == 1005.5
 
 
+def test_backtests_portfolio_gate_symbol_blocks_rebalances() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    with SessionLocal() as session:
+        g = Group(name="PF_GATE_SYMBOL", kind="PORTFOLIO", description="test")
+        session.add(g)
+        session.commit()
+        session.refresh(g)
+        session.add_all(
+            [
+                GroupMember(
+                    group_id=g.id,
+                    symbol="AAA",
+                    exchange="NSE",
+                    target_weight=0.5,
+                ),
+                GroupMember(
+                    group_id=g.id,
+                    symbol="BBB",
+                    exchange="NSE",
+                    target_weight=0.5,
+                ),
+            ]
+        )
+        session.commit()
+        group_id = g.id
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "PORTFOLIO",
+            "title": "pf_gate_symbol",
+            "universe": {"mode": "GROUP", "group_id": group_id, "symbols": []},
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "method": "TARGET_WEIGHTS",
+                "cadence": "MONTHLY",
+                "initial_cash": 1000.0,
+                "budget_pct": 100.0,
+                "max_trades": 10,
+                "min_trade_value": 0.0,
+                "slippage_bps": 0.0,
+                "charges_bps": 0.0,
+                "gate_source": "SYMBOL",
+                "gate_symbol_exchange": "NSE",
+                "gate_symbol": "AAA",
+                "gate_dsl": "PRICE() > 1000000",
+                "gate_min_coverage_pct": 90.0,
+            },
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "COMPLETED", body
+    assert body["result"]["meta"]["gate"]["source"] == "SYMBOL"
+    series = body["result"]["series"]
+    assert series["equity"][0] == 1000.0
+    assert series["equity"][-1] == 1000.0
+    actions = body["result"]["actions"]
+    assert actions and actions[0].get("skipped") is True
+    assert body["result"]["metrics"]["rebalance_skipped_count"] >= 1
+
+
+def test_backtests_portfolio_gate_group_index_blocks_on_low_coverage() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Insert partial history for one member to force low coverage early.
+    with SessionLocal() as session:
+        for i, close in enumerate([10.0, 10.0]):
+            ts = now - timedelta(days=1 - i)
+            session.add(
+                Candle(
+                    symbol="DDD",
+                    exchange="NSE",
+                    timeframe="1d",
+                    ts=ts,
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    volume=1000.0,
+                )
+            )
+        session.commit()
+
+        g = Group(name="PF_GATE_GROUP", kind="PORTFOLIO", description="test")
+        session.add(g)
+        session.commit()
+        session.refresh(g)
+        session.add_all(
+            [
+                GroupMember(
+                    group_id=g.id,
+                    symbol="AAA",
+                    exchange="NSE",
+                    target_weight=1 / 3,
+                ),
+                GroupMember(
+                    group_id=g.id,
+                    symbol="BBB",
+                    exchange="NSE",
+                    target_weight=1 / 3,
+                ),
+                GroupMember(
+                    group_id=g.id,
+                    symbol="DDD",
+                    exchange="NSE",
+                    target_weight=1 / 3,
+                ),
+            ]
+        )
+        session.commit()
+        group_id = g.id
+
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "PORTFOLIO",
+            "title": "pf_gate_group",
+            "universe": {"mode": "GROUP", "group_id": group_id, "symbols": []},
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "method": "TARGET_WEIGHTS",
+                "cadence": "MONTHLY",
+                "initial_cash": 1000.0,
+                "budget_pct": 100.0,
+                "max_trades": 10,
+                "min_trade_value": 0.0,
+                "slippage_bps": 0.0,
+                "charges_bps": 0.0,
+                "gate_source": "GROUP_INDEX",
+                "gate_dsl": "PRICE() > 0",
+                "gate_min_coverage_pct": 90.0,
+            },
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "COMPLETED", body
+    gate = body["result"]["meta"]["gate"]
+    assert gate["source"] == "GROUP_INDEX"
+    assert gate["members_total"] == 3
+    actions = body["result"]["actions"]
+    assert len(actions) >= 1
+    assert actions[0].get("skipped") is True
+    assert actions[0].get("gate", {}).get("coverage", 0.0) < 0.9
+
+
 def test_backtests_execution_backtest_costs_reduce_equity() -> None:
     now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     start = (now - timedelta(days=2)).date().isoformat()
