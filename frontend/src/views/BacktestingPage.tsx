@@ -2688,6 +2688,8 @@ export function BacktestingPage() {
                           chartType="line"
                           height={260}
                           overlays={strategyBaselineOverlays}
+                          showLegend
+                          baseSeriesName="Strategy equity"
                         />
                       </Box>
 

@@ -65,12 +65,18 @@ export function PriceChart({
   overlays = [],
   markers = [],
   height = 320,
+  showLegend = false,
+  baseSeriesName,
+  baseSeriesColor,
 }: {
   candles: PriceCandle[]
   chartType: PriceChartType
   overlays?: PriceOverlay[]
   markers?: PriceSignalMarker[]
   height?: number
+  showLegend?: boolean
+  baseSeriesName?: string
+  baseSeriesColor?: string
 }) {
   const theme = useTheme()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -93,6 +99,15 @@ export function PriceChart({
   const upColor = theme.palette.mode === 'dark' ? '#22c55e' : '#16a34a'
   const downColor = theme.palette.mode === 'dark' ? '#ef4444' : '#dc2626'
   const lineColor = theme.palette.primary.main
+  const overlayPalette = useMemo(
+    () => [
+      theme.palette.warning.main,
+      theme.palette.success.main,
+      theme.palette.info.main,
+      theme.palette.secondary.main,
+    ],
+    [theme],
+  )
 
   const seriesData = useMemo(() => {
     if (normalizedCandles.length === 0) return []
@@ -223,17 +238,10 @@ export function PriceChart({
     for (const s of overlaySeriesRefs.current) chart.removeSeries(s)
     overlaySeriesRefs.current = []
 
-    const palette = [
-      theme.palette.warning.main,
-      theme.palette.success.main,
-      theme.palette.info.main,
-      theme.palette.secondary.main,
-    ]
-
     normalizedOverlays.forEach((o, idx) => {
       const lineWidth = Math.min(4, Math.max(1, Math.round(o.lineWidth ?? 2))) as LineWidth
       const opts: LineSeriesPartialOptions = {
-        color: o.color || palette[idx % palette.length]!,
+        color: o.color || overlayPalette[idx % overlayPalette.length]!,
         lineWidth,
         priceLineVisible: false,
         lastValueVisible: false,
@@ -243,7 +251,7 @@ export function PriceChart({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       s.setData(o.data as any)
     })
-  }, [normalizedOverlays, theme])
+  }, [normalizedOverlays, overlayPalette])
 
   useEffect(() => {
     if (!seriesRef.current) return
@@ -279,14 +287,92 @@ export function PriceChart({
     }
   }, [markers, theme])
 
+  const legendItems = useMemo(() => {
+    if (!showLegend) return []
+    const baseName = baseSeriesName?.trim() || (chartType === 'line' ? 'Series' : 'Price')
+    const baseColorResolved = baseSeriesColor?.trim() || lineColor
+    const items: Array<{ name: string; color: string }> = [{ name: baseName, color: baseColorResolved }]
+    normalizedOverlays.forEach((o, idx) => {
+      const name = String(o.name ?? '').trim()
+      if (!name) return
+      const color = o.color || overlayPalette[idx % overlayPalette.length]!
+      items.push({ name, color })
+    })
+    return items
+  }, [baseSeriesColor, baseSeriesName, chartType, lineColor, normalizedOverlays, overlayPalette, showLegend])
+
   return (
-    <Box
-      ref={containerRef}
-      sx={{
-        height,
-        width: '100%',
-        '& canvas': { borderRadius: 1 },
-      }}
-    />
+    <Box sx={{ position: 'relative', height, width: '100%' }}>
+      {legendItems.length > 0 && (
+        <Box
+          sx={{
+            position: 'absolute',
+            zIndex: 1,
+            top: 8,
+            left: 8,
+            borderRadius: 1,
+            px: 1,
+            py: 0.5,
+            pointerEvents: 'none',
+            bgcolor:
+              theme.palette.mode === 'dark'
+                ? 'rgba(0,0,0,0.35)'
+                : 'rgba(255,255,255,0.7)',
+            border: `1px solid ${
+              theme.palette.mode === 'dark'
+                ? 'rgba(255,255,255,0.15)'
+                : 'rgba(0,0,0,0.08)'
+            }`,
+            maxWidth: '70%',
+          }}
+        >
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            {legendItems.map((it) => (
+              <Box
+                key={it.name}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.75,
+                  minWidth: 0,
+                }}
+              >
+                <Box
+                  sx={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    bgcolor: it.color,
+                    flex: '0 0 auto',
+                  }}
+                />
+                <Box
+                  component="span"
+                  sx={{
+                    fontSize: 12,
+                    color: theme.palette.text.secondary,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    maxWidth: 220,
+                  }}
+                >
+                  {it.name}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )}
+
+      <Box
+        ref={containerRef}
+        sx={{
+          height: '100%',
+          width: '100%',
+          '& canvas': { borderRadius: 1 },
+        }}
+      />
+    </Box>
   )
 }
