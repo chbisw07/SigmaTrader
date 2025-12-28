@@ -22,7 +22,7 @@ import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { MarkdownLite } from '../components/MarkdownLite'
-import { PriceChart, type PriceCandle } from '../components/PriceChart'
+import { PriceChart, type PriceCandle, type PriceSignalMarker } from '../components/PriceChart'
 import { fetchHoldings } from '../services/positions'
 import { fetchGroup, listGroups, type Group, type GroupDetail } from '../services/groups'
 import {
@@ -83,9 +83,13 @@ function fmtInr(value: unknown, digits = 0): string {
 }
 
 function downsample<T>(values: T[], maxPoints: number): T[] {
+  return downsampleKeep(values, maxPoints)
+}
+
+function downsampleKeep<T>(values: T[], maxPoints: number, keep?: (v: T) => boolean): T[] {
   if (values.length <= maxPoints) return values
   const step = Math.ceil(values.length / maxPoints)
-  return values.filter((_v, i) => i % step === 0 || i === values.length - 1)
+  return values.filter((v, i) => keep?.(v) === true || i % step === 0 || i === values.length - 1)
 }
 
 function daysBetweenIsoDates(startIso: string, endIso: string): number | null {
@@ -1194,6 +1198,41 @@ export function BacktestingPage() {
     return (result.series as Record<string, unknown> | undefined) ?? null
   }, [selectedRun, tab])
 
+  const strategyTradeMarkers = useMemo((): PriceSignalMarker[] => {
+    if (tab !== 'STRATEGY') return []
+    const result = selectedRun?.result as Record<string, unknown> | null | undefined
+    if (!result) return []
+    const trades = (result.trades as unknown[] | undefined) ?? []
+    const countsByKey = new Map<string, number>()
+    const out: PriceSignalMarker[] = []
+
+    const push = (ts: string, kind: string, text: string) => {
+      const key = `${ts}|${kind}`
+      const next = (countsByKey.get(key) ?? 0) + 1
+      countsByKey.set(key, next)
+      out.push({ ts, kind, text: next > 1 ? `${text}${next}` : text })
+    }
+
+    for (const t of trades) {
+      const row = (t ?? {}) as Record<string, unknown>
+      const entryTs = String(row.entry_ts ?? '')
+      const exitTs = String(row.exit_ts ?? '')
+      const side = String(row.side ?? '').toUpperCase()
+      if (!entryTs || !exitTs) continue
+      const entryKind = side === 'SHORT' ? 'CROSSUNDER' : 'CROSSOVER'
+      const exitKind = side === 'SHORT' ? 'CROSSOVER' : 'CROSSUNDER'
+      push(entryTs, entryKind, 'E')
+      push(exitTs, exitKind, 'X')
+    }
+    return out
+  }, [selectedRun, tab])
+
+  const strategyMarkerTs = useMemo(() => {
+    const s = new Set<string>()
+    for (const m of strategyTradeMarkers) s.add(m.ts)
+    return s
+  }, [strategyTradeMarkers])
+
   const strategyEquityCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'STRATEGY') return []
     if (!strategySeries) return []
@@ -1206,8 +1245,8 @@ export function BacktestingPage() {
       if (!t || !Number.isFinite(v)) continue
       candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
     }
-    return downsample(candles, 2500)
-  }, [strategySeries, tab])
+    return downsampleKeep(candles, 2500, (c) => strategyMarkerTs.has((c as PriceCandle).ts))
+  }, [strategyMarkerTs, strategySeries, tab])
 
   const strategyDrawdownCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'STRATEGY') return []
@@ -2724,6 +2763,7 @@ export function BacktestingPage() {
                           chartType="line"
                           height={260}
                           overlays={strategyBaselineOverlays}
+                          markers={strategyTradeMarkers}
                           showLegend
                           baseSeriesName="Strategy equity"
                         />
