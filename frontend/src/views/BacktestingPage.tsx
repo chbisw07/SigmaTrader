@@ -2546,15 +2546,25 @@ export function BacktestingPage() {
             </Box>
 
             <DividerBlock title="Selected run" />
-	            {selectedRun ? (
-	              <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
-                <Typography variant="body2" color="text.secondary">
-                  Run #{selectedRun.id} • {selectedRun.kind} • {selectedRun.status}
-                </Typography>
+		            {selectedRun ? (
+		              <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
+	                <Typography variant="body2" color="text.secondary">
+	                  Run #{selectedRun.id} • {selectedRun.kind} • {selectedRun.status}
+	                </Typography>
 
-                {tab === 'SIGNAL' && selectedRun.status === 'COMPLETED' && signalSummaryRows.length > 0 && (
-                  <Box sx={{ mt: 1 }}>
-                    <Typography variant="subtitle2">Signal summary (by forward window)</Typography>
+	                {selectedRun.status === 'FAILED' && selectedRun.error_message ? (
+	                  <Typography
+	                    variant="body2"
+	                    color="error"
+	                    sx={{ mt: 1, whiteSpace: 'pre-wrap' }}
+	                  >
+	                    Error: {selectedRun.error_message}
+	                  </Typography>
+	                ) : null}
+
+	                {tab === 'SIGNAL' && selectedRun.status === 'COMPLETED' && signalSummaryRows.length > 0 && (
+	                  <Box sx={{ mt: 1 }}>
+	                    <Typography variant="subtitle2">Signal summary (by forward window)</Typography>
                     <Box sx={{ height: 220, mt: 1 }}>
                       <DataGrid
                         rows={signalSummaryRows}

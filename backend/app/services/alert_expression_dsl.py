@@ -281,8 +281,24 @@ class _Parser:
             # - INDICATOR(period)
             # - INDICATOR(tf)
             # - INDICATOR(period, tf)
+            #
+            # For compatibility with TradingView-like formulas and our v3 DSL
+            # examples, we also accept:
+            # - INDICATOR(close, period)
+            # - INDICATOR(close, period, tf)
             tok = self._peek()
             if tok and tok.kind != "RPAREN":
+                # Optional first arg: "close" (ignored; indicators use close series).
+                if tok.kind == "IDENT" and tok.value.lower() == "close":
+                    self._consume("IDENT")
+                    if self._peek() and self._peek().kind == "COMMA":
+                        self._consume("COMMA")
+                        tok = self._peek()
+                    else:
+                        raise IndicatorAlertError(
+                            "Expected ',' after 'close' in indicator arguments",
+                        )
+
                 second = (
                     self.tokens[self.pos + 1]
                     if self.pos + 1 < len(self.tokens)

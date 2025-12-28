@@ -154,3 +154,12 @@ def test_dsl_can_use_fields_and_indicators() -> None:
         )
 
     assert matched
+
+
+def test_dsl_accepts_close_argument_in_indicator_call() -> None:
+    expr = parse_expression('SMA(close, 20, "1d") > SMA(close, 50, 1d)')
+    assert isinstance(expr, ComparisonNode)
+    assert isinstance(expr.left, IndicatorOperand)
+    assert expr.left.spec.kind == "MA"
+    assert expr.left.spec.timeframe == "1d"
+    assert expr.left.spec.params.get("period") == 20
