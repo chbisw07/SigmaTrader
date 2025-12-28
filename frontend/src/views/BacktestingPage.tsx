@@ -184,6 +184,8 @@ export function BacktestingPage() {
   const [strategyStopLossPct, setStrategyStopLossPct] = useState(0)
   const [strategyTakeProfitPct, setStrategyTakeProfitPct] = useState(0)
   const [strategyTrailingStopPct, setStrategyTrailingStopPct] = useState(0)
+  const [strategyMaxEquityDdGlobalPct, setStrategyMaxEquityDdGlobalPct] = useState(0)
+  const [strategyMaxEquityDdTradePct, setStrategyMaxEquityDdTradePct] = useState(0)
   const [strategySlippageBps, setStrategySlippageBps] = useState(0)
   const [strategyChargesModel, setStrategyChargesModel] = useState<ChargesModel>('BROKER')
   const [strategyChargesBps, setStrategyChargesBps] = useState(0)
@@ -297,8 +299,14 @@ export function BacktestingPage() {
         const direction = String(cfg.direction ?? 'LONG')
         const entry = String(cfg.entry_dsl ?? '').trim()
         const exit = String(cfg.exit_dsl ?? '').trim()
+        const ddGlobal = Number(cfg.max_equity_dd_global_pct ?? 0)
+        const ddTrade = Number(cfg.max_equity_dd_trade_pct ?? 0)
         const shorten = (s: string) => (s.length > 48 ? `${s.slice(0, 45)}…` : s)
-        return `${timeframe || '—'} • ${product}/${direction} • entry: ${shorten(entry)} • exit: ${shorten(exit)}`
+        const ddParts: string[] = []
+        if (Number.isFinite(ddGlobal) && ddGlobal > 0) ddParts.push(`eqDD global ${ddGlobal}%`)
+        if (Number.isFinite(ddTrade) && ddTrade > 0) ddParts.push(`eqDD trade ${ddTrade}%`)
+        const ddTxt = ddParts.length ? ` • ${ddParts.join(' • ')}` : ''
+        return `${timeframe || '—'} • ${product}/${direction} • entry: ${shorten(entry)} • exit: ${shorten(exit)}${ddTxt}`
       }
       if (run.kind === 'EXECUTION') {
         const base = cfg.base_run_id != null ? `Base #${cfg.base_run_id}` : 'Base —'
@@ -682,6 +690,8 @@ export function BacktestingPage() {
                 stop_loss_pct: strategyStopLossPct,
                 take_profit_pct: strategyTakeProfitPct,
                 trailing_stop_pct: strategyTrailingStopPct,
+                max_equity_dd_global_pct: strategyMaxEquityDdGlobalPct,
+                max_equity_dd_trade_pct: strategyMaxEquityDdTradePct,
                 slippage_bps: strategySlippageBps,
                 charges_model: strategyChargesModel,
                 charges_bps: strategyChargesBps,
@@ -955,6 +965,8 @@ export function BacktestingPage() {
     setStrategyStopLossPct(p.stop_loss_pct)
     setStrategyTakeProfitPct(p.take_profit_pct)
     setStrategyTrailingStopPct(p.trailing_stop_pct)
+    setStrategyMaxEquityDdGlobalPct(0)
+    setStrategyMaxEquityDdTradePct(0)
     setStrategySlippageBps(0)
     setStrategyChargesModel('BROKER')
     setStrategyChargesBps(0)
@@ -2437,6 +2449,29 @@ export function BacktestingPage() {
                     onChange={(e) => setStrategyTrailingStopPct(Number(e.target.value))}
                     inputProps={{ min: 0, max: 100 }}
                     fullWidth
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Max equity DD (global, %)"
+                    size="small"
+                    type="number"
+                    value={strategyMaxEquityDdGlobalPct}
+                    onChange={(e) => setStrategyMaxEquityDdGlobalPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                    helperText="0 disables. Equity DD from peak since start; triggers exit + blocks new entries."
+                  />
+                  <TextField
+                    label="Max equity DD (per-trade, %)"
+                    size="small"
+                    type="number"
+                    value={strategyMaxEquityDdTradePct}
+                    onChange={(e) => setStrategyMaxEquityDdTradePct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                    helperText="0 disables. Equity DD from peak since entry; resets on each entry."
                   />
                 </Stack>
 

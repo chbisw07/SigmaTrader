@@ -473,6 +473,8 @@ def run_strategy_backtest(
     entry_ts: datetime | None = None
     peak_since_entry: float | None = None
     trough_since_entry: float | None = None
+    peak_equity_since_entry: float | None = None
+    trading_disabled = False
 
     pending_entry: tuple[int, str] | None = None  # (exec_index, side)
     pending_exit: tuple[int, str, str] | None = None  # (exec_index, side, reason)
@@ -560,6 +562,9 @@ def run_strategy_backtest(
                         entry_fill = float(fill_px)
                         entry_ts = ts[i]
                         peak_since_entry = float(closes[i])
+                        peak_equity_since_entry = float(cash) + float(qty) * float(
+                            fill_px
+                        )
                 else:
                     # short sell: proceeds increase cash but we do not allow
                     # pyramiding (single-position backtest).
@@ -568,6 +573,7 @@ def run_strategy_backtest(
                     entry_fill = float(fill_px)
                     entry_ts = ts[i]
                     trough_since_entry = float(closes[i])
+                    peak_equity_since_entry = float(cash) + float(qty) * float(fill_px)
             pending_entry = None
 
         if pending_exit and pending_exit[0] == i and qty != 0:
@@ -610,6 +616,7 @@ def run_strategy_backtest(
             entry_ts = None
             peak_since_entry = None
             trough_since_entry = None
+            peak_equity_since_entry = None
             pending_exit = None
 
         # Risk controls evaluated at close; schedule exit next open.
@@ -664,7 +671,7 @@ def run_strategy_backtest(
 
         # Signal evaluation at close; schedule orders for next open.
         if i < sim_end:
-            if qty == 0 and pending_entry is None:
+            if qty == 0 and pending_entry is None and not trading_disabled:
                 if _eval_expr_at(entry_expr, series, i):
                     if cfg.direction == "LONG":
                         pending_entry = (i + 1, "BUY")
@@ -683,9 +690,46 @@ def run_strategy_backtest(
                 pending_entry = None
 
         v = equity_now(i)
+        if qty != 0:
+            peak_equity_since_entry = max(float(peak_equity_since_entry or v), float(v))
+        else:
+            peak_equity_since_entry = None
+
         equity.append(v)
         peak = max(peak, v)
-        dd.append((v / peak - 1.0) * 100.0 if peak > 0 else 0.0)
+        dd_global_pct = (v / peak - 1.0) * 100.0 if peak > 0 else 0.0
+        dd.append(float(dd_global_pct))
+
+        # Equity drawdown controls (evaluate at close, execute at next open).
+        if i < sim_end and pending_exit is None:
+            next_i = i + 1
+            max_dd_global = float(cfg.max_equity_dd_global_pct or 0.0)
+            max_dd_trade = float(cfg.max_equity_dd_trade_pct or 0.0)
+
+            if max_dd_global > 0 and dd_global_pct <= -max_dd_global:
+                trading_disabled = True
+                pending_entry = None
+                if qty != 0:
+                    pending_exit = (
+                        next_i,
+                        "SELL" if qty > 0 else "BUY",
+                        "EQUITY_DD_GLOBAL",
+                    )
+
+            if (
+                pending_exit is None
+                and qty != 0
+                and max_dd_trade > 0
+                and peak_equity_since_entry is not None
+                and peak_equity_since_entry > 0
+            ):
+                dd_trade_pct = (v / peak_equity_since_entry - 1.0) * 100.0
+                if dd_trade_pct <= -max_dd_trade:
+                    pending_exit = (
+                        next_i,
+                        "SELL" if qty > 0 else "BUY",
+                        "EQUITY_DD_TRADE",
+                    )
 
     # Close any open position at end of backtest (strategy ends).
     if qty != 0:
@@ -790,6 +834,8 @@ def run_strategy_backtest(
             "stop_loss_pct": float(cfg.stop_loss_pct),
             "take_profit_pct": float(cfg.take_profit_pct),
             "trailing_stop_pct": float(cfg.trailing_stop_pct),
+            "max_equity_dd_global_pct": float(cfg.max_equity_dd_global_pct),
+            "max_equity_dd_trade_pct": float(cfg.max_equity_dd_trade_pct),
             "slippage_bps": float(cfg.slippage_bps),
             "charges_model": cfg.charges_model,
             "charges_bps": float(cfg.charges_bps),

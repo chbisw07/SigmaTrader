@@ -106,6 +106,19 @@ Optional risk controls (set to `0` to disable):
 
 Note: in v1 these are evaluated at **bar close** and filled at **next open** (not intrabar).
 
+### Max equity DD (global) / Max equity DD (per‑trade)
+Optional equity‑based risk controls (set to `0` to disable). These are different from price stops:
+- **Global max equity DD (%)**: monitors your **equity curve drawdown** (cash + position mark‑to‑market) from the **peak since backtest start**.  
+  If breached, SigmaTrader:
+  - schedules an exit on the **next open** (if in a position), and
+  - disables further entries (a “kill switch” for the remainder of the backtest).
+- **Per‑trade max equity DD (%)**: monitors equity drawdown from the **peak since the current trade entry**.  
+  If breached, it schedules an exit on the **next open**. This resets on every new entry.
+
+Why this is useful:
+- Price drawdown can be misleading when you’re not “all‑in” (Position size < 100%) or when costs are high.
+- Equity drawdown directly answers: “How much did my account fall, given my sizing and costs?”
+
 ### Slippage (bps)
 Execution friction added to simulated fills:
 - `10 bps` = `0.10%`
@@ -149,7 +162,7 @@ Every executed trade pair (entry→exit), including:
 - side (LONG/SHORT)
 - qty
 - P&L %
-- exit reason (EXIT_SIGNAL, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP, EOD_SQUARE_OFF, END_OF_TEST)
+- exit reason (EXIT_SIGNAL, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP, EQUITY_DD_TRADE, EQUITY_DD_GLOBAL, EOD_SQUARE_OFF, END_OF_TEST)
 
 ---
 
@@ -172,4 +185,3 @@ Use presets as learning tools, not as “guaranteed profitable systems”.
 - One position at a time (no pyramiding / scaling in/out).
 - Stops/targets are evaluated at close and filled at next open (no intrabar stop simulation yet).
 - No limit/market microstructure modeling (this is for research intuition, not precise execution modeling).
-

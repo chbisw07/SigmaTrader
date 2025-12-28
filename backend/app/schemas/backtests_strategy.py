@@ -31,6 +31,12 @@ class StrategyBacktestConfigIn(BaseModel):
     take_profit_pct: float = Field(default=0.0, ge=0.0, le=100.0)
     trailing_stop_pct: float = Field(default=0.0, ge=0.0, le=100.0)
 
+    # Equity drawdown controls (optional; set to 0 to disable)
+    # - global: from peak since start ("kill switch"; stops new entries)
+    # - trade: from peak since last entry (equity trailing stop for the current trade)
+    max_equity_dd_global_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    max_equity_dd_trade_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+
     # Execution assumptions
     slippage_bps: float = Field(default=0.0, ge=0.0, le=2000.0)
     charges_model: ChargesModel = "BROKER"

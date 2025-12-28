@@ -62,6 +62,37 @@ def setup_module() -> None:  # type: ignore[override]
                     volume=1000.0,
                 )
             )
+        # Used by equity drawdown tests (open != close).
+        for i, (o, c) in enumerate([(100.0, 100.0), (100.0, 90.0), (90.0, 90.0)]):
+            ts = now - timedelta(days=2 - i)
+            session.add(
+                Candle(
+                    symbol="EEE",
+                    exchange="NSE",
+                    timeframe="1d",
+                    ts=ts,
+                    open=o,
+                    high=max(o, c),
+                    low=min(o, c),
+                    close=c,
+                    volume=1000.0,
+                )
+            )
+        for i, (o, c) in enumerate([(100.0, 100.0), (100.0, 50.0), (50.0, 50.0)]):
+            ts = now - timedelta(days=2 - i)
+            session.add(
+                Candle(
+                    symbol="FFF",
+                    exchange="NSE",
+                    timeframe="1d",
+                    ts=ts,
+                    open=o,
+                    high=max(o, c),
+                    low=min(o, c),
+                    close=c,
+                    volume=1000.0,
+                )
+            )
         session.commit()
 
 
@@ -196,6 +227,98 @@ def test_backtests_strategy_backtest_entry_exit_single_symbol() -> None:
     assert "metrics" in result
     assert "baselines" in result
     assert "start_to_end" in result["baselines"]
+
+
+def test_backtests_strategy_backtest_equity_dd_trade_exit_reason() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "STRATEGY",
+            "title": "strategy equity dd trade",
+            "universe": {
+                "mode": "GROUP",
+                "group_id": 123,
+                "symbols": [{"symbol": "EEE", "exchange": "NSE"}],
+            },
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "entry_dsl": "PRICE() > 0",
+                "exit_dsl": "PRICE() > 1000000",
+                "product": "CNC",
+                "direction": "LONG",
+                "initial_cash": 1000.0,
+                "position_size_pct": 100.0,
+                "stop_loss_pct": 0.0,
+                "take_profit_pct": 0.0,
+                "trailing_stop_pct": 0.0,
+                "max_equity_dd_trade_pct": 5.0,
+                "max_equity_dd_global_pct": 0.0,
+                "slippage_bps": 0.0,
+                "charges_model": "BPS",
+                "charges_bps": 0.0,
+                "charges_broker": "zerodha",
+                "include_dp_charges": False,
+            },
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "COMPLETED", body
+    trades = body["result"]["trades"]
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "EQUITY_DD_TRADE"
+
+
+def test_backtests_strategy_backtest_equity_dd_global_exit_reason() -> None:
+    now = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = (now - timedelta(days=2)).date().isoformat()
+    end = now.date().isoformat()
+
+    res = client.post(
+        "/api/backtests/runs",
+        json={
+            "kind": "STRATEGY",
+            "title": "strategy equity dd global",
+            "universe": {
+                "mode": "GROUP",
+                "group_id": 123,
+                "symbols": [{"symbol": "FFF", "exchange": "NSE"}],
+            },
+            "config": {
+                "timeframe": "1d",
+                "start_date": start,
+                "end_date": end,
+                "entry_dsl": "PRICE() > 0",
+                "exit_dsl": "PRICE() > 1000000",
+                "product": "CNC",
+                "direction": "LONG",
+                "initial_cash": 1000.0,
+                "position_size_pct": 100.0,
+                "stop_loss_pct": 0.0,
+                "take_profit_pct": 0.0,
+                "trailing_stop_pct": 0.0,
+                "max_equity_dd_trade_pct": 0.0,
+                "max_equity_dd_global_pct": 10.0,
+                "slippage_bps": 0.0,
+                "charges_model": "BPS",
+                "charges_bps": 0.0,
+                "charges_broker": "zerodha",
+                "include_dp_charges": False,
+            },
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "COMPLETED", body
+    trades = body["result"]["trades"]
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "EQUITY_DD_GLOBAL"
 
 
 def test_backtests_portfolio_target_weights_basic_run() -> None:
