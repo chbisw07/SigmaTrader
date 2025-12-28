@@ -2458,20 +2458,28 @@ export function BacktestingPage() {
                     size="small"
                     type="number"
                     value={strategyMaxEquityDdGlobalPct}
-                    onChange={(e) => setStrategyMaxEquityDdGlobalPct(Number(e.target.value))}
-                    inputProps={{ min: 0, max: 100 }}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isFinite(n)) return
+                      setStrategyMaxEquityDdGlobalPct(Math.min(100, Math.abs(n)))
+                    }}
+                    inputProps={{ min: -100, max: 100 }}
                     fullWidth
-                    helperText="0 disables. Equity DD from peak since start; triggers exit + blocks new entries."
+                    helperText="0 disables. Enter 5 (or -5) for a 5% equity drawdown. Peak since start; triggers exit + blocks new entries."
                   />
                   <TextField
                     label="Max equity DD (per-trade, %)"
                     size="small"
                     type="number"
                     value={strategyMaxEquityDdTradePct}
-                    onChange={(e) => setStrategyMaxEquityDdTradePct(Number(e.target.value))}
-                    inputProps={{ min: 0, max: 100 }}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isFinite(n)) return
+                      setStrategyMaxEquityDdTradePct(Math.min(100, Math.abs(n)))
+                    }}
+                    inputProps={{ min: -100, max: 100 }}
                     fullWidth
-                    helperText="0 disables. Equity DD from peak since entry; resets on each entry."
+                    helperText="0 disables. Enter 5 (or -5) for a 5% equity drawdown. Peak since entry; resets on each entry."
                   />
                 </Stack>
 
