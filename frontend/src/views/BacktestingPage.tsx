@@ -225,6 +225,20 @@ export function BacktestingPage() {
     [getRunUniverse, groups],
   )
 
+  const renderSymbolLabel = useCallback(
+    (run: BacktestRun): string => {
+      if (run.kind !== 'STRATEGY') return '—'
+      const u = getRunUniverse(run)
+      const symbols = (u.symbols as Array<Record<string, unknown>> | undefined) ?? []
+      const first = symbols[0] ?? null
+      if (!first) return '—'
+      const exchange = String(first.exchange ?? '').trim().toUpperCase() || 'NSE'
+      const symbol = String(first.symbol ?? '').trim().toUpperCase()
+      return symbol ? `${exchange}:${symbol}` : '—'
+    },
+    [getRunUniverse],
+  )
+
   const renderDuration = useCallback(
     (run: BacktestRun): string => {
       const cfg = getRunConfig(run)
@@ -722,6 +736,13 @@ export function BacktestingPage() {
         renderCell: (params) => renderGroupLabel(params.row as BacktestRun),
       },
       {
+        field: 'symbol',
+        headerName: 'Symbol',
+        width: 160,
+        sortable: false,
+        renderCell: (params) => renderSymbolLabel(params.row as BacktestRun),
+      },
+      {
         field: 'duration',
         headerName: 'Duration',
         width: 240,
@@ -738,7 +759,11 @@ export function BacktestingPage() {
       },
     ]
     return cols
-  }, [renderDetails, renderDuration, renderGroupLabel])
+  }, [renderDetails, renderDuration, renderGroupLabel, renderSymbolLabel])
+
+  const runColumnVisibilityModel = useMemo(() => {
+    return { symbol: tab === 'STRATEGY' }
+  }, [tab])
 
   const selectedUniverseSummary = useMemo(() => {
     if (universeMode === 'HOLDINGS') return `Holdings (${brokerName})`
@@ -2501,6 +2526,7 @@ export function BacktestingPage() {
                 getRowId={(r) => (r as BacktestRun).id}
                 loading={runsLoading}
                 density="compact"
+                columnVisibilityModel={runColumnVisibilityModel}
                 checkboxSelection
                 rowSelectionModel={selectedRunIds}
                 onRowSelectionModelChange={(model) =>
