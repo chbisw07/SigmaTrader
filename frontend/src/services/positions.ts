@@ -18,6 +18,7 @@ export type PositionSnapshot = {
   product: string
   qty: number
   remaining_qty: number
+  holding_qty?: number | null
   avg_price: number
   pnl: number
   last_price?: number | null
