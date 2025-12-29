@@ -607,13 +607,17 @@ def reconcile_portfolio_allocations(
         used_live_holdings = False
         holdings = []
 
+    # Sum holdings across exchanges for the same symbol. This makes allocation
+    # reconciliation resilient to NSE/BSE mismatches between portfolio baselines
+    # and broker holdings (common when external providers standardize on one
+    # exchange while the broker position is held on the other).
     for h in holdings:
         if (h.symbol or "").strip().upper() != sym_u:
             continue
-        if (h.exchange or "NSE").strip().upper() != exch_u:
+        try:
+            holdings_qty_live += float(getattr(h, "quantity", 0.0) or 0.0)
+        except (TypeError, ValueError):
             continue
-        holdings_qty_live = float(getattr(h, "quantity", 0.0) or 0.0)
-        break
 
     broker_lc = (payload.broker_name or "zerodha").strip().lower()
     snap = (

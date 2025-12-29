@@ -39,7 +39,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
 import { createManualOrder } from '../services/orders'
-import { fetchHoldings, fetchDailyPositions, type Holding } from '../services/positions'
+import { fetchHoldings, fetchDailyPositions, syncPositions, type Holding } from '../services/positions'
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
@@ -273,6 +273,9 @@ export function GroupsPage() {
   // Portfolio allocation health (PORTFOLIO groups only).
   const [compareBroker, setCompareBroker] = useState<'zerodha' | 'angelone'>('zerodha')
   const [holdingsReloadNonce, setHoldingsReloadNonce] = useState(0)
+  const [holdingsSyncBusy, setHoldingsSyncBusy] = useState(false)
+  const [holdingsFetchBusy, setHoldingsFetchBusy] = useState(false)
+  const [holdingsSnapshotError, setHoldingsSnapshotError] = useState<string | null>(null)
   const [holdingsByKey, setHoldingsByKey] = useState<
     Record<string, { qty: number; avgPrice: number | null }>
   >({})
@@ -474,6 +477,8 @@ export function GroupsPage() {
         return
       }
       try {
+        setHoldingsSnapshotError(null)
+        setHoldingsFetchBusy(true)
         const [holdings, positions] = await Promise.all([
           fetchHoldings(compareBroker),
           fetchDailyPositions({ broker_name: compareBroker }).catch(() => []),
@@ -552,10 +557,35 @@ export function GroupsPage() {
           const avgPrice = map[key]?.avgPrice ?? p.avg_price ?? null
           map[key] = { qty: effQty, avgPrice }
         }
+
+        // Ensure a stable display for symbols absent from broker holdings and snapshots.
+        // Do not insert a zero value when the symbol exists under another exchange
+        // (e.g. holdings in BSE, portfolio member configured as NSE).
+        const presentSymbols = new Set<string>()
+        for (const k of Object.keys(map)) {
+          const parts = k.split(':')
+          const sym = (parts[1] || '').trim().toUpperCase()
+          if (sym) presentSymbols.add(sym)
+        }
+        for (const m of selectedGroup.members ?? []) {
+          const sym = (m.symbol || '').trim().toUpperCase()
+          const exch = (m.exchange || 'NSE').trim().toUpperCase()
+          if (!sym) continue
+          if (presentSymbols.has(sym)) continue
+          const key = `${exch}:${sym}`
+          if (map[key] == null) map[key] = { qty: 0, avgPrice: null }
+        }
+
         setHoldingsByKey(map)
-      } catch {
+      } catch (err) {
         if (!active) return
+        setHoldingsSnapshotError(
+          err instanceof Error ? err.message : 'Failed to refresh broker snapshot (Y).',
+        )
         setHoldingsByKey({})
+      } finally {
+        if (!active) return
+        setHoldingsFetchBusy(false)
       }
     }
     void loadHoldings()
@@ -564,9 +594,72 @@ export function GroupsPage() {
     }
   }, [compareBroker, holdingsReloadNonce, selectedGroup])
 
-  const refreshHoldingsSnapshot = useCallback(() => {
-    setHoldingsReloadNonce((n) => n + 1)
-  }, [])
+  const holdingsBySymbol = useMemo(() => {
+    const agg: Record<string, { qty: number; costQty: number; cost: number }> = {}
+    for (const [key, h] of Object.entries(holdingsByKey)) {
+      const parts = key.split(':')
+      const sym = (parts[1] || '').trim().toUpperCase()
+      if (!sym) continue
+
+      const qty = Number.isFinite(h.qty) ? Number(h.qty) : 0
+      const avg = h.avgPrice != null && Number.isFinite(h.avgPrice) ? Number(h.avgPrice) : null
+
+      const row = agg[sym] ?? { qty: 0, costQty: 0, cost: 0 }
+      row.qty += qty
+      if (avg != null && avg > 0 && qty > 0) {
+        row.costQty += qty
+        row.cost += qty * avg
+      }
+      agg[sym] = row
+    }
+
+    const out: Record<string, { qty: number; avgPrice: number | null }> = {}
+    for (const [sym, v] of Object.entries(agg)) {
+      out[sym] = {
+        qty: v.qty,
+        avgPrice: v.costQty > 0 ? v.cost / v.costQty : null,
+      }
+    }
+    return out
+  }, [holdingsByKey])
+
+  const getHoldingsSnapshot = useCallback(
+    (exchange: string | null | undefined, symbol: string | null | undefined) => {
+      const sym = (symbol || '').trim().toUpperCase()
+      const exch = (exchange || 'NSE').trim().toUpperCase()
+      if (!sym) return null
+
+      const bySymbol = holdingsBySymbol[sym]
+      if (bySymbol != null) return bySymbol
+
+      const direct = holdingsByKey[`${exch}:${sym}`]
+      if (direct != null) return direct
+
+      const altExch = exch === 'NSE' ? 'BSE' : exch === 'BSE' ? 'NSE' : null
+      if (altExch) {
+        const alt = holdingsByKey[`${altExch}:${sym}`]
+        if (alt != null) return alt
+      }
+
+      return null
+    },
+    [holdingsByKey, holdingsBySymbol],
+  )
+
+  const refreshHoldingsSnapshot = useCallback(async () => {
+    setHoldingsSnapshotError(null)
+    setHoldingsSyncBusy(true)
+    try {
+      await syncPositions(compareBroker)
+    } catch (err) {
+      setHoldingsSnapshotError(
+        err instanceof Error ? err.message : 'Failed to sync positions from broker.',
+      )
+    } finally {
+      setHoldingsSyncBusy(false)
+      setHoldingsReloadNonce((n) => n + 1)
+    }
+  }, [compareBroker])
 
   const groupsById = useMemo(() => {
     const m = new Map<number, Group>()
@@ -1202,7 +1295,7 @@ export function GroupsPage() {
       const exch = (row.exchange || 'NSE').trim().toUpperCase()
       if (!sym) return
       const key = `${exch}:${sym}`
-      const holdQty = holdingsByKey[key]?.qty ?? 0
+      const holdQty = getHoldingsSnapshot(exch, sym)?.qty ?? 0
       setReconcileError(null)
       setReconcileSymbolKey(key)
       setReconcileHoldQty(Number.isFinite(holdQty) ? holdQty : 0)
@@ -1230,7 +1323,7 @@ export function GroupsPage() {
         setReconcileBusy(false)
       }
     },
-    [holdingsByKey],
+    [getHoldingsSnapshot],
   )
 
   const reconcileTotal = useMemo(() => {
@@ -1363,8 +1456,7 @@ export function GroupsPage() {
                   const row = params.row
                   const sym = (row.symbol || '').trim().toUpperCase()
                   const exch = (row.exchange || 'NSE').trim().toUpperCase()
-                  const key = `${exch}:${sym}`
-                  const holdQty = holdingsByKey[key]?.qty ?? null
+                  const holdQty = getHoldingsSnapshot(exch, sym)?.qty ?? null
                   const refQty =
                     row.reference_qty != null && Number.isFinite(Number(row.reference_qty))
                       ? Math.trunc(Number(row.reference_qty))
@@ -1392,8 +1484,7 @@ export function GroupsPage() {
                   const row = params.row
                   const sym = (row.symbol || '').trim().toUpperCase()
                   const exch = (row.exchange || 'NSE').trim().toUpperCase()
-                  const key = `${exch}:${sym}`
-                  const holdAvg = holdingsByKey[key]?.avgPrice ?? null
+                  const holdAvg = getHoldingsSnapshot(exch, sym)?.avgPrice ?? null
                   const ref =
                     row.reference_price != null && Number.isFinite(Number(row.reference_price))
                       ? Number(row.reference_price)
@@ -1426,7 +1517,7 @@ export function GroupsPage() {
           const sym = (row.symbol || '').trim().toUpperCase()
           const exch = (row.exchange || 'NSE').trim().toUpperCase()
           const key = `${exch}:${sym}`
-          const holdQty = holdingsByKey[key]?.qty ?? 0
+          const holdQty = getHoldingsSnapshot(exch, sym)?.qty ?? 0
           const totalAlloc = allocationTotalsByKey[key] ?? 0
           const holdInt = Math.trunc(Number.isFinite(holdQty) ? holdQty : 0)
           const allocInt = Math.trunc(Number.isFinite(totalAlloc) ? totalAlloc : 0)
@@ -1485,7 +1576,7 @@ export function GroupsPage() {
     )
 
     return cols
-  }, [allocationTotalsByKey, holdingsByKey, openReconcileForMember, selectedGroup?.kind])
+  }, [allocationTotalsByKey, getHoldingsSnapshot, openReconcileForMember, selectedGroup?.kind])
 
   const canAllocateWithWeights =
     selectedGroup?.members?.some((m) => (m.target_weight ?? 0) > 0) ?? false
@@ -1680,6 +1771,7 @@ export function GroupsPage() {
                   size="small"
                   variant="outlined"
                   startIcon={<RefreshIcon />}
+                  disabled={holdingsSyncBusy || holdingsFetchBusy}
                   onClick={refreshHoldingsSnapshot}
                 >
                   Refresh (Y)
@@ -1687,6 +1779,11 @@ export function GroupsPage() {
                 <Typography variant="caption" color="text.secondary">
                   Used only for X/Y display and allocation health.
                 </Typography>
+                {holdingsSnapshotError && (
+                  <Typography variant="caption" color="error">
+                    {holdingsSnapshotError}
+                  </Typography>
+                )}
               </Stack>
             )}
 
@@ -2279,14 +2376,13 @@ export function GroupsPage() {
               const sym = memberDraft.symbol.trim().toUpperCase()
               const exch = (memberDraft.exchange || 'NSE').trim().toUpperCase()
               const key = `${exch}:${sym}`
-              const hold = holdingsByKey[key]
-              const holdQty = hold?.qty ?? null
+              const hold = getHoldingsSnapshot(exch, sym)
+              const holdQty = hold?.qty ?? 0
               const holdAvg = hold?.avgPrice ?? null
               const currentRefQty = Math.max(0, Math.trunc(Number(memberDraft.refQty || 0)))
               const allocatedTotal = Math.max(0, Math.trunc(Number(allocationTotalsByKey[key] ?? 0)))
               const otherAllocated = Math.max(0, allocatedTotal - currentRefQty)
               const canAutoSetQty =
-                holdQty != null &&
                 Number.isFinite(holdQty) &&
                 holdQty >= 0 &&
                 otherAllocated <= 0
@@ -2296,7 +2392,7 @@ export function GroupsPage() {
                   <Stack spacing={1}>
                     <Typography variant="subtitle2">Broker snapshot (Y)</Typography>
                     <Typography variant="body2" color="text.secondary">
-                      Broker: {compareBroker} | Holdings qty (Y): {holdQty != null ? Math.trunc(holdQty) : '—'}
+                      Broker: {compareBroker} | Holdings qty (Y): {Math.trunc(holdQty)}
                       {' | '}
                       Avg price (Y): {holdAvg != null ? holdAvg.toFixed(2) : '—'}
                     </Typography>
@@ -2311,7 +2407,7 @@ export function GroupsPage() {
                         variant="outlined"
                         disabled={!canAutoSetQty}
                         onClick={() => {
-                          if (holdQty == null || !Number.isFinite(holdQty) || holdQty < 0) return
+                          if (!Number.isFinite(holdQty) || holdQty < 0) return
                           setMemberDraft((prev) => ({ ...prev, refQty: String(Math.trunc(holdQty)) }))
                         }}
                       >
@@ -2332,6 +2428,7 @@ export function GroupsPage() {
                         size="small"
                         variant="outlined"
                         startIcon={<RefreshIcon />}
+                        disabled={holdingsSyncBusy || holdingsFetchBusy}
                         onClick={refreshHoldingsSnapshot}
                       >
                         Refresh (Y)
