@@ -480,6 +480,7 @@ export function GroupsPage() {
         ])
         if (!active) return
         const posDeltaByKey: Record<string, number> = {}
+        const posAvgByKey: Record<string, number> = {}
         for (const p of positions) {
           const sym = (p.symbol || '').trim().toUpperCase()
           const exch = (p.exchange || 'NSE').trim().toUpperCase()
@@ -490,6 +491,11 @@ export function GroupsPage() {
           if (product !== 'CNC' && product !== 'DELIVERY') continue
           const key = `${exch}:${sym}`
           posDeltaByKey[key] = (posDeltaByKey[key] ?? 0) + qty
+          const avgRaw =
+            Number((p as any).avg_price ?? (p as any).avg ?? (p as any).buy_avg_price ?? 0) || 0
+          if (avgRaw > 0 && Number.isFinite(avgRaw)) {
+            posAvgByKey[key] = avgRaw
+          }
         }
         const map: Record<string, { qty: number; avgPrice: number | null }> = {}
         for (const h of holdings) {
@@ -506,6 +512,17 @@ export function GroupsPage() {
           const delta = posDeltaByKey[key] ?? 0
           map[key] = {
             qty: baseQty + (delta > 0 ? delta : 0),
+            avgPrice: avg != null && Number.isFinite(avg) && avg > 0 ? avg : null,
+          }
+        }
+        // If holdings are not yet updated (e.g., Zerodha CNC T+1), surface the
+        // buy qty from delivery positions so that "Y" does not show as empty.
+        for (const [key, delta] of Object.entries(posDeltaByKey)) {
+          if (map[key] != null) continue
+          if (!Number.isFinite(delta) || delta <= 0) continue
+          const avg = posAvgByKey[key]
+          map[key] = {
+            qty: delta,
             avgPrice: avg != null && Number.isFinite(avg) && avg > 0 ? avg : null,
           }
         }
