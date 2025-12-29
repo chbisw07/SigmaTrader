@@ -7,6 +7,9 @@ export type Strategy = {
   paper_poll_interval_sec?: number | null
   enabled: boolean
   available_for_alert: boolean
+  scope?: 'GLOBAL' | 'LOCAL' | null
+  dsl_expression?: string | null
+  is_builtin?: boolean
 }
 
 export type RiskSettings = {
@@ -137,4 +140,14 @@ export async function updateStrategyPaperPollInterval(
     )
   }
   return (await res.json()) as Strategy
+}
+
+export async function deleteStrategy(strategyId: number): Promise<void> {
+  const res = await fetch(`/api/strategies/${strategyId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to delete strategy (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
 }

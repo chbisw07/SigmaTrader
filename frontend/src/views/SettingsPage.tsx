@@ -1,3 +1,4 @@
+import DeleteIcon from '@mui/icons-material/Delete'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
@@ -30,6 +31,7 @@ import {
   updateStrategyExecutionMode,
   updateStrategyExecutionTarget,
   updateStrategyPaperPollInterval,
+  deleteStrategy,
   type RiskSettings,
   type Strategy,
 } from '../services/admin'
@@ -381,6 +383,7 @@ export function SettingsPage() {
   const [angeloneOtpPromptOpen, setAngeloneOtpPromptOpen] = useState(false)
   const [angeloneOtpDraft, setAngeloneOtpDraft] = useState('')
   const [updatingStrategyId, setUpdatingStrategyId] = useState<number | null>(null)
+  const [deletingStrategyId, setDeletingStrategyId] = useState<number | null>(null)
   const [savingRisk, setSavingRisk] = useState(false)
   const [deletingRiskId, setDeletingRiskId] = useState<number | null>(null)
   const [riskScope, setRiskScope] = useState<'GLOBAL' | 'STRATEGY'>('GLOBAL')
@@ -702,6 +705,23 @@ export function SettingsPage() {
       )
     } finally {
       setUpdatingStrategyId(null)
+    }
+  }
+
+  const handleDeleteStrategy = async (strategy: Strategy) => {
+    const confirmed = window.confirm(
+      `Delete strategy "${strategy.name}"?\n\nThis will also remove any linked alerts/risk rows for this strategy.`,
+    )
+    if (!confirmed) return
+    setDeletingStrategyId(strategy.id)
+    try {
+      await deleteStrategy(strategy.id)
+      setStrategies((prev) => prev.filter((s) => s.id !== strategy.id))
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete strategy')
+    } finally {
+      setDeletingStrategyId(null)
     }
   }
 
@@ -1163,6 +1183,7 @@ export function SettingsPage() {
                   <TableCell>Enabled</TableCell>
                   <TableCell>Available for alert</TableCell>
                   <TableCell>Description</TableCell>
+                  <TableCell>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -1252,11 +1273,31 @@ export function SettingsPage() {
                       />
                     </TableCell>
                     <TableCell>{strategy.description}</TableCell>
+                    <TableCell>
+                      <IconButton
+                        size="small"
+                        color="error"
+                        aria-label={`delete strategy ${strategy.name}`}
+                        disabled={
+                          Boolean(strategy.is_builtin) ||
+                          updatingStrategyId === strategy.id ||
+                          deletingStrategyId === strategy.id
+                        }
+                        onClick={() => void handleDeleteStrategy(strategy)}
+                        title={
+                          strategy.is_builtin
+                            ? 'Built-in strategies cannot be deleted.'
+                            : 'Delete strategy'
+                        }
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </TableCell>
                   </TableRow>
                 ))}
                 {strategies.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={8}>
                       <Typography variant="body2" color="text.secondary">
                         No strategies configured yet.
                       </Typography>
