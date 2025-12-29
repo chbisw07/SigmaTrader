@@ -484,6 +484,7 @@ export function GroupsPage() {
           {
             qty: number
             holding_qty: number | null
+            day_buy_qty: number
             avg_price: number | null
             captured_at: number
           }
@@ -508,11 +509,17 @@ export function GroupsPage() {
             holdingQtyRaw != null && Number.isFinite(Number(holdingQtyRaw))
               ? Number(holdingQtyRaw)
               : null
+          const dayBuyRaw = (p as any).day_buy_qty
+          const dayBuyQty =
+            dayBuyRaw != null && Number.isFinite(Number(dayBuyRaw)) && Number(dayBuyRaw) > 0
+              ? Number(dayBuyRaw)
+              : 0
           const avgRaw =
             Number((p as any).buy_avg_price ?? (p as any).avg_price ?? 0) || 0
           latestPosByKey[key] = {
             qty: Number.isFinite(qty) ? qty : 0,
             holding_qty: holdingQty,
+            day_buy_qty: dayBuyQty,
             avg_price: avgRaw > 0 && Number.isFinite(avgRaw) ? avgRaw : null,
             captured_at: capturedAt,
           }
@@ -532,17 +539,16 @@ export function GroupsPage() {
           }
         }
         // Merge in the latest delivery position snapshot:
-        // - Use `holding_qty` as the base holdings qty when holdings are missing.
-        // - Add positive `qty` to represent same-day buys not yet reflected in holdings (T+1).
+        // - Use `holding_qty` + `day_buy_qty` to approximate effective holdings (T+1 lag).
+        // - Take max with broker holdings qty if broker already reflects the buy.
         for (const [key, p] of Object.entries(latestPosByKey)) {
           const baseFromHoldings = map[key]?.qty ?? 0
-          const baseFromPositions = p.holding_qty ?? 0
-          const base = Math.max(
+          const holdingQty = Number.isFinite(p.holding_qty ?? 0) ? (p.holding_qty ?? 0) : 0
+          const dayBuyQty = Number.isFinite(p.day_buy_qty) && p.day_buy_qty > 0 ? p.day_buy_qty : 0
+          const effQty = Math.max(
             Number.isFinite(baseFromHoldings) ? baseFromHoldings : 0,
-            Number.isFinite(baseFromPositions) ? baseFromPositions : 0,
+            holdingQty + dayBuyQty,
           )
-          const pendingBuy = Number.isFinite(p.qty) && p.qty > 0 ? p.qty : 0
-          const effQty = base + pendingBuy
           const avgPrice = map[key]?.avgPrice ?? p.avg_price ?? null
           map[key] = { qty: effQty, avgPrice }
         }

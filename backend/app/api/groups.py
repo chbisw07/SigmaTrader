@@ -589,22 +589,74 @@ def reconcile_portfolio_allocations(
         )
 
     # Fetch current broker holdings as the source-of-truth quantity.
+    # When holdings lag (T+1) or broker fetch fails, fall back to the most
+    # recent cached positions snapshot fields (`holding_qty`, `day_buy_qty`).
     from app.api.positions import list_holdings
+    from app.models import PositionSnapshot
 
-    holdings = list_holdings(
-        broker_name=payload.broker_name,
-        db=db,
-        settings=settings,
-        user=user,
-    )
-    holding_qty: float = 0.0
+    holdings_qty_live: float = 0.0
+    used_live_holdings = True
+    try:
+        holdings = list_holdings(
+            broker_name=payload.broker_name,
+            db=db,
+            settings=settings,
+            user=user,
+        )
+    except HTTPException:
+        used_live_holdings = False
+        holdings = []
+
     for h in holdings:
         if (h.symbol or "").strip().upper() != sym_u:
             continue
         if (h.exchange or "NSE").strip().upper() != exch_u:
             continue
-        holding_qty = float(getattr(h, "quantity", 0.0) or 0.0)
+        holdings_qty_live = float(getattr(h, "quantity", 0.0) or 0.0)
         break
+
+    broker_lc = (payload.broker_name or "zerodha").strip().lower()
+    snap = (
+        db.query(PositionSnapshot)
+        .filter(
+            PositionSnapshot.broker_name == broker_lc,
+            func.upper(PositionSnapshot.symbol) == sym_u,
+            func.upper(func.coalesce(PositionSnapshot.exchange, "NSE")) == exch_u,
+            PositionSnapshot.product.in_(["CNC", "DELIVERY"]),
+        )
+        .order_by(
+            PositionSnapshot.as_of_date.desc(),
+            PositionSnapshot.captured_at.desc(),
+        )
+        .first()
+    )
+    if snap is None:
+        snap = (
+            db.query(PositionSnapshot)
+            .filter(
+                PositionSnapshot.broker_name == broker_lc,
+                func.upper(PositionSnapshot.symbol) == sym_u,
+                PositionSnapshot.product.in_(["CNC", "DELIVERY"]),
+            )
+            .order_by(
+                PositionSnapshot.as_of_date.desc(),
+                PositionSnapshot.captured_at.desc(),
+            )
+            .first()
+        )
+
+    snap_holding_qty = float(snap.holding_qty or 0.0) if snap is not None else 0.0
+    snap_day_buy_qty = float(snap.day_buy_qty or 0.0) if snap is not None else 0.0
+    if snap_day_buy_qty < 0:
+        snap_day_buy_qty = 0.0
+
+    # Effective holdings qty:
+    # - If broker holdings already reflect the buy, that wins.
+    # - Otherwise, approximate T+1 lag as `holding_qty + day_buy_qty`.
+    holding_qty = max(
+        float(holdings_qty_live),
+        float(snap_holding_qty + snap_day_buy_qty),
+    )
 
     total = sum(float(u.reference_qty or 0) for u in updates)
     if total > holding_qty + 1e-9:
@@ -668,6 +720,10 @@ def reconcile_portfolio_allocations(
             "symbol": sym_u,
             "exchange": exch_u,
             "holding_qty": float(holding_qty),
+            "holding_qty_live": float(holdings_qty_live),
+            "used_live_holdings": bool(used_live_holdings),
+            "holding_qty_from_positions": float(snap_holding_qty),
+            "day_buy_qty_from_positions": float(snap_day_buy_qty),
             "allocated_total": float(total),
             "updated_groups": updated_groups,
         },
