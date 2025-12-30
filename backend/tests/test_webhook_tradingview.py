@@ -91,6 +91,30 @@ def test_webhook_persists_alert_with_valid_secret() -> None:
         assert order.mode == "MANUAL"
 
 
+def test_webhook_root_accepts_tradingview_payload() -> None:
+    unique_strategy = f"webhook-test-strategy-root-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:BSE",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "BUY", "quantity": 1, "price": 320.29},
+    }
+
+    response = client.post("/webhook", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        order = session.get(Order, data["order_id"])
+        assert order is not None
+        assert order.price == 320.3
+
+
 def test_webhook_auto_strategy_routes_to_auto_and_executes(monkeypatch: Any) -> None:
     unique_strategy = f"webhook-auto-strategy-{uuid4().hex}"
 

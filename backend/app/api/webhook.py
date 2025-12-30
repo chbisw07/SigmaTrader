@@ -26,6 +26,43 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get(
+    "",
+    summary="Webhook root (compat)",
+)
+def webhook_root() -> Dict[str, str]:
+    return {
+        "message": "SigmaTrader webhook endpoint",
+        "tradingview": "POST /webhook/tradingview",
+        "compat": "POST /webhook",
+    }
+
+
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    include_in_schema=False,
+)
+def tradingview_webhook_compat(
+    payload: TradingViewWebhookPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Dict[str, Any]:
+    """Backward-compatible alias for TradingView webhook.
+
+    Some TradingView alert setups point to `/webhook` instead of
+    `/webhook/tradingview`. Accept both.
+    """
+
+    return tradingview_webhook(
+        payload=payload,
+        request=request,
+        db=db,
+        settings=settings,
+    )
+
+
 @router.post(
     "/tradingview",
     status_code=status.HTTP_201_CREATED,

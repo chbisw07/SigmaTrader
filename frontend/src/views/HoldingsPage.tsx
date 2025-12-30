@@ -3122,6 +3122,29 @@ export function HoldingsPage() {
           : '',
     },
     {
+      field: 'pnl_shares',
+      headerName: 'PnL Shares',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => {
+        const r = row as HoldingRow
+        const pnl = r.pnl
+        const last = r.last_price
+        if (pnl == null || last == null) return null
+        const pnlN = Number(pnl)
+        const lastN = Number(last)
+        if (!Number.isFinite(pnlN) || !Number.isFinite(lastN) || lastN <= 0) {
+          return null
+        }
+        return Math.floor(pnlN / lastN)
+      },
+      valueFormatter: (value) => (value != null ? String(Math.trunc(Number(value))) : '-'),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0
+          ? 'pnl-negative'
+          : '',
+    },
+    {
       field: 'total_pnl_percent',
       headerName: 'P&L %',
       type: 'number',
