@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models import Alert, Order
+from app.services.price_ticks import round_price_to_tick
 
 
 def create_order_from_alert(
@@ -32,7 +33,7 @@ def create_order_from_alert(
         exchange=alert.exchange,
         side=alert.action,
         qty=qty,
-        price=alert.price,
+        price=round_price_to_tick(alert.price),
         order_type=order_type,
         product=product,
         gtt=False,

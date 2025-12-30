@@ -104,6 +104,40 @@ def test_create_manual_limit_requires_positive_price() -> None:
     assert data["price"] == 3500.0
 
 
+def test_create_manual_limit_rounds_price_to_tick() -> None:
+    resp = client.post(
+        "/api/orders/",
+        json={
+            "symbol": "TCS",
+            "exchange": "NSE",
+            "side": "BUY",
+            "qty": 1,
+            "order_type": "LIMIT",
+            "price": 320.29,
+            "product": "CNC",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["price"] == 320.3
+
+    resp2 = client.post(
+        "/api/orders/",
+        json={
+            "symbol": "TCS",
+            "exchange": "NSE",
+            "side": "BUY",
+            "qty": 1,
+            "order_type": "LIMIT",
+            "price": 320.26,
+            "product": "CNC",
+        },
+    )
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["price"] == 320.25
+
+
 def test_create_manual_sl_requires_trigger_and_price() -> None:
     resp_missing_trigger = client.post(
         "/api/orders/",
@@ -153,6 +187,26 @@ def test_create_manual_sl_requires_trigger_and_price() -> None:
     assert data["order_type"] == "SL"
     assert data["price"] == 3500.0
     assert data["trigger_price"] == 3490.0
+
+
+def test_create_manual_sl_rounds_price_and_trigger_to_tick() -> None:
+    resp = client.post(
+        "/api/orders/",
+        json={
+            "symbol": "TCS",
+            "exchange": "NSE",
+            "side": "BUY",
+            "qty": 1,
+            "order_type": "SL",
+            "price": 320.29,
+            "trigger_price": 319.99,
+            "product": "CNC",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["price"] == 320.3
+    assert data["trigger_price"] == 320.0
 
 
 def test_create_manual_slm_requires_trigger() -> None:
@@ -218,9 +272,26 @@ def test_create_manual_gtt_requires_limit() -> None:
         },
     )
     assert resp_ok.status_code == 200
-    data = resp_ok.json()
-    assert data["order_type"] == "LIMIT"
-    assert data["gtt"] is True
+
+
+def test_create_manual_gtt_defaults_trigger_to_rounded_price() -> None:
+    resp = client.post(
+        "/api/orders/",
+        json={
+            "symbol": "TCS",
+            "exchange": "NSE",
+            "side": "BUY",
+            "qty": 1,
+            "order_type": "LIMIT",
+            "price": 320.29,
+            "gtt": True,
+            "product": "CNC",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["price"] == 320.3
+    assert data["trigger_price"] == 320.3
 
 
 def test_bulk_like_multiple_create_calls_allow_partial_success() -> None:

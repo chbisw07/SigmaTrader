@@ -33,6 +33,7 @@ from app.schemas.rebalance_schedule import (
     RebalanceScheduleRead,
     RebalanceScheduleUpdate,
 )
+from app.services.price_ticks import round_price_to_tick
 from app.services.rebalance import _broker_list, build_run_snapshots, preview_rebalance
 from app.services.rebalance_schedule import (
     _json_load,
@@ -277,7 +278,7 @@ def rebalance_execute(
                     side=trade.side,
                     qty=float(trade.qty),
                     price=(
-                        float(trade.estimated_price)
+                        round_price_to_tick(float(trade.estimated_price))
                         if payload.order_type == "LIMIT"
                         else None
                     ),
@@ -456,7 +457,7 @@ def rebalance_execute(
                     side=trade.side,
                     qty=float(trade.qty),
                     price=(
-                        float(trade.estimated_price)
+                        round_price_to_tick(float(trade.estimated_price))
                         if payload.order_type == "LIMIT"
                         else None
                     ),

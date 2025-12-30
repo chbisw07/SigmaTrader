@@ -116,6 +116,28 @@ def test_edit_order_in_waiting_queue() -> None:
         assert order.product == "CNC"
 
 
+def test_edit_order_rounds_price_to_tick() -> None:
+    order_id = _create_order_via_webhook()
+
+    resp_edit = client.patch(
+        f"/api/orders/{order_id}",
+        json={
+            "price": 320.29,
+            "order_type": "LIMIT",
+            "product": "CNC",
+        },
+    )
+    assert resp_edit.status_code == 200
+    edited = resp_edit.json()
+    assert edited["id"] == order_id
+    assert edited["price"] == 320.3
+
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        assert order.price == 320.3
+
+
 def test_manual_order_cannot_execute_when_broker_not_connected() -> None:
     """Manual WAITING orders should remain in queue if Zerodha is not connected."""
 

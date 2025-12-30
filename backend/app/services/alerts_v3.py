@@ -33,6 +33,7 @@ from app.services.alerts_v3_expression import (
     timeframe_to_timedelta,
 )
 from app.services.indicator_alerts import IndicatorAlertError
+from app.services.price_ticks import round_price_to_tick
 
 
 class AlertsV3Error(RuntimeError):
@@ -481,6 +482,8 @@ def _create_order_for_alert_match(
 
     price = _as_float(params.get("price"))
     trigger_price = _as_float(params.get("trigger_price"))
+    price = round_price_to_tick(price)
+    trigger_price = round_price_to_tick(trigger_price)
     gtt = bool(params.get("gtt") or False)
 
     order = Order(

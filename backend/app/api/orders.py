@@ -27,6 +27,7 @@ from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
 from app.services.instruments_sync import sync_smartapi_instrument_master
 from app.services.paper_trading import submit_paper_order
+from app.services.price_ticks import round_price_to_tick
 from app.services.risk import evaluate_order_risk
 from app.services.system_events import record_system_event
 
@@ -235,6 +236,9 @@ def create_manual_order(
             detail="Price must be non-negative.",
         )
 
+    price = round_price_to_tick(payload.price)
+    trigger_price = round_price_to_tick(payload.trigger_price)
+
     broker = _ensure_supported_broker(payload.broker_name)
 
     portfolio_group_id: int | None = None
@@ -268,7 +272,7 @@ def create_manual_order(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="GTT is supported only for LIMIT orders.",
         )
-    if payload.gtt and (payload.price is None or payload.price <= 0):
+    if payload.gtt and (price is None or price <= 0):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Price must be positive for GTT LIMIT orders.",
@@ -277,7 +281,6 @@ def create_manual_order(
     # Basic validation for stop-loss semantics so that obviously
     # inconsistent orders are rejected at creation time instead of
     # failing only when execution is attempted.
-    trigger_price = payload.trigger_price
     if payload.order_type in {"SL", "SL-M"}:
         # For SL/SL-M orders, trigger price is mandatory and must be
         # strictly positive.
@@ -293,7 +296,7 @@ def create_manual_order(
                     detail="Price must be positive for SL orders.",
                 )
     elif payload.order_type == "LIMIT":
-        if payload.price is None or payload.price <= 0:
+        if price is None or price <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Price must be positive for LIMIT orders.",
@@ -304,11 +307,10 @@ def create_manual_order(
             detail="Trigger price must be positive when provided.",
         )
 
-    trigger_price = payload.trigger_price
     # For GTT / conditional orders, default trigger to the limit price when
     # not provided so that the condition is well-defined.
-    if payload.gtt and (trigger_price is None or trigger_price <= 0) and payload.price:
-        trigger_price = float(payload.price)
+    if payload.gtt and (trigger_price is None or trigger_price <= 0) and price:
+        trigger_price = float(price)
 
     synthetic_gtt = bool(payload.gtt and broker != "zerodha")
     armed_at = None
@@ -325,7 +327,7 @@ def create_manual_order(
         exchange=payload.exchange,
         side=payload.side,
         qty=payload.qty,
-        price=payload.price,
+        price=price,
         trigger_price=trigger_price,
         trigger_percent=None,
         order_type=payload.order_type,
@@ -489,7 +491,7 @@ def edit_order(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Price must be non-negative.",
             )
-        order.price = payload.price
+        order.price = round_price_to_tick(payload.price)
         updated = True
 
     if payload.trigger_price is not None:
@@ -498,7 +500,7 @@ def edit_order(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Trigger price must be positive.",
             )
-        order.trigger_price = payload.trigger_price
+        order.trigger_price = round_price_to_tick(payload.trigger_price)
         updated = True
 
     if payload.trigger_percent is not None:
@@ -634,6 +636,17 @@ def execute_order_internal(
             order.error_message = f"{order.error_message}; {clamp_note}"
         else:
             order.error_message = clamp_note
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
+    # Enforce tick-size rounding on all persisted orders (defensive for legacy
+    # rows created before rounding was introduced).
+    rounded_price = round_price_to_tick(order.price)
+    rounded_trigger_price = round_price_to_tick(order.trigger_price)
+    if rounded_price != order.price or rounded_trigger_price != order.trigger_price:
+        order.price = rounded_price
+        order.trigger_price = rounded_trigger_price
         db.add(order)
         db.commit()
         db.refresh(order)
