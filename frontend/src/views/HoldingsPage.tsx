@@ -2882,6 +2882,28 @@ export function HoldingsPage() {
       headerName: 'Qty',
       type: 'number',
       width: 100,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        if (activeGroup?.kind !== 'PORTFOLIO') return <span>{row.quantity}</span>
+
+        const holdRaw = row.quantity
+        const holdQty =
+          holdRaw != null && Number.isFinite(Number(holdRaw))
+            ? Math.trunc(Number(holdRaw))
+            : null
+        const ref = row.reference_qty
+        const refQty =
+          ref != null && Number.isFinite(Number(ref)) ? Math.trunc(Number(ref)) : null
+
+        if (refQty == null || holdQty == null) return <span>{row.quantity}</span>
+
+        const bad = refQty > holdQty
+        return (
+          <span style={bad ? { color: '#d32f2f', fontWeight: 600 } : undefined}>
+            {refQty}/{holdQty}
+          </span>
+        )
+      },
     },
     {
       field: 'reference_qty',

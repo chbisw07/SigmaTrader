@@ -83,6 +83,7 @@ class _MemberInfo:
     symbol: str
     exchange: str
     target_weight_raw: Optional[float]
+    reference_qty_raw: Optional[int] = None
 
 
 def _normalize_target_weights(
@@ -157,6 +158,7 @@ def preview_rebalance(
                     symbol=_norm_symbol(getattr(h, "symbol", "") or ""),
                     exchange=_norm_exchange(getattr(h, "exchange", None)),
                     target_weight_raw=None,
+                    reference_qty_raw=None,
                 )
                 for h in holdings
                 if _norm_symbol(getattr(h, "symbol", "") or "")
@@ -172,6 +174,7 @@ def preview_rebalance(
                 settings,
                 user=user,
                 group_id=0,
+                group_kind="HOLDINGS",
                 broker_name=broker,
                 member_infos=member_infos,
                 target_weights=target_weights,
@@ -205,6 +208,7 @@ def preview_rebalance(
             target_weight_raw=(
                 None if group.kind == "HOLDINGS_VIEW" else m.target_weight
             ),
+            reference_qty_raw=(m.reference_qty if group.kind == "PORTFOLIO" else None),
         )
         for m in members
         if _norm_symbol(m.symbol)
@@ -251,7 +255,10 @@ def preview_rebalance(
         existing_pairs = {(m.symbol, m.exchange) for m in base_member_infos}
         additions = [
             _MemberInfo(
-                symbol=t.symbol, exchange=t.exchange, target_weight_raw=t.target_weight
+                symbol=t.symbol,
+                exchange=t.exchange,
+                target_weight_raw=t.target_weight,
+                reference_qty_raw=0,
             )
             for t in rotation.targets
             if (t.symbol, t.exchange) not in existing_pairs
@@ -267,6 +274,7 @@ def preview_rebalance(
                         symbol=m.symbol,
                         exchange=m.exchange,
                         target_weight_raw=float(rotation.weight_by_pair.get(key, 0.0)),
+                        reference_qty_raw=m.reference_qty_raw,
                     )
                 )
                 extra_reason_by_symbol[m.symbol] = rotation.meta_by_symbol.get(
@@ -281,6 +289,7 @@ def preview_rebalance(
                         symbol=m.symbol,
                         exchange=m.exchange,
                         target_weight_raw=tw,
+                        reference_qty_raw=m.reference_qty_raw,
                     )
                 )
                 extra_reason_by_symbol[m.symbol] = {
@@ -331,6 +340,7 @@ def preview_rebalance(
                 target_weight_raw=float(
                     risk.weight_by_pair.get((m.symbol, m.exchange), 0.0)
                 ),
+                reference_qty_raw=m.reference_qty_raw,
             )
             for m in base_member_infos
         ]
@@ -351,6 +361,7 @@ def preview_rebalance(
             settings,
             user=user,
             group_id=group.id,
+            group_kind=group.kind,
             broker_name=broker,
             member_infos=member_infos,
             target_weights=target_weights,
@@ -371,6 +382,7 @@ def _preview_rebalance_single_broker(
     *,
     user: User,
     group_id: int,
+    group_kind: str,
     broker_name: str,
     member_infos: List[_MemberInfo],
     target_weights: Dict[Tuple[str, str], float],
@@ -389,25 +401,43 @@ def _preview_rebalance_single_broker(
         user=user,
     )
     holdings_by_symbol: dict[str, object] = {}
+    holdings_qty_by_symbol: dict[str, float] = {}
     for h in holdings:
         sym = _norm_symbol(getattr(h, "symbol", "") or "")
         if not sym:
             continue
         holdings_by_symbol[sym] = h
+        holdings_qty_by_symbol[sym] = float(getattr(h, "quantity", 0.0) or 0.0)
 
     missing_prices: list[Tuple[str, str]] = []
     price_by_symbol: dict[str, float] = {}
-    qty_by_symbol: dict[str, float] = {}
+    current_qty_by_symbol: dict[str, float] = {}
     for m in member_infos:
         h = holdings_by_symbol.get(m.symbol)
-        qty = float(getattr(h, "quantity", 0.0) or 0.0) if h is not None else 0.0
+        holdings_qty = (
+            float(getattr(h, "quantity", 0.0) or 0.0) if h is not None else 0.0
+        )
+        qty = holdings_qty
+        if str(group_kind).upper() == "PORTFOLIO":
+            # Portfolio groups rebalance against portfolio allocation qty (X),
+            # not total broker holdings qty (Y). If X is missing, fall back to Y.
+            if m.reference_qty_raw is not None:
+                qty = float(int(m.reference_qty_raw))
+                if qty > holdings_qty + 1e-9:
+                    warnings.append(
+                        f"Portfolio qty exceeds broker holdings for {m.symbol}: "
+                        f"{int(qty)}/{int(holdings_qty)}. "
+                        "Rebalance uses portfolio qty (X) but SELLs are limited "
+                        "by broker holdings (Y). "
+                        "Consider reconciling allocations."
+                    )
         last = getattr(h, "last_price", None) if h is not None else None
         price = float(last) if last is not None else None
         if price is None or price <= 0:
             missing_prices.append((m.symbol, m.exchange))
         else:
             price_by_symbol[m.symbol] = price
-        qty_by_symbol[m.symbol] = qty
+        current_qty_by_symbol[m.symbol] = qty
 
     if missing_prices:
         close_map = _load_latest_close_prices(db, missing_prices)
@@ -423,7 +453,7 @@ def _preview_rebalance_single_broker(
     current_value_by_symbol: dict[str, float] = {}
     for m in member_infos:
         price = price_by_symbol.get(m.symbol)
-        qty = qty_by_symbol.get(m.symbol, 0.0)
+        qty = current_qty_by_symbol.get(m.symbol, 0.0)
         if price is None or price <= 0:
             current_value_by_symbol[m.symbol] = 0.0
         else:
@@ -526,7 +556,8 @@ def _preview_rebalance_single_broker(
             continue
 
         if c["side"] == "SELL":
-            held_qty = float(qty_by_symbol.get(c["symbol"], 0.0) or 0.0)
+            # Never attempt to sell more than the broker actually holds (Y).
+            held_qty = float(holdings_qty_by_symbol.get(c["symbol"], 0.0) or 0.0)
             qty = min(qty, int(held_qty))
             if qty <= 0:
                 continue

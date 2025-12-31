@@ -2,6 +2,7 @@ import AutorenewIcon from '@mui/icons-material/Autorenew'
 import HistoryIcon from '@mui/icons-material/History'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import Box from '@mui/material/Box'
+import Alert from '@mui/material/Alert'
 import Button from '@mui/material/Button'
 import Checkbox from '@mui/material/Checkbox'
 import Dialog from '@mui/material/Dialog'
@@ -1228,6 +1229,10 @@ export function RebalanceDialog({
                       {r.summary.budget_used.toFixed(0)} ({r.summary.budget_used_pct.toFixed(1)}%), turnover:{' '}
                       {r.summary.turnover_pct.toFixed(1)}%
                     </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      Max drift (before): {(r.summary.max_abs_drift_before * 100).toFixed(2)}% • Max drift (after):{' '}
+                      {(r.summary.max_abs_drift_after * 100).toFixed(2)}%
+                    </Typography>
                     {r.warnings?.length ? (
                       <Typography variant="caption" color="text.secondary">
                         Warnings: {r.warnings.join(' | ')}
@@ -1235,6 +1240,17 @@ export function RebalanceDialog({
                     ) : null}
                   </Paper>
                 ))}
+                {previewResults.every((r) => (r.summary.trades_count ?? 0) <= 0) && (
+                  <Alert severity="info">
+                    No trades were generated. Common reasons:
+                    <ul style={{ margin: '6px 0 0 18px' }}>
+                      <li>All symbols are within drift bands (abs/rel), so they are intentionally ignored.</li>
+                      <li>After scaling, qty rounds to 0 or notional falls below “Min trade value”.</li>
+                    </ul>
+                    Try lowering <b>Abs band</b>/<b>Rel band</b> or <b>Min trade value</b> if you want to see smaller
+                    rebalance actions.
+                  </Alert>
+                )}
                 <Box sx={{ height: 360 }}>
                   <DataGrid
                     rows={tradeRows}
