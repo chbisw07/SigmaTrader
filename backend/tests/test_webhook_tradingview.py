@@ -115,6 +115,39 @@ def test_webhook_root_accepts_tradingview_payload() -> None:
         assert order.price == 320.3
 
 
+def test_webhook_accepts_flat_payload_fields() -> None:
+    unique_strategy = f"webhook-test-strategy-flat-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:INFY",
+        "exchange": "NSE",
+        "interval": "5",
+        # flat (no trade_details object)
+        "order_action": "BUY",
+        "quantity": 2,
+        "price": 320.29,
+        "product": "CNC",
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        alert = session.get(Alert, data["alert_id"])
+        assert alert is not None
+        assert alert.symbol == "NSE:INFY"
+
+        order = session.get(Order, data["order_id"])
+        assert order is not None
+        assert order.qty == 2
+        assert order.price == 320.3
+
+
 def test_webhook_auto_strategy_routes_to_auto_and_executes(monkeypatch: Any) -> None:
     unique_strategy = f"webhook-auto-strategy-{uuid4().hex}"
 

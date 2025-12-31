@@ -70,10 +70,69 @@ class TradingViewWebhookPayload(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_platform(cls, values: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(values, dict):
+            return values
+
         platform = values.get("platform")
         # Accept either a string or a list like ["fyers"]
         if isinstance(platform, list) and platform:
             values["platform"] = str(platform[0])
+
+        # Accept alternate key naming used by some TradingView templates.
+        if "trade_details" not in values and "tradeDetails" in values:
+            values["trade_details"] = values.get("tradeDetails")
+
+        # Backward compatible: allow "flat" order fields at the root (without
+        # nesting them under trade_details).
+        if "trade_details" not in values:
+            flat_keys = {
+                "order_action",
+                "orderAction",
+                "quantity",
+                "order_contracts",
+                "price",
+                "order_price",
+                "product",
+                "trade_type",
+                "comment",
+                "order_comment",
+                "alert_message",
+                "order_alert_message",
+            }
+            if any(k in values for k in flat_keys):
+                values["trade_details"] = {
+                    "order_action": values.get("order_action")
+                    or values.get("orderAction"),
+                    "quantity": (
+                        values.get("quantity")
+                        if "quantity" in values
+                        else values.get("order_contracts")
+                    ),
+                    "price": (
+                        values.get("price")
+                        if "price" in values
+                        else values.get("order_price")
+                    ),
+                    "product": values.get("product"),
+                    "trade_type": values.get("trade_type"),
+                    "comment": values.get("comment") or values.get("order_comment"),
+                    "alert_message": values.get("alert_message")
+                    or values.get("order_alert_message"),
+                }
+
+        # If symbol is omitted but exchange+ticker are present, derive it.
+        if "symbol" not in values and "ticker" in values:
+            exchange_val = values.get("exchange") or values.get("Exchange") or ""
+            ticker_val = values.get("ticker") or ""
+            if exchange_val:
+                values["symbol"] = f"{exchange_val}:{ticker_val}"
+            else:
+                values["symbol"] = str(ticker_val)
+
+        # Accept "strategy" as an alias for strategy_name.
+        if "strategy_name" not in values and "strategy" in values:
+            values["strategy_name"] = values.get("strategy")
+
         return values
 
 
