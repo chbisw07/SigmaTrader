@@ -3,12 +3,15 @@ import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import Checkbox from '@mui/material/Checkbox'
+import IconButton from '@mui/material/IconButton'
+import InputAdornment from '@mui/material/InputAdornment'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
 import { useEffect, useRef, useState } from 'react'
 import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mui/x-data-grid'
+import ClearIcon from '@mui/icons-material/Clear'
 
 import {
   fetchDailyPositions,
@@ -312,6 +315,20 @@ export function PositionsPage() {
             value={symbolQuery}
             onChange={(e) => setSymbolQuery(e.target.value.toUpperCase())}
             sx={{ minWidth: 140 }}
+            InputProps={{
+              endAdornment: symbolQuery ? (
+                <InputAdornment position="end">
+                  <IconButton
+                    size="small"
+                    aria-label="Clear symbol"
+                    onClick={() => setSymbolQuery('')}
+                    edge="end"
+                  >
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              ) : null,
+            }}
           />
           <FormControlLabel
             control={
