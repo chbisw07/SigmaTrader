@@ -81,4 +81,28 @@ def is_market_open_now() -> bool:
     return True
 
 
-__all__ = ["is_market_open_now"]
+def is_preopen_now(now_ist: datetime | None = None) -> bool:
+    """Return True if Indian pre-open session is currently active.
+
+    Pre-open session (cash market): 09:00–09:15 IST (end-exclusive).
+    This is useful for fetching indicative prices before continuous trading
+    begins.
+    """
+
+    current = now_ist or _now_ist()
+
+    # Weekends
+    if current.weekday() >= 5:
+        return False
+
+    # Holidays
+    if current.date().isoformat() in _load_indian_holidays():
+        return False
+
+    minutes = current.hour * 60 + current.minute
+    start = 9 * 60  # 09:00
+    end = 9 * 60 + 15  # 09:15 (exclusive)
+    return start <= minutes < end
+
+
+__all__ = ["is_market_open_now", "is_preopen_now"]

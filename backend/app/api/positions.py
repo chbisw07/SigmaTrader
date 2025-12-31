@@ -18,10 +18,14 @@ from app.clients import (
 )
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
+from app.core.market_hours import is_preopen_now
 from app.db.session import get_db
 from app.models import BrokerConnection, Order, Position, PositionSnapshot, User
 from app.schemas.positions import HoldingRead, PositionRead, PositionSnapshotRead
-from app.services.broker_instruments import resolve_listing_for_broker_symbol
+from app.services.broker_instruments import (
+    resolve_broker_symbol_and_token,
+    resolve_listing_for_broker_symbol,
+)
 from app.services.broker_secrets import get_broker_secret
 from app.services.market_data import ensure_instrument_from_holding_entry
 from app.services.positions_sync import (
@@ -467,6 +471,51 @@ def list_holdings(
             if o.symbol not in last_buy_by_symbol:
                 last_buy_by_symbol[o.symbol] = o.created_at
 
+        # During pre-open (09:00–09:15 IST), refresh LTP for each holding
+        # because AngelOne's holdings snapshot can lag during the auction.
+        ltp_map: dict[tuple[str, str], float] = {}
+        if is_preopen_now():
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    continue
+
+                broker_symbol = entry.get("tradingsymbol") or entry.get("symbol")
+                exchange = entry.get("exchange") or "NSE"
+                if not isinstance(broker_symbol, str) or not isinstance(exchange, str):
+                    continue
+
+                exch_u = exchange.strip().upper()
+                broker_symbol_u = broker_symbol.strip().upper()
+                listing = resolve_listing_for_broker_symbol(
+                    db,
+                    broker_name="angelone",
+                    exchange=exch_u,
+                    broker_symbol=broker_symbol_u,
+                )
+                symbol_u = (
+                    listing.symbol.strip().upper()
+                    if listing is not None
+                    else broker_symbol_u
+                )
+                resolved = resolve_broker_symbol_and_token(
+                    db,
+                    broker_name="angelone",
+                    exchange=exch_u,
+                    symbol=symbol_u,
+                )
+                if resolved is None:
+                    continue
+                angel_symbol, token = resolved
+
+                try:
+                    ltp_map[(exch_u, symbol_u)] = client.get_ltp(
+                        exchange=exch_u,
+                        tradingsymbol=angel_symbol,
+                        symboltoken=token,
+                    )
+                except Exception:
+                    continue
+
         holdings: List[HoldingRead] = []
         for entry in raw:
             if not isinstance(entry, dict):
@@ -509,6 +558,8 @@ def list_holdings(
                 last_f = float(last) if last is not None else None
             except (TypeError, ValueError):
                 continue
+            if is_preopen_now():
+                last_f = ltp_map.get((exch_u, symbol_u), last_f)
 
             pnl = None
             if last_f is not None:
@@ -595,7 +646,11 @@ def list_holdings(
         if isinstance(symbol, str):
             instruments.append((exchange, symbol))
 
-    ltp_map = client.get_ltp_bulk(instruments)
+    ltp_map = (
+        client.get_quote_bulk(instruments)
+        if is_preopen_now()
+        else client.get_ltp_bulk(instruments)
+    )
 
     # Pre-compute the last executed BUY order date per symbol for this user so
     # that the holdings response can surface a "last purchase date" column.

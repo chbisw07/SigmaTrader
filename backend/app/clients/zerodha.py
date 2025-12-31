@@ -36,6 +36,9 @@ class KiteLike(Protocol):
     def ltp(self, instruments: list[str]) -> Dict[str, Any]:  # pragma: no cover
         ...
 
+    def quote(self, instruments: list[str]) -> Dict[str, Any]:  # pragma: no cover
+        ...
+
     def place_gtt(
         self,
         trigger_type: str,
@@ -184,6 +187,43 @@ class ZerodhaClient:
             prev_close = float(close_val) if close_val is not None else None
             result[(exchange, symbol)] = {
                 "last_price": last_price,
+                "prev_close": prev_close,
+            }
+        return result
+
+    def get_quote_bulk(
+        self,
+        instruments: list[tuple[str, str]],
+    ) -> Dict[tuple[str, str], Dict[str, float | None]]:
+        """Return quote last_price and previous close for multiple instruments.
+
+        This uses KiteConnect.quote when available. When the underlying client
+        does not implement quote (e.g. some fakes in tests), it falls back to
+        get_ltp_bulk.
+        """
+
+        quote_fn = getattr(self._kite, "quote", None)
+        if not callable(quote_fn):
+            return self.get_ltp_bulk(instruments)
+
+        if not instruments:
+            return {}
+
+        codes = [f"{exchange}:{symbol}" for exchange, symbol in instruments]
+        data = quote_fn(codes)
+
+        result: Dict[tuple[str, str], Dict[str, float | None]] = {}
+        for (exchange, symbol), code in zip(instruments, codes, strict=False):
+            quote = data.get(code)
+            if not quote:
+                continue
+            last_price = quote.get("last_price")
+            last_out = float(last_price) if last_price is not None else 0.0
+            ohlc = quote.get("ohlc") or {}
+            close_val = ohlc.get("close")
+            prev_close = float(close_val) if close_val is not None else None
+            result[(exchange, symbol)] = {
+                "last_price": last_out,
                 "prev_close": prev_close,
             }
         return result

@@ -52,6 +52,10 @@ class FakeKite:
         # fixed last_price so tests that exercise guardrails can use it.
         return {instruments[0]: {"last_price": 100.0}}
 
+    def quote(self, instruments: list[str]) -> Dict[str, Any]:
+        # Minimal quote payload for get_quote_bulk tests.
+        return {instruments[0]: {"last_price": 101.0, "ohlc": {"close": 99.0}}}
+
     def margins(self, segment: str | None = None) -> Dict[str, Any]:
         return {
             "equity": {
@@ -164,3 +168,12 @@ def test_place_gtt_single_uses_underlying_kite_client() -> None:
     assert payload["orders"][0]["product"] == "CNC"
     assert payload["orders"][0]["price"] == 940.0
     assert result["trigger_id"] == 9876
+
+
+def test_get_quote_bulk_uses_quote_when_available() -> None:
+    kite = FakeKite()
+    client = ZerodhaClient(kite)
+
+    out = client.get_quote_bulk([("NSE", "INFY")])
+    assert out[("NSE", "INFY")]["last_price"] == 101.0
+    assert out[("NSE", "INFY")]["prev_close"] == 99.0
