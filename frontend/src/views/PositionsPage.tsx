@@ -7,7 +7,7 @@ import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mui/x-data-grid'
 
 import {
@@ -47,6 +47,9 @@ export function PositionsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
+  const loadSeqRef = useRef(0)
+  const symbolApplyTimeoutRef = useRef<number | null>(null)
+  const symbolAutoApplyMountedRef = useRef(false)
 
   const [startDate, setStartDate] = useState<string>(defaults.from)
   const [endDate, setEndDate] = useState<string>(defaults.to)
@@ -54,6 +57,7 @@ export function PositionsPage() {
   const [includeZero, setIncludeZero] = useState(true)
 
   const load = async (opts?: { preferLatest?: boolean }) => {
+    const seq = (loadSeqRef.current += 1)
     try {
       setLoading(true)
       const params =
@@ -67,12 +71,14 @@ export function PositionsPage() {
               include_zero: includeZero,
             }
       const data = await fetchDailyPositions(params)
+      if (seq !== loadSeqRef.current) return
       setPositions(data)
       setError(null)
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
       setError(err instanceof Error ? err.message : 'Failed to load positions')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }
 
@@ -101,6 +107,33 @@ export function PositionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBroker])
 
+  useEffect(() => {
+    if (!symbolAutoApplyMountedRef.current) {
+      symbolAutoApplyMountedRef.current = true
+      return
+    }
+
+    if (symbolApplyTimeoutRef.current != null) {
+      window.clearTimeout(symbolApplyTimeoutRef.current)
+      symbolApplyTimeoutRef.current = null
+    }
+
+    // Symbol filter should apply as-you-type (debounced) to avoid extra clicks.
+    // Other filters still use the "Apply" button.
+    symbolApplyTimeoutRef.current = window.setTimeout(() => {
+      symbolApplyTimeoutRef.current = null
+      void load()
+    }, 350)
+
+    return () => {
+      if (symbolApplyTimeoutRef.current != null) {
+        window.clearTimeout(symbolApplyTimeoutRef.current)
+        symbolApplyTimeoutRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbolQuery])
+
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
@@ -118,6 +151,10 @@ export function PositionsPage() {
   }
 
   const handleApply = async () => {
+    if (symbolApplyTimeoutRef.current != null) {
+      window.clearTimeout(symbolApplyTimeoutRef.current)
+      symbolApplyTimeoutRef.current = null
+    }
     await load()
   }
 
