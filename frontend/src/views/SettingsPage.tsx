@@ -55,6 +55,10 @@ import {
 } from '../services/brokers'
 import { fetchMarketDataStatus, type MarketDataStatus } from '../services/marketData'
 import { recordAppLog } from '../services/logs'
+import {
+  fetchTradingViewWebhookSecret,
+  updateTradingViewWebhookSecret,
+} from '../services/webhookSettings'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
 import { formatInTimeZone } from '../utils/datetime'
@@ -398,6 +402,15 @@ export function SettingsPage() {
 
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
   const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
+  const [tvWebhookSecret, setTvWebhookSecret] = useState<string>('')
+  const [tvWebhookSecretDraft, setTvWebhookSecretDraft] = useState<string>('')
+  const [tvWebhookSecretSource, setTvWebhookSecretSource] = useState<
+    'db' | 'env' | 'unset'
+  >('unset')
+  const [tvWebhookSecretLoaded, setTvWebhookSecretLoaded] = useState(false)
+  const [tvWebhookSecretVisible, setTvWebhookSecretVisible] = useState(false)
+  const [tvWebhookSecretSaving, setTvWebhookSecretSaving] = useState(false)
+  const [tvWebhookSecretError, setTvWebhookSecretError] = useState<string | null>(null)
   const displayTzIsPreset = DISPLAY_TZ_PRESETS.includes(displayTimeZone as any)
   const [showCustomTz, setShowCustomTz] = useState<boolean>(
     () => !displayTzIsPreset && displayTimeZone !== 'LOCAL',
@@ -424,6 +437,24 @@ export function SettingsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search])
+
+  useEffect(() => {
+    if (activeTab !== 'strategy' || tvWebhookSecretLoaded) return
+    void (async () => {
+      try {
+        const data = await fetchTradingViewWebhookSecret()
+        setTvWebhookSecret(data.value ?? '')
+        setTvWebhookSecretDraft(data.value ?? '')
+        setTvWebhookSecretSource(data.source)
+        setTvWebhookSecretError(null)
+        setTvWebhookSecretLoaded(true)
+      } catch (err) {
+        setTvWebhookSecretError(
+          err instanceof Error ? err.message : 'Failed to load webhook secret',
+        )
+      }
+    })()
+  }, [activeTab, tvWebhookSecretLoaded])
 
   const handleTabChange = (_event: React.SyntheticEvent, next: string) => {
     const nextTab: SettingsTab =
@@ -1160,153 +1191,233 @@ export function SettingsPage() {
           {error}
         </Typography>
       ) : activeTab === 'strategy' ? (
-          <Paper sx={{ mb: 3, p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Strategies
-            </Typography>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Name</TableCell>
-                  <TableCell>Mode</TableCell>
-                  <TableCell>Execution Target</TableCell>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                      <Typography variant="body2">
-                        Paper Poll Interval (sec)
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        15–14400 sec (leave blank for default)
-                      </Typography>
-                    </Box>
-                  </TableCell>
-                  <TableCell>Enabled</TableCell>
-                  <TableCell>Available for alert</TableCell>
-                  <TableCell>Description</TableCell>
-                  <TableCell>Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {strategies.map((strategy) => (
-                  <TableRow key={strategy.id}>
-                    <TableCell>{strategy.name}</TableCell>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
+            <Paper sx={{ p: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
+                  TradingView webhook
+                </Typography>
+                <Chip
+                  size="small"
+                  label={`Secret source: ${tvWebhookSecretSource}`}
+                  color={tvWebhookSecretSource === 'db' ? 'success' : 'default'}
+                />
+              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+                Used to authenticate incoming alerts at <code>/webhook/tradingview</code>. You can
+                send it either in the JSON payload as <code>secret</code> or via the header{' '}
+                <code>X-SIGMATRADER-SECRET</code>.
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                <TextField
+                  size="small"
+                  label="TradingView webhook secret"
+                  type={tvWebhookSecretVisible ? 'text' : 'password'}
+                  value={tvWebhookSecretDraft}
+                  onChange={(e) => setTvWebhookSecretDraft(e.target.value)}
+                  sx={{ minWidth: 320, flex: 1 }}
+                  InputProps={{
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          aria-label="toggle TradingView webhook secret visibility"
+                          onClick={() => setTvWebhookSecretVisible((prev) => !prev)}
+                          edge="end"
+                        >
+                          {tvWebhookSecretVisible ? 'Hide' : 'Show'}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  }}
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={tvWebhookSecretSaving || tvWebhookSecretDraft === tvWebhookSecret}
+                  onClick={() => setTvWebhookSecretDraft(tvWebhookSecret)}
+                >
+                  Reset
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  disabled={tvWebhookSecretSaving || tvWebhookSecretDraft === tvWebhookSecret}
+                  onClick={async () => {
+                    setTvWebhookSecretSaving(true)
+                    try {
+                      const data = await updateTradingViewWebhookSecret(tvWebhookSecretDraft)
+                      setTvWebhookSecret(data.value ?? '')
+                      setTvWebhookSecretDraft(data.value ?? '')
+                      setTvWebhookSecretSource(data.source)
+                      setTvWebhookSecretError(null)
+                    } catch (err) {
+                      setTvWebhookSecretError(
+                        err instanceof Error ? err.message : 'Failed to update webhook secret',
+                      )
+                    } finally {
+                      setTvWebhookSecretSaving(false)
+                    }
+                  }}
+                >
+                  {tvWebhookSecretSaving ? 'Saving…' : 'Save'}
+                </Button>
+              </Box>
+              {tvWebhookSecretError && (
+                <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+                  {tvWebhookSecretError}
+                </Typography>
+              )}
+            </Paper>
+
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                Strategies
+              </Typography>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Mode</TableCell>
+                    <TableCell>Execution Target</TableCell>
                     <TableCell>
-                      <TextField
-                        select
-                        size="small"
-                        value={strategy.execution_mode}
-                        onChange={(e) =>
-                          handleChangeExecutionMode(
-                            strategy,
-                            e.target.value as Strategy['execution_mode'],
-                          )
-                        }
-                        disabled={updatingStrategyId === strategy.id}
-                      >
-                        <MenuItem value="MANUAL">MANUAL</MenuItem>
-                        <MenuItem value="AUTO">AUTO</MenuItem>
-                      </TextField>
+                      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                        <Typography variant="body2">
+                          Paper Poll Interval (sec)
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          15–14400 sec (leave blank for default)
+                        </Typography>
+                      </Box>
                     </TableCell>
-                    <TableCell>
-                      <TextField
-                        select
-                        size="small"
-                        value={strategy.execution_target}
-                        onChange={(e) =>
-                          handleChangeExecutionTarget(
-                            strategy,
-                            e.target.value as Strategy['execution_target'],
-                          )
-                        }
-                        disabled={updatingStrategyId === strategy.id}
-                      >
-                        <MenuItem value="LIVE">LIVE</MenuItem>
-                        <MenuItem value="PAPER">PAPER</MenuItem>
-                      </TextField>
-                    </TableCell>
-                    <TableCell>
-                      <TextField
-                        size="small"
-                        type="number"
-                        placeholder="60"
-                        value={
-                          paperPollDrafts[strategy.id] ??
-                          (strategy.paper_poll_interval_sec != null
-                            ? String(strategy.paper_poll_interval_sec)
-                            : '')
-                        }
-                        onChange={(e) =>
-                          setPaperPollDrafts((prev) => ({
-                            ...prev,
-                            [strategy.id]: e.target.value,
-                          }))
-                        }
-                        onBlur={(e) =>
-                          void handleChangePaperPollInterval(
-                            strategy,
-                            e.target.value,
-                          )
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            void handleChangePaperPollInterval(
+                    <TableCell>Enabled</TableCell>
+                    <TableCell>Available for alert</TableCell>
+                    <TableCell>Description</TableCell>
+                    <TableCell>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {strategies.map((strategy) => (
+                    <TableRow key={strategy.id}>
+                      <TableCell>{strategy.name}</TableCell>
+                      <TableCell>
+                        <TextField
+                          select
+                          size="small"
+                          value={strategy.execution_mode}
+                          onChange={(e) =>
+                            handleChangeExecutionMode(
                               strategy,
-                              (e.target as HTMLInputElement).value,
+                              e.target.value as Strategy['execution_mode'],
                             )
                           }
-                        }}
-                      />
-                    </TableCell>
-                    <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>
-                    <TableCell>
-                      <Chip
-                        label={strategy.available_for_alert ? 'Yes' : 'No'}
-                        size="small"
-                        color={strategy.available_for_alert ? 'success' : 'default'}
-                        onClick={() =>
-                          void handleToggleAvailableForAlert(
-                            strategy,
-                            !strategy.available_for_alert,
-                          )
-                        }
-                        sx={{ cursor: 'pointer' }}
-                      />
-                    </TableCell>
-                    <TableCell>{strategy.description}</TableCell>
-                    <TableCell>
-                      <IconButton
-                        size="small"
-                        color="error"
-                        aria-label={`delete strategy ${strategy.name}`}
-                        disabled={
-                          Boolean(strategy.is_builtin) ||
-                          updatingStrategyId === strategy.id ||
-                          deletingStrategyId === strategy.id
-                        }
-                        onClick={() => void handleDeleteStrategy(strategy)}
-                        title={
-                          strategy.is_builtin
-                            ? 'Built-in strategies cannot be deleted.'
-                            : 'Delete strategy'
-                        }
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {strategies.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={8}>
-                      <Typography variant="body2" color="text.secondary">
-                        No strategies configured yet.
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </Paper>
+                          disabled={updatingStrategyId === strategy.id}
+                        >
+                          <MenuItem value="MANUAL">MANUAL</MenuItem>
+                          <MenuItem value="AUTO">AUTO</MenuItem>
+                        </TextField>
+                      </TableCell>
+                      <TableCell>
+                        <TextField
+                          select
+                          size="small"
+                          value={strategy.execution_target}
+                          onChange={(e) =>
+                            handleChangeExecutionTarget(
+                              strategy,
+                              e.target.value as Strategy['execution_target'],
+                            )
+                          }
+                          disabled={updatingStrategyId === strategy.id}
+                        >
+                          <MenuItem value="LIVE">LIVE</MenuItem>
+                          <MenuItem value="PAPER">PAPER</MenuItem>
+                        </TextField>
+                      </TableCell>
+                      <TableCell>
+                        <TextField
+                          size="small"
+                          type="number"
+                          placeholder="60"
+                          value={
+                            paperPollDrafts[strategy.id] ??
+                            (strategy.paper_poll_interval_sec != null
+                              ? String(strategy.paper_poll_interval_sec)
+                              : '')
+                          }
+                          onChange={(e) =>
+                            setPaperPollDrafts((prev) => ({
+                              ...prev,
+                              [strategy.id]: e.target.value,
+                            }))
+                          }
+                          onBlur={(e) =>
+                            void handleChangePaperPollInterval(
+                              strategy,
+                              e.target.value,
+                            )
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              void handleChangePaperPollInterval(
+                                strategy,
+                                (e.target as HTMLInputElement).value,
+                              )
+                            }
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>
+                      <TableCell>
+                        <Chip
+                          label={strategy.available_for_alert ? 'Yes' : 'No'}
+                          size="small"
+                          color={strategy.available_for_alert ? 'success' : 'default'}
+                          onClick={() =>
+                            void handleToggleAvailableForAlert(
+                              strategy,
+                              !strategy.available_for_alert,
+                            )
+                          }
+                          sx={{ cursor: 'pointer' }}
+                        />
+                      </TableCell>
+                      <TableCell>{strategy.description}</TableCell>
+                      <TableCell>
+                        <IconButton
+                          size="small"
+                          color="error"
+                          aria-label={`delete strategy ${strategy.name}`}
+                          disabled={
+                            Boolean(strategy.is_builtin) ||
+                            updatingStrategyId === strategy.id ||
+                            deletingStrategyId === strategy.id
+                          }
+                          onClick={() => void handleDeleteStrategy(strategy)}
+                          title={
+                            strategy.is_builtin
+                              ? 'Built-in strategies cannot be deleted.'
+                              : 'Delete strategy'
+                          }
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {strategies.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={8}>
+                        <Typography variant="body2" color="text.secondary">
+                          No strategies configured yet.
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </Paper>
+          </Box>
       ) : activeTab === 'risk' ? (
           <Paper sx={{ mb: 3, p: 2 }}>
             <Typography variant="h6" gutterBottom>

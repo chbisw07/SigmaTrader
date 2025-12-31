@@ -17,6 +17,7 @@ client = TestClient(app)
 
 
 def setup_module() -> None:  # type: ignore[override]
+    os.environ["ST_CRYPTO_KEY"] = "test-webhook-crypto-key"
     os.environ["ST_TRADINGVIEW_WEBHOOK_SECRET"] = "test-secret"
     get_settings.cache_clear()
     Base.metadata.drop_all(bind=engine)
@@ -48,6 +49,26 @@ def test_webhook_rejects_invalid_secret() -> None:
 
     response = client.post("/webhook/tradingview", json=payload)
     assert response.status_code == 401
+
+
+def test_webhook_accepts_header_secret_without_body_secret() -> None:
+    unique_strategy = f"webhook-test-strategy-header-{uuid4().hex}"
+    payload = {
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:INFY",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "SELL", "quantity": 1, "price": 1500.0},
+    }
+
+    response = client.post(
+        "/webhook/tradingview",
+        json=payload,
+        headers={"X-SIGMATRADER-SECRET": "test-secret"},
+    )
+    assert response.status_code == 201
 
 
 def test_webhook_persists_alert_with_valid_secret() -> None:
@@ -218,6 +239,50 @@ def test_webhook_auto_strategy_routes_to_auto_and_executes(monkeypatch: Any) -> 
         assert order.zerodha_order_id == "AUTO123"
 
     assert len(fake_client.calls) == 1
+
+
+def test_tradingview_secret_can_be_overridden_via_settings_api() -> None:
+    # First confirm the env-backed secret is visible.
+    response = client.get("/api/webhook-settings/tradingview-secret")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["value"] == "test-secret"
+
+    # Override with a DB-stored secret.
+    response = client.put(
+        "/api/webhook-settings/tradingview-secret",
+        json={"value": "db-secret"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["value"] == "db-secret"
+    assert data["source"] == "db"
+
+    # Old secret should now be rejected.
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": f"webhook-test-strategy-db-{uuid4().hex}",
+        "symbol": "NSE:INFY",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "BUY", "quantity": 1},
+    }
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 401
+
+    # DB secret should be accepted.
+    payload["secret"] = "db-secret"
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+
+    # Restore to env-backed secret for other tests in this module.
+    response = client.put(
+        "/api/webhook-settings/tradingview-secret",
+        json={"value": ""},
+    )
+    assert response.status_code == 200
 
 
 def test_webhook_manual_strategy_creates_waiting_order_for_user() -> None:

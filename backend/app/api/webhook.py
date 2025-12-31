@@ -10,6 +10,7 @@ from app.core.config import Settings, get_settings
 from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
 from app.models import Alert, Strategy, User
+from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
 from app.services.paper_trading import submit_paper_order
@@ -18,6 +19,7 @@ from app.services.tradingview_zerodha_adapter import (
     NormalizedAlert,
     normalize_tradingview_payload_for_zerodha,
 )
+from app.services.webhook_secrets import get_tradingview_webhook_secret
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -69,28 +71,43 @@ def tradingview_webhook_compat(
     summary="Receive TradingView webhook alerts",
 )
 def tradingview_webhook(
-    payload: TradingViewWebhookPayload,
+    payload: TradingViewWebhookPayload | Dict[str, Any],
     request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Dict[str, Any]:
     """Ingest a TradingView webhook alert and persist it as an Alert row.
 
-    The `secret` field must match the configured `tradingview_webhook_secret`
+    The secret must match the configured TradingView webhook secret
     when one is set; otherwise a 401 response is returned.
     """
 
     correlation_id = getattr(request.state, "correlation_id", None)
 
-    expected_secret = settings.tradingview_webhook_secret
-    if expected_secret and payload.secret != expected_secret:
+    expected_secret = get_tradingview_webhook_secret(db, settings)
+    provided_secret = request.headers.get("X-SIGMATRADER-SECRET")
+    if not provided_secret:
+        if isinstance(payload, TradingViewWebhookPayload):
+            provided_secret = payload.secret
+        else:
+            provided_secret = str(payload.get("secret") or "")
+
+    if expected_secret and provided_secret != expected_secret:
         logger.warning(
             "Received webhook with invalid secret",
             extra={
                 "extra": {
                     "correlation_id": correlation_id,
-                    "strategy": payload.strategy_name,
-                    "platform": payload.platform,
+                    "strategy": (
+                        payload.strategy_name
+                        if isinstance(payload, TradingViewWebhookPayload)
+                        else payload.get("strategy_name")
+                    ),
+                    "platform": (
+                        payload.platform
+                        if isinstance(payload, TradingViewWebhookPayload)
+                        else payload.get("platform")
+                    ),
                 }
             },
         )
@@ -98,6 +115,30 @@ def tradingview_webhook(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid webhook secret.",
         )
+
+    # Lightweight health check / tunnel validation.
+    if not isinstance(payload, TradingViewWebhookPayload):
+        if payload.get("test") == "tradingview":
+            return {"status": "ok"}
+
+        # Allow header-only auth by injecting a placeholder secret into the
+        # payload before parsing, so callers can omit "secret" from the JSON.
+        payload_with_secret = dict(payload)
+        payload_with_secret.setdefault("secret", provided_secret or "")
+        try:
+            if PYDANTIC_V2 and hasattr(TradingViewWebhookPayload, "model_validate"):
+                payload = TradingViewWebhookPayload.model_validate(  # type: ignore[assignment]
+                    payload_with_secret
+                )
+            else:
+                payload = TradingViewWebhookPayload.parse_obj(  # type: ignore[assignment]
+                    payload_with_secret
+                )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid TradingView payload. Missing required fields.",
+            ) from exc
 
     # For now we only process alerts targeting Zerodha / generic TradingView.
     platform_normalized = (payload.platform or "").lower()

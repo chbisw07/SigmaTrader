@@ -22,6 +22,7 @@ from . import (
     strategies,
     system_events,
     webhook,
+    webhook_settings,
     zerodha,
 )
 
@@ -178,6 +179,13 @@ router.include_router(
     prefix="/api/brokers",
     dependencies=[Depends(require_admin)],
     tags=["brokers"],
+)
+
+router.include_router(
+    webhook_settings.router,
+    prefix="/api/webhook-settings",
+    dependencies=[Depends(require_admin)],
+    tags=["webhook-settings"],
 )
 
 router.include_router(
