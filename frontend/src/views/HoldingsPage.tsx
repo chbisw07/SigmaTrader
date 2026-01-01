@@ -21,6 +21,7 @@ import Chip from '@mui/material/Chip'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import {
+  DataGrid,
   GridToolbar,
   type GridColDef,
   type GridRenderCellParams,
@@ -100,6 +101,14 @@ type HoldingRow = Holding & {
 
 type HoldingsViewMode = 'default' | 'risk'
 
+type PortfolioAllocationMismatch = {
+  symbol: string
+  allocated: number
+  holdingQty: number
+  excess: number
+  groups: Array<{ group_id: number; group_name: string; allocated: number }>
+}
+
 const ANALYTICS_LOOKBACK_DAYS = 730
 const BRACKET_BASE_MTP_DEFAULT = 5
 const BRACKET_APPRECIATION_THRESHOLD = 3
@@ -135,8 +144,10 @@ export function HoldingsPage() {
     Record<string, number>
   >({})
   const [portfolioAllocationMismatches, setPortfolioAllocationMismatches] = useState<
-    Array<{ key: string; allocated: number; holdingQty: number }>
+    PortfolioAllocationMismatch[]
   >([])
+  const [portfolioMismatchDialogOpen, setPortfolioMismatchDialogOpen] =
+    useState(false)
 
   const [tradeOpen, setTradeOpen] = useState(false)
   const [tradeHolding, setTradeHolding] = useState<HoldingRow | null>(null)
@@ -437,6 +448,11 @@ export function HoldingsPage() {
       setAvailableGroups(groups)
 
       const allocationTotals: Record<string, number> = {}
+      const allocationTotalsBySymbol: Record<string, number> = {}
+      const allocationGroupsBySymbol: Record<
+        string,
+        Record<number, { group_id: number; group_name: string; allocated: number }>
+      > = {}
       for (const a of allocations) {
         const sym = (a.symbol || '').trim().toUpperCase()
         const exch = (a.exchange || 'NSE').trim().toUpperCase()
@@ -447,6 +463,19 @@ export function HoldingsPage() {
         if (!sym || !Number.isFinite(qty) || qty <= 0) continue
         const key = `${exch}:${sym}`
         allocationTotals[key] = (allocationTotals[key] ?? 0) + qty
+        allocationTotalsBySymbol[sym] = (allocationTotalsBySymbol[sym] ?? 0) + qty
+        const groupId = Number(a.group_id)
+        if (Number.isFinite(groupId) && groupId > 0) {
+          allocationGroupsBySymbol[sym] = allocationGroupsBySymbol[sym] ?? {}
+          const prev = allocationGroupsBySymbol[sym][groupId]
+          allocationGroupsBySymbol[sym][groupId] = prev
+            ? { ...prev, allocated: prev.allocated + qty }
+            : {
+                group_id: groupId,
+                group_name: String(a.group_name ?? ''),
+                allocated: qty,
+              }
+        }
       }
       setPortfolioAllocationTotalsByKey(allocationTotals)
 
@@ -454,45 +483,55 @@ export function HoldingsPage() {
 
       // Same-day delivery buys often appear in positions before holdings update.
       // Use an effective holdings qty for mismatch detection: holdings + positive CNC positions.
-      let posDeltaByKey: Record<string, number> = {}
+      let posDeltaBySymbol: Record<string, number> = {}
       try {
         const positions = await fetchDailyPositions({ broker_name: holdingsBroker })
         if (requestId !== loadRequestId.current) return
-        posDeltaByKey = {}
+        posDeltaBySymbol = {}
         for (const p of positions) {
           const sym = (p.symbol || '').trim().toUpperCase()
-          const exch = (p.exchange || 'NSE').trim().toUpperCase()
           const product = (p.product || '').trim().toUpperCase()
           const qty = Number(p.qty ?? 0)
           if (!sym || !Number.isFinite(qty) || qty <= 0) continue
           if (product !== 'CNC' && product !== 'DELIVERY') continue
-          const key = `${exch}:${sym}`
-          posDeltaByKey[key] = (posDeltaByKey[key] ?? 0) + qty
+          posDeltaBySymbol[sym] = (posDeltaBySymbol[sym] ?? 0) + qty
         }
       } catch {
-        posDeltaByKey = {}
+        posDeltaBySymbol = {}
       }
 
-      const holdingQtyByKey: Record<string, number> = {}
+      const holdingQtyBySymbol: Record<string, number> = {}
       for (const h of holdingsRows) {
         const sym = (h.symbol || '').trim().toUpperCase()
-        const exch = (h.exchange || 'NSE').trim().toUpperCase()
         if (!sym) continue
         const qty = Number(h.quantity ?? 0)
         const base = Number.isFinite(qty) ? qty : 0
-        const key = `${exch}:${sym}`
-        const delta = posDeltaByKey[key] ?? 0
-        holdingQtyByKey[key] = base + (delta > 0 ? delta : 0)
+        holdingQtyBySymbol[sym] = (holdingQtyBySymbol[sym] ?? 0) + base
       }
-      const mismatches: Array<{ key: string; allocated: number; holdingQty: number }> = []
-      for (const [key, allocated] of Object.entries(allocationTotals)) {
-        const holdingQty = holdingQtyByKey[key] ?? 0
+      for (const [sym, delta] of Object.entries(posDeltaBySymbol)) {
+        if (delta > 0) {
+          holdingQtyBySymbol[sym] = (holdingQtyBySymbol[sym] ?? 0) + delta
+        }
+      }
+
+      const mismatches: PortfolioAllocationMismatch[] = []
+      for (const [sym, allocated] of Object.entries(allocationTotalsBySymbol)) {
+        const holdingQty = holdingQtyBySymbol[sym] ?? 0
         if (allocated > holdingQty + 1e-9) {
-          mismatches.push({ key, allocated, holdingQty })
+          const groups = Object.values(allocationGroupsBySymbol[sym] ?? {}).sort(
+            (a, b) => b.allocated - a.allocated,
+          )
+          mismatches.push({
+            symbol: sym,
+            allocated,
+            holdingQty,
+            excess: allocated - holdingQty,
+            groups,
+          })
         }
       }
       setPortfolioAllocationMismatches(
-        mismatches.sort((a, b) => (b.allocated - b.holdingQty) - (a.allocated - a.holdingQty)),
+        mismatches.sort((a, b) => b.excess - a.excess),
       )
 
       // Compute a simple live portfolio value estimate so that sizing
@@ -3356,9 +3395,9 @@ export function HoldingsPage() {
                 <Button
                   color="inherit"
                   size="small"
-                  onClick={() => navigate('/groups')}
+                  onClick={() => setPortfolioMismatchDialogOpen(true)}
                 >
-                  Open groups
+                  Review
                 </Button>
               }
             >
@@ -3366,6 +3405,99 @@ export function HoldingsPage() {
               {portfolioAllocationMismatches.length === 1 ? '' : 's'} (Σ portfolio ref qty exceeds broker holdings).
             </Alert>
           )}
+
+          <Dialog
+            open={portfolioMismatchDialogOpen}
+            onClose={() => setPortfolioMismatchDialogOpen(false)}
+            fullWidth
+            maxWidth="md"
+          >
+            <DialogTitle>Portfolio allocation mismatches</DialogTitle>
+            <DialogContent sx={{ pt: 2 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Σ portfolio reference qty across all PORTFOLIO groups is greater than your broker
+                holdings qty for these symbols. Click a portfolio chip to open that portfolio.
+              </Typography>
+              <Paper sx={{ height: 520 }}>
+                <DataGrid
+                  rows={portfolioAllocationMismatches}
+                  getRowId={(row) => row.symbol}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  sx={{ height: '100%' }}
+                  columns={[
+                    { field: 'symbol', headerName: 'Symbol', width: 140 },
+                    {
+                      field: 'holdingQty',
+                      headerName: 'Holdings',
+                      width: 120,
+                      type: 'number',
+                      valueFormatter: (v) => Math.trunc(Number(v ?? 0)),
+                    },
+                    {
+                      field: 'allocated',
+                      headerName: 'Allocated (Σ)',
+                      width: 140,
+                      type: 'number',
+                      valueFormatter: (v) => Math.trunc(Number(v ?? 0)),
+                    },
+                    {
+                      field: 'excess',
+                      headerName: 'Excess',
+                      width: 110,
+                      type: 'number',
+                      valueFormatter: (v) => Math.trunc(Number(v ?? 0)),
+                    },
+                    {
+                      field: 'groups',
+                      headerName: 'Portfolios',
+                      flex: 1,
+                      minWidth: 260,
+                      sortable: false,
+                      filterable: false,
+                      renderCell: (
+                        params: GridRenderCellParams<PortfolioAllocationMismatch>,
+                      ) => {
+                        const row = params.row
+                        const top = row.groups.slice(0, 4)
+                        const extra = row.groups.length - top.length
+                        return (
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                            {top.map((g) => (
+                              <Chip
+                                key={g.group_id}
+                                size="small"
+                                label={`${g.group_name} (${Math.trunc(g.allocated)})`}
+                                clickable
+                                onClick={() =>
+                                  navigate(
+                                    `/groups?group=${encodeURIComponent(g.group_name)}`,
+                                  )
+                                }
+                              />
+                            ))}
+                            {extra > 0 && (
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                label={`+${extra} more`}
+                              />
+                            )}
+                          </Box>
+                        )
+                      },
+                    },
+                  ]}
+                />
+              </Paper>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => navigate('/groups')}>Open groups</Button>
+              <Button onClick={() => setPortfolioMismatchDialogOpen(false)}>
+                Close
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Box>
 
         <Paper

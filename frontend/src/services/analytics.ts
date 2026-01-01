@@ -73,6 +73,59 @@ export type RiskSizingResponse = {
   max_loss: number
 }
 
+function parseDateOnly(value: string): { y: number; m: number; d: number } | null {
+  const raw = (value ?? '').trim()
+  if (!raw) return null
+
+  // YYYY-MM-DD (HTML date input spec)
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
+  if (iso) {
+    const y = Number(iso[1])
+    const m = Number(iso[2])
+    const d = Number(iso[3])
+    if (y > 0 && m >= 1 && m <= 12 && d >= 1 && d <= 31) return { y, m, d }
+    return null
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY (common locales)
+  const dmy = /^(\d{2})[/-](\d{2})[/-](\d{4})$/.exec(raw)
+  if (dmy) {
+    const d = Number(dmy[1])
+    const m = Number(dmy[2])
+    const y = Number(dmy[3])
+    if (y > 0 && m >= 1 && m <= 12 && d >= 1 && d <= 31) return { y, m, d }
+    return null
+  }
+
+  return null
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function formatDateOnly(parts: { y: number; m: number; d: number }): string {
+  return `${parts.y}-${pad2(parts.m)}-${pad2(parts.d)}`
+}
+
+function normalizeDateTimeParam(
+  value: string | null | undefined,
+  mode: 'from' | 'to',
+): string | null {
+  const raw = (value ?? '').trim()
+  if (!raw) return null
+
+  // Pass through full datetime strings (already in ISO-ish form).
+  if (raw.includes('T')) return raw
+
+  const date = parseDateOnly(raw)
+  if (!date) return raw
+  const isoDate = formatDateOnly(date)
+  return mode === 'from'
+    ? `${isoDate}T00:00:00`
+    : `${isoDate}T23:59:59.999999`
+}
+
 
 export async function rebuildAnalyticsTrades(): Promise<{ created: number }> {
   const res = await fetch('/api/analytics/rebuild-trades', {
@@ -102,8 +155,8 @@ export async function fetchAnalyticsSummary(
       params && typeof params.strategyId === 'number'
         ? params.strategyId
         : null,
-    date_from: params?.dateFrom ?? null,
-    date_to: params?.dateTo ?? null,
+    date_from: normalizeDateTimeParam(params?.dateFrom ?? null, 'from'),
+    date_to: normalizeDateTimeParam(params?.dateTo ?? null, 'to'),
     include_simulated: params?.includeSimulated ?? false,
   }
   const res = await fetch('/api/analytics/summary', {
@@ -135,8 +188,8 @@ export async function fetchAnalyticsTrades(
       params && typeof params.strategyId === 'number'
         ? params.strategyId
         : null,
-    date_from: params?.dateFrom ?? null,
-    date_to: params?.dateTo ?? null,
+    date_from: normalizeDateTimeParam(params?.dateFrom ?? null, 'from'),
+    date_to: normalizeDateTimeParam(params?.dateTo ?? null, 'to'),
     include_simulated: params?.includeSimulated ?? false,
   }
   const res = await fetch('/api/analytics/trades', {
