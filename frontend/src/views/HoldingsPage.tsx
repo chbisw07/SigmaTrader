@@ -95,6 +95,7 @@ type HoldingRow = Holding & {
   correlationWeight?: number
   groupNames?: string[]
   groupsLabel?: string
+  target_weight?: number | null
   reference_qty?: number | null
   reference_price?: number | null
 }
@@ -584,6 +585,7 @@ export function HoldingsPage() {
                 if (held)
                   return {
                     ...held,
+                    target_weight: m.target_weight ?? null,
                     reference_qty: m.reference_qty ?? null,
                     reference_price: m.reference_price ?? null,
                   }
@@ -597,6 +599,7 @@ export function HoldingsPage() {
                   last_purchase_date: null,
                   total_pnl_percent: null,
                   today_pnl_percent: null,
+                  target_weight: m.target_weight ?? null,
                   reference_qty: m.reference_qty ?? null,
                   reference_price: m.reference_price ?? null,
                 } as HoldingRow
@@ -2816,6 +2819,28 @@ export function HoldingsPage() {
     : 140
   const symbolColumnFlex = activeGroup ? 1.2 : 1
 
+  const portfolioBaselineTotalValue = useMemo(() => {
+    if (activeGroup?.kind !== 'PORTFOLIO') return null
+    let total = 0
+    for (const row of holdings) {
+      const h = row as HoldingRow
+      const qty = getUniverseReferenceQty(h) ?? 0
+      if (!Number.isFinite(qty) || qty <= 0) continue
+      let price = getUniverseReferencePrice(h)
+      if (price == null) {
+        const avg = Number(h.average_price ?? 0)
+        if (Number.isFinite(avg) && avg > 0) price = avg
+      }
+      if (price == null) {
+        const ltp = Number(h.last_price ?? 0)
+        if (Number.isFinite(ltp) && ltp > 0) price = ltp
+      }
+      if (price == null || !Number.isFinite(price) || price <= 0) continue
+      total += qty * price
+    }
+    return total > 0 && Number.isFinite(total) ? total : null
+  }, [activeGroup?.kind, holdings, getUniverseReferencePrice, getUniverseReferenceQty])
+
   const baseColumns: GridColDef[] = [
     {
       field: 'index',
@@ -3101,6 +3126,71 @@ export function HoldingsPage() {
       },
       valueFormatter: (value) =>
         value != null ? Number(value).toFixed(2) : '-',
+    },
+    {
+      field: 'weight',
+      headerName: 'Weight',
+      width: activeGroup ? 140 : 110,
+      sortable: false,
+      filterable: false,
+      valueGetter: (_value, row) => {
+        const h = row as HoldingRow
+        const qty = Number(h.quantity ?? 0)
+        const price = getDisplayPrice(h)
+        if (!Number.isFinite(qty) || qty <= 0 || price == null) return null
+        const value = qty * price
+        if (!Number.isFinite(value) || value <= 0) return null
+        if (portfolioValue == null || !Number.isFinite(portfolioValue) || portfolioValue <= 0)
+          return null
+        const wh = (value / portfolioValue) * 100
+        return Number.isFinite(wh) ? wh : null
+      },
+      renderCell: (params: GridRenderCellParams) => {
+        const row = params.row as HoldingRow
+        const qty = Number(row.quantity ?? 0)
+        const price = getDisplayPrice(row)
+        const hv =
+          Number.isFinite(qty) && qty > 0 && price != null && price > 0
+            ? qty * price
+            : 0
+        const wh =
+          portfolioValue != null && Number.isFinite(portfolioValue) && portfolioValue > 0
+            ? (hv / portfolioValue) * 100
+            : null
+
+        if (!activeGroup) {
+          return <span>{wh == null ? '—' : wh.toFixed(2)}</span>
+        }
+
+        let wp = 0
+        if (activeGroup.kind === 'PORTFOLIO') {
+          const refQty = getUniverseReferenceQty(row) ?? 0
+          let refPrice = getUniverseReferencePrice(row)
+          if (refPrice == null) {
+            const avg = Number(row.average_price ?? 0)
+            if (Number.isFinite(avg) && avg > 0) refPrice = avg
+          }
+          if (refPrice == null) {
+            const ltp = Number(row.last_price ?? 0)
+            if (Number.isFinite(ltp) && ltp > 0) refPrice = ltp
+          }
+          const base =
+            Number.isFinite(refQty) && refQty > 0 && refPrice != null && refPrice > 0
+              ? refQty * refPrice
+              : 0
+          wp =
+            portfolioBaselineTotalValue != null && portfolioBaselineTotalValue > 0 && base > 0
+              ? (base / portfolioBaselineTotalValue) * 100
+              : 0
+        } else {
+          const tw = Number(row.target_weight ?? 0)
+          wp = Number.isFinite(tw) && tw > 0 ? tw * 100 : 0
+        }
+
+        const left = Number.isFinite(wp) ? wp.toFixed(2) : '0.00'
+        const right = wh != null && Number.isFinite(wh) ? wh.toFixed(2) : '—'
+        return <span>{`${left}/${right}`}</span>
+      },
     },
     {
       field: 'indicator_rsi14',
