@@ -3129,19 +3129,61 @@ export function HoldingsPage() {
       field: 'weight',
       headerName: 'Weight',
       width: activeGroup ? 140 : 110,
-      sortable: false,
       filterable: false,
       valueGetter: (_value, row) => {
         const h = row as HoldingRow
+
         const qty = Number(h.quantity ?? 0)
         const price = getDisplayPrice(h)
-        if (!Number.isFinite(qty) || qty <= 0 || price == null) return null
-        const value = qty * price
-        if (!Number.isFinite(value) || value <= 0) return null
-        if (portfolioValue == null || !Number.isFinite(portfolioValue) || portfolioValue <= 0)
-          return null
-        const wh = (value / portfolioValue) * 100
-        return Number.isFinite(wh) ? wh : null
+        const hv =
+          Number.isFinite(qty) && qty > 0 && price != null && price > 0
+            ? qty * price
+            : 0
+        const wh =
+          portfolioValue != null && Number.isFinite(portfolioValue) && portfolioValue > 0 && hv > 0
+            ? (hv / portfolioValue) * 100
+            : null
+
+        const kind = activeGroup?.kind ?? null
+        const shouldSortByPortfolioWeight =
+          kind === 'MODEL_PORTFOLIO' || kind === 'PORTFOLIO'
+        if (!shouldSortByPortfolioWeight) return wh
+
+        let wp = 0
+        if (kind === 'PORTFOLIO') {
+          const refQty = getUniverseReferenceQty(h) ?? 0
+          let refPrice = getUniverseReferencePrice(h)
+          if (refPrice == null) {
+            const avg = Number(h.average_price ?? 0)
+            if (Number.isFinite(avg) && avg > 0) refPrice = avg
+          }
+          if (refPrice == null) {
+            const ltp = Number(h.last_price ?? 0)
+            if (Number.isFinite(ltp) && ltp > 0) refPrice = ltp
+          }
+          const base =
+            Number.isFinite(refQty) && refQty > 0 && refPrice != null && refPrice > 0
+              ? refQty * refPrice
+              : 0
+          wp =
+            portfolioBaselineTotalValue != null && portfolioBaselineTotalValue > 0 && base > 0
+              ? (base / portfolioBaselineTotalValue) * 100
+              : 0
+        } else {
+          const tw = Number(h.target_weight ?? 0)
+          wp = Number.isFinite(tw) && tw > 0 ? tw * 100 : 0
+        }
+        return Number.isFinite(wp) ? wp : null
+      },
+      sortComparator: (v1, v2) => {
+        const a = typeof v1 === 'number' ? v1 : v1 != null ? Number(v1) : null
+        const b = typeof v2 === 'number' ? v2 : v2 != null ? Number(v2) : null
+        const aOk = a != null && Number.isFinite(a)
+        const bOk = b != null && Number.isFinite(b)
+        if (!aOk && !bOk) return 0
+        if (!aOk) return 1
+        if (!bOk) return -1
+        return a - b
       },
       renderCell: (params: GridRenderCellParams) => {
         const row = params.row as HoldingRow
