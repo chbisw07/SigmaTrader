@@ -87,3 +87,36 @@ export async function updateTheme(themeId: string): Promise<CurrentUser> {
   }
   return (await res.json()) as CurrentUser
 }
+
+function extractFastApiDetail(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown }
+    if (typeof parsed?.detail === 'string') return parsed.detail
+  } catch {
+    // Not JSON; fall back to raw body.
+  }
+  return text
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const res = await fetch('/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  })
+
+  if (res.status === 204) return
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    const detail = body ? extractFastApiDetail(body) : ''
+    throw new Error(
+      `Change password failed (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+}

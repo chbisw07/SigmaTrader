@@ -19,6 +19,7 @@ import Toolbar from '@mui/material/Toolbar'
 import Typography from '@mui/material/Typography'
 
 import { MoonPhaseHeader } from '../components/MoonPhaseHeader'
+import { ChangePasswordDialog } from '../components/ChangePasswordDialog'
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
 import DashboardIcon from '@mui/icons-material/Dashboard'
@@ -85,6 +86,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
   const { status, isLoading } = useHealth()
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const open = Boolean(anchorEl)
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false)
 
   const handleDrawerToggle = () => {
     setMobileOpen((prev) => !prev)
@@ -96,6 +98,11 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
 
   const handleUserMenuClose = () => {
     setAnchorEl(null)
+  }
+
+  const handleChangePassword = () => {
+    handleUserMenuClose()
+    setChangePasswordOpen(true)
   }
 
   const handleLogout = async () => {
@@ -285,9 +292,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
               >
                 <MenuItem disabled>{currentUser.username}</MenuItem>
                 <MenuItem onClick={handleUserMenuClose}>Profile (coming soon)</MenuItem>
-                <MenuItem onClick={handleUserMenuClose}>
-                  Change password (coming soon)
-                </MenuItem>
+                <MenuItem onClick={handleChangePassword}>Change password</MenuItem>
                 <MenuItem
                   onClick={() => {
                     handleUserMenuClose()
@@ -301,6 +306,10 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
           </Stack>
         </Toolbar>
       </AppBar>
+      <ChangePasswordDialog
+        open={changePasswordOpen}
+        onClose={() => setChangePasswordOpen(false)}
+      />
       <Box
         component="nav"
         sx={{ width: { sm: effectiveDrawerWidth }, flexShrink: { sm: 0 } }}
