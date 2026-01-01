@@ -552,6 +552,16 @@ def edit_order(
             order.synthetic_gtt = broker_name != "zerodha"
         updated = True
 
+    if payload.execution_target is not None:
+        target = str(payload.execution_target).strip().upper()
+        if target not in {"LIVE", "PAPER"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="execution_target must be LIVE or PAPER.",
+            )
+        order.execution_target = target
+        updated = True
+
     if not updated:
         return order
 
@@ -651,20 +661,28 @@ def execute_order_internal(
         db.commit()
         db.refresh(order)
 
-    # Route PAPER strategies to the paper engine instead of Zerodha.
-    exec_target = getattr(order, "execution_target", None) or "LIVE"
-    if order.strategy is not None:
-        exec_target = getattr(order.strategy, "execution_target", exec_target)
-    else:
-        # Fallback: when no strategy is attached, treat a single
-        # configured strategy as the default execution_target so that
-        # paper mode can still be used in simple setups.
-        try:
-            strategies: list[Strategy] = db.query(Strategy).all()
-            if len(strategies) == 1:
-                exec_target = strategies[0].execution_target
-        except Exception:
-            exec_target = "LIVE"
+    # Route PAPER orders/strategies to the paper engine instead of the broker.
+    # Precedence:
+    # - Per-order execution_target='PAPER' always forces paper execution.
+    # - Otherwise, fall back to the attached strategy's execution_target (if any),
+    #   or (in single-strategy deployments) the only configured strategy.
+    exec_target = (getattr(order, "execution_target", None) or "LIVE").strip().upper()
+    if exec_target != "PAPER":
+        if order.strategy is not None:
+            exec_target = (
+                getattr(order.strategy, "execution_target", exec_target) or exec_target
+            )
+        else:
+            # Fallback: when no strategy is attached, treat a single configured
+            # strategy as the default execution_target so that paper mode can
+            # still be used in simple setups.
+            try:
+                strategies: list[Strategy] = db.query(Strategy).all()
+                if len(strategies) == 1:
+                    exec_target = strategies[0].execution_target
+            except Exception:
+                exec_target = "LIVE"
+        exec_target = str(exec_target).strip().upper() or "LIVE"
 
     if exec_target == "PAPER":
         if not is_market_open_now():

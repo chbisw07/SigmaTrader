@@ -25,6 +25,7 @@ import {
   executeOrder,
   updateOrder,
   type Order,
+  type ExecutionTarget,
 } from '../services/orders'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import {
@@ -60,6 +61,8 @@ export function WaitingQueuePanel({
   >('MARKET')
   const [editProduct, setEditProduct] = useState<string>('MIS')
   const [editGtt, setEditGtt] = useState<boolean>(false)
+  const [editExecutionTarget, setEditExecutionTarget] =
+    useState<ExecutionTarget>('LIVE')
   const [savingEdit, setSavingEdit] = useState(false)
   const [fundsAvailable, setFundsAvailable] = useState<number | null>(null)
   const [fundsRequired, setFundsRequired] = useState<number | null>(null)
@@ -222,6 +225,7 @@ export function WaitingQueuePanel({
     )
     setEditProduct(order.product)
     setEditGtt(order.gtt)
+    setEditExecutionTarget(order.execution_target ?? 'LIVE')
     setFundsAvailable(null)
     setFundsRequired(null)
     setFundsCurrency(null)
@@ -346,6 +350,7 @@ export function WaitingQueuePanel({
         order_type: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
         product: string
         gtt: boolean
+        execution_target: ExecutionTarget
         trigger_price?: number
         trigger_percent?: number
       } = {
@@ -355,6 +360,7 @@ export function WaitingQueuePanel({
         order_type: editOrderType,
         product: editProduct,
         gtt: editGtt,
+        execution_target: editExecutionTarget,
       }
       if (triggerPrice !== undefined) {
         payload.trigger_price = triggerPrice
@@ -532,6 +538,7 @@ export function WaitingQueuePanel({
     {
       field: 'trigger_price',
       headerName: 'Trigger',
+      description: 'Trigger price for SL/SL-M orders and conditional (GTT) orders.',
       width: 110,
       type: 'number',
       valueFormatter: (value) =>
@@ -583,6 +590,8 @@ export function WaitingQueuePanel({
     {
       field: 'gtt',
       headerName: 'Cond',
+      description:
+        'Whether this order is conditional: GTT (broker-managed) or Sigma (SigmaTrader-managed).',
       width: 80,
       valueFormatter: (_value, row) => {
         const order = row as Order
@@ -910,6 +919,22 @@ export function WaitingQueuePanel({
               >
                 <MenuItem value="MIS">MIS (Intraday)</MenuItem>
                 <MenuItem value="CNC">CNC (Delivery)</MenuItem>
+              </TextField>
+              <TextField
+                label="Execution target"
+                select
+                value={editExecutionTarget}
+                onChange={(e) =>
+                  setEditExecutionTarget(
+                    (e.target.value as ExecutionTarget) || 'LIVE',
+                  )
+                }
+                fullWidth
+                size="small"
+                helperText="LIVE sends the order to the broker; PAPER routes it to the simulated engine."
+              >
+                <MenuItem value="LIVE">LIVE</MenuItem>
+                <MenuItem value="PAPER">PAPER</MenuItem>
               </TextField>
               <FormControlLabel
                 control={

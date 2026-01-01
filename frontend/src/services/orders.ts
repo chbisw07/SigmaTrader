@@ -130,6 +130,7 @@ export async function updateOrder(
     order_type?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
     product?: string
     gtt?: boolean
+    execution_target?: ExecutionTarget
   },
 ): Promise<Order> {
   const res = await fetch(`/api/orders/${orderId}`, {

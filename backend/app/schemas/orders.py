@@ -85,6 +85,7 @@ class OrderUpdate(BaseModel):
     order_type: Optional[Literal["MARKET", "LIMIT", "SL", "SL-M"]] = None
     product: Optional[str] = None
     gtt: Optional[bool] = None
+    execution_target: Optional[ExecutionTarget] = None
 
 
 class ManualOrderCreate(BaseModel):

@@ -21,6 +21,7 @@ from . import (
     signal_strategies,
     strategies,
     system_events,
+    tv_alerts,
     webhook,
     webhook_settings,
     zerodha,
@@ -72,6 +73,13 @@ router.include_router(
     prefix="/api/orders",
     dependencies=[Depends(require_admin)],
     tags=["orders"],
+)
+
+router.include_router(
+    tv_alerts.router,
+    prefix="/api/tv-alerts",
+    dependencies=[Depends(require_admin)],
+    tags=["tv-alerts"],
 )
 
 router.include_router(

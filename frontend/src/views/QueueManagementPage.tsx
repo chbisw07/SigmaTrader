@@ -7,11 +7,15 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { OrdersPanel } from './OrdersPage'
 import { WaitingQueuePanel } from './QueuePage'
+import { TvAlertsPanel } from './TvAlertsPanel'
 
-type QueueTab = 'waiting' | 'orders'
+type QueueTab = 'tv_alerts' | 'waiting' | 'orders'
 
 function parseTab(value: string | null | undefined): QueueTab | null {
   const v = (value ?? '').trim().toLowerCase()
+  if (v === 'tv' || v === 'tv_alerts' || v === 'tv-alerts' || v === 'alerts') {
+    return 'tv_alerts'
+  }
   if (v === 'waiting' || v === 'queue') return 'waiting'
   if (v === 'orders') return 'orders'
   return null
@@ -55,10 +59,14 @@ export function QueueManagementPage() {
         onChange={(_e, v) => setActiveTab(v as QueueTab)}
         sx={{ mb: 2 }}
       >
+        <Tab value="tv_alerts" label="TV Alerts" />
         <Tab value="waiting" label="Waiting Queue" />
         <Tab value="orders" label="Orders" />
       </Tabs>
 
+      <Box sx={{ display: tab === 'tv_alerts' ? 'block' : 'none' }}>
+        <TvAlertsPanel embedded active={tab === 'tv_alerts'} />
+      </Box>
       <Box sx={{ display: tab === 'waiting' ? 'block' : 'none' }}>
         <WaitingQueuePanel embedded active={tab === 'waiting'} />
       </Box>
@@ -68,4 +76,3 @@ export function QueueManagementPage() {
     </Box>
   )
 }
-
