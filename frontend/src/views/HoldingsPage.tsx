@@ -70,16 +70,37 @@ import {
 
 type HoldingIndicators = {
   rsi14?: number
+  sma20?: number
+  sma50?: number
+  sma200?: number
+  ema20?: number
+  ema50?: number
+  ema200?: number
+  macd?: number
+  macdSignal?: number
+  macdHist?: number
+  obv?: number
+  pvt?: number
+  pvtSlopePct20?: number
   ma50Pct?: number
   ma200Pct?: number
   volatility20dPct?: number
   volatility6mPct?: number
   atr14Pct?: number
+  perf1dPct?: number
+  perf5dPct?: number
   perf1wPct?: number
   perf1mPct?: number
   perf3mPct?: number
+  perf6mPct?: number
   perf1yPct?: number
   volumeVsAvg20d?: number
+  sr20High?: number
+  sr20Low?: number
+  sr50High?: number
+  sr50Low?: number
+  distToSr20HighPct?: number
+  distToSr20LowPct?: number
   maxPnlPct?: number
   drawdownFromPeakPct?: number
   dd6mPct?: number
@@ -100,7 +121,13 @@ type HoldingRow = Holding & {
   reference_price?: number | null
 }
 
-type HoldingsViewMode = 'default' | 'risk'
+type HoldingsViewId =
+  | 'default'
+  | 'performance'
+  | 'indicators'
+  | 'support_resistance'
+  | 'risk'
+  | `custom:${string}`
 
 type PortfolioAllocationMismatch = {
   symbol: string
@@ -117,6 +144,8 @@ const BRACKET_MTP_MIN = 3
 const BRACKET_MTP_MAX = 20
 const DEFAULT_RISK_FREE_RATE_PCT = 6.5
 const DEFAULT_ALPHA_BETA_BENCHMARK = { symbol: 'NIFTYBEES', exchange: 'NSE' as const }
+const HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY = 'st_holdings_custom_views_v1'
+const HOLDINGS_SELECTED_VIEW_STORAGE_KEY = 'st_holdings_view_v2'
 
 export function HoldingsPage() {
   const navigate = useNavigate()
@@ -225,12 +254,54 @@ export function HoldingsPage() {
 
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
-  const [viewMode, setViewMode] = useState<HoldingsViewMode>('default')
+  const [viewId, setViewId] = useState<HoldingsViewId>('default')
+  const [customViews, setCustomViews] = useState<Array<{ id: string; name: string }>>(
+    [],
+  )
+  const [viewsDialogOpen, setViewsDialogOpen] = useState(false)
+  const [newViewName, setNewViewName] = useState('')
+  const columnsFieldRef = useRef<string[]>([])
   const [columnVisibilityModel, setColumnVisibilityModel] =
     useState<GridColumnVisibilityModel>({
       maxPnlPct: false,
       drawdownFromPeakPct: false,
     })
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const rawViews = window.localStorage.getItem(
+        HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY,
+      )
+      if (rawViews) {
+        const parsed = JSON.parse(rawViews) as Array<{ id: string; name: string }>
+        if (Array.isArray(parsed)) {
+          setCustomViews(
+            parsed
+              .filter((v) => typeof v?.id === 'string' && typeof v?.name === 'string')
+              .map((v) => ({ id: v.id, name: v.name })),
+          )
+        }
+      }
+    } catch {
+      // Ignore storage errors.
+    }
+
+    try {
+      const raw = window.localStorage.getItem(HOLDINGS_SELECTED_VIEW_STORAGE_KEY)
+      let next: HoldingsViewId | null = raw ? (raw as HoldingsViewId) : null
+      if (!next) {
+        const legacy = window.localStorage.getItem('st_holdings_view_v1')
+        if (legacy === 'risk' || legacy === 'default') {
+          next = legacy
+        }
+      }
+      if (next) setViewId(next)
+    } catch {
+      // Ignore storage errors.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false)
   const [refreshDays, setRefreshDays] = useState('0')
@@ -880,79 +951,6 @@ export function HoldingsPage() {
       active = false
     }
   }, [angeloneConnected, angeloneStatusLoaded, universeId])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const raw = window.localStorage.getItem('st_holdings_view_v1')
-      if (raw === 'risk' || raw === 'default') {
-        setViewMode(raw)
-      }
-    } catch {
-      // Ignore storage errors and fall back to default view.
-    }
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const universeKey = encodeURIComponent(universeId)
-    const perUniverseKey = `st_holdings_column_visibility_${viewMode}_${universeKey}_v1`
-    const legacyKey =
-      viewMode === 'risk'
-        ? 'st_holdings_column_visibility_risk_v1'
-        : 'st_holdings_column_visibility_default_v1'
-    try {
-      const raw = window.localStorage.getItem(perUniverseKey)
-      if (raw) {
-        const parsed = JSON.parse(raw) as GridColumnVisibilityModel
-        setColumnVisibilityModel(parsed)
-      } else {
-        const legacy = window.localStorage.getItem(legacyKey)
-        if (legacy) {
-          const parsed = JSON.parse(legacy) as GridColumnVisibilityModel
-          setColumnVisibilityModel(parsed)
-        } else if (viewMode === 'risk') {
-          setColumnVisibilityModel({
-            chart: false,
-            average_price: false,
-            invested: false,
-            indicator_rsi14: false,
-            perf_1m_pct: false,
-            perf_1y_pct: false,
-            volume_vs_20d_avg: false,
-            maxPnlPct: true,
-            drawdownFromPeakPct: true,
-          })
-        } else {
-          setColumnVisibilityModel({
-            maxPnlPct: false,
-            drawdownFromPeakPct: false,
-          })
-        }
-      }
-    } catch {
-      // Ignore JSON/Storage errors but ensure we don't keep the previous
-      // universe's visibility state.
-      if (viewMode === 'risk') {
-        setColumnVisibilityModel({
-          chart: false,
-          average_price: false,
-          invested: false,
-          indicator_rsi14: false,
-          perf_1m_pct: false,
-          perf_1y_pct: false,
-          volume_vs_20d_avg: false,
-          maxPnlPct: true,
-          drawdownFromPeakPct: true,
-        })
-      } else {
-        setColumnVisibilityModel({
-          maxPnlPct: false,
-          drawdownFromPeakPct: false,
-        })
-      }
-    }
-  }, [universeId, viewMode])
 
   useEffect(() => {
     const isGroupUniverse = universeId.startsWith('group:')
@@ -3203,6 +3201,30 @@ export function HoldingsPage() {
         value != null ? Number(value).toFixed(1) : '-',
     },
     {
+      field: 'perf_1d_pct',
+      headerName: '1D PnL %',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.perf1dPct ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'perf_5d_pct',
+      headerName: '5D PnL %',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.perf5dPct ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
       field: 'perf_1m_pct',
       headerName: '1M PnL %',
       type: 'number',
@@ -3217,6 +3239,30 @@ export function HoldingsPage() {
           : '',
     },
     {
+      field: 'perf_3m_pct',
+      headerName: '3M PnL %',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.perf3mPct ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'perf_6m_pct',
+      headerName: '6M PnL %',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.perf6mPct ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
       field: 'perf_1y_pct',
       headerName: '1Y PnL %',
       type: 'number',
@@ -3229,6 +3275,180 @@ export function HoldingsPage() {
         params.value != null && Number(params.value) < 0
           ? 'pnl-negative'
           : '',
+    },
+    {
+      field: 'sma_20',
+      headerName: 'SMA(20)',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.sma20 ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'sma_50',
+      headerName: 'SMA(50)',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.sma50 ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'sma_200',
+      headerName: 'SMA(200)',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.sma200 ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'ema_20',
+      headerName: 'EMA(20)',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.ema20 ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'ema_50',
+      headerName: 'EMA(50)',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.ema50 ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'ema_200',
+      headerName: 'EMA(200)',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.ema200 ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'macd',
+      headerName: 'MACD',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.macd ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(3) : '-'),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'macd_signal',
+      headerName: 'MACD Sig',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.macdSignal ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(3) : '-'),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'macd_hist',
+      headerName: 'MACD Hist',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.macdHist ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(3) : '-'),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'sr_20_high',
+      headerName: '20D High',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.sr20High ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'sr_20_low',
+      headerName: '20D Low',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.sr20Low ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'sr_50_high',
+      headerName: '50D High',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.sr50High ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'sr_50_low',
+      headerName: '50D Low',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.sr50Low ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+    },
+    {
+      field: 'dist_20_high_pct',
+      headerName: 'To 20D High %',
+      type: 'number',
+      width: 140,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.distToSr20HighPct ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'dist_20_low_pct',
+      headerName: 'To 20D Low %',
+      type: 'number',
+      width: 140,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.distToSr20LowPct ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'obv',
+      headerName: 'OBV',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.obv ?? null,
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value))
+          ? String(Math.trunc(Number(value)))
+          : '-',
+    },
+    {
+      field: 'pvt',
+      headerName: 'PVT',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.pvt ?? null,
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value))
+          ? Number(value).toFixed(0)
+          : '-',
+    },
+    {
+      field: 'pvt_slope_pct_20',
+      headerName: 'PVT 20D %',
+      type: 'number',
+      width: 120,
+      valueGetter: (_value, row) =>
+        (row as HoldingRow).indicators?.pvtSlopePct20 ?? null,
+      valueFormatter: (value) =>
+        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'volatility_20d_pct',
@@ -3433,6 +3653,207 @@ export function HoldingsPage() {
           ]
         })()
       : baseColumns
+
+  columnsFieldRef.current = columns.map((c) => String(c.field))
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    if (viewId.startsWith('custom:') && !customViews.some((v) => v.id === viewId)) {
+      try {
+        const raw = window.localStorage.getItem(HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY)
+        if (raw) {
+          const parsed = JSON.parse(raw) as Array<{ id: string }>
+          if (Array.isArray(parsed) && parsed.some((v) => v?.id === viewId)) {
+            // Storage has it; allow subsequent render to pick it up.
+            return
+          }
+        }
+      } catch {
+        // Ignore parse errors.
+      }
+
+      setViewId('default')
+      try {
+        window.localStorage.setItem(HOLDINGS_SELECTED_VIEW_STORAGE_KEY, 'default')
+      } catch {
+        // Ignore persistence errors.
+      }
+      return
+    }
+
+    const universeKey = encodeURIComponent(universeId)
+    const viewKey = encodeURIComponent(viewId)
+    const perUniverseKeyV2 = `st_holdings_column_visibility_${viewKey}_${universeKey}_v2`
+    const globalKeyV2 = `st_holdings_column_visibility_${viewKey}_v2`
+
+    const readModel = (key: string): GridColumnVisibilityModel | null => {
+      try {
+        const raw = window.localStorage.getItem(key)
+        if (!raw) return null
+        const parsed = JSON.parse(raw) as GridColumnVisibilityModel
+        return parsed && typeof parsed === 'object' ? parsed : null
+      } catch {
+        return null
+      }
+    }
+
+    const buildShowOnlyModel = (showFields: string[]): GridColumnVisibilityModel => {
+      const show = new Set(showFields)
+      const model: GridColumnVisibilityModel = {}
+      for (const field of columnsFieldRef.current) {
+        if (field.startsWith('import_')) continue
+        model[field] = show.has(field)
+      }
+      return model
+    }
+
+    const defaultModel: GridColumnVisibilityModel = {
+      maxPnlPct: false,
+      drawdownFromPeakPct: false,
+      perf_1d_pct: false,
+      perf_5d_pct: false,
+      perf_3m_pct: false,
+      perf_6m_pct: false,
+      sma_20: false,
+      sma_50: false,
+      sma_200: false,
+      ema_20: false,
+      ema_50: false,
+      ema_200: false,
+      macd: false,
+      macd_signal: false,
+      macd_hist: false,
+      sr_20_high: false,
+      sr_20_low: false,
+      sr_50_high: false,
+      sr_50_low: false,
+      dist_20_high_pct: false,
+      dist_20_low_pct: false,
+      obv: false,
+      pvt: false,
+      pvt_slope_pct_20: false,
+    }
+
+    const presetShowFields: Record<string, string[]> = {
+      performance: [
+        'index',
+        'symbol',
+        'groupsLabel',
+        'chart',
+        'quantity',
+        'last_price',
+        'gap_pct',
+        'weight',
+        'perf_1d_pct',
+        'perf_5d_pct',
+        'perf_1m_pct',
+        'perf_3m_pct',
+        'perf_6m_pct',
+        'perf_1y_pct',
+        'volume_vs_20d_avg',
+        'pnlSinceCreationPct',
+      ],
+      indicators: [
+        'index',
+        'symbol',
+        'groupsLabel',
+        'chart',
+        'last_price',
+        'indicator_rsi14',
+        'sma_20',
+        'sma_50',
+        'sma_200',
+        'ema_20',
+        'ema_50',
+        'ema_200',
+        'macd',
+        'macd_signal',
+        'macd_hist',
+        'atr_14_pct',
+        'volatility_20d_pct',
+        'volume_vs_20d_avg',
+        'obv',
+        'pvt',
+        'pvt_slope_pct_20',
+      ],
+      support_resistance: [
+        'index',
+        'symbol',
+        'groupsLabel',
+        'chart',
+        'last_price',
+        'gap_pct',
+        'sma_20',
+        'sma_50',
+        'sr_20_high',
+        'sr_20_low',
+        'sr_50_high',
+        'sr_50_low',
+        'dist_20_high_pct',
+        'dist_20_low_pct',
+        'week52_low',
+        'week52_high',
+        'atr_14_pct',
+      ],
+      risk: [
+        'index',
+        'symbol',
+        'groupsLabel',
+        'quantity',
+        'average_price',
+        'last_price',
+        'weight',
+        'maxPnlPct',
+        'drawdownFromPeakPct',
+        'dd6mPct',
+        'volatility_20d_pct',
+        'atr_14_pct',
+      ],
+    }
+
+    const v2 = readModel(perUniverseKeyV2) ?? readModel(globalKeyV2)
+    if (v2) {
+      setColumnVisibilityModel(v2)
+      return
+    }
+
+    // Backward-compatible fallback for legacy default/risk view keys.
+    if (viewId === 'default' || viewId === 'risk') {
+      const legacyPerUniverseKey = `st_holdings_column_visibility_${viewId}_${universeKey}_v1`
+      const legacy = readModel(legacyPerUniverseKey)
+      if (legacy) {
+        setColumnVisibilityModel(legacy)
+        return
+      }
+
+      const legacyKey =
+        viewId === 'risk'
+          ? 'st_holdings_column_visibility_risk_v1'
+          : 'st_holdings_column_visibility_default_v1'
+      const legacyGlobal = readModel(legacyKey)
+      if (legacyGlobal) {
+        setColumnVisibilityModel(legacyGlobal)
+        return
+      }
+    }
+
+    let nextModel: GridColumnVisibilityModel
+    if (viewId === 'default') {
+      nextModel = defaultModel
+    } else if (presetShowFields[viewId]) {
+      nextModel = buildShowOnlyModel(presetShowFields[viewId])
+    } else {
+      nextModel = defaultModel
+    }
+
+    setColumnVisibilityModel(nextModel)
+    try {
+      window.localStorage.setItem(globalKeyV2, JSON.stringify(nextModel))
+    } catch {
+      // Ignore persistence errors.
+    }
+  }, [customViews, universeId, viewId])
 
   return (
     <Box>
@@ -3884,6 +4305,197 @@ export function HoldingsPage() {
         </DialogActions>
       </Dialog>
 
+      <Dialog
+        open={viewsDialogOpen}
+        onClose={() => setViewsDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Holdings views</DialogTitle>
+        <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Views save your column selection. Use the Columns menu to pick columns, then save.
+          </Typography>
+
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+            <TextField
+              label="New view name"
+              size="small"
+              value={newViewName}
+              onChange={(e) => setNewViewName(e.target.value)}
+              sx={{ flex: '1 1 220px' }}
+            />
+            <Button
+              size="small"
+              variant="contained"
+              onClick={() => {
+                const name = newViewName.trim()
+                if (!name) return
+                const id = `custom:${Date.now().toString(36)}`
+                const next = [...customViews, { id, name }]
+                setCustomViews(next)
+                setNewViewName('')
+                try {
+                  window.localStorage.setItem(
+                    HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY,
+                    JSON.stringify(next),
+                  )
+                } catch {
+                  // Ignore persistence errors.
+                }
+                try {
+                  const universeKey = encodeURIComponent(universeId)
+                  const viewKey = encodeURIComponent(id)
+                  window.localStorage.setItem(
+                    `st_holdings_column_visibility_${viewKey}_${universeKey}_v2`,
+                    JSON.stringify(columnVisibilityModel),
+                  )
+                  window.localStorage.setItem(
+                    `st_holdings_column_visibility_${viewKey}_v2`,
+                    JSON.stringify(columnVisibilityModel),
+                  )
+                  window.localStorage.setItem(HOLDINGS_SELECTED_VIEW_STORAGE_KEY, id)
+                } catch {
+                  // Ignore persistence errors.
+                }
+                setViewId(id as HoldingsViewId)
+                setViewsDialogOpen(false)
+              }}
+            >
+              Save as new
+            </Button>
+            {viewId.startsWith('custom:') && (
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  try {
+                    const universeKey = encodeURIComponent(universeId)
+                    const viewKey = encodeURIComponent(viewId)
+                    window.localStorage.setItem(
+                      `st_holdings_column_visibility_${viewKey}_${universeKey}_v2`,
+                      JSON.stringify(columnVisibilityModel),
+                    )
+                    window.localStorage.setItem(
+                      `st_holdings_column_visibility_${viewKey}_v2`,
+                      JSON.stringify(columnVisibilityModel),
+                    )
+                  } catch {
+                    // Ignore persistence errors.
+                  }
+                }}
+              >
+                Update current
+              </Button>
+            )}
+          </Box>
+
+          {customViews.length > 0 && (
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Custom views
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {customViews.map((v) => (
+                  <Box
+                    key={v.id}
+                    sx={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 1,
+                      p: 1,
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                    }}
+                  >
+                    <Typography variant="body2">{v.name}</Typography>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          setViewId(v.id as HoldingsViewId)
+                          try {
+                            window.localStorage.setItem(
+                              HOLDINGS_SELECTED_VIEW_STORAGE_KEY,
+                              v.id,
+                            )
+                          } catch {
+                            // Ignore persistence errors.
+                          }
+                          setViewsDialogOpen(false)
+                        }}
+                      >
+                        Use
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          const nextName = window.prompt('Rename view', v.name)?.trim()
+                          if (!nextName) return
+                          const next = customViews.map((x) =>
+                            x.id === v.id ? { ...x, name: nextName } : x,
+                          )
+                          setCustomViews(next)
+                          try {
+                            window.localStorage.setItem(
+                              HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY,
+                              JSON.stringify(next),
+                            )
+                          } catch {
+                            // Ignore persistence errors.
+                          }
+                        }}
+                      >
+                        Rename
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        variant="outlined"
+                        onClick={() => {
+                          const ok = window.confirm(`Delete view "${v.name}"?`)
+                          if (!ok) return
+                          const next = customViews.filter((x) => x.id !== v.id)
+                          setCustomViews(next)
+                          try {
+                            window.localStorage.setItem(
+                              HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY,
+                              JSON.stringify(next),
+                            )
+                          } catch {
+                            // Ignore persistence errors.
+                          }
+                          if (viewId === v.id) {
+                            setViewId('default')
+                            try {
+                              window.localStorage.setItem(
+                                HOLDINGS_SELECTED_VIEW_STORAGE_KEY,
+                                'default',
+                              )
+                            } catch {
+                              // Ignore persistence errors.
+                            }
+                          }
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setViewsDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
       <RebalanceDialog
         open={rebalanceOpen}
         onClose={() => setRebalanceOpen(false)}
@@ -3974,27 +4586,42 @@ export function HoldingsPage() {
 		            </Typography>
 	            <Select
 	              size="small"
-	              value={viewMode}
+	              value={viewId}
 	              onChange={(e) => {
-	                const mode =
-	                  e.target.value === 'risk' ? 'risk' : 'default'
-	                setViewMode(mode)
+	                const next = String(e.target.value || 'default') as HoldingsViewId
+	                setViewId(next)
 	                if (typeof window !== 'undefined') {
 	                  try {
 	                    window.localStorage.setItem(
-	                      'st_holdings_view_v1',
-	                      mode,
+	                      HOLDINGS_SELECTED_VIEW_STORAGE_KEY,
+	                      next,
 	                    )
 	                  } catch {
 	                    // Ignore persistence errors.
 	                  }
 	                }
 	              }}
-	              sx={{ minWidth: 120 }}
+	              sx={{ minWidth: 160 }}
 	            >
 	              <MenuItem value="default">Default</MenuItem>
-	              <MenuItem value="risk">Risk view</MenuItem>
+	              <MenuItem value="performance">Performance</MenuItem>
+	              <MenuItem value="indicators">Indicators</MenuItem>
+	              <MenuItem value="support_resistance">Support/Resistance</MenuItem>
+	              <MenuItem value="risk">Risk</MenuItem>
+	              {customViews.length > 0 && <MenuItem disabled>— Custom —</MenuItem>}
+	              {customViews.map((v) => (
+	                <MenuItem key={v.id} value={v.id as HoldingsViewId}>
+	                  {v.name}
+	                </MenuItem>
+	              ))}
 	            </Select>
+	            <Button
+	              size="small"
+	              variant="outlined"
+	              onClick={() => setViewsDialogOpen(true)}
+	            >
+	              Views…
+	            </Button>
 	          </Box>
 			          <Button
 			            size="small"
@@ -4618,17 +5245,22 @@ export function HoldingsPage() {
           setColumnVisibilityModel(model)
           try {
             const universeKey = encodeURIComponent(universeId)
-            const perUniverseKey = `st_holdings_column_visibility_${viewMode}_${universeKey}_v1`
+            const viewKey = encodeURIComponent(viewId)
+            const perUniverseKey = `st_holdings_column_visibility_${viewKey}_${universeKey}_v2`
+            const globalKey = `st_holdings_column_visibility_${viewKey}_v2`
             window.localStorage.setItem(perUniverseKey, JSON.stringify(model))
+            window.localStorage.setItem(globalKey, JSON.stringify(model))
 
             // Keep the legacy keys updated for backwards-compatible defaults
             // (these are used only as fallbacks).
-            const legacyKey =
-              viewMode === 'risk'
-                ? 'st_holdings_column_visibility_risk_v1'
-                : 'st_holdings_column_visibility_default_v1'
-            if (universeId === 'holdings' || universeId === 'holdings:angelone') {
-              window.localStorage.setItem(legacyKey, JSON.stringify(model))
+            if (viewId === 'default' || viewId === 'risk') {
+              const legacyKey =
+                viewId === 'risk'
+                  ? 'st_holdings_column_visibility_risk_v1'
+                  : 'st_holdings_column_visibility_default_v1'
+              if (universeId === 'holdings' || universeId === 'holdings:angelone') {
+                window.localStorage.setItem(legacyKey, JSON.stringify(model))
+              }
             }
           } catch {
             // Ignore persistence errors.
@@ -7001,6 +7633,97 @@ function computeSma(values: number[], period: number): number | undefined {
   return sum / period
 }
 
+function computeEma(values: number[], period: number): number | undefined {
+  if (period <= 0 || values.length < period) return undefined
+  const k = 2 / (period + 1)
+  let ema = values[0]
+  for (let i = 1; i < values.length; i += 1) {
+    ema = values[i] * k + ema * (1 - k)
+  }
+  return ema
+}
+
+function computeEmaSeries(values: number[], period: number): number[] | null {
+  if (period <= 0 || values.length < period) return null
+  const k = 2 / (period + 1)
+  const out: number[] = new Array(values.length)
+  out[0] = values[0]
+  for (let i = 1; i < values.length; i += 1) {
+    out[i] = values[i] * k + out[i - 1] * (1 - k)
+  }
+  return out
+}
+
+function computeMacd(
+  closes: number[],
+): { macd: number; signal: number; hist: number } | null {
+  const ema12 = computeEmaSeries(closes, 12)
+  const ema26 = computeEmaSeries(closes, 26)
+  if (!ema12 || !ema26) return null
+  const macdSeries = ema12.map((v, i) => v - ema26[i])
+  const signalSeries = computeEmaSeries(macdSeries, 9)
+  if (!signalSeries) return null
+  const macd = macdSeries[macdSeries.length - 1]
+  const signal = signalSeries[signalSeries.length - 1]
+  const hist = macd - signal
+  if (![macd, signal, hist].every((v) => Number.isFinite(v))) return null
+  return { macd, signal, hist }
+}
+
+function computeObv(closes: number[], volumes: number[]): number | undefined {
+  if (closes.length < 2 || volumes.length !== closes.length) return undefined
+  let obv = 0
+  for (let i = 1; i < closes.length; i += 1) {
+    const prev = closes[i - 1]
+    const curr = closes[i]
+    const vol = volumes[i] ?? 0
+    if (!Number.isFinite(vol)) continue
+    if (curr > prev) obv += vol
+    else if (curr < prev) obv -= vol
+  }
+  return Number.isFinite(obv) ? obv : undefined
+}
+
+function computePvt(closes: number[], volumes: number[]): number | undefined {
+  if (closes.length < 2 || volumes.length !== closes.length) return undefined
+  let pvt = 0
+  for (let i = 1; i < closes.length; i += 1) {
+    const prev = closes[i - 1]
+    const curr = closes[i]
+    const vol = volumes[i] ?? 0
+    if (!Number.isFinite(prev) || prev === 0 || !Number.isFinite(curr) || !Number.isFinite(vol))
+      continue
+    pvt += ((curr - prev) / prev) * vol
+  }
+  return Number.isFinite(pvt) ? pvt : undefined
+}
+
+function computePvtSlopePct(
+  closes: number[],
+  volumes: number[],
+  window: number,
+): number | undefined {
+  if (window <= 1 || closes.length < window + 1 || volumes.length !== closes.length) {
+    return undefined
+  }
+  const full = new Array(closes.length).fill(0)
+  for (let i = 1; i < closes.length; i += 1) {
+    const prev = closes[i - 1]
+    const curr = closes[i]
+    const vol = volumes[i] ?? 0
+    const prevPvt = full[i - 1] ?? 0
+    if (!Number.isFinite(prev) || prev === 0 || !Number.isFinite(curr) || !Number.isFinite(vol)) {
+      full[i] = prevPvt
+      continue
+    }
+    full[i] = prevPvt + ((curr - prev) / prev) * vol
+  }
+  const past = full[full.length - window - 1]
+  const curr = full[full.length - 1]
+  if (!Number.isFinite(past) || past === 0 || !Number.isFinite(curr)) return undefined
+  return ((curr - past) / Math.abs(past)) * 100
+}
+
 function computeRsi(values: number[], period: number): number | undefined {
   if (period <= 0 || values.length < period + 1) return undefined
   let gains = 0
@@ -7110,6 +7833,21 @@ function computeHoldingIndicators(
   const indicators: HoldingIndicators = {}
 
   indicators.rsi14 = computeRsi(closes, 14)
+  indicators.sma20 = computeSma(closes, 20)
+  indicators.sma50 = computeSma(closes, 50)
+  indicators.sma200 = computeSma(closes, 200)
+  indicators.ema20 = computeEma(closes, 20)
+  indicators.ema50 = computeEma(closes, 50)
+  indicators.ema200 = computeEma(closes, 200)
+  const macd = computeMacd(closes)
+  if (macd) {
+    indicators.macd = macd.macd
+    indicators.macdSignal = macd.signal
+    indicators.macdHist = macd.hist
+  }
+  indicators.obv = computeObv(closes, volumes)
+  indicators.pvt = computePvt(closes, volumes)
+  indicators.pvtSlopePct20 = computePvtSlopePct(closes, volumes, 20)
 
   const ma50 = computeSma(closes, 50)
   if (ma50 != null && ma50 !== 0) {
@@ -7125,12 +7863,43 @@ function computeHoldingIndicators(
   indicators.volatility6mPct = computeVolatilityPct(closes, 126)
   indicators.atr14Pct = computeAtrPct(highs, lows, closes, 14)
 
+  indicators.perf1dPct = computePerfPct(closes, 1)
+  indicators.perf5dPct = computePerfPct(closes, 5)
   indicators.perf1wPct = computePerfPct(closes, 5)
   indicators.perf1mPct = computePerfPct(closes, 21)
   indicators.perf3mPct = computePerfPct(closes, 63)
+  indicators.perf6mPct = computePerfPct(closes, 126)
   indicators.perf1yPct = computePerfPct(closes, 252)
 
   indicators.volumeVsAvg20d = computeVolumeRatio(volumes, 20)
+
+  // Support/resistance proxies.
+  const sr20 = points.length > 20 ? points.slice(-20) : points
+  const sr50 = points.length > 50 ? points.slice(-50) : points
+  const sr20High = sr20.map((p) => p.high).filter((v) => Number.isFinite(v))
+  const sr20Low = sr20.map((p) => p.low).filter((v) => Number.isFinite(v))
+  const sr50High = sr50.map((p) => p.high).filter((v) => Number.isFinite(v))
+  const sr50Low = sr50.map((p) => p.low).filter((v) => Number.isFinite(v))
+  if (sr20High.length) indicators.sr20High = Math.max(...sr20High)
+  if (sr20Low.length) indicators.sr20Low = Math.min(...sr20Low)
+  if (sr50High.length) indicators.sr50High = Math.max(...sr50High)
+  if (sr50Low.length) indicators.sr50Low = Math.min(...sr50Low)
+  if (
+    indicators.sr20High != null
+    && indicators.sr20High > 0
+    && Number.isFinite(lastClose)
+    && lastClose > 0
+  ) {
+    indicators.distToSr20HighPct = ((lastClose / indicators.sr20High) - 1) * 100
+  }
+  if (
+    indicators.sr20Low != null
+    && indicators.sr20Low > 0
+    && Number.isFinite(lastClose)
+    && lastClose > 0
+  ) {
+    indicators.distToSr20LowPct = ((lastClose / indicators.sr20Low) - 1) * 100
+  }
 
   // 52-week high/low (approx. 252 trading days).
   const w52 = points.length > 252 ? points.slice(-252) : points
