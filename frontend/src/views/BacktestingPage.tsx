@@ -1,4 +1,5 @@
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import CloseIcon from '@mui/icons-material/Close'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
@@ -272,6 +273,31 @@ export function BacktestingPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [detailsRun, setDetailsRun] = useState<BacktestRun | null>(null)
 
+  const [pinnedRunIds, setPinnedRunIds] = useState<number[]>([])
+  const [activePinnedRunId, setActivePinnedRunId] = useState<number | null>(null)
+  const [pinnedRunsById, setPinnedRunsById] = useState<Record<number, BacktestRun>>({})
+  const [pinnedRunErrorsById, setPinnedRunErrorsById] = useState<Record<number, string>>({})
+
+  const pinRun = useCallback((runId: number) => {
+    setPinnedRunIds((prev) => (prev.includes(runId) ? prev : [...prev, runId]))
+    setActivePinnedRunId(runId)
+  }, [])
+
+  const closePinnedRun = useCallback((runId: number) => {
+    setPinnedRunIds((prev) => prev.filter((x) => x !== runId))
+    setPinnedRunsById((prev) => {
+      const next = { ...prev }
+      delete next[runId]
+      return next
+    })
+    setPinnedRunErrorsById((prev) => {
+      const next = { ...prev }
+      delete next[runId]
+      return next
+    })
+    setActivePinnedRunId((prev) => (prev === runId ? null : prev))
+  }, [])
+
   const getRunUniverse = useCallback((run: BacktestRun) => {
     return ((run.config as any)?.universe ?? {}) as Record<string, unknown>
   }, [])
@@ -393,6 +419,164 @@ export function BacktestingPage() {
     [getRunConfig],
   )
 
+  const applyRunToInputs = useCallback(
+    (run: BacktestRun) => {
+      const u = getRunUniverse(run)
+      const cfg = getRunConfig(run)
+
+      const mode = String(u.mode ?? '').toUpperCase()
+      if (mode === 'HOLDINGS' || mode === 'GROUP' || mode === 'BOTH') {
+        setUniverseMode(mode as UniverseMode)
+      }
+
+      const broker = String(u.broker_name ?? '').toLowerCase()
+      setBrokerName(broker === 'angelone' ? 'angelone' : 'zerodha')
+
+      const gid = u.group_id
+      setGroupId(typeof gid === 'number' ? gid : '')
+
+      const start = String(cfg.start_date ?? '').trim()
+      const end = String(cfg.end_date ?? '').trim()
+      if (start) setStartDate(start)
+      if (end) setEndDate(end)
+
+      if (run.kind === 'SIGNAL') {
+        const modeCfg = String(cfg.mode ?? 'DSL').toUpperCase()
+        if (modeCfg === 'RANKING') {
+          setSignalMode('RANKING')
+          setRankingWindow(Number(cfg.ranking_window ?? cfg.window ?? 20) || 20)
+          setRankingTopN(Number(cfg.top_n ?? 10) || 10)
+          const cadence = String(cfg.cadence ?? 'MONTHLY').toUpperCase()
+          setRankingCadence(cadence === 'WEEKLY' ? 'WEEKLY' : 'MONTHLY')
+        } else {
+          setSignalMode('DSL')
+          setSignalDsl(String(cfg.dsl ?? '').trim() || 'RSI(14) < 30')
+        }
+        if (Array.isArray(cfg.forward_windows)) {
+          const ws = (cfg.forward_windows as unknown[])
+            .map((x) => Number(x))
+            .filter((x) => Number.isFinite(x) && x > 0)
+          if (ws.length) setSignalForwardWindows(ws)
+        }
+        return
+      }
+
+      if (run.kind === 'PORTFOLIO') {
+        const method = String(cfg.method ?? 'TARGET_WEIGHTS').toUpperCase()
+        if (method === 'ROTATION' || method === 'RISK_PARITY' || method === 'TARGET_WEIGHTS') {
+          setPortfolioMethod(method as PortfolioMethod)
+        }
+        const cadence = String(cfg.cadence ?? 'MONTHLY').toUpperCase()
+        setPortfolioCadence(cadence === 'WEEKLY' ? 'WEEKLY' : 'MONTHLY')
+
+        const fill = String(cfg.fill_timing ?? 'CLOSE').toUpperCase()
+        setPortfolioFillTiming(fill === 'NEXT_OPEN' ? 'NEXT_OPEN' : 'CLOSE')
+
+        const chargesModel = String(cfg.charges_model ?? 'BPS').toUpperCase()
+        setPortfolioChargesModel(chargesModel === 'BROKER' ? 'BROKER' : 'BPS')
+        setPortfolioChargesBps(Number(cfg.charges_bps ?? 0) || 0)
+        setPortfolioChargesBroker(String(cfg.charges_broker ?? 'zerodha') === 'angelone' ? 'angelone' : 'zerodha')
+
+        setPortfolioInitialCash(Number(cfg.initial_cash ?? 100000) || 100000)
+        setPortfolioBudgetPct(Number(cfg.budget_pct ?? 100) || 100)
+        setPortfolioMaxTrades(Number(cfg.max_trades ?? 50) || 50)
+        setPortfolioMinTradeValue(Number(cfg.min_trade_value ?? 0) || 0)
+        setPortfolioSlippageBps(Number(cfg.slippage_bps ?? 10) || 0)
+
+        const product = String(cfg.product ?? 'CNC').toUpperCase()
+        setPortfolioProduct(product === 'MIS' ? 'MIS' : 'CNC')
+        setPortfolioIncludeDpCharges(cfg.include_dp_charges !== false)
+
+        const gateSource = String(cfg.gate_source ?? 'NONE').toUpperCase()
+        setPortfolioGateSource(
+          gateSource === 'SYMBOL'
+            ? 'SYMBOL'
+            : gateSource === 'GROUP_INDEX'
+              ? 'GROUP_INDEX'
+              : 'NONE',
+        )
+        setPortfolioGateDsl(String(cfg.gate_dsl ?? ''))
+        setPortfolioGateSymbol(String(cfg.gate_symbol ?? ''))
+        setPortfolioGateSymbolExchange(String(cfg.gate_symbol_exchange ?? 'NSE') || 'NSE')
+        setPortfolioGateGroupId(typeof cfg.gate_group_id === 'number' ? (cfg.gate_group_id as number) : '')
+        setPortfolioGateMinCoveragePct(Number(cfg.gate_min_coverage_pct ?? 80) || 0)
+
+        setRotationTopN(Number(cfg.top_n ?? rotationTopN) || rotationTopN)
+        setRotationWindow(Number(cfg.ranking_window ?? rotationWindow) || rotationWindow)
+        setRotationEligibleDsl(String(cfg.eligible_dsl ?? rotationEligibleDsl))
+        setRiskWindow(Number(cfg.risk_window ?? riskWindow) || riskWindow)
+        setRiskMinObs(Number(cfg.min_observations ?? riskMinObs) || riskMinObs)
+        setRiskMinWeight(Math.round(Number(cfg.min_weight ?? 0) * 100))
+        setRiskMaxWeight(Math.round(Number(cfg.max_weight ?? 1) * 100))
+        return
+      }
+
+      if (run.kind === 'STRATEGY') {
+        const symbols = (u.symbols as Array<Record<string, unknown>> | undefined) ?? []
+        const first = symbols[0] ?? null
+        if (first) {
+          const ex = String(first.exchange ?? 'NSE').trim().toUpperCase()
+          const sym = String(first.symbol ?? '').trim().toUpperCase()
+          if (sym) setStrategySymbolKey(`${ex}:${sym}`)
+        }
+
+        const tf = String(cfg.timeframe ?? '').trim()
+        if (tf === '1m' || tf === '5m' || tf === '15m' || tf === '30m' || tf === '1h' || tf === '1d') {
+          setStrategyTimeframe(tf as StrategyTimeframe)
+        }
+
+        setStrategyEntryDsl(String(cfg.entry_dsl ?? '').trim() || 'RSI(14) < 30')
+        setStrategyExitDsl(String(cfg.exit_dsl ?? '').trim() || 'RSI(14) > 70')
+
+        const product = String(cfg.product ?? 'CNC').toUpperCase()
+        setStrategyProduct(product === 'MIS' ? 'MIS' : 'CNC')
+
+        const direction = String(cfg.direction ?? 'LONG').toUpperCase()
+        setStrategyDirection(direction === 'SHORT' ? 'SHORT' : 'LONG')
+
+        setStrategyInitialCash(Number(cfg.initial_cash ?? 100000) || 100000)
+        setStrategyPositionSizePct(Number(cfg.position_size_pct ?? 100) || 100)
+        setStrategyStopLossPct(Number(cfg.stop_loss_pct ?? 0) || 0)
+        setStrategyTakeProfitPct(Number(cfg.take_profit_pct ?? 0) || 0)
+        setStrategyTrailingStopPct(Number(cfg.trailing_stop_pct ?? 0) || 0)
+        setStrategyMaxEquityDdGlobalPct(Number(cfg.max_equity_dd_global_pct ?? 0) || 0)
+        setStrategyMaxEquityDdTradePct(Number(cfg.max_equity_dd_trade_pct ?? 0) || 0)
+        setStrategySlippageBps(Number(cfg.slippage_bps ?? 0) || 0)
+
+        const chargesModel = String(cfg.charges_model ?? 'BROKER').toUpperCase()
+        setStrategyChargesModel(chargesModel === 'BPS' ? 'BPS' : 'BROKER')
+        setStrategyChargesBps(Number(cfg.charges_bps ?? 0) || 0)
+        setStrategyIncludeDpCharges(cfg.include_dp_charges !== false)
+        return
+      }
+
+      if (run.kind === 'EXECUTION') {
+        const base = cfg.base_run_id
+        setExecutionBaseRunId(typeof base === 'number' ? base : '')
+        const fill = String(cfg.fill_timing ?? 'NEXT_OPEN').toUpperCase()
+        setExecutionFillTiming(fill === 'CLOSE' ? 'CLOSE' : 'NEXT_OPEN')
+        setExecutionSlippageBps(Number(cfg.slippage_bps ?? 10) || 0)
+        const chargesModel = String(cfg.charges_model ?? 'BPS').toUpperCase()
+        setExecutionChargesModel(chargesModel === 'BROKER' ? 'BROKER' : 'BPS')
+        setExecutionChargesBps(Number(cfg.charges_bps ?? 0) || 0)
+        setExecutionChargesBroker(String(cfg.charges_broker ?? 'zerodha') === 'angelone' ? 'angelone' : 'zerodha')
+        const product = String(cfg.product ?? 'CNC').toUpperCase()
+        setExecutionProduct(product === 'MIS' ? 'MIS' : 'CNC')
+        setExecutionIncludeDpCharges(cfg.include_dp_charges !== false)
+      }
+    },
+    [
+      getRunConfig,
+      getRunUniverse,
+      riskMaxWeight,
+      riskMinObs,
+      riskWindow,
+      rotationEligibleDsl,
+      rotationTopN,
+      rotationWindow,
+    ],
+  )
+
   const refreshRuns = useCallback(async () => {
     setRunsLoading(true)
     try {
@@ -402,6 +586,35 @@ export function BacktestingPage() {
       setRunsLoading(false)
     }
   }, [kind])
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const missing = pinnedRunIds.filter((id) => pinnedRunsById[id] == null)
+      if (!missing.length) return
+      for (const id of missing) {
+        try {
+          const run = await getBacktestRun(id)
+          if (!active) return
+          setPinnedRunsById((prev) => ({ ...prev, [id]: run }))
+          setPinnedRunErrorsById((prev) => {
+            const next = { ...prev }
+            delete next[id]
+            return next
+          })
+        } catch (err) {
+          if (!active) return
+          setPinnedRunErrorsById((prev) => ({
+            ...prev,
+            [id]: err instanceof Error ? err.message : 'Failed to load run',
+          }))
+        }
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [pinnedRunIds, pinnedRunsById])
 
   const handleDeleteSelected = useCallback(async () => {
     const ids = selectedRunIds.slice()
@@ -2752,7 +2965,18 @@ export function BacktestingPage() {
                   )
                 }
                 disableRowSelectionOnClick
-                onRowClick={(p) => setSelectedRunId((p.row as BacktestRun).id)}
+                onRowClick={(p, event) => {
+                  const run = p.row as BacktestRun
+                  setSelectedRunId(run.id)
+                  applyRunToInputs(run)
+                  const e = event as unknown as { ctrlKey?: boolean; metaKey?: boolean }
+                  const ctrl = Boolean(e?.ctrlKey || e?.metaKey)
+                  if (ctrl && tab === 'STRATEGY') {
+                    pinRun(run.id)
+                  } else {
+                    setActivePinnedRunId(null)
+                  }
+                }}
                 initialState={{
                   pagination: { paginationModel: { pageSize: 5 } },
                 }}
@@ -2761,7 +2985,58 @@ export function BacktestingPage() {
             </Box>
 
             <DividerBlock title="Selected run" />
-		            {selectedRun ? (
+            {tab === 'STRATEGY' && pinnedRunIds.length > 0 ? (
+              <Tabs
+                value={activePinnedRunId ?? 0}
+                onChange={(_e, v) => setActivePinnedRunId(v === 0 ? null : Number(v))}
+                sx={{ mt: 1 }}
+              >
+                <Tab value={0} label="Selected" />
+                {pinnedRunIds.map((id) => (
+                  <Tab
+                    key={id}
+                    value={id}
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <span>Run #{id}</span>
+                        <IconButton
+                          size="small"
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            closePinnedRun(id)
+                          }}
+                          aria-label={`Close run ${id}`}
+                        >
+                          <CloseIcon fontSize="inherit" />
+                        </IconButton>
+                      </Box>
+                    }
+                  />
+                ))}
+              </Tabs>
+            ) : null}
+
+		            {activePinnedRunId != null ? (
+                  <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      Run #{activePinnedRunId} • STRATEGY • pinned
+                    </Typography>
+                    {pinnedRunErrorsById[activePinnedRunId] ? (
+                      <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                        {pinnedRunErrorsById[activePinnedRunId]}
+                      </Typography>
+                    ) : pinnedRunsById[activePinnedRunId] ? (
+                      <StrategyRunEquityCard
+                        run={pinnedRunsById[activePinnedRunId]}
+                        displayTimeZone={displayTimeZone}
+                      />
+                    ) : (
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                        Loading run…
+                      </Typography>
+                    )}
+                  </Paper>
+                ) : selectedRun ? (
 		              <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
 	                <Typography variant="body2" color="text.secondary">
 	                  Run #{selectedRun.id} • {selectedRun.kind} • {selectedRun.status}
@@ -3130,6 +3405,272 @@ export function BacktestingPage() {
           </Button>
         </DialogActions>
       </Dialog>
+    </Box>
+  )
+}
+
+function StrategyRunEquityCard({
+  run,
+  displayTimeZone,
+}: {
+  run: BacktestRun
+  displayTimeZone: 'LOCAL' | string
+}) {
+  const result = (run.result as Record<string, unknown> | null | undefined) ?? null
+  const series = (result?.series as Record<string, unknown> | undefined) ?? null
+  const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
+  const tradeStats = (result?.trade_stats as Record<string, unknown> | undefined) ?? null
+  const baselines = (result?.baselines as Record<string, unknown> | undefined) ?? null
+  const trades = (result?.trades as unknown[] | undefined) ?? []
+
+  const tradeMarkers = useMemo((): PriceSignalMarker[] => {
+    const countsByKey = new Map<string, number>()
+    const out: PriceSignalMarker[] = []
+    const push = (ts: string, kind: string, text: string) => {
+      const key = `${ts}|${kind}`
+      const next = (countsByKey.get(key) ?? 0) + 1
+      countsByKey.set(key, next)
+      out.push({ ts, kind, text: next > 1 ? `${text}${next}` : text })
+    }
+    for (const t of trades) {
+      const row = (t ?? {}) as Record<string, unknown>
+      const entryTs = String(row.entry_ts ?? '')
+      const exitTs = String(row.exit_ts ?? '')
+      const side = String(row.side ?? '').toUpperCase()
+      if (!entryTs || !exitTs) continue
+      const entryKind = side === 'SHORT' ? 'CROSSUNDER' : 'CROSSOVER'
+      const exitKind = side === 'SHORT' ? 'CROSSOVER' : 'CROSSUNDER'
+      push(entryTs, entryKind, 'E')
+      push(exitTs, exitKind, 'X')
+    }
+    return out
+  }, [trades])
+
+  const markerTs = useMemo(() => {
+    const s = new Set<string>()
+    for (const m of tradeMarkers) s.add(m.ts)
+    return s
+  }, [tradeMarkers])
+
+  const equityCandles = useMemo((): PriceCandle[] => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(ts.length, equity.length); i++) {
+      const t = String(ts[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!t || !Number.isFinite(v)) continue
+      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return downsampleKeep(candles, 2500, (c) => markerTs.has((c as PriceCandle).ts))
+  }, [markerTs, series])
+
+  const drawdownCandles = useMemo((): PriceCandle[] => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const dd = (series?.drawdown_pct as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(ts.length, dd.length); i++) {
+      const t = String(ts[i] ?? '')
+      const v = Number(dd[i] ?? NaN)
+      if (!t || !Number.isFinite(v)) continue
+      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return downsample(candles, 2500)
+  }, [series])
+
+  const profitValue = useMemo(() => {
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    let first: number | null = null
+    let last: number | null = null
+    for (const v of equity) {
+      const n = Number(v ?? NaN)
+      if (!Number.isFinite(n)) continue
+      if (first === null) first = n
+      last = n
+    }
+    if (first === null || last === null) return null
+    return last - first
+  }, [series])
+
+  const baselineOverlays = useMemo(() => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    if (!baselines || !ts.length) return []
+
+    const overlays: Array<{ name: string; color: string; points: Array<{ ts: string; value: number | null }> }> = []
+
+    const addOverlay = (name: string, color: string, curve: unknown) => {
+      const row = (curve ?? {}) as Record<string, unknown>
+      const equity = (row.equity as unknown[] | undefined) ?? []
+      const byTs = new Map<string, number>()
+      for (let i = 0; i < Math.min(ts.length, equity.length); i++) {
+        const t = String(ts[i] ?? '')
+        const v = Number(equity[i] ?? NaN)
+        if (!t || !Number.isFinite(v)) continue
+        byTs.set(t, v)
+      }
+      const points = equityCandles.map((c) => ({ ts: c.ts, value: byTs.get(c.ts) ?? null }))
+      overlays.push({ name, color, points })
+    }
+
+    addOverlay('Buy & hold (start→end)', '#6b7280', (baselines.start_to_end as unknown) ?? null)
+    if ((baselines as any).first_entry_to_end) {
+      addOverlay('Buy & hold (first entry→end)', '#9ca3af', (baselines as any).first_entry_to_end)
+    }
+
+    return overlays
+  }, [baselines, equityCandles, series])
+
+  const tradeRows = useMemo(() => {
+    return trades.map((t, idx) => {
+      const row = (t ?? {}) as Record<string, unknown>
+      return {
+        id: idx,
+        entry_ts: String(row.entry_ts ?? ''),
+        exit_ts: String(row.exit_ts ?? ''),
+        side: String(row.side ?? ''),
+        qty: row.qty ?? null,
+        pnl_pct: row.pnl_pct ?? null,
+        reason: String(row.reason ?? ''),
+      }
+    })
+  }, [trades])
+
+  const tradeColumns = useMemo((): GridColDef[] => {
+    return [
+      {
+        field: 'entry_ts',
+        headerName: 'Entry',
+        width: 230,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      {
+        field: 'exit_ts',
+        headerName: 'Exit',
+        width: 230,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      { field: 'side', headerName: 'Side', width: 110 },
+      { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
+      {
+        field: 'pnl_pct',
+        headerName: 'P&L %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      { field: 'reason', headerName: 'Reason', minWidth: 160, flex: 1 },
+    ]
+  }, [displayTimeZone])
+
+  if (run.kind !== 'STRATEGY') {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        Pinned tabs are supported for Strategy runs only.
+      </Typography>
+    )
+  }
+
+  if (!result || run.status !== 'COMPLETED' || !equityCandles.length) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        No equity curve data available for this run.
+      </Typography>
+    )
+  }
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Typography variant="subtitle2">Equity curve</Typography>
+      {metrics ? (
+        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+          <Chip size="small" label={`Total: ${Number(metrics.total_return_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`CAGR: ${Number(metrics.cagr_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`Max DD: ${Number(metrics.max_drawdown_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`Turnover: ${Number(metrics.turnover_pct_total ?? 0).toFixed(1)}%`} />
+          <Chip size="small" label={`Charges: ${fmtInr(Number(metrics.total_charges ?? 0), 0)}`} />
+          {baselines?.start_to_end ? (
+            <Chip
+              size="small"
+              variant="outlined"
+              label={`Buy&hold: ${Number((baselines.start_to_end as any)?.total_return_pct ?? 0).toFixed(2)}%`}
+            />
+          ) : null}
+          {baselines && (baselines as any).first_entry_to_end ? (
+            <Chip
+              size="small"
+              variant="outlined"
+              label={`Hold from 1st entry: ${Number(((baselines as any).first_entry_to_end as any)?.total_return_pct ?? 0).toFixed(2)}%`}
+            />
+          ) : null}
+          {tradeStats ? (
+            <>
+              <Chip size="small" label={`Trades: ${Number(tradeStats.count ?? 0)}`} />
+              <Chip size="small" label={`Win: ${Number(tradeStats.win_rate_pct ?? 0).toFixed(1)}%`} />
+              {typeof profitValue === 'number' ? (
+                <Chip size="small" label={`Profit: ${fmtInr(profitValue, 0)}`} />
+              ) : null}
+            </>
+          ) : null}
+        </Stack>
+      ) : null}
+
+      <Box sx={{ mt: 1 }}>
+        <PriceChart
+          candles={equityCandles}
+          chartType="line"
+          height={260}
+          overlays={baselineOverlays}
+          markers={tradeMarkers}
+          showLegend
+          baseSeriesName="Strategy equity"
+        />
+      </Box>
+
+      {drawdownCandles.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2">Drawdown (%)</Typography>
+          <Box sx={{ mt: 1 }}>
+            <PriceChart candles={drawdownCandles} chartType="line" height={180} />
+          </Box>
+        </Box>
+      ) : null}
+
+      {tradeRows.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+            <Typography variant="subtitle2">Trades</Typography>
+            <Box sx={{ flexGrow: 1 }} />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                const rows = tradeRows.map((r) => ({
+                  entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
+                  exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
+                  side: r.side,
+                  qty: r.qty,
+                  pnl_pct: r.pnl_pct,
+                  reason: r.reason,
+                }))
+                downloadCsv(`strategy_trades_run_${run.id}.csv`, rows)
+              }}
+            >
+              Export CSV
+            </Button>
+          </Stack>
+          <Box sx={{ height: 260, mt: 1 }}>
+            <DataGrid
+              rows={tradeRows}
+              columns={tradeColumns}
+              density="compact"
+              disableRowSelectionOnClick
+              pageSizeOptions={[5, 10, 25]}
+              initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+            />
+          </Box>
+        </Box>
+      ) : null}
     </Box>
   )
 }
