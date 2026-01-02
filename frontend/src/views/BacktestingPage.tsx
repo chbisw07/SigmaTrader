@@ -21,6 +21,7 @@ import Typography from '@mui/material/Typography'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { KeyValueJsonDialog } from '../components/KeyValueJsonDialog'
 import { MarkdownLite } from '../components/MarkdownLite'
 import { PriceChart, type PriceCandle, type PriceSignalMarker } from '../components/PriceChart'
 import { fetchHoldings } from '../services/positions'
@@ -203,6 +204,7 @@ export function BacktestingPage() {
   const [running, setRunning] = useState(false)
   const [selectedRunIds, setSelectedRunIds] = useState<number[]>([])
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [detailsRun, setDetailsRun] = useState<BacktestRun | null>(null)
 
   const getRunUniverse = useCallback((run: BacktestRun) => {
     return ((run.config as any)?.universe ?? {}) as Record<string, unknown>
@@ -744,8 +746,9 @@ export function BacktestingPage() {
       {
         field: 'group',
         headerName: 'Group',
-        minWidth: 180,
-        flex: 1,
+        width: 160,
+        minWidth: 140,
+        flex: 0,
         sortable: false,
         renderCell: (params) => renderGroupLabel(params.row as BacktestRun),
       },
@@ -766,10 +769,40 @@ export function BacktestingPage() {
       {
         field: 'details',
         headerName: 'DSL / Ranking',
-        minWidth: 260,
+        minWidth: 320,
         flex: 2,
         sortable: false,
-        renderCell: (params) => renderDetails(params.row as BacktestRun),
+        renderCell: (params) => {
+          const run = params.row as BacktestRun
+          const text = renderDetails(run)
+          return (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, width: '100%' }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+                title={text}
+              >
+                {text}
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDetailsRun(run)
+                }}
+              >
+                Details
+              </Button>
+            </Box>
+          )
+        },
       },
     ]
     return cols
@@ -1281,6 +1314,22 @@ export function BacktestingPage() {
     if (!result) return null
     return (result.metrics as Record<string, unknown> | undefined) ?? null
   }, [selectedRun, tab])
+
+  const strategyProfitValue = useMemo(() => {
+    if (tab !== 'STRATEGY') return null
+    if (!strategySeries) return null
+    const equity = (strategySeries.equity as unknown[] | undefined) ?? []
+    let first: number | null = null
+    let last: number | null = null
+    for (const v of equity) {
+      const n = Number(v ?? NaN)
+      if (!Number.isFinite(n)) continue
+      if (first === null) first = n
+      last = n
+    }
+    if (first === null || last === null) return null
+    return last - first
+  }, [strategySeries, tab])
 
   const strategyTradeStats = useMemo(() => {
     if (tab !== 'STRATEGY') return null
@@ -2795,6 +2844,9 @@ export function BacktestingPage() {
                             <>
                               <Chip size="small" label={`Trades: ${Number(strategyTradeStats.count ?? 0)}`} />
                               <Chip size="small" label={`Win: ${Number(strategyTradeStats.win_rate_pct ?? 0).toFixed(1)}%`} />
+                              {typeof strategyProfitValue === 'number' ? (
+                                <Chip size="small" label={`Profit: ${fmtInr(strategyProfitValue, 0)}`} />
+                              ) : null}
                             </>
                           ) : null}
                         </Stack>
@@ -2927,6 +2979,26 @@ export function BacktestingPage() {
           <Button onClick={() => setHelpOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      <KeyValueJsonDialog
+        open={detailsRun != null}
+        onClose={() => setDetailsRun(null)}
+        title={`DSL / Ranking — Run #${detailsRun?.id ?? ''}`}
+        value={
+          detailsRun
+            ? {
+                id: detailsRun.id,
+                kind: detailsRun.kind,
+                status: detailsRun.status,
+                created_at: detailsRun.created_at,
+                title: detailsRun.title,
+                details: renderDetails(detailsRun),
+                universe: getRunUniverse(detailsRun),
+                config: getRunConfig(detailsRun),
+              }
+            : {}
+        }
+      />
 
       <Dialog open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Delete backtest runs</DialogTitle>
