@@ -34,6 +34,8 @@ import {
   type BacktestKind,
   type BacktestRun,
 } from '../services/backtests'
+import { useTimeSettings } from '../timeSettingsContext'
+import { parseBackendDate } from '../utils/datetime'
 
 import backtestingHelpText from '../../../docs/backtesting_page_help.md?raw'
 import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_help.md?raw'
@@ -83,6 +85,69 @@ function fmtInr(value: unknown, digits = 0): string {
   }
 }
 
+function formatYmdHmsAmPm(value: unknown, displayTimeZone: 'LOCAL' | string): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const isNaive =
+    Boolean(raw) &&
+    !/(z|[+-]\d{2}:?\d{2})$/i.test(raw) &&
+    /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(raw)
+
+  const d = parseBackendDate(
+    isNaive ? raw.replace(' ', 'T') + '+05:30' : value,
+  )
+  if (!d) return ''
+
+  const opts: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    ...(displayTimeZone === 'LOCAL' ? {} : { timeZone: displayTimeZone }),
+  }
+
+  const parts = new Intl.DateTimeFormat('en-US', opts).formatToParts(d)
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? ''
+
+  const year = get('year')
+  const month = get('month')
+  const day = get('day')
+  const hour = get('hour')
+  const minute = get('minute')
+  const second = get('second')
+  const dayPeriod = get('dayPeriod')
+
+  if (!year || !month || !day) return ''
+  return `${year}-${month}-${day} ${hour}:${minute}:${second} ${dayPeriod}`
+}
+
+function csvEscape(value: unknown): string {
+  const raw = value == null ? '' : String(value)
+  if (/[",\n\r]/.test(raw)) return `"${raw.replace(/"/g, '""')}"`
+  return raw
+}
+
+function downloadCsv(filename: string, rows: Array<Record<string, unknown>>): void {
+  if (!rows.length) return
+  const headers = Object.keys(rows[0] ?? {})
+  const lines = [
+    headers.map(csvEscape).join(','),
+    ...rows.map((r) => headers.map((h) => csvEscape(r[h])).join(',')),
+  ]
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 function downsample<T>(values: T[], maxPoints: number): T[] {
   return downsampleKeep(values, maxPoints)
 }
@@ -115,6 +180,7 @@ function getDatePreset(preset: '6M' | '1Y' | '2Y'): { start: string; end: string
 }
 
 export function BacktestingPage() {
+  const { displayTimeZone } = useTimeSettings()
   const [tab, setTab] = useState<BacktestTab>('SIGNAL')
   const kind: BacktestKind = tab
 
@@ -741,7 +807,13 @@ export function BacktestingPage() {
   const runColumns = useMemo((): GridColDef[] => {
     const cols: GridColDef[] = [
       { field: 'id', headerName: 'Run', width: 90 },
-      { field: 'created_at', headerName: 'Created', width: 180 },
+      {
+        field: 'created_at',
+        headerName: 'Created',
+        width: 210,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
       { field: 'status', headerName: 'Status', width: 120 },
       {
         field: 'group',
@@ -806,7 +878,7 @@ export function BacktestingPage() {
       },
     ]
     return cols
-  }, [renderDetails, renderDuration, renderGroupLabel, renderSymbolLabel])
+  }, [displayTimeZone, renderDetails, renderDuration, renderGroupLabel, renderSymbolLabel])
 
   const runColumnVisibilityModel = useMemo(() => {
     return { symbol: tab === 'STRATEGY' }
@@ -1404,8 +1476,20 @@ export function BacktestingPage() {
 
   const strategyTradesColumns = useMemo((): GridColDef[] => {
     return [
-      { field: 'entry_ts', headerName: 'Entry', width: 200 },
-      { field: 'exit_ts', headerName: 'Exit', width: 200 },
+      {
+        field: 'entry_ts',
+        headerName: 'Entry',
+        width: 230,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      {
+        field: 'exit_ts',
+        headerName: 'Exit',
+        width: 230,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
       { field: 'side', headerName: 'Side', width: 110 },
       { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
       {
@@ -1416,7 +1500,7 @@ export function BacktestingPage() {
       },
       { field: 'reason', headerName: 'Reason', minWidth: 160, flex: 1 },
     ]
-  }, [])
+  }, [displayTimeZone])
 
   const portfolioDrawdownCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'PORTFOLIO') return []
@@ -2875,7 +2959,29 @@ export function BacktestingPage() {
 
                       {strategyTradesRows.length > 0 ? (
                         <Box sx={{ mt: 2 }}>
-                          <Typography variant="subtitle2">Trades</Typography>
+                          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                            <Typography variant="subtitle2">Trades</Typography>
+                            <Box sx={{ flexGrow: 1 }} />
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={() => {
+                                const runId = selectedRun?.id ?? ''
+                                const rows = strategyTradesRows.map((r) => ({
+                                  entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
+                                  exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
+                                  side: r.side,
+                                  qty: r.qty,
+                                  pnl_pct: r.pnl_pct,
+                                  reason: r.reason,
+                                }))
+                                downloadCsv(`strategy_trades_run_${runId || 'selected'}.csv`, rows)
+                              }}
+                              disabled={strategyTradesRows.length === 0}
+                            >
+                              Export CSV
+                            </Button>
+                          </Stack>
                           <Box sx={{ height: 260, mt: 1 }}>
                             <DataGrid
                               rows={strategyTradesRows}

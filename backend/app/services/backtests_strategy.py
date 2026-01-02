@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 from sqlalchemy.orm import Session
@@ -21,6 +21,16 @@ from app.services.alert_expression_dsl import parse_expression
 from app.services.backtests_data import UniverseSymbolRef
 from app.services.charges_india import estimate_india_equity_charges
 from app.services.market_data import Timeframe, load_series
+
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def _iso_ist(dt: datetime) -> str:
+    # Market data timestamps are stored as naive IST in SQLite. Serialise them
+    # with an explicit offset so the frontend doesn't misinterpret them as UTC.
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=IST_TZ).isoformat()
+    return dt.astimezone(IST_TZ).isoformat()
 
 
 @dataclass(frozen=True)
@@ -471,6 +481,7 @@ def run_strategy_backtest(
     qty = 0  # positive long, negative short
     entry_fill: float | None = None
     entry_ts: datetime | None = None
+    first_long_entry_idx: int | None = None
     peak_since_entry: float | None = None
     trough_since_entry: float | None = None
     peak_equity_since_entry: float | None = None
@@ -520,8 +531,8 @@ def run_strategy_backtest(
             trade_pnl_pct.append(float(ret_pct))
             trades.append(
                 {
-                    "entry_ts": entry_ts.isoformat(),
-                    "exit_ts": ts[i].isoformat(),
+                    "entry_ts": _iso_ist(entry_ts),
+                    "exit_ts": _iso_ist(ts[i]),
                     "side": "LONG" if qty > 0 else "SHORT",
                     "entry_price": float(entry_fill),
                     "exit_price": float(fill_px),
@@ -561,6 +572,8 @@ def run_strategy_backtest(
                         qty = qty_int
                         entry_fill = float(fill_px)
                         entry_ts = ts[i]
+                        if first_long_entry_idx is None:
+                            first_long_entry_idx = i
                         peak_since_entry = float(closes[i])
                         peak_equity_since_entry = float(cash) + float(qty) * float(
                             fill_px
@@ -601,8 +614,8 @@ def run_strategy_backtest(
                 trade_pnl_pct.append(float(ret_pct))
                 trades.append(
                     {
-                        "entry_ts": entry_ts.isoformat(),
-                        "exit_ts": ts[i].isoformat(),
+                        "entry_ts": _iso_ist(entry_ts),
+                        "exit_ts": _iso_ist(ts[i]),
                         "side": "LONG" if qty > 0 else "SHORT",
                         "entry_price": float(entry_fill),
                         "exit_price": float(fill_px),
@@ -780,17 +793,6 @@ def run_strategy_backtest(
 
     # Baselines: buy-and-hold (long only).
     buy_hold: dict[str, Any] = {}
-    first_entry_idx = None
-    for tr in trades:
-        if tr.get("side") == "LONG":
-            first_entry_ts = tr.get("entry_ts")
-            if isinstance(first_entry_ts, str):
-                dt = datetime.fromisoformat(first_entry_ts)
-                for j in range(sim_start, sim_end + 1):
-                    if ts[j] == dt:
-                        first_entry_idx = j
-                        break
-            break
 
     def _hold_curve(buy_i: int) -> dict[str, Any]:
         if buy_i is None:
@@ -810,14 +812,14 @@ def run_strategy_backtest(
         end_h = float(curve[-1])
         ret = (end_h / start_h - 1.0) * 100.0 if start_h > 0 else 0.0
         return {
-            "buy_ts": ts[buy_i].isoformat(),
+            "buy_ts": _iso_ist(ts[buy_i]),
             "total_return_pct": float(ret),
             "equity": curve,
         }
 
     buy_hold["start_to_end"] = _hold_curve(sim_start)
-    if first_entry_idx is not None:
-        buy_hold["first_entry_to_end"] = _hold_curve(first_entry_idx)
+    if first_long_entry_idx is not None:
+        buy_hold["first_entry_to_end"] = _hold_curve(first_long_entry_idx)
 
     return {
         "meta": {
@@ -843,7 +845,7 @@ def run_strategy_backtest(
             "include_dp_charges": bool(cfg.include_dp_charges),
         },
         "series": {
-            "ts": [t.isoformat() for t in ts[sim_start : sim_end + 1]],
+            "ts": [_iso_ist(t) for t in ts[sim_start : sim_end + 1]],
             "equity": equity,
             "drawdown_pct": dd,
         },
