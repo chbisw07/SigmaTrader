@@ -3,6 +3,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
+import Drawer from '@mui/material/Drawer'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -20,7 +21,9 @@ import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTheme } from '@mui/material/styles'
+import useMediaQuery from '@mui/material/useMediaQuery'
 
 import { KeyValueJsonDialog } from '../components/KeyValueJsonDialog'
 import { MarkdownLite } from '../components/MarkdownLite'
@@ -181,6 +184,9 @@ function getDatePreset(preset: '6M' | '1Y' | '2Y'): { start: string; end: string
 }
 
 export function BacktestingPage() {
+  const theme = useTheme()
+  const smUp = useMediaQuery(theme.breakpoints.up('sm'))
+  const mdUp = useMediaQuery(theme.breakpoints.up('md'))
   const { displayTimeZone } = useTimeSettings()
   const [tab, setTab] = useState<BacktestTab>('SIGNAL')
   const kind: BacktestKind = tab
@@ -274,13 +280,31 @@ export function BacktestingPage() {
   const [detailsRun, setDetailsRun] = useState<BacktestRun | null>(null)
 
   const [pinnedRunIds, setPinnedRunIds] = useState<number[]>([])
-  const [activePinnedRunId, setActivePinnedRunId] = useState<number | null>(null)
   const [pinnedRunsById, setPinnedRunsById] = useState<Record<number, BacktestRun>>({})
   const [pinnedRunErrorsById, setPinnedRunErrorsById] = useState<Record<number, string>>({})
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerTab, setDrawerTab] = useState<'selected' | number>('selected')
+  const [drawerWidth, setDrawerWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 720
+    try {
+      const raw = window.localStorage.getItem('st_bt_drawer_width_v1')
+      const n = raw ? Number(raw) : NaN
+      return Number.isFinite(n) ? Math.max(420, Math.min(1600, n)) : 720
+    } catch {
+      return 720
+    }
+  })
+  const resizingRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const drawerWidthRef = useRef(drawerWidth)
+
+  useEffect(() => {
+    drawerWidthRef.current = drawerWidth
+  }, [drawerWidth])
 
   const pinRun = useCallback((runId: number) => {
     setPinnedRunIds((prev) => (prev.includes(runId) ? prev : [...prev, runId]))
-    setActivePinnedRunId(runId)
+    setDrawerTab(runId)
+    setDrawerOpen(true)
   }, [])
 
   const closePinnedRun = useCallback((runId: number) => {
@@ -295,8 +319,52 @@ export function BacktestingPage() {
       delete next[runId]
       return next
     })
-    setActivePinnedRunId((prev) => (prev === runId ? null : prev))
+    setDrawerTab((prev) => (prev === runId ? 'selected' : prev))
   }, [])
+
+  const openDrawerSelected = useCallback(() => {
+    setDrawerTab('selected')
+    setDrawerOpen(true)
+  }, [])
+
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false)
+    if (!mdUp) setDrawerTab('selected')
+  }, [mdUp])
+
+  useEffect(() => {
+    if (tab === 'STRATEGY') return
+    setDrawerOpen(false)
+    setDrawerTab('selected')
+  }, [tab])
+
+  useEffect(() => {
+    if (!mdUp || tab !== 'STRATEGY') return
+    const onMove = (e: MouseEvent) => {
+      const st = resizingRef.current
+      if (!st) return
+      const dx = st.startX - e.clientX
+      const next = Math.max(420, Math.min(1600, st.startWidth + dx))
+      setDrawerWidth(next)
+    }
+    const onUp = () => {
+      if (!resizingRef.current) return
+      resizingRef.current = null
+      try {
+        window.localStorage.setItem('st_bt_drawer_width_v1', String(drawerWidthRef.current))
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [mdUp, tab])
+
+  const appBarOffsetPx = useMemo(() => (smUp ? 64 : 56), [smUp])
 
   const getRunUniverse = useCallback((run: BacktestRun) => {
     return ((run.config as any)?.universe ?? {}) as Record<string, unknown>
@@ -1019,7 +1087,28 @@ export function BacktestingPage() {
 
   const runColumns = useMemo((): GridColDef[] => {
     const cols: GridColDef[] = [
-      { field: 'id', headerName: 'Run', width: 90 },
+      {
+        field: 'id',
+        headerName: 'Run',
+        width: 90,
+        renderCell: (params) => {
+          const run = params.row as BacktestRun
+          return (
+            <Button
+              size="small"
+              variant="text"
+              onClick={(e) => {
+                e.stopPropagation()
+                setSelectedRunId(run.id)
+                applyRunToInputs(run)
+                if (tab === 'STRATEGY') openDrawerSelected()
+              }}
+            >
+              {run.id}
+            </Button>
+          )
+        },
+      },
       {
         field: 'created_at',
         headerName: 'Created',
@@ -1031,8 +1120,8 @@ export function BacktestingPage() {
       {
         field: 'group',
         headerName: 'Group',
-        width: 160,
-        minWidth: 140,
+        width: 140,
+        minWidth: 120,
         flex: 0,
         sortable: false,
         renderCell: (params) => renderGroupLabel(params.row as BacktestRun),
@@ -1054,27 +1143,15 @@ export function BacktestingPage() {
       {
         field: 'details',
         headerName: 'DSL / Ranking',
-        minWidth: 320,
-        flex: 2,
+        width: 120,
+        minWidth: 120,
+        flex: 0,
         sortable: false,
         renderCell: (params) => {
           const run = params.row as BacktestRun
           const text = renderDetails(run)
           return (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, width: '100%' }}>
-              <Typography
-                variant="body2"
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-                title={text}
-              >
-                {text}
-              </Typography>
+            <Tooltip title={text}>
               <Button
                 size="small"
                 variant="outlined"
@@ -1085,13 +1162,13 @@ export function BacktestingPage() {
               >
                 Details
               </Button>
-            </Box>
+            </Tooltip>
           )
         },
       },
     ]
     return cols
-  }, [displayTimeZone, renderDetails, renderDuration, renderGroupLabel, renderSymbolLabel])
+  }, [applyRunToInputs, displayTimeZone, openDrawerSelected, renderDetails, renderDuration, renderGroupLabel, renderSymbolLabel, tab])
 
   const runColumnVisibilityModel = useMemo(() => {
     return { symbol: tab === 'STRATEGY' }
@@ -1521,200 +1598,6 @@ export function BacktestingPage() {
     return (result.delta as Record<string, unknown> | undefined) ?? null
   }, [selectedRun, tab])
 
-  const strategySeries = useMemo(() => {
-    if (tab !== 'STRATEGY') return null
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return null
-    return (result.series as Record<string, unknown> | undefined) ?? null
-  }, [selectedRun, tab])
-
-  const strategyTradeMarkers = useMemo((): PriceSignalMarker[] => {
-    if (tab !== 'STRATEGY') return []
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return []
-    const trades = (result.trades as unknown[] | undefined) ?? []
-    const countsByKey = new Map<string, number>()
-    const out: PriceSignalMarker[] = []
-
-    const push = (ts: string, kind: string, text: string) => {
-      const key = `${ts}|${kind}`
-      const next = (countsByKey.get(key) ?? 0) + 1
-      countsByKey.set(key, next)
-      out.push({ ts, kind, text: next > 1 ? `${text}${next}` : text })
-    }
-
-    for (const t of trades) {
-      const row = (t ?? {}) as Record<string, unknown>
-      const entryTs = String(row.entry_ts ?? '')
-      const exitTs = String(row.exit_ts ?? '')
-      const side = String(row.side ?? '').toUpperCase()
-      if (!entryTs || !exitTs) continue
-      const entryKind = side === 'SHORT' ? 'CROSSUNDER' : 'CROSSOVER'
-      const exitKind = side === 'SHORT' ? 'CROSSOVER' : 'CROSSUNDER'
-      push(entryTs, entryKind, 'E')
-      push(exitTs, exitKind, 'X')
-    }
-    return out
-  }, [selectedRun, tab])
-
-  const strategyMarkerTs = useMemo(() => {
-    const s = new Set<string>()
-    for (const m of strategyTradeMarkers) s.add(m.ts)
-    return s
-  }, [strategyTradeMarkers])
-
-  const strategyEquityCandles = useMemo((): PriceCandle[] => {
-    if (tab !== 'STRATEGY') return []
-    if (!strategySeries) return []
-    const ts = (strategySeries.ts as unknown[] | undefined) ?? []
-    const equity = (strategySeries.equity as unknown[] | undefined) ?? []
-    const candles: PriceCandle[] = []
-    for (let i = 0; i < Math.min(ts.length, equity.length); i++) {
-      const t = String(ts[i] ?? '')
-      const v = Number(equity[i] ?? NaN)
-      if (!t || !Number.isFinite(v)) continue
-      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
-    }
-    return downsampleKeep(candles, 2500, (c) => strategyMarkerTs.has((c as PriceCandle).ts))
-  }, [strategyMarkerTs, strategySeries, tab])
-
-  const strategyDrawdownCandles = useMemo((): PriceCandle[] => {
-    if (tab !== 'STRATEGY') return []
-    if (!strategySeries) return []
-    const ts = (strategySeries.ts as unknown[] | undefined) ?? []
-    const dd = (strategySeries.drawdown_pct as unknown[] | undefined) ?? []
-    const candles: PriceCandle[] = []
-    for (let i = 0; i < Math.min(ts.length, dd.length); i++) {
-      const t = String(ts[i] ?? '')
-      const v = Number(dd[i] ?? NaN)
-      if (!t || !Number.isFinite(v)) continue
-      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
-    }
-    return downsample(candles, 2500)
-  }, [strategySeries, tab])
-
-  const strategyMetrics = useMemo(() => {
-    if (tab !== 'STRATEGY') return null
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return null
-    return (result.metrics as Record<string, unknown> | undefined) ?? null
-  }, [selectedRun, tab])
-
-  const strategyProfitValue = useMemo(() => {
-    if (tab !== 'STRATEGY') return null
-    if (!strategySeries) return null
-    const equity = (strategySeries.equity as unknown[] | undefined) ?? []
-    let first: number | null = null
-    let last: number | null = null
-    for (const v of equity) {
-      const n = Number(v ?? NaN)
-      if (!Number.isFinite(n)) continue
-      if (first === null) first = n
-      last = n
-    }
-    if (first === null || last === null) return null
-    return last - first
-  }, [strategySeries, tab])
-
-  const strategyTradeStats = useMemo(() => {
-    if (tab !== 'STRATEGY') return null
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return null
-    return (result.trade_stats as Record<string, unknown> | undefined) ?? null
-  }, [selectedRun, tab])
-
-  const strategyBaselines = useMemo(() => {
-    if (tab !== 'STRATEGY') return null
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return null
-    return (result.baselines as Record<string, unknown> | undefined) ?? null
-  }, [selectedRun, tab])
-
-  const strategyBaselineOverlays = useMemo(() => {
-    if (tab !== 'STRATEGY') return []
-    if (!strategyBaselines || !strategySeries) return []
-    const ts = (strategySeries.ts as unknown[] | undefined) ?? []
-    if (!ts.length) return []
-
-    const overlays: Array<{ name: string; color: string; points: Array<{ ts: string; value: number | null }> }> = []
-
-    const addOverlay = (name: string, color: string, curve: unknown) => {
-      const row = (curve ?? {}) as Record<string, unknown>
-      const equity = (row.equity as unknown[] | undefined) ?? []
-      const byTs = new Map<string, number>()
-      for (let i = 0; i < Math.min(ts.length, equity.length); i++) {
-        const t = String(ts[i] ?? '')
-        const v = Number(equity[i] ?? NaN)
-        if (!t || !Number.isFinite(v)) continue
-        byTs.set(t, v)
-      }
-      const points = strategyEquityCandles.map((c) => ({ ts: c.ts, value: byTs.get(c.ts) ?? null }))
-      overlays.push({ name, color, points })
-    }
-
-    addOverlay(
-      'Buy & hold (start→end)',
-      '#6b7280',
-      (strategyBaselines.start_to_end as unknown) ?? null,
-    )
-    if (strategyBaselines.first_entry_to_end) {
-      addOverlay(
-        'Buy & hold (first entry→end)',
-        '#9ca3af',
-        strategyBaselines.first_entry_to_end,
-      )
-    }
-
-    return overlays
-  }, [strategyBaselines, strategyEquityCandles, strategySeries, tab])
-
-  const strategyTradesRows = useMemo(() => {
-    if (tab !== 'STRATEGY') return []
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return []
-    const trades = (result.trades as unknown[] | undefined) ?? []
-    return trades.map((t, idx) => {
-      const row = (t ?? {}) as Record<string, unknown>
-      return {
-        id: idx,
-        entry_ts: String(row.entry_ts ?? ''),
-        exit_ts: String(row.exit_ts ?? ''),
-        side: String(row.side ?? ''),
-        qty: row.qty ?? null,
-        pnl_pct: row.pnl_pct ?? null,
-        reason: String(row.reason ?? ''),
-      }
-    })
-  }, [selectedRun, tab])
-
-  const strategyTradesColumns = useMemo((): GridColDef[] => {
-    return [
-      {
-        field: 'entry_ts',
-        headerName: 'Entry',
-        width: 230,
-        valueFormatter: (value) =>
-          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
-      },
-      {
-        field: 'exit_ts',
-        headerName: 'Exit',
-        width: 230,
-        valueFormatter: (value) =>
-          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
-      },
-      { field: 'side', headerName: 'Side', width: 110 },
-      { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
-      {
-        field: 'pnl_pct',
-        headerName: 'P&L %',
-        width: 110,
-        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
-      },
-      { field: 'reason', headerName: 'Reason', minWidth: 160, flex: 1 },
-    ]
-  }, [displayTimeZone])
-
   const portfolioDrawdownCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'PORTFOLIO') return []
     if (!selectedRun?.result) return []
@@ -1806,7 +1689,14 @@ export function BacktestingPage() {
   }, [])
 
   return (
-    <Box>
+    <Box
+      sx={{
+        pr: tab === 'STRATEGY' && drawerOpen && mdUp ? `${drawerWidth}px` : 0,
+        transition: theme.transitions.create('padding-right', {
+          duration: theme.transitions.duration.shortest,
+        }),
+      }}
+    >
       <Box
         sx={{
           mb: 1,
@@ -2947,7 +2837,7 @@ export function BacktestingPage() {
               </Button>
             </Stack>
 
-            <Box sx={{ height: 260 }}>
+            <Box sx={{ height: tab === 'STRATEGY' ? 'calc(100vh - 320px)' : 260, minHeight: 260 }}>
               <DataGrid
                 rows={runs}
                 columns={runColumns}
@@ -2973,70 +2863,19 @@ export function BacktestingPage() {
                   const ctrl = Boolean(e?.ctrlKey || e?.metaKey)
                   if (ctrl && tab === 'STRATEGY') {
                     pinRun(run.id)
-                  } else {
-                    setActivePinnedRunId(null)
                   }
                 }}
                 initialState={{
-                  pagination: { paginationModel: { pageSize: 5 } },
+                  pagination: { paginationModel: { pageSize: 25 } },
                 }}
-                pageSizeOptions={[5, 10, 25]}
+                pageSizeOptions={[5, 10, 25, 50]}
               />
             </Box>
 
-            <DividerBlock title="Selected run" />
-            {tab === 'STRATEGY' && pinnedRunIds.length > 0 ? (
-              <Tabs
-                value={activePinnedRunId ?? 0}
-                onChange={(_e, v) => setActivePinnedRunId(v === 0 ? null : Number(v))}
-                sx={{ mt: 1 }}
-              >
-                <Tab value={0} label="Selected" />
-                {pinnedRunIds.map((id) => (
-                  <Tab
-                    key={id}
-                    value={id}
-                    label={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <span>Run #{id}</span>
-                        <IconButton
-                          size="small"
-                          onClick={(ev) => {
-                            ev.stopPropagation()
-                            closePinnedRun(id)
-                          }}
-                          aria-label={`Close run ${id}`}
-                        >
-                          <CloseIcon fontSize="inherit" />
-                        </IconButton>
-                      </Box>
-                    }
-                  />
-                ))}
-              </Tabs>
-            ) : null}
-
-		            {activePinnedRunId != null ? (
-                  <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
-                    <Typography variant="body2" color="text.secondary">
-                      Run #{activePinnedRunId} • STRATEGY • pinned
-                    </Typography>
-                    {pinnedRunErrorsById[activePinnedRunId] ? (
-                      <Typography variant="body2" color="error" sx={{ mt: 1 }}>
-                        {pinnedRunErrorsById[activePinnedRunId]}
-                      </Typography>
-                    ) : pinnedRunsById[activePinnedRunId] ? (
-                      <StrategyRunEquityCard
-                        run={pinnedRunsById[activePinnedRunId]}
-                        displayTimeZone={displayTimeZone}
-                      />
-                    ) : (
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                        Loading run…
-                      </Typography>
-                    )}
-                  </Paper>
-                ) : selectedRun ? (
+            {tab !== 'STRATEGY' ? (
+              <>
+                <DividerBlock title="Selected run" />
+                {selectedRun ? (
 		              <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'background.default' }}>
 	                <Typography variant="body2" color="text.secondary">
 	                  Run #{selectedRun.id} • {selectedRun.kind} • {selectedRun.status}
@@ -3173,105 +3012,6 @@ export function BacktestingPage() {
                     </Box>
                   )}
 
-                {tab === 'STRATEGY' &&
-                  selectedRun.status === 'COMPLETED' &&
-                  strategyEquityCandles.length > 0 && (
-                    <Box sx={{ mt: 1 }}>
-                      <Typography variant="subtitle2">Equity curve</Typography>
-                      {strategyMetrics ? (
-                        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
-                          <Chip size="small" label={`Total: ${Number(strategyMetrics.total_return_pct ?? 0).toFixed(2)}%`} />
-                          <Chip size="small" label={`CAGR: ${Number(strategyMetrics.cagr_pct ?? 0).toFixed(2)}%`} />
-                          <Chip size="small" label={`Max DD: ${Number(strategyMetrics.max_drawdown_pct ?? 0).toFixed(2)}%`} />
-                          <Chip size="small" label={`Turnover: ${Number(strategyMetrics.turnover_pct_total ?? 0).toFixed(1)}%`} />
-                          <Chip size="small" label={`Charges: ${fmtInr(Number(strategyMetrics.total_charges ?? 0), 0)}`} />
-                          {strategyBaselines?.start_to_end ? (
-                            <Chip
-                              size="small"
-                              variant="outlined"
-                              label={`Buy&hold: ${Number((strategyBaselines.start_to_end as any)?.total_return_pct ?? 0).toFixed(2)}%`}
-                            />
-                          ) : null}
-                          {strategyBaselines?.first_entry_to_end ? (
-                            <Chip
-                              size="small"
-                              variant="outlined"
-                              label={`Hold from 1st entry: ${Number((strategyBaselines.first_entry_to_end as any)?.total_return_pct ?? 0).toFixed(2)}%`}
-                            />
-                          ) : null}
-                          {strategyTradeStats ? (
-                            <>
-                              <Chip size="small" label={`Trades: ${Number(strategyTradeStats.count ?? 0)}`} />
-                              <Chip size="small" label={`Win: ${Number(strategyTradeStats.win_rate_pct ?? 0).toFixed(1)}%`} />
-                              {typeof strategyProfitValue === 'number' ? (
-                                <Chip size="small" label={`Profit: ${fmtInr(strategyProfitValue, 0)}`} />
-                              ) : null}
-                            </>
-                          ) : null}
-                        </Stack>
-                      ) : null}
-
-                      <Box sx={{ mt: 1 }}>
-                        <PriceChart
-                          candles={strategyEquityCandles}
-                          chartType="line"
-                          height={260}
-                          overlays={strategyBaselineOverlays}
-                          markers={strategyTradeMarkers}
-                          showLegend
-                          baseSeriesName="Strategy equity"
-                        />
-                      </Box>
-
-                      {strategyDrawdownCandles.length > 0 ? (
-                        <Box sx={{ mt: 2 }}>
-                          <Typography variant="subtitle2">Drawdown (%)</Typography>
-                          <Box sx={{ mt: 1 }}>
-                            <PriceChart candles={strategyDrawdownCandles} chartType="line" height={180} />
-                          </Box>
-                        </Box>
-                      ) : null}
-
-                      {strategyTradesRows.length > 0 ? (
-                        <Box sx={{ mt: 2 }}>
-                          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                            <Typography variant="subtitle2">Trades</Typography>
-                            <Box sx={{ flexGrow: 1 }} />
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={() => {
-                                const runId = selectedRun?.id ?? ''
-                                const rows = strategyTradesRows.map((r) => ({
-                                  entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
-                                  exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
-                                  side: r.side,
-                                  qty: r.qty,
-                                  pnl_pct: r.pnl_pct,
-                                  reason: r.reason,
-                                }))
-                                downloadCsv(`strategy_trades_run_${runId || 'selected'}.csv`, rows)
-                              }}
-                              disabled={strategyTradesRows.length === 0}
-                            >
-                              Export CSV
-                            </Button>
-                          </Stack>
-                          <Box sx={{ height: 260, mt: 1 }}>
-                            <DataGrid
-                              rows={strategyTradesRows}
-                              columns={strategyTradesColumns}
-                              density="compact"
-                              disableRowSelectionOnClick
-                              pageSizeOptions={[5, 10, 25]}
-                              initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
-                            />
-                          </Box>
-                        </Box>
-                      ) : null}
-                    </Box>
-                  )}
-
                 {tab === 'EXECUTION' && selectedRun.status === 'COMPLETED' && executionEquityCandles.length > 0 && (
                   <Box sx={{ mt: 1 }}>
                     <Typography variant="subtitle2">Equity curve (realistic vs ideal)</Typography>
@@ -3342,11 +3082,13 @@ export function BacktestingPage() {
                   </Button>
                 </Stack>
               </Paper>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                Select a run to view details.
-              </Typography>
-            )}
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Select a run to view details.
+                  </Typography>
+                )}
+              </>
+            ) : null}
           </Stack>
         </Paper>
       </Box>
@@ -3360,6 +3102,121 @@ export function BacktestingPage() {
           <Button onClick={() => setHelpOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      <Drawer
+        anchor="right"
+        variant={mdUp ? 'persistent' : 'temporary'}
+        open={tab === 'STRATEGY' && drawerOpen}
+        onClose={closeDrawer}
+        ModalProps={{ keepMounted: true }}
+        sx={{
+          '& .MuiDrawer-paper': {
+            width: mdUp ? drawerWidth : '100%',
+            maxWidth: '100vw',
+            mt: `${appBarOffsetPx}px`,
+            height: `calc(100% - ${appBarOffsetPx}px)`,
+          },
+        }}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 1.25,
+            py: 1,
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Typography variant="subtitle1" sx={{ flex: 1, minWidth: 0 }} noWrap>
+            {drawerTab === 'selected'
+              ? selectedRunId != null
+                ? `Run details — #${selectedRunId}`
+                : 'Run details'
+              : `Run details — #${drawerTab}`}
+          </Typography>
+          <IconButton onClick={closeDrawer} size="small" aria-label="Close">
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+
+        {mdUp ? (
+          <Box
+            onMouseDown={(e) => {
+              resizingRef.current = { startX: e.clientX, startWidth: drawerWidthRef.current }
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            sx={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 6,
+              cursor: 'col-resize',
+              zIndex: 2,
+            }}
+          />
+        ) : null}
+
+        <Box sx={{ px: 1.25 }}>
+          <Tabs
+            value={drawerTab}
+            onChange={(_e, v) => setDrawerTab(v as 'selected' | number)}
+            variant="scrollable"
+            scrollButtons="auto"
+          >
+            <Tab
+              value="selected"
+              label="Selected"
+            />
+            {pinnedRunIds.map((id) => (
+              <Tab
+                key={id}
+                value={id}
+                label={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <span>Run #{id}</span>
+                    <IconButton
+                      size="small"
+                      onClick={(ev) => {
+                        ev.stopPropagation()
+                        closePinnedRun(id)
+                      }}
+                      aria-label={`Close run ${id}`}
+                    >
+                      <CloseIcon fontSize="inherit" />
+                    </IconButton>
+                  </Box>
+                }
+              />
+            ))}
+          </Tabs>
+        </Box>
+
+        <Box sx={{ px: 1.25, pb: 2, overflow: 'auto' }}>
+          {drawerTab === 'selected' ? (
+            selectedRun ? (
+              <StrategyRunEquityCard run={selectedRun} displayTimeZone={displayTimeZone} />
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                {selectedRunId != null ? 'Loading run…' : 'Click a run to load details.'}
+              </Typography>
+            )
+          ) : pinnedRunErrorsById[drawerTab] ? (
+            <Typography variant="body2" color="error" sx={{ mt: 2 }}>
+              {pinnedRunErrorsById[drawerTab]}
+            </Typography>
+          ) : pinnedRunsById[drawerTab] ? (
+            <StrategyRunEquityCard run={pinnedRunsById[drawerTab]} displayTimeZone={displayTimeZone} />
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+              Loading run…
+            </Typography>
+          )}
+        </Box>
+      </Drawer>
 
       <KeyValueJsonDialog
         open={detailsRun != null}
