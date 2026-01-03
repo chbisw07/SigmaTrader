@@ -51,8 +51,8 @@ import executionBacktestingHelpText from '../../../docs/backtesting_execution_he
 
 type UniverseMode = 'HOLDINGS' | 'GROUP' | 'BOTH'
 
-type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION' | 'STRATEGY'
-type DrawerBacktestTab = 'PORTFOLIO' | 'STRATEGY'
+type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'PORTFOLIO_STRATEGY' | 'EXECUTION' | 'STRATEGY'
+type DrawerBacktestTab = 'PORTFOLIO' | 'PORTFOLIO_STRATEGY' | 'STRATEGY'
 
 type SignalMode = 'DSL' | 'RANKING'
 type RankingCadence = 'WEEKLY' | 'MONTHLY'
@@ -65,6 +65,9 @@ type BrokerName = 'zerodha' | 'angelone'
 type GateSource = 'NONE' | 'GROUP_INDEX' | 'SYMBOL'
 type StrategyTimeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '1d'
 type StrategyDirection = 'LONG' | 'SHORT'
+type PortfolioStrategyAllocationMode = 'EQUAL' | 'RANKING'
+type PortfolioStrategySizingMode = 'PCT_EQUITY' | 'FIXED_CASH' | 'CASH_PER_SLOT'
+type PortfolioStrategyRankingMetric = 'PERF_PCT'
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -191,7 +194,7 @@ export function BacktestingPage() {
   const { displayTimeZone } = useTimeSettings()
   const [tab, setTab] = useState<BacktestTab>('SIGNAL')
   const kind: BacktestKind = tab
-  const drawerEnabled = tab === 'STRATEGY' || tab === 'PORTFOLIO'
+  const drawerEnabled = tab === 'STRATEGY' || tab === 'PORTFOLIO' || tab === 'PORTFOLIO_STRATEGY'
 
   const [helpOpen, setHelpOpen] = useState(false)
 
@@ -267,6 +270,43 @@ export function BacktestingPage() {
   const [strategyChargesBps, setStrategyChargesBps] = useState(0)
   const [strategyIncludeDpCharges, setStrategyIncludeDpCharges] = useState(true)
 
+  const [portfolioStrategyTimeframe, setPortfolioStrategyTimeframe] =
+    useState<StrategyTimeframe>('1d')
+  const [portfolioStrategyEntryDsl, setPortfolioStrategyEntryDsl] = useState('RSI(14) < 30')
+  const [portfolioStrategyExitDsl, setPortfolioStrategyExitDsl] = useState('RSI(14) > 70')
+  const [portfolioStrategyProduct, setPortfolioStrategyProduct] = useState<ProductType>('CNC')
+  const [portfolioStrategyDirection, setPortfolioStrategyDirection] =
+    useState<StrategyDirection>('LONG')
+  const [portfolioStrategyInitialCash, setPortfolioStrategyInitialCash] = useState(100000)
+  const [portfolioStrategyMaxOpenPositions, setPortfolioStrategyMaxOpenPositions] = useState(10)
+  const [portfolioStrategyAllocationMode, setPortfolioStrategyAllocationMode] =
+    useState<PortfolioStrategyAllocationMode>('EQUAL')
+  const [portfolioStrategyRankingMetric, setPortfolioStrategyRankingMetric] =
+    useState<PortfolioStrategyRankingMetric>('PERF_PCT')
+  const [portfolioStrategyRankingWindow, setPortfolioStrategyRankingWindow] = useState(20)
+  const [portfolioStrategySizingMode, setPortfolioStrategySizingMode] =
+    useState<PortfolioStrategySizingMode>('CASH_PER_SLOT')
+  const [portfolioStrategyPositionSizePct, setPortfolioStrategyPositionSizePct] = useState(10)
+  const [portfolioStrategyFixedCashPerTrade, setPortfolioStrategyFixedCashPerTrade] =
+    useState(10000)
+  const [portfolioStrategyMinHoldingBars, setPortfolioStrategyMinHoldingBars] = useState(0)
+  const [portfolioStrategyCooldownBars, setPortfolioStrategyCooldownBars] = useState(0)
+  const [portfolioStrategyMaxSymbolAllocPct, setPortfolioStrategyMaxSymbolAllocPct] = useState(0)
+  const [portfolioStrategyStopLossPct, setPortfolioStrategyStopLossPct] = useState(0)
+  const [portfolioStrategyTakeProfitPct, setPortfolioStrategyTakeProfitPct] = useState(0)
+  const [portfolioStrategyTrailingStopPct, setPortfolioStrategyTrailingStopPct] = useState(0)
+  const [portfolioStrategyMaxEquityDdGlobalPct, setPortfolioStrategyMaxEquityDdGlobalPct] =
+    useState(0)
+  const [portfolioStrategyMaxEquityDdTradePct, setPortfolioStrategyMaxEquityDdTradePct] =
+    useState(0)
+  const [portfolioStrategySlippageBps, setPortfolioStrategySlippageBps] = useState(0)
+  const [portfolioStrategyChargesModel, setPortfolioStrategyChargesModel] =
+    useState<ChargesModel>('BROKER')
+  const [portfolioStrategyChargesBps, setPortfolioStrategyChargesBps] = useState(0)
+  const [portfolioStrategyChargesBroker, setPortfolioStrategyChargesBroker] =
+    useState<BrokerName>('zerodha')
+  const [portfolioStrategyIncludeDpCharges, setPortfolioStrategyIncludeDpCharges] = useState(true)
+
   const [holdingsSymbols, setHoldingsSymbols] = useState<Array<{ symbol: string; exchange: string }>>([])
 
   const [runs, setRuns] = useState<BacktestRun[]>([])
@@ -284,6 +324,7 @@ export function BacktestingPage() {
   const [pinnedRunIdsByTab, setPinnedRunIdsByTab] = useState<Record<DrawerBacktestTab, number[]>>({
     STRATEGY: [],
     PORTFOLIO: [],
+    PORTFOLIO_STRATEGY: [],
   })
   const [pinnedRunsById, setPinnedRunsById] = useState<Record<number, BacktestRun>>({})
   const [pinnedRunErrorsById, setPinnedRunErrorsById] = useState<Record<number, string>>({})
@@ -309,18 +350,20 @@ export function BacktestingPage() {
   const pinnedRunIds = useMemo(() => {
     if (tab === 'STRATEGY') return pinnedRunIdsByTab.STRATEGY
     if (tab === 'PORTFOLIO') return pinnedRunIdsByTab.PORTFOLIO
+    if (tab === 'PORTFOLIO_STRATEGY') return pinnedRunIdsByTab.PORTFOLIO_STRATEGY
     return []
-  }, [pinnedRunIdsByTab.PORTFOLIO, pinnedRunIdsByTab.STRATEGY, tab])
+  }, [pinnedRunIdsByTab.PORTFOLIO, pinnedRunIdsByTab.PORTFOLIO_STRATEGY, pinnedRunIdsByTab.STRATEGY, tab])
 
   const allPinnedRunIds = useMemo(() => {
     const ids = new Set<number>()
     for (const id of pinnedRunIdsByTab.STRATEGY) ids.add(id)
     for (const id of pinnedRunIdsByTab.PORTFOLIO) ids.add(id)
+    for (const id of pinnedRunIdsByTab.PORTFOLIO_STRATEGY) ids.add(id)
     return Array.from(ids.values())
-  }, [pinnedRunIdsByTab.PORTFOLIO, pinnedRunIdsByTab.STRATEGY])
+  }, [pinnedRunIdsByTab.PORTFOLIO, pinnedRunIdsByTab.PORTFOLIO_STRATEGY, pinnedRunIdsByTab.STRATEGY])
 
   const pinRun = useCallback((runId: number) => {
-    if (tab !== 'STRATEGY' && tab !== 'PORTFOLIO') return
+    if (tab !== 'STRATEGY' && tab !== 'PORTFOLIO' && tab !== 'PORTFOLIO_STRATEGY') return
     setPinnedRunIdsByTab((prev) => {
       const list = prev[tab]
       return list.includes(runId) ? prev : { ...prev, [tab]: [...list, runId] }
@@ -330,7 +373,7 @@ export function BacktestingPage() {
   }, [tab])
 
   const closePinnedRun = useCallback((runId: number) => {
-    if (tab !== 'STRATEGY' && tab !== 'PORTFOLIO') return
+    if (tab !== 'STRATEGY' && tab !== 'PORTFOLIO' && tab !== 'PORTFOLIO_STRATEGY') return
     setPinnedRunIdsByTab((prev) => ({ ...prev, [tab]: prev[tab].filter((x) => x !== runId) }))
     setDrawerTab((prev) => (prev === runId ? 'selected' : prev))
   }, [tab])
@@ -411,6 +454,9 @@ export function BacktestingPage() {
             compareRun={compareRun}
           />
         )
+      }
+      if (tab === 'PORTFOLIO_STRATEGY') {
+        return <PortfolioStrategyRunDetailsCard run={run} displayTimeZone={displayTimeZone} />
       }
       return <StrategyRunEquityCard run={run} displayTimeZone={displayTimeZone} />
     },
@@ -520,6 +566,21 @@ export function BacktestingPage() {
         if (Number.isFinite(ddTrade) && ddTrade > 0) ddParts.push(`eqDD trade ${ddTrade}%`)
         const ddTxt = ddParts.length ? ` • ${ddParts.join(' • ')}` : ''
         return `${timeframe || '—'} • ${product}/${direction} • entry: ${shorten(entry)} • exit: ${shorten(exit)}${ddTxt}`
+      }
+      if (run.kind === 'PORTFOLIO_STRATEGY') {
+        const timeframe = String(cfg.timeframe ?? '')
+        const product = String(cfg.product ?? 'CNC')
+        const direction = String(cfg.direction ?? 'LONG')
+        const entry = String(cfg.entry_dsl ?? '').trim()
+        const exit = String(cfg.exit_dsl ?? '').trim()
+        const alloc = String(cfg.allocation_mode ?? '')
+        const sizing = String(cfg.sizing_mode ?? '')
+        const maxPos = Number(cfg.max_open_positions ?? 0)
+        const shorten = (s: string) => (s.length > 42 ? `${s.slice(0, 39)}…` : s)
+        const posTxt = Number.isFinite(maxPos) && maxPos > 0 ? ` • maxPos ${maxPos}` : ''
+        const allocTxt = alloc ? ` • ${alloc}` : ''
+        const sizingTxt = sizing ? ` • ${sizing}` : ''
+        return `${timeframe || '—'} • ${product}/${direction}${posTxt}${allocTxt}${sizingTxt} • entry: ${shorten(entry)} • exit: ${shorten(exit)}`
       }
       if (run.kind === 'EXECUTION') {
         const base = cfg.base_run_id != null ? `Base #${cfg.base_run_id}` : 'Base —'
@@ -666,6 +727,62 @@ export function BacktestingPage() {
         setStrategyChargesModel(chargesModel === 'BPS' ? 'BPS' : 'BROKER')
         setStrategyChargesBps(Number(cfg.charges_bps ?? 0) || 0)
         setStrategyIncludeDpCharges(cfg.include_dp_charges !== false)
+        return
+      }
+
+      if (run.kind === 'PORTFOLIO_STRATEGY') {
+        const tf = String(cfg.timeframe ?? '').trim()
+        if (tf === '1m' || tf === '5m' || tf === '15m' || tf === '30m' || tf === '1h' || tf === '1d') {
+          setPortfolioStrategyTimeframe(tf as StrategyTimeframe)
+        }
+        setPortfolioStrategyEntryDsl(String(cfg.entry_dsl ?? '').trim() || 'RSI(14) < 30')
+        setPortfolioStrategyExitDsl(String(cfg.exit_dsl ?? '').trim() || 'RSI(14) > 70')
+
+        const product = String(cfg.product ?? 'CNC').toUpperCase()
+        setPortfolioStrategyProduct(product === 'MIS' ? 'MIS' : 'CNC')
+
+        const direction = String(cfg.direction ?? 'LONG').toUpperCase()
+        setPortfolioStrategyDirection(direction === 'SHORT' ? 'SHORT' : 'LONG')
+
+        setPortfolioStrategyInitialCash(Number(cfg.initial_cash ?? 100000) || 100000)
+        setPortfolioStrategyMaxOpenPositions(Number(cfg.max_open_positions ?? 10) || 10)
+
+        const alloc = String(cfg.allocation_mode ?? 'EQUAL').toUpperCase()
+        setPortfolioStrategyAllocationMode(alloc === 'RANKING' ? 'RANKING' : 'EQUAL')
+        const rMetric = String(cfg.ranking_metric ?? 'PERF_PCT').toUpperCase()
+        setPortfolioStrategyRankingMetric(rMetric === 'PERF_PCT' ? 'PERF_PCT' : 'PERF_PCT')
+        setPortfolioStrategyRankingWindow(Number(cfg.ranking_window ?? 20) || 20)
+
+        const sizing = String(cfg.sizing_mode ?? 'CASH_PER_SLOT').toUpperCase()
+        setPortfolioStrategySizingMode(
+          sizing === 'PCT_EQUITY'
+            ? 'PCT_EQUITY'
+            : sizing === 'FIXED_CASH'
+              ? 'FIXED_CASH'
+              : 'CASH_PER_SLOT',
+        )
+        setPortfolioStrategyPositionSizePct(Number(cfg.position_size_pct ?? 10) || 10)
+        setPortfolioStrategyFixedCashPerTrade(Number(cfg.fixed_cash_per_trade ?? 10000) || 0)
+
+        setPortfolioStrategyMinHoldingBars(Number(cfg.min_holding_bars ?? 0) || 0)
+        setPortfolioStrategyCooldownBars(Number(cfg.cooldown_bars ?? 0) || 0)
+        setPortfolioStrategyMaxSymbolAllocPct(Number(cfg.max_symbol_alloc_pct ?? 0) || 0)
+
+        setPortfolioStrategyStopLossPct(Number(cfg.stop_loss_pct ?? 0) || 0)
+        setPortfolioStrategyTakeProfitPct(Number(cfg.take_profit_pct ?? 0) || 0)
+        setPortfolioStrategyTrailingStopPct(Number(cfg.trailing_stop_pct ?? 0) || 0)
+
+        setPortfolioStrategyMaxEquityDdGlobalPct(Number(cfg.max_equity_dd_global_pct ?? 0) || 0)
+        setPortfolioStrategyMaxEquityDdTradePct(Number(cfg.max_equity_dd_trade_pct ?? 0) || 0)
+
+        setPortfolioStrategySlippageBps(Number(cfg.slippage_bps ?? 0) || 0)
+        const chargesModel = String(cfg.charges_model ?? 'BROKER').toUpperCase()
+        setPortfolioStrategyChargesModel(chargesModel === 'BPS' ? 'BPS' : 'BROKER')
+        setPortfolioStrategyChargesBps(Number(cfg.charges_bps ?? 0) || 0)
+        setPortfolioStrategyChargesBroker(
+          String(cfg.charges_broker ?? 'zerodha') === 'angelone' ? 'angelone' : 'zerodha',
+        )
+        setPortfolioStrategyIncludeDpCharges(cfg.include_dp_charges !== false)
         return
       }
 
@@ -868,6 +985,20 @@ export function BacktestingPage() {
   }, [strategyProduct, strategyTimeframe, tab])
 
   useEffect(() => {
+    if (tab !== 'PORTFOLIO_STRATEGY') return
+    if (portfolioStrategyProduct === 'CNC' && portfolioStrategyDirection !== 'LONG') {
+      setPortfolioStrategyDirection('LONG')
+    }
+  }, [portfolioStrategyDirection, portfolioStrategyProduct, tab])
+
+  useEffect(() => {
+    if (tab !== 'PORTFOLIO_STRATEGY') return
+    if (portfolioStrategyProduct === 'MIS' && portfolioStrategyTimeframe === '1d') {
+      setPortfolioStrategyTimeframe('1h')
+    }
+  }, [portfolioStrategyProduct, portfolioStrategyTimeframe, tab])
+
+  useEffect(() => {
     let active = true
     void (async () => {
       if (selectedRunId == null) {
@@ -988,6 +1119,8 @@ export function BacktestingPage() {
           ? `EXECUTION backtest (base #${executionBaseRunId || '?'})`
           : kind === 'STRATEGY'
             ? `STRATEGY backtest (${strategyTimeframe})`
+            : kind === 'PORTFOLIO_STRATEGY'
+              ? `Portfolio strategy backtest (${portfolioStrategyTimeframe})`
           : `${kind} backtest`
       if (kind === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim()) {
         throw new Error('DSL is required for Signal backtest (DSL mode).')
@@ -1022,6 +1155,23 @@ export function BacktestingPage() {
           throw new Error('CNC does not allow short selling. Use direction LONG or switch to MIS.')
         }
         if (strategyProduct === 'MIS' && strategyTimeframe === '1d') {
+          throw new Error('MIS requires an intraday timeframe (<= 1h).')
+        }
+      }
+      if (kind === 'PORTFOLIO_STRATEGY') {
+        if (universeMode !== 'GROUP') {
+          throw new Error('Portfolio strategy backtests currently require Universe = Group.')
+        }
+        if (typeof groupId !== 'number') {
+          throw new Error('Please select a portfolio group for Portfolio strategy backtests.')
+        }
+        if (!portfolioStrategyEntryDsl.trim() || !portfolioStrategyExitDsl.trim()) {
+          throw new Error('Both entry and exit DSL are required for Portfolio strategy backtests.')
+        }
+        if (portfolioStrategyProduct === 'CNC' && portfolioStrategyDirection !== 'LONG') {
+          throw new Error('CNC does not allow short selling. Use direction LONG or switch to MIS.')
+        }
+        if (portfolioStrategyProduct === 'MIS' && portfolioStrategyTimeframe === '1d') {
           throw new Error('MIS requires an intraday timeframe (<= 1h).')
         }
       }
@@ -1097,6 +1247,37 @@ export function BacktestingPage() {
                 charges_bps: strategyChargesBps,
                 charges_broker: 'zerodha',
                 include_dp_charges: strategyIncludeDpCharges,
+              }
+          : kind === 'PORTFOLIO_STRATEGY'
+            ? {
+                timeframe: portfolioStrategyTimeframe,
+                start_date: startDate,
+                end_date: endDate,
+                entry_dsl: portfolioStrategyEntryDsl,
+                exit_dsl: portfolioStrategyExitDsl,
+                product: portfolioStrategyProduct,
+                direction: portfolioStrategyDirection,
+                initial_cash: portfolioStrategyInitialCash,
+                max_open_positions: portfolioStrategyMaxOpenPositions,
+                allocation_mode: portfolioStrategyAllocationMode,
+                ranking_metric: portfolioStrategyRankingMetric,
+                ranking_window: portfolioStrategyRankingWindow,
+                sizing_mode: portfolioStrategySizingMode,
+                position_size_pct: portfolioStrategyPositionSizePct,
+                fixed_cash_per_trade: portfolioStrategyFixedCashPerTrade,
+                min_holding_bars: portfolioStrategyMinHoldingBars,
+                cooldown_bars: portfolioStrategyCooldownBars,
+                max_symbol_alloc_pct: portfolioStrategyMaxSymbolAllocPct,
+                stop_loss_pct: portfolioStrategyStopLossPct,
+                take_profit_pct: portfolioStrategyTakeProfitPct,
+                trailing_stop_pct: portfolioStrategyTrailingStopPct,
+                max_equity_dd_global_pct: portfolioStrategyMaxEquityDdGlobalPct,
+                max_equity_dd_trade_pct: portfolioStrategyMaxEquityDdTradePct,
+                slippage_bps: portfolioStrategySlippageBps,
+                charges_model: portfolioStrategyChargesModel,
+                charges_bps: portfolioStrategyChargesBps,
+                charges_broker: portfolioStrategyChargesBroker,
+                include_dp_charges: portfolioStrategyIncludeDpCharges,
               }
           : {
               base_run_id: executionBaseRunId,
@@ -1241,6 +1422,8 @@ export function BacktestingPage() {
           : portfolioMethod === 'RISK_PARITY'
             ? riskParityBacktestingHelpText
           : portfolioBacktestingHelpText
+        : tab === 'PORTFOLIO_STRATEGY'
+          ? strategyBacktestingHelpText
         : tab === 'EXECUTION'
           ? executionBacktestingHelpText
           : tab === 'STRATEGY'
@@ -1250,6 +1433,11 @@ export function BacktestingPage() {
   const runDisabled =
     running ||
     (tab === 'PORTFOLIO' && typeof groupId !== 'number') ||
+    (tab === 'PORTFOLIO_STRATEGY' &&
+      (universeMode !== 'GROUP' ||
+        typeof groupId !== 'number' ||
+        !portfolioStrategyEntryDsl.trim() ||
+        !portfolioStrategyExitDsl.trim())) ||
     (tab === 'EXECUTION' &&
       (executionBaseRunId === '' || typeof executionBaseRunId !== 'number')) ||
     (tab === 'SIGNAL' && signalMode === 'DSL' && !signalDsl.trim()) ||
@@ -1629,6 +1817,7 @@ export function BacktestingPage() {
 	          <Tabs value={tab} onChange={(_e, v) => setTab(v as BacktestTab)} sx={{ mt: 0 }}>
 	            <Tab value="SIGNAL" label="Signal backtest" />
 	            <Tab value="PORTFOLIO" label="Portfolio backtest" />
+	            <Tab value="PORTFOLIO_STRATEGY" label="Portfolio strategy backtest" />
 	            <Tab value="EXECUTION" label="Execution backtest" />
 	            <Tab value="STRATEGY" label="Strategy backtest" />
 	          </Tabs>
@@ -2446,6 +2635,382 @@ export function BacktestingPage() {
 	                    Preset: Risk parity (6M)
 	                  </Button>
                 </Stack>
+              </Stack>
+            )}
+
+            {tab === 'PORTFOLIO_STRATEGY' && (
+              <Stack spacing={1.5}>
+                <Stack direction="row" spacing={1}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-pfs-timeframe-label">Timeframe</InputLabel>
+                    <Select
+                      labelId="bt-pfs-timeframe-label"
+                      label="Timeframe"
+                      value={portfolioStrategyTimeframe}
+                      onChange={(e) =>
+                        setPortfolioStrategyTimeframe(e.target.value as StrategyTimeframe)
+                      }
+                    >
+                      <MenuItem value="1m">1m</MenuItem>
+                      <MenuItem value="5m">5m</MenuItem>
+                      <MenuItem value="15m">15m</MenuItem>
+                      <MenuItem value="30m">30m</MenuItem>
+                      <MenuItem value="1h">1h</MenuItem>
+                      <MenuItem value="1d" disabled={portfolioStrategyProduct === 'MIS'}>
+                        1d
+                      </MenuItem>
+                    </Select>
+                  </FormControl>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-pfs-product-label">Product</InputLabel>
+                    <Select
+                      labelId="bt-pfs-product-label"
+                      label="Product"
+                      value={portfolioStrategyProduct}
+                      onChange={(e) => setPortfolioStrategyProduct(e.target.value as ProductType)}
+                    >
+                      <MenuItem value="CNC">CNC (delivery)</MenuItem>
+                      <MenuItem value="MIS">MIS (intraday)</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-pfs-direction-label">Direction</InputLabel>
+                    <Select
+                      labelId="bt-pfs-direction-label"
+                      label="Direction"
+                      value={portfolioStrategyDirection}
+                      onChange={(e) =>
+                        setPortfolioStrategyDirection(e.target.value as StrategyDirection)
+                      }
+                      disabled={portfolioStrategyProduct === 'CNC'}
+                    >
+                      <MenuItem value="LONG">Long</MenuItem>
+                      <MenuItem value="SHORT">Short</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                <TextField
+                  label="Entry DSL (evaluate at close)"
+                  size="small"
+                  multiline
+                  minRows={2}
+                  value={portfolioStrategyEntryDsl}
+                  onChange={(e) => setPortfolioStrategyEntryDsl(e.target.value)}
+                  placeholder="Example: RSI(14) < 30"
+                />
+
+                <TextField
+                  label="Exit DSL (evaluate at close)"
+                  size="small"
+                  multiline
+                  minRows={2}
+                  value={portfolioStrategyExitDsl}
+                  onChange={(e) => setPortfolioStrategyExitDsl(e.target.value)}
+                  placeholder="Example: RSI(14) > 70"
+                />
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Initial cash"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyInitialCash}
+                    onChange={(e) => setPortfolioStrategyInitialCash(Number(e.target.value))}
+                    inputProps={{ min: 0 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Max open positions"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyMaxOpenPositions}
+                    onChange={(e) =>
+                      setPortfolioStrategyMaxOpenPositions(Number(e.target.value))
+                    }
+                    inputProps={{ min: 1, max: 200 }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <DividerBlock title="Allocation & sizing" />
+
+                <Stack direction="row" spacing={1}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-pfs-alloc-label">Allocation</InputLabel>
+                    <Select
+                      labelId="bt-pfs-alloc-label"
+                      label="Allocation"
+                      value={portfolioStrategyAllocationMode}
+                      onChange={(e) =>
+                        setPortfolioStrategyAllocationMode(
+                          e.target.value as PortfolioStrategyAllocationMode,
+                        )
+                      }
+                    >
+                      <MenuItem value="EQUAL">Equal weight</MenuItem>
+                      <MenuItem value="RANKING">Ranking-based</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <FormControl
+                    fullWidth
+                    size="small"
+                    disabled={portfolioStrategyAllocationMode !== 'RANKING'}
+                  >
+                    <InputLabel id="bt-pfs-rank-metric-label">Ranking</InputLabel>
+                    <Select
+                      labelId="bt-pfs-rank-metric-label"
+                      label="Ranking"
+                      value={portfolioStrategyRankingMetric}
+                      onChange={(e) =>
+                        setPortfolioStrategyRankingMetric(
+                          e.target.value as PortfolioStrategyRankingMetric,
+                        )
+                      }
+                    >
+                      <MenuItem value="PERF_PCT">PERF_PCT (momentum)</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <TextField
+                    label="Rank window (bars)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyRankingWindow}
+                    onChange={(e) => setPortfolioStrategyRankingWindow(Number(e.target.value))}
+                    inputProps={{ min: 1, max: 1000 }}
+                    fullWidth
+                    disabled={portfolioStrategyAllocationMode !== 'RANKING'}
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-pfs-sizing-label">Position sizing</InputLabel>
+                    <Select
+                      labelId="bt-pfs-sizing-label"
+                      label="Position sizing"
+                      value={portfolioStrategySizingMode}
+                      onChange={(e) =>
+                        setPortfolioStrategySizingMode(
+                          e.target.value as PortfolioStrategySizingMode,
+                        )
+                      }
+                    >
+                      <MenuItem value="CASH_PER_SLOT">Use cash per slot (max positions)</MenuItem>
+                      <MenuItem value="PCT_EQUITY">% of current equity</MenuItem>
+                      <MenuItem value="FIXED_CASH">Fixed cash per trade</MenuItem>
+                    </Select>
+                  </FormControl>
+                  {portfolioStrategySizingMode === 'PCT_EQUITY' ? (
+                    <TextField
+                      label="Position size (%)"
+                      size="small"
+                      type="number"
+                      value={portfolioStrategyPositionSizePct}
+                      onChange={(e) =>
+                        setPortfolioStrategyPositionSizePct(Number(e.target.value))
+                      }
+                      inputProps={{ min: 0, max: 100 }}
+                      fullWidth
+                    />
+                  ) : portfolioStrategySizingMode === 'FIXED_CASH' ? (
+                    <TextField
+                      label="Cash per trade"
+                      size="small"
+                      type="number"
+                      value={portfolioStrategyFixedCashPerTrade}
+                      onChange={(e) =>
+                        setPortfolioStrategyFixedCashPerTrade(Number(e.target.value))
+                      }
+                      inputProps={{ min: 0 }}
+                      fullWidth
+                    />
+                  ) : (
+                    <TextField
+                      label="Cash per trade"
+                      size="small"
+                      value="Auto"
+                      disabled
+                      fullWidth
+                      helperText="Uses all available cash split by remaining slots."
+                    />
+                  )}
+                </Stack>
+
+                <DividerBlock title="Constraints & risk" />
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Min holding (bars)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyMinHoldingBars}
+                    onChange={(e) => setPortfolioStrategyMinHoldingBars(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 1000 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Cooldown (bars)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyCooldownBars}
+                    onChange={(e) => setPortfolioStrategyCooldownBars(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 1000 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Max alloc/symbol (%)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyMaxSymbolAllocPct}
+                    onChange={(e) =>
+                      setPortfolioStrategyMaxSymbolAllocPct(Number(e.target.value))
+                    }
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                    helperText="0 disables"
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Stop loss (%)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyStopLossPct}
+                    onChange={(e) => setPortfolioStrategyStopLossPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Take profit (%)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyTakeProfitPct}
+                    onChange={(e) => setPortfolioStrategyTakeProfitPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                  <TextField
+                    label="Trailing stop (%)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyTrailingStopPct}
+                    onChange={(e) => setPortfolioStrategyTrailingStopPct(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 100 }}
+                    fullWidth
+                  />
+                </Stack>
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Max equity DD (global, %)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyMaxEquityDdGlobalPct}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isFinite(n)) return
+                      setPortfolioStrategyMaxEquityDdGlobalPct(Math.min(100, Math.abs(n)))
+                    }}
+                    inputProps={{ min: -100, max: 100 }}
+                    fullWidth
+                    helperText="0 disables. Peak since start; triggers exits + blocks new entries."
+                  />
+                  <TextField
+                    label="Max equity DD (per-trade, %)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyMaxEquityDdTradePct}
+                    onChange={(e) => {
+                      const n = Number(e.target.value)
+                      if (!Number.isFinite(n)) return
+                      setPortfolioStrategyMaxEquityDdTradePct(Math.min(100, Math.abs(n)))
+                    }}
+                    inputProps={{ min: -100, max: 100 }}
+                    fullWidth
+                    helperText="0 disables. Peak since entry; resets on each entry."
+                  />
+                </Stack>
+
+                <DividerBlock title="Costs" />
+
+                <Stack direction="row" spacing={1}>
+                  <TextField
+                    label="Slippage (bps)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategySlippageBps}
+                    onChange={(e) => setPortfolioStrategySlippageBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                  <FormControl fullWidth size="small">
+                    <InputLabel id="bt-pfs-charges-model-label">Charges</InputLabel>
+                    <Select
+                      labelId="bt-pfs-charges-model-label"
+                      label="Charges"
+                      value={portfolioStrategyChargesModel}
+                      onChange={(e) =>
+                        setPortfolioStrategyChargesModel(e.target.value as ChargesModel)
+                      }
+                    >
+                      <MenuItem value="BROKER">Broker estimate (India equity)</MenuItem>
+                      <MenuItem value="BPS">Manual (bps)</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Stack>
+
+                {portfolioStrategyChargesModel === 'BPS' ? (
+                  <TextField
+                    label="Charges (bps)"
+                    size="small"
+                    type="number"
+                    value={portfolioStrategyChargesBps}
+                    onChange={(e) => setPortfolioStrategyChargesBps(Number(e.target.value))}
+                    inputProps={{ min: 0, max: 2000 }}
+                    fullWidth
+                  />
+                ) : (
+                  <Stack spacing={1}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="bt-pfs-broker-label">Broker</InputLabel>
+                      <Select
+                        labelId="bt-pfs-broker-label"
+                        label="Broker"
+                        value={portfolioStrategyChargesBroker}
+                        onChange={(e) =>
+                          setPortfolioStrategyChargesBroker(
+                            e.target.value === 'angelone' ? 'angelone' : 'zerodha',
+                          )
+                        }
+                      >
+                        <MenuItem value="zerodha">Zerodha</MenuItem>
+                        <MenuItem value="angelone">AngelOne</MenuItem>
+                      </Select>
+                    </FormControl>
+                    {portfolioStrategyProduct === 'CNC' && (
+                      <FormControl fullWidth size="small">
+                        <InputLabel id="bt-pfs-dp-label">DP charges</InputLabel>
+                        <Select
+                          labelId="bt-pfs-dp-label"
+                          label="DP charges"
+                          value={portfolioStrategyIncludeDpCharges ? 'ON' : 'OFF'}
+                          onChange={(e) =>
+                            setPortfolioStrategyIncludeDpCharges(e.target.value === 'ON')
+                          }
+                        >
+                          <MenuItem value="ON">Include DP (delivery sell)</MenuItem>
+                          <MenuItem value="OFF">Exclude DP</MenuItem>
+                        </Select>
+                      </FormControl>
+                    )}
+                    <Typography variant="caption" color="text.secondary">
+                      Evaluates signals at close and fills at next open. CNC is long-only. MIS
+                      positions are squared off at end of day.
+                    </Typography>
+                  </Stack>
+                )}
               </Stack>
             )}
 
@@ -3346,6 +3911,313 @@ function StrategyRunEquityCard({
               disableRowSelectionOnClick
               pageSizeOptions={[5, 10, 25]}
               initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+            />
+          </Box>
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+function PortfolioStrategyRunDetailsCard({
+  run,
+  displayTimeZone,
+}: {
+  run: BacktestRun
+  displayTimeZone: string
+}) {
+  const result = (run.result as Record<string, unknown> | null | undefined) ?? null
+  const series = (result?.series as Record<string, unknown> | undefined) ?? null
+  const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
+  const meta = (result?.meta as Record<string, unknown> | undefined) ?? null
+
+  const markers = useMemo((): PriceSignalMarker[] => {
+    const ms = (result?.markers as unknown[] | undefined) ?? []
+    return ms
+      .map((m) => {
+        const row = (m ?? {}) as Record<string, unknown>
+        return {
+          ts: String(row.ts ?? ''),
+          kind: String(row.kind ?? ''),
+          text: String(row.text ?? ''),
+        } as PriceSignalMarker
+      })
+      .filter((m) => m.ts)
+  }, [result])
+
+  const markerTs = useMemo(() => {
+    const s = new Set<string>()
+    for (const m of markers) s.add(m.ts)
+    return s
+  }, [markers])
+
+  const equityCandles = useMemo((): PriceCandle[] => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(ts.length, equity.length); i++) {
+      const t = String(ts[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!t || !Number.isFinite(v)) continue
+      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return downsampleKeep(candles, 2500, (c) => markerTs.has((c as PriceCandle).ts))
+  }, [markerTs, series])
+
+  const drawdownCandles = useMemo((): PriceCandle[] => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const dd = (series?.drawdown_pct as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(ts.length, dd.length); i++) {
+      const t = String(ts[i] ?? '')
+      const v = Number(dd[i] ?? NaN)
+      if (!t || !Number.isFinite(v)) continue
+      candles.push({ ts: t, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return downsample(candles, 2500)
+  }, [series])
+
+  const profitValue = useMemo(() => {
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    let first: number | null = null
+    let last: number | null = null
+    for (const v of equity) {
+      const n = Number(v ?? NaN)
+      if (!Number.isFinite(n)) continue
+      if (first === null) first = n
+      last = n
+    }
+    if (first === null || last === null) return null
+    return last - first
+  }, [series])
+
+  const trades = useMemo(() => {
+    const ts = (result?.trades as unknown[] | undefined) ?? []
+    return ts.map((t) => (t ?? {}) as Record<string, unknown>)
+  }, [result])
+
+  const tradeRows = useMemo(() => {
+    return trades.map((t, idx) => ({
+      id: idx,
+      symbol: String(t.symbol ?? ''),
+      entry_ts: String(t.entry_ts ?? ''),
+      exit_ts: String(t.exit_ts ?? ''),
+      side: String(t.side ?? ''),
+      qty: t.qty ?? null,
+      pnl_pct: t.pnl_pct ?? null,
+      reason: String(t.reason ?? ''),
+    }))
+  }, [trades])
+
+  const tradeColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'symbol', headerName: 'Symbol', width: 160 },
+      {
+        field: 'entry_ts',
+        headerName: 'Entry',
+        width: 230,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      {
+        field: 'exit_ts',
+        headerName: 'Exit',
+        width: 230,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      { field: 'side', headerName: 'Side', width: 110 },
+      { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
+      {
+        field: 'pnl_pct',
+        headerName: 'P&L %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      { field: 'reason', headerName: 'Reason', minWidth: 160, flex: 1 },
+    ]
+  }, [displayTimeZone])
+
+  const perSymbolStats = useMemo(() => {
+    const rows = (result?.per_symbol_stats as unknown[] | undefined) ?? []
+    return rows.map((s) => (s ?? {}) as Record<string, unknown>)
+  }, [result])
+
+  const statsRows = useMemo(() => {
+    return perSymbolStats.map((s, idx) => ({
+      id: idx,
+      symbol: String(s.symbol ?? ''),
+      trades: s.trades ?? null,
+      win_rate_pct: s.win_rate_pct ?? null,
+      avg_pnl_pct: s.avg_pnl_pct ?? null,
+      realized_pnl: s.realized_pnl ?? null,
+    }))
+  }, [perSymbolStats])
+
+  const statsColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'symbol', headerName: 'Symbol', width: 160 },
+      { field: 'trades', headerName: 'Trades', width: 90, type: 'number' },
+      {
+        field: 'win_rate_pct',
+        headerName: 'Win %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 1),
+      },
+      {
+        field: 'avg_pnl_pct',
+        headerName: 'Avg P&L %',
+        width: 120,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'realized_pnl',
+        headerName: 'Realized P&L',
+        minWidth: 130,
+        flex: 1,
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+    ]
+  }, [])
+
+  if (run.kind !== 'PORTFOLIO_STRATEGY') {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        This view is available for Portfolio strategy runs only.
+      </Typography>
+    )
+  }
+
+  if (!result || run.status !== 'COMPLETED' || !equityCandles.length) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        No equity curve data available for this run.
+      </Typography>
+    )
+  }
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Typography variant="subtitle2">Equity curve</Typography>
+      {metrics ? (
+        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+          <Chip size="small" label={`Total: ${Number(metrics.total_return_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`CAGR: ${Number(metrics.cagr_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`Max DD: ${Number(metrics.max_drawdown_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`Turnover: ${Number(metrics.turnover_pct_total ?? 0).toFixed(1)}%`} />
+          <Chip size="small" label={`Charges: ${fmtInr(Number(metrics.total_charges ?? 0), 0)}`} />
+          <Chip size="small" label={`Trades: ${Number(metrics.trades ?? 0)}`} />
+          <Chip size="small" label={`Win: ${Number(metrics.win_rate_pct ?? 0).toFixed(1)}%`} />
+          {typeof profitValue === 'number' ? (
+            <Chip size="small" label={`Profit: ${fmtInr(profitValue, 0)}`} />
+          ) : null}
+          {meta ? (
+            <>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={`Loaded: ${Number(meta.symbols_loaded ?? 0)} / ${Number(meta.symbols_requested ?? 0)}`}
+              />
+              {Array.isArray(meta.symbols_missing) && (meta.symbols_missing as unknown[]).length ? (
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  label={`Missing: ${(meta.symbols_missing as unknown[]).length}`}
+                />
+              ) : null}
+            </>
+          ) : null}
+        </Stack>
+      ) : null}
+
+      <Box sx={{ mt: 1 }}>
+        <PriceChart
+          candles={equityCandles}
+          chartType="line"
+          height={260}
+          markers={markers}
+          showLegend
+          baseSeriesName="Portfolio equity"
+        />
+      </Box>
+
+      {drawdownCandles.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2">Drawdown (%)</Typography>
+          <Box sx={{ mt: 1 }}>
+            <PriceChart candles={drawdownCandles} chartType="line" height={180} />
+          </Box>
+        </Box>
+      ) : null}
+
+      {tradeRows.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+            <Typography variant="subtitle2">Trades</Typography>
+            <Box sx={{ flexGrow: 1 }} />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                const rows = tradeRows.map((r) => ({
+                  symbol: r.symbol,
+                  entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
+                  exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
+                  side: r.side,
+                  qty: r.qty,
+                  pnl_pct: r.pnl_pct,
+                  reason: r.reason,
+                }))
+                downloadCsv(`portfolio_strategy_trades_run_${run.id}.csv`, rows)
+              }}
+            >
+              Export CSV
+            </Button>
+          </Stack>
+          <Box sx={{ height: 280, mt: 1 }}>
+            <DataGrid
+              rows={tradeRows}
+              columns={tradeColumns}
+              density="compact"
+              disableRowSelectionOnClick
+              pageSizeOptions={[5, 10, 25]}
+              initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+            />
+          </Box>
+        </Box>
+      ) : null}
+
+      {statsRows.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+            <Typography variant="subtitle2">Per-symbol stats</Typography>
+            <Box sx={{ flexGrow: 1 }} />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                const rows = statsRows.map((r) => ({
+                  symbol: r.symbol,
+                  trades: r.trades,
+                  win_rate_pct: r.win_rate_pct,
+                  avg_pnl_pct: r.avg_pnl_pct,
+                  realized_pnl: r.realized_pnl,
+                }))
+                downloadCsv(`portfolio_strategy_symbols_run_${run.id}.csv`, rows)
+              }}
+            >
+              Export CSV
+            </Button>
+          </Stack>
+          <Box sx={{ height: 260 }}>
+            <DataGrid
+              rows={statsRows}
+              columns={statsColumns}
+              density="compact"
+              disableRowSelectionOnClick
+              pageSizeOptions={[10, 25, 50, 100]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
             />
           </Box>
         </Box>
