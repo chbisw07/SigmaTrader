@@ -52,6 +52,7 @@ import executionBacktestingHelpText from '../../../docs/backtesting_execution_he
 type UniverseMode = 'HOLDINGS' | 'GROUP' | 'BOTH'
 
 type BacktestTab = 'SIGNAL' | 'PORTFOLIO' | 'EXECUTION' | 'STRATEGY'
+type DrawerBacktestTab = 'PORTFOLIO' | 'STRATEGY'
 
 type SignalMode = 'DSL' | 'RANKING'
 type RankingCadence = 'WEEKLY' | 'MONTHLY'
@@ -190,6 +191,7 @@ export function BacktestingPage() {
   const { displayTimeZone } = useTimeSettings()
   const [tab, setTab] = useState<BacktestTab>('SIGNAL')
   const kind: BacktestKind = tab
+  const drawerEnabled = tab === 'STRATEGY' || tab === 'PORTFOLIO'
 
   const [helpOpen, setHelpOpen] = useState(false)
 
@@ -279,7 +281,10 @@ export function BacktestingPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [detailsRun, setDetailsRun] = useState<BacktestRun | null>(null)
 
-  const [pinnedRunIds, setPinnedRunIds] = useState<number[]>([])
+  const [pinnedRunIdsByTab, setPinnedRunIdsByTab] = useState<Record<DrawerBacktestTab, number[]>>({
+    STRATEGY: [],
+    PORTFOLIO: [],
+  })
   const [pinnedRunsById, setPinnedRunsById] = useState<Record<number, BacktestRun>>({})
   const [pinnedRunErrorsById, setPinnedRunErrorsById] = useState<Record<number, string>>({})
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -301,26 +306,34 @@ export function BacktestingPage() {
     drawerWidthRef.current = drawerWidth
   }, [drawerWidth])
 
+  const pinnedRunIds = useMemo(() => {
+    if (tab === 'STRATEGY') return pinnedRunIdsByTab.STRATEGY
+    if (tab === 'PORTFOLIO') return pinnedRunIdsByTab.PORTFOLIO
+    return []
+  }, [pinnedRunIdsByTab.PORTFOLIO, pinnedRunIdsByTab.STRATEGY, tab])
+
+  const allPinnedRunIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const id of pinnedRunIdsByTab.STRATEGY) ids.add(id)
+    for (const id of pinnedRunIdsByTab.PORTFOLIO) ids.add(id)
+    return Array.from(ids.values())
+  }, [pinnedRunIdsByTab.PORTFOLIO, pinnedRunIdsByTab.STRATEGY])
+
   const pinRun = useCallback((runId: number) => {
-    setPinnedRunIds((prev) => (prev.includes(runId) ? prev : [...prev, runId]))
+    if (tab !== 'STRATEGY' && tab !== 'PORTFOLIO') return
+    setPinnedRunIdsByTab((prev) => {
+      const list = prev[tab]
+      return list.includes(runId) ? prev : { ...prev, [tab]: [...list, runId] }
+    })
     setDrawerTab(runId)
     setDrawerOpen(true)
-  }, [])
+  }, [tab])
 
   const closePinnedRun = useCallback((runId: number) => {
-    setPinnedRunIds((prev) => prev.filter((x) => x !== runId))
-    setPinnedRunsById((prev) => {
-      const next = { ...prev }
-      delete next[runId]
-      return next
-    })
-    setPinnedRunErrorsById((prev) => {
-      const next = { ...prev }
-      delete next[runId]
-      return next
-    })
+    if (tab !== 'STRATEGY' && tab !== 'PORTFOLIO') return
+    setPinnedRunIdsByTab((prev) => ({ ...prev, [tab]: prev[tab].filter((x) => x !== runId) }))
     setDrawerTab((prev) => (prev === runId ? 'selected' : prev))
-  }, [])
+  }, [tab])
 
   const openDrawerSelected = useCallback(() => {
     setDrawerTab('selected')
@@ -333,13 +346,12 @@ export function BacktestingPage() {
   }, [mdUp])
 
   useEffect(() => {
-    if (tab === 'STRATEGY') return
     setDrawerOpen(false)
     setDrawerTab('selected')
   }, [tab])
 
   useEffect(() => {
-    if (!mdUp || tab !== 'STRATEGY') return
+    if (!mdUp || !drawerEnabled) return
     const onMove = (e: MouseEvent) => {
       const st = resizingRef.current
       if (!st) return
@@ -362,9 +374,48 @@ export function BacktestingPage() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [mdUp, tab])
+  }, [drawerEnabled, mdUp])
+
+  useEffect(() => {
+    setPinnedRunsById((prev) => {
+      const keep = new Set(allPinnedRunIds)
+      const next: Record<number, BacktestRun> = {}
+      for (const [k, v] of Object.entries(prev)) {
+        const id = Number(k)
+        if (keep.has(id)) next[id] = v
+      }
+      return next
+    })
+    setPinnedRunErrorsById((prev) => {
+      const keep = new Set(allPinnedRunIds)
+      const next: Record<number, string> = {}
+      for (const [k, v] of Object.entries(prev)) {
+        const id = Number(k)
+        if (keep.has(id)) next[id] = v
+      }
+      return next
+    })
+  }, [allPinnedRunIds])
 
   const appBarOffsetPx = useMemo(() => (smUp ? 64 : 56), [smUp])
+
+  const renderDrawerDetails = useCallback(
+    (run: BacktestRun) => {
+      if (tab === 'PORTFOLIO') {
+        return (
+          <PortfolioRunDetailsCard
+            run={run}
+            runs={runs}
+            compareRunId={compareRunId}
+            setCompareRunId={setCompareRunId}
+            compareRun={compareRun}
+          />
+        )
+      }
+      return <StrategyRunEquityCard run={run} displayTimeZone={displayTimeZone} />
+    },
+    [compareRun, compareRunId, displayTimeZone, runs, tab],
+  )
 
   const getRunUniverse = useCallback((run: BacktestRun) => {
     return ((run.config as any)?.universe ?? {}) as Record<string, unknown>
@@ -658,7 +709,7 @@ export function BacktestingPage() {
   useEffect(() => {
     let active = true
     void (async () => {
-      const missing = pinnedRunIds.filter((id) => pinnedRunsById[id] == null)
+      const missing = allPinnedRunIds.filter((id) => pinnedRunsById[id] == null)
       if (!missing.length) return
       for (const id of missing) {
         try {
@@ -682,7 +733,7 @@ export function BacktestingPage() {
     return () => {
       active = false
     }
-  }, [pinnedRunIds, pinnedRunsById])
+  }, [allPinnedRunIds, pinnedRunsById])
 
   const handleDeleteSelected = useCallback(async () => {
     const ids = selectedRunIds.slice()
@@ -1101,7 +1152,7 @@ export function BacktestingPage() {
                 e.stopPropagation()
                 setSelectedRunId(run.id)
                 applyRunToInputs(run)
-                if (tab === 'STRATEGY') openDrawerSelected()
+                if (drawerEnabled) openDrawerSelected()
               }}
             >
               {run.id}
@@ -1497,52 +1548,6 @@ export function BacktestingPage() {
     ]
   }, [])
 
-  const portfolioEquityCandles = useMemo((): PriceCandle[] => {
-    if (tab !== 'PORTFOLIO') return []
-    if (!selectedRun?.result) return []
-    const result = selectedRun.result as Record<string, unknown>
-    const series = result.series as Record<string, unknown> | undefined
-    if (!series) return []
-    const dates = (series.dates as unknown[] | undefined) ?? []
-    const equity = (series.equity as unknown[] | undefined) ?? []
-    const candles: PriceCandle[] = []
-    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
-      const ts = String(dates[i] ?? '')
-      const v = Number(equity[i] ?? NaN)
-      if (!ts || !Number.isFinite(v)) continue
-      candles.push({ ts, open: v, high: v, low: v, close: v, volume: 0 })
-    }
-    return candles
-  }, [selectedRun, tab])
-
-  const portfolioCompareOverlay = useMemo(() => {
-    if (tab !== 'PORTFOLIO') return []
-    if (!compareRun?.result) return []
-    const r = compareRun.result as Record<string, unknown>
-    const series = r.series as Record<string, unknown> | undefined
-    if (!series) return []
-    const dates = (series.dates as unknown[] | undefined) ?? []
-    const equity = (series.equity as unknown[] | undefined) ?? []
-    const byDate = new Map<string, number>()
-    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
-      const ts = String(dates[i] ?? '')
-      const v = Number(equity[i] ?? NaN)
-      if (!ts || !Number.isFinite(v)) continue
-      byDate.set(ts, v)
-    }
-    const points = portfolioEquityCandles.map((c) => ({
-      ts: c.ts,
-      value: byDate.get(c.ts) ?? null,
-    }))
-    return [
-      {
-        name: `Compare: run #${compareRun.id}`,
-        color: '#6b7280',
-        points,
-      },
-    ]
-  }, [compareRun, portfolioEquityCandles, tab])
-
   const executionEquityCandles = useMemo((): PriceCandle[] => {
     if (tab !== 'EXECUTION') return []
     if (!selectedRun?.result) return []
@@ -1598,100 +1603,10 @@ export function BacktestingPage() {
     return (result.delta as Record<string, unknown> | undefined) ?? null
   }, [selectedRun, tab])
 
-  const portfolioDrawdownCandles = useMemo((): PriceCandle[] => {
-    if (tab !== 'PORTFOLIO') return []
-    if (!selectedRun?.result) return []
-    const result = selectedRun.result as Record<string, unknown>
-    const series = result.series as Record<string, unknown> | undefined
-    if (!series) return []
-    const dates = (series.dates as unknown[] | undefined) ?? []
-    const dd = (series.drawdown_pct as unknown[] | undefined) ?? []
-    const candles: PriceCandle[] = []
-    for (let i = 0; i < Math.min(dates.length, dd.length); i++) {
-      const ts = String(dates[i] ?? '')
-      const v = Number(dd[i] ?? NaN)
-      if (!ts || !Number.isFinite(v)) continue
-      candles.push({ ts, open: v, high: v, low: v, close: v, volume: 0 })
-    }
-    return candles
-  }, [selectedRun, tab])
-
-  const portfolioMetrics = useMemo(() => {
-    if (tab !== 'PORTFOLIO') return null
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return null
-    return (result.metrics as Record<string, unknown> | undefined) ?? null
-  }, [selectedRun, tab])
-
-  const portfolioMeta = useMemo(() => {
-    if (tab !== 'PORTFOLIO') return null
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return null
-    return (result.meta as Record<string, unknown> | undefined) ?? null
-  }, [selectedRun, tab])
-
-  const portfolioActionsRows = useMemo(() => {
-    if (tab !== 'PORTFOLIO') return []
-    const result = selectedRun?.result as Record<string, unknown> | null | undefined
-    if (!result) return []
-    const actions = (result.actions as unknown[] | undefined) ?? []
-    return actions.map((a, idx) => {
-      const row = (a ?? {}) as Record<string, unknown>
-      const trades = (row.trades as unknown[] | undefined) ?? []
-      const skipped = Boolean(row.skipped)
-      const charges = trades.reduce<number>(
-        (acc, t) => acc + Number((t as any)?.charges ?? 0),
-        0,
-      )
-      return {
-        id: idx,
-        date: String(row.date ?? ''),
-        status: skipped ? 'SKIPPED' : 'OK',
-        note: skipped ? String(row.skip_reason ?? '') : '',
-        trades: trades.length,
-        turnover_pct: row.turnover_pct ?? null,
-        budget_used: row.budget_used ?? null,
-        charges: Number.isFinite(charges) ? charges : null,
-      }
-    })
-  }, [selectedRun, tab])
-
-  const portfolioActionsColumns = useMemo((): GridColDef[] => {
-    const fmtPct = (value: unknown) =>
-      value == null || value === '' ? '' : `${Number(value).toFixed(1)}%`
-    return [
-      { field: 'date', headerName: 'Date', width: 120 },
-      { field: 'status', headerName: 'Status', width: 110 },
-      { field: 'note', headerName: 'Note', minWidth: 160, flex: 1 },
-      { field: 'trades', headerName: 'Trades', width: 90 },
-      {
-        field: 'turnover_pct',
-        headerName: 'Turnover %',
-        width: 120,
-        valueFormatter: (value) =>
-          fmtPct((value as { value?: unknown })?.value ?? value),
-      },
-      {
-        field: 'budget_used',
-        headerName: 'Budget used',
-        width: 140,
-        valueFormatter: (value) =>
-          fmtInr((value as { value?: unknown })?.value ?? value, 0),
-      },
-      {
-        field: 'charges',
-        headerName: 'Charges',
-        width: 140,
-        valueFormatter: (value) =>
-          fmtInr((value as { value?: unknown })?.value ?? value, 0),
-      },
-    ]
-  }, [])
-
   return (
     <Box
       sx={{
-        pr: tab === 'STRATEGY' && drawerOpen && mdUp ? `${drawerWidth}px` : 0,
+        pr: drawerEnabled && drawerOpen && mdUp ? `${drawerWidth}px` : 0,
         transition: theme.transitions.create('padding-right', {
           duration: theme.transitions.duration.shortest,
         }),
@@ -2837,7 +2752,7 @@ export function BacktestingPage() {
               </Button>
             </Stack>
 
-            <Box sx={{ height: tab === 'STRATEGY' ? 'calc(100vh - 320px)' : 260, minHeight: 260 }}>
+            <Box sx={{ height: drawerEnabled ? 'calc(100vh - 320px)' : 260, minHeight: 260 }}>
               <DataGrid
                 rows={runs}
                 columns={runColumns}
@@ -2861,7 +2776,7 @@ export function BacktestingPage() {
                   applyRunToInputs(run)
                   const e = event as unknown as { ctrlKey?: boolean; metaKey?: boolean }
                   const ctrl = Boolean(e?.ctrlKey || e?.metaKey)
-                  if (ctrl && tab === 'STRATEGY') {
+                  if (ctrl && drawerEnabled) {
                     pinRun(run.id)
                   }
                 }}
@@ -2872,7 +2787,7 @@ export function BacktestingPage() {
               />
             </Box>
 
-            {tab !== 'STRATEGY' ? (
+            {!drawerEnabled ? (
               <>
                 <DividerBlock title="Selected run" />
                 {selectedRun ? (
@@ -2906,111 +2821,6 @@ export function BacktestingPage() {
                     </Box>
                   </Box>
                 )}
-
-                {tab === 'PORTFOLIO' &&
-                  selectedRun.status === 'COMPLETED' &&
-                  portfolioEquityCandles.length > 0 && (
-                    <Box sx={{ mt: 1 }}>
-                      <Typography variant="subtitle2">Equity curve</Typography>
-                      {portfolioMetrics ? (
-                        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
-                          <Chip
-                            size="small"
-                            label={`Total: ${Number(portfolioMetrics.total_return_pct ?? 0).toFixed(2)}%`}
-                          />
-                          <Chip size="small" label={`CAGR: ${Number(portfolioMetrics.cagr_pct ?? 0).toFixed(2)}%`} />
-                          <Chip
-                            size="small"
-                            label={`Max DD: ${Number(portfolioMetrics.max_drawdown_pct ?? 0).toFixed(2)}%`}
-                          />
-                          <Chip
-                            size="small"
-                            label={`Turnover: ${Number(portfolioMetrics.turnover_pct_total ?? 0).toFixed(1)}%`}
-                          />
-                          {Number.isFinite(Number(portfolioMetrics.total_charges)) && (
-                            <Chip
-                              size="small"
-                              label={`Charges: ${fmtInr(Number(portfolioMetrics.total_charges ?? 0), 0)}`}
-                            />
-                          )}
-                          <Chip size="small" label={`Rebalances: ${Number(portfolioMetrics.rebalance_count ?? 0)}`} />
-                          {Number(portfolioMetrics.rebalance_skipped_count ?? 0) > 0 && (
-                            <Tooltip
-                              title={
-                                portfolioMeta?.gate
-                                  ? `Gate blocked ${Number(portfolioMetrics.rebalance_skipped_count ?? 0)} rebalance(s).`
-                                  : `Skipped ${Number(portfolioMetrics.rebalance_skipped_count ?? 0)} rebalance(s).`
-                              }
-                            >
-                              <Chip
-                                size="small"
-                                color="warning"
-                                label={`Skipped: ${Number(portfolioMetrics.rebalance_skipped_count ?? 0)}`}
-                              />
-                            </Tooltip>
-                          )}
-                        </Stack>
-                      ) : null}
-
-                      <Box sx={{ mt: 1 }}>
-                        <PriceChart
-                          candles={portfolioEquityCandles}
-                          chartType="line"
-                          height={260}
-                          overlays={portfolioCompareOverlay}
-                        />
-                      </Box>
-
-                      {runs.length > 1 ? (
-                        <Box sx={{ mt: 2 }}>
-                          <FormControl fullWidth size="small">
-                            <InputLabel id="bt-compare-label">Compare run</InputLabel>
-                            <Select
-                              labelId="bt-compare-label"
-                              label="Compare run"
-                              value={compareRunId}
-                              onChange={(e) =>
-                                setCompareRunId(e.target.value === '' ? '' : Number(e.target.value))
-                              }
-                            >
-                              <MenuItem value="">(none)</MenuItem>
-                              {runs
-                                .filter((r) => r.id !== selectedRun.id && r.status === 'COMPLETED')
-                                .map((r) => (
-                                  <MenuItem key={r.id} value={String(r.id)}>
-                                    #{r.id} — {String((r.config as any)?.config?.method ?? r.title ?? '')}
-                                  </MenuItem>
-                                ))}
-                            </Select>
-                          </FormControl>
-                        </Box>
-                      ) : null}
-
-                      {portfolioDrawdownCandles.length > 0 ? (
-                        <Box sx={{ mt: 2 }}>
-                          <Typography variant="subtitle2">Drawdown (%)</Typography>
-                          <Box sx={{ mt: 1 }}>
-                            <PriceChart candles={portfolioDrawdownCandles} chartType="line" height={180} />
-                          </Box>
-                        </Box>
-                      ) : null}
-
-                      {portfolioActionsRows.length > 0 ? (
-                        <Box sx={{ mt: 2 }}>
-                          <Typography variant="subtitle2">Rebalance actions</Typography>
-                          <Box sx={{ height: 220, mt: 1 }}>
-                            <DataGrid
-                              rows={portfolioActionsRows}
-                              columns={portfolioActionsColumns}
-                              density="compact"
-                              disableRowSelectionOnClick
-                              hideFooter
-                            />
-                          </Box>
-                        </Box>
-                      ) : null}
-                    </Box>
-                  )}
 
                 {tab === 'EXECUTION' && selectedRun.status === 'COMPLETED' && executionEquityCandles.length > 0 && (
                   <Box sx={{ mt: 1 }}>
@@ -3106,7 +2916,7 @@ export function BacktestingPage() {
       <Drawer
         anchor="right"
         variant={mdUp ? 'persistent' : 'temporary'}
-        open={tab === 'STRATEGY' && drawerOpen}
+        open={drawerEnabled && drawerOpen}
         onClose={closeDrawer}
         ModalProps={{ keepMounted: true }}
         sx={{
@@ -3198,7 +3008,13 @@ export function BacktestingPage() {
         <Box sx={{ px: 1.25, pb: 2, overflow: 'auto' }}>
           {drawerTab === 'selected' ? (
             selectedRun ? (
-              <StrategyRunEquityCard run={selectedRun} displayTimeZone={displayTimeZone} />
+              selectedRun.kind !== tab ? (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                  Selected run is {selectedRun.kind}; switch to the {selectedRun.kind.toLowerCase()} tab to view details.
+                </Typography>
+              ) : (
+                renderDrawerDetails(selectedRun)
+              )
             ) : (
               <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
                 {selectedRunId != null ? 'Loading run…' : 'Click a run to load details.'}
@@ -3209,7 +3025,13 @@ export function BacktestingPage() {
               {pinnedRunErrorsById[drawerTab]}
             </Typography>
           ) : pinnedRunsById[drawerTab] ? (
-            <StrategyRunEquityCard run={pinnedRunsById[drawerTab]} displayTimeZone={displayTimeZone} />
+            pinnedRunsById[drawerTab].kind !== tab ? (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                This pinned run is {pinnedRunsById[drawerTab].kind}; switch tabs to view.
+              </Typography>
+            ) : (
+              renderDrawerDetails(pinnedRunsById[drawerTab])
+            )
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
               Loading run…
@@ -3540,6 +3362,219 @@ function DividerBlock({ title }: { title: string }) {
         {title}
       </Typography>
       <Box sx={{ flex: 1, height: 1, bgcolor: 'divider' }} />
+    </Box>
+  )
+}
+
+function PortfolioRunDetailsCard({
+  run,
+  runs,
+  compareRunId,
+  setCompareRunId,
+  compareRun,
+}: {
+  run: BacktestRun
+  runs: BacktestRun[]
+  compareRunId: number | ''
+  setCompareRunId: (id: number | '') => void
+  compareRun: BacktestRun | null
+}) {
+  const result = (run.result as Record<string, unknown> | null | undefined) ?? null
+  const series = (result?.series as Record<string, unknown> | undefined) ?? null
+  const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
+  const meta = (result?.meta as Record<string, unknown> | undefined) ?? null
+
+  const equityCandles = useMemo((): PriceCandle[] => {
+    const dates = (series?.dates as unknown[] | undefined) ?? []
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      candles.push({ ts, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return candles
+  }, [series])
+
+  const compareOverlay = useMemo(() => {
+    if (!compareRun?.result || compareRun.id === run.id) return []
+    const r = compareRun.result as Record<string, unknown>
+    const cSeries = r.series as Record<string, unknown> | undefined
+    if (!cSeries) return []
+    const dates = (cSeries.dates as unknown[] | undefined) ?? []
+    const equity = (cSeries.equity as unknown[] | undefined) ?? []
+    const byDate = new Map<string, number>()
+    for (let i = 0; i < Math.min(dates.length, equity.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(equity[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      byDate.set(ts, v)
+    }
+    const points = equityCandles.map((c) => ({ ts: c.ts, value: byDate.get(c.ts) ?? null }))
+    return [
+      {
+        name: `Compare: run #${compareRun.id}`,
+        color: '#6b7280',
+        points,
+      },
+    ]
+  }, [compareRun, equityCandles, run.id])
+
+  const drawdownCandles = useMemo((): PriceCandle[] => {
+    const dates = (series?.dates as unknown[] | undefined) ?? []
+    const dd = (series?.drawdown_pct as unknown[] | undefined) ?? []
+    const candles: PriceCandle[] = []
+    for (let i = 0; i < Math.min(dates.length, dd.length); i++) {
+      const ts = String(dates[i] ?? '')
+      const v = Number(dd[i] ?? NaN)
+      if (!ts || !Number.isFinite(v)) continue
+      candles.push({ ts, open: v, high: v, low: v, close: v, volume: 0 })
+    }
+    return candles
+  }, [series])
+
+  const actionsRows = useMemo(() => {
+    const actions = (result?.actions as unknown[] | undefined) ?? []
+    return actions.map((a, idx) => {
+      const row = (a ?? {}) as Record<string, unknown>
+      const trades = (row.trades as unknown[] | undefined) ?? []
+      const skipped = Boolean(row.skipped)
+      const charges = trades.reduce<number>((acc, t) => acc + Number((t as any)?.charges ?? 0), 0)
+      return {
+        id: idx,
+        date: String(row.date ?? ''),
+        status: skipped ? 'SKIPPED' : 'OK',
+        note: skipped ? String(row.skip_reason ?? '') : '',
+        trades: trades.length,
+        turnover_pct: row.turnover_pct ?? null,
+        budget_used: row.budget_used ?? null,
+        charges: Number.isFinite(charges) ? charges : null,
+      }
+    })
+  }, [result])
+
+  const actionsColumns = useMemo((): GridColDef[] => {
+    const fmtPctLocal = (value: unknown) => (value == null || value === '' ? '' : `${Number(value).toFixed(1)}%`)
+    return [
+      { field: 'date', headerName: 'Date', width: 120 },
+      { field: 'status', headerName: 'Status', width: 110 },
+      { field: 'note', headerName: 'Note', minWidth: 160, flex: 1 },
+      { field: 'trades', headerName: 'Trades', width: 90 },
+      {
+        field: 'turnover_pct',
+        headerName: 'Turnover %',
+        width: 120,
+        valueFormatter: (value) => fmtPctLocal((value as { value?: unknown })?.value ?? value),
+      },
+      {
+        field: 'budget_used',
+        headerName: 'Budget used',
+        width: 140,
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'charges',
+        headerName: 'Charges',
+        width: 140,
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+    ]
+  }, [])
+
+  if (run.kind !== 'PORTFOLIO') {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        Portfolio details are available for Portfolio runs only.
+      </Typography>
+    )
+  }
+
+  if (!result || run.status !== 'COMPLETED' || !equityCandles.length) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        {run.status === 'FAILED' && run.error_message ? `Error: ${run.error_message}` : 'No equity curve data available for this run.'}
+      </Typography>
+    )
+  }
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Typography variant="subtitle2">Equity curve</Typography>
+      {metrics ? (
+        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
+          <Chip size="small" label={`Total: ${Number(metrics.total_return_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`CAGR: ${Number(metrics.cagr_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`Max DD: ${Number(metrics.max_drawdown_pct ?? 0).toFixed(2)}%`} />
+          <Chip size="small" label={`Turnover: ${Number(metrics.turnover_pct_total ?? 0).toFixed(1)}%`} />
+          {Number.isFinite(Number(metrics.total_charges)) && (
+            <Chip size="small" label={`Charges: ${fmtInr(Number(metrics.total_charges ?? 0), 0)}`} />
+          )}
+          <Chip size="small" label={`Rebalances: ${Number(metrics.rebalance_count ?? 0)}`} />
+          {Number(metrics.rebalance_skipped_count ?? 0) > 0 ? (
+            <Tooltip
+              title={
+                meta?.gate
+                  ? `Gate blocked ${Number(metrics.rebalance_skipped_count ?? 0)} rebalance(s).`
+                  : `Skipped ${Number(metrics.rebalance_skipped_count ?? 0)} rebalance(s).`
+              }
+            >
+              <Chip size="small" color="warning" label={`Skipped: ${Number(metrics.rebalance_skipped_count ?? 0)}`} />
+            </Tooltip>
+          ) : null}
+        </Stack>
+      ) : null}
+
+      <Box sx={{ mt: 1 }}>
+        <PriceChart candles={equityCandles} chartType="line" height={260} overlays={compareOverlay} />
+      </Box>
+
+      {runs.length > 1 ? (
+        <Box sx={{ mt: 2 }}>
+          <FormControl fullWidth size="small">
+            <InputLabel id={`bt-compare-label-${run.id}`}>Compare run</InputLabel>
+            <Select
+              labelId={`bt-compare-label-${run.id}`}
+              label="Compare run"
+              value={compareRunId}
+              onChange={(e) => setCompareRunId(e.target.value === '' ? '' : Number(e.target.value))}
+            >
+              <MenuItem value="">(none)</MenuItem>
+              {runs
+                .filter((r) => r.id !== run.id && r.status === 'COMPLETED')
+                .map((r) => (
+                  <MenuItem key={r.id} value={String(r.id)}>
+                    #{r.id} — {String((r.config as any)?.config?.method ?? r.title ?? '')}
+                  </MenuItem>
+                ))}
+            </Select>
+          </FormControl>
+        </Box>
+      ) : null}
+
+      {drawdownCandles.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2">Drawdown (%)</Typography>
+          <Box sx={{ mt: 1 }}>
+            <PriceChart candles={drawdownCandles} chartType="line" height={180} />
+          </Box>
+        </Box>
+      ) : null}
+
+      {actionsRows.length > 0 ? (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2">Rebalance actions</Typography>
+          <Box sx={{ height: 240, mt: 1 }}>
+            <DataGrid
+              rows={actionsRows}
+              columns={actionsColumns}
+              density="compact"
+              disableRowSelectionOnClick
+              hideFooter
+            />
+          </Box>
+        </Box>
+      ) : null}
     </Box>
   )
 }
