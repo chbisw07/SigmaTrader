@@ -23,6 +23,11 @@ from app.services.market_data import Timeframe, load_series
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
+MAX_SYMBOLS_LOADED = 500
+MAX_GLOBAL_BARS = 200_000
+MAX_CELL_UPDATES = 10_000_000  # symbols * global_bars
+MAX_RETURN_POINTS = 25_000
+
 
 def _iso_ist(dt: datetime) -> str:
     if dt.tzinfo is None:
@@ -258,6 +263,21 @@ def run_portfolio_strategy_backtest(
     gts = sorted(all_ts)
     if not gts:
         raise ValueError("No candles in the selected window.")
+    if len(gts) > MAX_GLOBAL_BARS:
+        raise ValueError(
+            f"Too many bars in window ({len(gts)}). "
+            "Narrow the date range or use a higher timeframe."
+        )
+    if len(bars_by_key) > MAX_SYMBOLS_LOADED:
+        raise ValueError(
+            f"Too many symbols loaded ({len(bars_by_key)}). Reduce group size or split "
+            "into smaller groups."
+        )
+    if len(gts) * len(bars_by_key) > MAX_CELL_UPDATES:
+        raise ValueError(
+            f"Backtest too large (symbols={len(bars_by_key)}, bars={len(gts)}). "
+            "Narrow the date range, use a higher timeframe, or reduce group size."
+        )
 
     slip = float(config.slippage_bps) / 10000.0
     charges_rate = (
@@ -814,6 +834,26 @@ def run_portfolio_strategy_backtest(
             }
         )
 
+    ts_iso = [_iso_ist(x) for x in gts]
+    if len(ts_iso) > MAX_RETURN_POINTS:
+        step = int(math.ceil(len(ts_iso) / MAX_RETURN_POINTS))
+        keep: set[int] = set(range(0, len(ts_iso), step))
+        keep.add(len(ts_iso) - 1)
+        marker_ts = {
+            str(m.get("ts"))
+            for m in markers
+            if isinstance(m, dict) and m.get("ts") is not None
+        }
+        keep.update(i for i, t in enumerate(ts_iso) if t in marker_ts)
+        idxs = sorted(keep)
+
+        ts_iso = [ts_iso[i] for i in idxs]
+        equity = [equity[i] for i in idxs]
+        drawdown_pct = [drawdown_pct[i] for i in idxs]
+        per_symbol_pnl = {
+            k: [vals[i] for i in idxs] for k, vals in per_symbol_pnl.items()
+        }
+
     return {
         "meta": {
             "timeframe": config.timeframe,
@@ -847,9 +887,11 @@ def run_portfolio_strategy_backtest(
             "symbols_requested": len(unique),
             "symbols_loaded": len(bars_by_key),
             "symbols_missing": missing_symbols,
+            "bars_total": len(gts),
+            "bars_returned": len(ts_iso),
         },
         "series": {
-            "ts": [_iso_ist(x) for x in gts],
+            "ts": ts_iso,
             "equity": equity,
             "drawdown_pct": drawdown_pct,
         },
