@@ -612,6 +612,12 @@ def run_portfolio_strategy_backtest(
                         and si < b.sim_end
                         and _eval_expr_at(exit_expr, b.series, si)
                     ):
+                        if (
+                            int(config.min_holding_bars or 0) > 0
+                            and st.entry_gi is not None
+                        ):
+                            if gi - int(st.entry_gi) < int(config.min_holding_bars):
+                                continue
                         next_ts = b.ts[si + 1]
                         pending_exit_ts[key] = (next_ts, "EXIT_SIGNAL")
 

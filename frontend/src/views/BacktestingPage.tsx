@@ -43,6 +43,7 @@ import { parseBackendDate } from '../utils/datetime'
 
 import backtestingHelpText from '../../../docs/backtesting_page_help.md?raw'
 import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_help.md?raw'
+import portfolioStrategyBacktestingHelpText from '../../../docs/backtesting_portfolio_strategy_help.md?raw'
 import riskParityBacktestingHelpText from '../../../docs/backtesting_risk_parity_help.md?raw'
 import rotationBacktestingHelpText from '../../../docs/backtesting_rotation_help.md?raw'
 import signalBacktestingHelpText from '../../../docs/backtesting_signal_help.md?raw'
@@ -1423,7 +1424,7 @@ export function BacktestingPage() {
             ? riskParityBacktestingHelpText
           : portfolioBacktestingHelpText
         : tab === 'PORTFOLIO_STRATEGY'
-          ? strategyBacktestingHelpText
+          ? portfolioStrategyBacktestingHelpText
         : tab === 'EXECUTION'
           ? executionBacktestingHelpText
           : tab === 'STRATEGY'
