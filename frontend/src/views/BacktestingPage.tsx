@@ -94,6 +94,11 @@ function fmtInr(value: unknown, digits = 0): string {
   }
 }
 
+function fmtPrice(value: unknown, digits = 2): string {
+  const n = Number(value)
+  return Number.isFinite(n) ? n.toFixed(digits) : '—'
+}
+
 function formatYmdHmsAmPm(value: unknown, displayTimeZone: 'LOCAL' | string): string {
   const raw = typeof value === 'string' ? value.trim() : ''
   const isNaive =
@@ -3772,11 +3777,19 @@ function StrategyRunEquityCard({
   const tradeRows = useMemo(() => {
     return trades.map((t, idx) => {
       const row = (t ?? {}) as Record<string, unknown>
+      const side = String(row.side ?? '')
+      const isShort = side.toUpperCase() === 'SHORT'
+      const entryPrice = Number(row.entry_price ?? NaN)
+      const exitPrice = Number(row.exit_price ?? NaN)
+      const buyPrice = isShort ? exitPrice : entryPrice
+      const sellPrice = isShort ? entryPrice : exitPrice
       return {
         id: idx,
         entry_ts: String(row.entry_ts ?? ''),
         exit_ts: String(row.exit_ts ?? ''),
-        side: String(row.side ?? ''),
+        side,
+        buy_price: Number.isFinite(buyPrice) ? buyPrice : null,
+        sell_price: Number.isFinite(sellPrice) ? sellPrice : null,
         qty: row.qty ?? null,
         pnl_pct: row.pnl_pct ?? null,
         reason: String(row.reason ?? ''),
@@ -3801,6 +3814,20 @@ function StrategyRunEquityCard({
           formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
       },
       { field: 'side', headerName: 'Side', width: 110 },
+      {
+        field: 'buy_price',
+        headerName: 'Buy',
+        width: 120,
+        type: 'number',
+        valueFormatter: (value) => fmtPrice((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'sell_price',
+        headerName: 'Sell',
+        width: 120,
+        type: 'number',
+        valueFormatter: (value) => fmtPrice((value as { value?: unknown })?.value ?? value, 2),
+      },
       { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
       {
         field: 'pnl_pct',
@@ -3868,6 +3895,13 @@ function StrategyRunEquityCard({
           <Chip size="small" label={`CAGR: ${Number(metrics.cagr_pct ?? 0).toFixed(2)}%`} />
           <Chip size="small" label={`Max DD: ${Number(metrics.max_drawdown_pct ?? 0).toFixed(2)}%`} />
           <Chip size="small" label={`Turnover: ${Number(metrics.turnover_pct_total ?? 0).toFixed(1)}%`} />
+          {metrics.total_turnover != null ? (
+            <Chip
+              size="small"
+              variant="outlined"
+              label={`Turnover: ${fmtInr(Number(metrics.total_turnover ?? 0), 0)}`}
+            />
+          ) : null}
           <Chip size="small" label={`Charges: ${fmtInr(Number(metrics.total_charges ?? 0), 0)}`} />
           {baselines?.start_to_end ? (
             <Chip
@@ -3888,7 +3922,7 @@ function StrategyRunEquityCard({
               <Chip size="small" label={`Trades: ${Number(tradeStats.count ?? 0)}`} />
               <Chip size="small" label={`Win: ${Number(tradeStats.win_rate_pct ?? 0).toFixed(1)}%`} />
               {typeof profitValue === 'number' ? (
-                <Chip size="small" label={`Profit: ${fmtInr(profitValue, 0)}`} />
+                <Chip size="small" label={`Profit (net): ${fmtInr(profitValue, 0)}`} />
               ) : null}
             </>
           ) : null}
@@ -3929,6 +3963,8 @@ function StrategyRunEquityCard({
                   entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
                   exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
                   side: r.side,
+                  buy_price: r.buy_price,
+                  sell_price: r.sell_price,
                   qty: r.qty,
                   pnl_pct: r.pnl_pct,
                   reason: r.reason,
@@ -4055,6 +4091,16 @@ function PortfolioStrategyRunDetailsCard({
       entry_ts: String(t.entry_ts ?? ''),
       exit_ts: String(t.exit_ts ?? ''),
       side: String(t.side ?? ''),
+      buy_price: (() => {
+        const isShort = String(t.side ?? '').toUpperCase() === 'SHORT'
+        const n = Number((isShort ? t.exit_price : t.entry_price) ?? NaN)
+        return Number.isFinite(n) ? n : null
+      })(),
+      sell_price: (() => {
+        const isShort = String(t.side ?? '').toUpperCase() === 'SHORT'
+        const n = Number((isShort ? t.entry_price : t.exit_price) ?? NaN)
+        return Number.isFinite(n) ? n : null
+      })(),
       qty: t.qty ?? null,
       pnl_pct: t.pnl_pct ?? null,
       reason: String(t.reason ?? ''),
@@ -4079,6 +4125,20 @@ function PortfolioStrategyRunDetailsCard({
           formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
       },
       { field: 'side', headerName: 'Side', width: 110 },
+      {
+        field: 'buy_price',
+        headerName: 'Buy',
+        width: 120,
+        type: 'number',
+        valueFormatter: (value) => fmtPrice((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'sell_price',
+        headerName: 'Sell',
+        width: 120,
+        type: 'number',
+        valueFormatter: (value) => fmtPrice((value as { value?: unknown })?.value ?? value, 2),
+      },
       { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
       {
         field: 'pnl_pct',
@@ -4183,11 +4243,18 @@ function PortfolioStrategyRunDetailsCard({
           <Chip size="small" label={`CAGR: ${Number(metrics.cagr_pct ?? 0).toFixed(2)}%`} />
           <Chip size="small" label={`Max DD: ${Number(metrics.max_drawdown_pct ?? 0).toFixed(2)}%`} />
           <Chip size="small" label={`Turnover: ${Number(metrics.turnover_pct_total ?? 0).toFixed(1)}%`} />
+          {metrics.total_turnover != null ? (
+            <Chip
+              size="small"
+              variant="outlined"
+              label={`Turnover: ${fmtInr(Number(metrics.total_turnover ?? 0), 0)}`}
+            />
+          ) : null}
           <Chip size="small" label={`Charges: ${fmtInr(Number(metrics.total_charges ?? 0), 0)}`} />
           <Chip size="small" label={`Trades: ${Number(metrics.trades ?? 0)}`} />
           <Chip size="small" label={`Win: ${Number(metrics.win_rate_pct ?? 0).toFixed(1)}%`} />
           {typeof profitValue === 'number' ? (
-            <Chip size="small" label={`Profit: ${fmtInr(profitValue, 0)}`} />
+            <Chip size="small" label={`Profit (net): ${fmtInr(profitValue, 0)}`} />
           ) : null}
           {meta ? (
             <>
@@ -4243,6 +4310,8 @@ function PortfolioStrategyRunDetailsCard({
                   entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
                   exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
                   side: r.side,
+                  buy_price: r.buy_price,
+                  sell_price: r.sell_price,
                   qty: r.qty,
                   pnl_pct: r.pnl_pct,
                   reason: r.reason,

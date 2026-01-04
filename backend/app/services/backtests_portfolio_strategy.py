@@ -900,6 +900,7 @@ def run_portfolio_strategy_backtest(
             "cagr_pct": float(cagr_pct),
             "max_drawdown_pct": float(max_drawdown_pct),
             "turnover_pct_total": float(turnover_pct_total),
+            "total_turnover": float(total_turnover),
             "total_charges": float(total_charges),
             "trades": len(trade_pnl_pct),
             "win_rate_pct": float(win_rate_pct),
