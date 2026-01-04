@@ -3661,6 +3661,10 @@ function StrategyRunEquityCard({
   run: BacktestRun
   displayTimeZone: 'LOCAL' | string
 }) {
+  const [showTrades, setShowTrades] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === 'undefined' ? 900 : window.innerHeight,
+  )
   const result = (run.result as Record<string, unknown> | null | undefined) ?? null
   const series = (result?.series as Record<string, unknown> | undefined) ?? null
   const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
@@ -3808,6 +3812,25 @@ function StrategyRunEquityCard({
     ]
   }, [displayTimeZone])
 
+  useEffect(() => {
+    setShowTrades(false)
+  }, [run.id])
+
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const chartsExpanded = !showTrades || tradeRows.length === 0
+  const { equityHeight, drawdownHeight } = useMemo(() => {
+    if (!chartsExpanded) return { equityHeight: 260, drawdownHeight: 180 }
+    const available = Math.max(520, viewportHeight - 420)
+    const eq = Math.max(320, Math.round(available * 0.62))
+    const dd = Math.max(220, available - eq)
+    return { equityHeight: eq, drawdownHeight: dd }
+  }, [chartsExpanded, viewportHeight])
+
   if (run.kind !== 'STRATEGY') {
     return (
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -3826,7 +3849,19 @@ function StrategyRunEquityCard({
 
   return (
     <Box sx={{ mt: 1 }}>
-      <Typography variant="subtitle2">Equity curve</Typography>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+        <Typography variant="subtitle2">Equity curve</Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        {tradeRows.length > 0 ? (
+          <Button
+            size="small"
+            variant={showTrades ? 'contained' : 'outlined'}
+            onClick={() => setShowTrades((v) => !v)}
+          >
+            {showTrades ? 'Hide trades' : 'Show trades'}
+          </Button>
+        ) : null}
+      </Stack>
       {metrics ? (
         <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
           <Chip size="small" label={`Total: ${Number(metrics.total_return_pct ?? 0).toFixed(2)}%`} />
@@ -3864,7 +3899,7 @@ function StrategyRunEquityCard({
         <PriceChart
           candles={equityCandles}
           chartType="line"
-          height={260}
+          height={equityHeight}
           overlays={baselineOverlays}
           markers={tradeMarkers}
           showLegend
@@ -3876,12 +3911,12 @@ function StrategyRunEquityCard({
         <Box sx={{ mt: 2 }}>
           <Typography variant="subtitle2">Drawdown (%)</Typography>
           <Box sx={{ mt: 1 }}>
-            <PriceChart candles={drawdownCandles} chartType="line" height={180} />
+            <PriceChart candles={drawdownCandles} chartType="line" height={drawdownHeight} />
           </Box>
         </Box>
       ) : null}
 
-      {tradeRows.length > 0 ? (
+      {showTrades && tradeRows.length > 0 ? (
         <Box sx={{ mt: 2 }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
             <Typography variant="subtitle2">Trades</Typography>
@@ -4294,6 +4329,10 @@ function PortfolioRunDetailsCard({
   setCompareRunId: (id: number | '') => void
   compareRun: BacktestRun | null
 }) {
+  const [showActions, setShowActions] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === 'undefined' ? 900 : window.innerHeight,
+  )
   const result = (run.result as Record<string, unknown> | null | undefined) ?? null
   const series = (result?.series as Record<string, unknown> | undefined) ?? null
   const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
@@ -4397,6 +4436,26 @@ function PortfolioRunDetailsCard({
     ]
   }, [])
 
+  useEffect(() => {
+    setShowActions(false)
+  }, [run.id])
+
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const chartsExpanded = !showActions || actionsRows.length === 0
+  const { equityHeight, drawdownHeight } = useMemo(() => {
+    if (!chartsExpanded) return { equityHeight: 260, drawdownHeight: 180 }
+    const overhead = runs.length > 1 ? 520 : 470
+    const available = Math.max(520, viewportHeight - overhead)
+    const eq = Math.max(320, Math.round(available * 0.62))
+    const dd = Math.max(220, available - eq)
+    return { equityHeight: eq, drawdownHeight: dd }
+  }, [actionsRows.length, chartsExpanded, runs.length, viewportHeight])
+
   if (run.kind !== 'PORTFOLIO') {
     return (
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -4415,7 +4474,19 @@ function PortfolioRunDetailsCard({
 
   return (
     <Box sx={{ mt: 1 }}>
-      <Typography variant="subtitle2">Equity curve</Typography>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+        <Typography variant="subtitle2">Equity curve</Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        {actionsRows.length > 0 ? (
+          <Button
+            size="small"
+            variant={showActions ? 'contained' : 'outlined'}
+            onClick={() => setShowActions((v) => !v)}
+          >
+            {showActions ? 'Hide actions' : 'Show actions'}
+          </Button>
+        ) : null}
+      </Stack>
       {metrics ? (
         <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
           <Chip size="small" label={`Total: ${Number(metrics.total_return_pct ?? 0).toFixed(2)}%`} />
@@ -4441,7 +4512,12 @@ function PortfolioRunDetailsCard({
       ) : null}
 
       <Box sx={{ mt: 1 }}>
-        <PriceChart candles={equityCandles} chartType="line" height={260} overlays={compareOverlay} />
+        <PriceChart
+          candles={equityCandles}
+          chartType="line"
+          height={equityHeight}
+          overlays={compareOverlay}
+        />
       </Box>
 
       {runs.length > 1 ? (
@@ -4471,12 +4547,12 @@ function PortfolioRunDetailsCard({
         <Box sx={{ mt: 2 }}>
           <Typography variant="subtitle2">Drawdown (%)</Typography>
           <Box sx={{ mt: 1 }}>
-            <PriceChart candles={drawdownCandles} chartType="line" height={180} />
+            <PriceChart candles={drawdownCandles} chartType="line" height={drawdownHeight} />
           </Box>
         </Box>
       ) : null}
 
-      {actionsRows.length > 0 ? (
+      {showActions && actionsRows.length > 0 ? (
         <Box sx={{ mt: 2 }}>
           <Typography variant="subtitle2">Rebalance actions</Typography>
           <Box sx={{ height: 240, mt: 1 }}>
