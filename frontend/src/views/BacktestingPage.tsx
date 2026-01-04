@@ -3927,10 +3927,17 @@ function PortfolioStrategyRunDetailsCard({
   run: BacktestRun
   displayTimeZone: string
 }) {
+  const [showTrades, setShowTrades] = useState(false)
+  const [showPerSymbolStats, setShowPerSymbolStats] = useState(false)
   const result = (run.result as Record<string, unknown> | null | undefined) ?? null
   const series = (result?.series as Record<string, unknown> | undefined) ?? null
   const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
   const meta = (result?.meta as Record<string, unknown> | undefined) ?? null
+
+  useEffect(() => {
+    setShowTrades(false)
+    setShowPerSymbolStats(false)
+  }, [run.id])
 
   const markers = useMemo((): PriceSignalMarker[] => {
     const ms = (result?.markers as unknown[] | undefined) ?? []
@@ -4097,9 +4104,30 @@ function PortfolioStrategyRunDetailsCard({
     )
   }
 
+  const chartsExpanded = !showTrades && !showPerSymbolStats
+  const equityHeight = chartsExpanded ? 340 : 260
+  const drawdownHeight = chartsExpanded ? 240 : 180
+
   return (
     <Box sx={{ mt: 1 }}>
-      <Typography variant="subtitle2">Equity curve</Typography>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+        <Typography variant="subtitle2">Equity curve</Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        <Button
+          size="small"
+          variant={showTrades ? 'contained' : 'outlined'}
+          onClick={() => setShowTrades((v) => !v)}
+        >
+          {showTrades ? 'Hide trades' : 'Show trades'}
+        </Button>
+        <Button
+          size="small"
+          variant={showPerSymbolStats ? 'contained' : 'outlined'}
+          onClick={() => setShowPerSymbolStats((v) => !v)}
+        >
+          {showPerSymbolStats ? 'Hide per-symbol stats' : 'Show per-symbol stats'}
+        </Button>
+      </Stack>
       {metrics ? (
         <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
           <Chip size="small" label={`Total: ${Number(metrics.total_return_pct ?? 0).toFixed(2)}%`} />
@@ -4136,7 +4164,7 @@ function PortfolioStrategyRunDetailsCard({
         <PriceChart
           candles={equityCandles}
           chartType="line"
-          height={260}
+          height={equityHeight}
           markers={markers}
           showLegend
           baseSeriesName="Portfolio equity"
@@ -4147,12 +4175,12 @@ function PortfolioStrategyRunDetailsCard({
         <Box sx={{ mt: 2 }}>
           <Typography variant="subtitle2">Drawdown (%)</Typography>
           <Box sx={{ mt: 1 }}>
-            <PriceChart candles={drawdownCandles} chartType="line" height={180} />
+            <PriceChart candles={drawdownCandles} chartType="line" height={drawdownHeight} />
           </Box>
         </Box>
       ) : null}
 
-      {tradeRows.length > 0 ? (
+      {showTrades && tradeRows.length > 0 ? (
         <Box sx={{ mt: 2 }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
             <Typography variant="subtitle2">Trades</Typography>
@@ -4189,7 +4217,7 @@ function PortfolioStrategyRunDetailsCard({
         </Box>
       ) : null}
 
-      {statsRows.length > 0 ? (
+      {showPerSymbolStats && statsRows.length > 0 ? (
         <Box sx={{ mt: 2 }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
             <Typography variant="subtitle2">Per-symbol stats</Typography>
