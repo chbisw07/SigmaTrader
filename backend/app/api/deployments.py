@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.api.auth import get_current_user
 from app.db.session import get_db
-from app.models import StrategyDeployment, StrategyDeploymentState, User
+from app.models import (
+    StrategyDeployment,
+    StrategyDeploymentJob,
+    StrategyDeploymentState,
+    User,
+)
 from app.schemas.deployments import (
     DeploymentKind,
     DeploymentUniverse,
@@ -171,6 +176,41 @@ def list_deployments(
         q = q.filter(StrategyDeployment.enabled.is_(enabled))
     deps = q.all()
     return [StrategyDeploymentRead.from_model(d) for d in deps]
+
+
+@router.get("/metrics")
+def deployments_metrics(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Basic scheduler/worker metrics for the current user."""
+
+    from sqlalchemy import func
+
+    counts = (
+        db.query(StrategyDeploymentJob.status, func.count(StrategyDeploymentJob.id))
+        .filter(StrategyDeploymentJob.owner_id == user.id)
+        .group_by(StrategyDeploymentJob.status)
+        .all()
+    )
+    by_status = {str(s): int(c) for (s, c) in counts}
+    oldest_pending = (
+        db.query(func.min(StrategyDeploymentJob.created_at))
+        .filter(StrategyDeploymentJob.owner_id == user.id)
+        .filter(StrategyDeploymentJob.status == "PENDING")
+        .scalar()
+    )
+    latest_error = (
+        db.query(func.max(StrategyDeploymentJob.updated_at))
+        .filter(StrategyDeploymentJob.owner_id == user.id)
+        .filter(StrategyDeploymentJob.status == "FAILED")
+        .scalar()
+    )
+    return {
+        "job_counts": by_status,
+        "oldest_pending_created_at": oldest_pending,
+        "latest_failed_updated_at": latest_error,
+    }
 
 
 @router.post(

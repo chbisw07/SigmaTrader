@@ -1,6 +1,12 @@
 from .alerts_v3 import AlertDefinition, AlertEvent, CustomIndicator
 from .backtests import BacktestRun
 from .broker import BrokerConnection, BrokerSecret
+from .deployment_runtime import (
+    StrategyDeploymentAction,
+    StrategyDeploymentBarCursor,
+    StrategyDeploymentJob,
+    StrategyDeploymentLock,
+)
 from .deployments import StrategyDeployment, StrategyDeploymentState
 from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
@@ -37,6 +43,10 @@ __all__ = [
     "CustomIndicator",
     "StrategyDeployment",
     "StrategyDeploymentState",
+    "StrategyDeploymentJob",
+    "StrategyDeploymentLock",
+    "StrategyDeploymentBarCursor",
+    "StrategyDeploymentAction",
     "Order",
     "Position",
     "PositionSnapshot",
