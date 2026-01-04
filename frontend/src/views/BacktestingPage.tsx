@@ -1818,9 +1818,9 @@ export function BacktestingPage() {
 	          <Tabs value={tab} onChange={(_e, v) => setTab(v as BacktestTab)} sx={{ mt: 0 }}>
 	            <Tab value="SIGNAL" label="Signal backtest" />
 	            <Tab value="PORTFOLIO" label="Portfolio backtest" />
-	            <Tab value="PORTFOLIO_STRATEGY" label="Portfolio strategy backtest" />
 	            <Tab value="EXECUTION" label="Execution backtest" />
 	            <Tab value="STRATEGY" label="Strategy backtest" />
+	            <Tab value="PORTFOLIO_STRATEGY" label="Portfolio strategy backtest" />
 	          </Tabs>
 	        </Box>
 
