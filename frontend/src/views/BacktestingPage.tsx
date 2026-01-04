@@ -3929,6 +3929,9 @@ function PortfolioStrategyRunDetailsCard({
 }) {
   const [showTrades, setShowTrades] = useState(false)
   const [showPerSymbolStats, setShowPerSymbolStats] = useState(false)
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window === 'undefined' ? 900 : window.innerHeight,
+  )
   const result = (run.result as Record<string, unknown> | null | undefined) ?? null
   const series = (result?.series as Record<string, unknown> | undefined) ?? null
   const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
@@ -3938,6 +3941,12 @@ function PortfolioStrategyRunDetailsCard({
     setShowTrades(false)
     setShowPerSymbolStats(false)
   }, [run.id])
+
+  useEffect(() => {
+    const onResize = () => setViewportHeight(window.innerHeight)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   const markers = useMemo((): PriceSignalMarker[] => {
     const ms = (result?.markers as unknown[] | undefined) ?? []
@@ -4105,8 +4114,13 @@ function PortfolioStrategyRunDetailsCard({
   }
 
   const chartsExpanded = !showTrades && !showPerSymbolStats
-  const equityHeight = chartsExpanded ? 340 : 260
-  const drawdownHeight = chartsExpanded ? 240 : 180
+  const { equityHeight, drawdownHeight } = useMemo(() => {
+    if (!chartsExpanded) return { equityHeight: 260, drawdownHeight: 180 }
+    const available = Math.max(520, viewportHeight - 420)
+    const eq = Math.max(320, Math.round(available * 0.62))
+    const dd = Math.max(220, available - eq)
+    return { equityHeight: eq, drawdownHeight: dd }
+  }, [chartsExpanded, viewportHeight])
 
   return (
     <Box sx={{ mt: 1 }}>
