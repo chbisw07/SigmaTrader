@@ -1,6 +1,7 @@
 from .alerts_v3 import AlertDefinition, AlertEvent, CustomIndicator
 from .backtests import BacktestRun
 from .broker import BrokerConnection, BrokerSecret
+from .deployments import StrategyDeployment, StrategyDeploymentState
 from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
 from .instruments import BrokerInstrument, Listing, Security
@@ -34,6 +35,8 @@ __all__ = [
     "AnalyticsTrade",
     "BacktestRun",
     "CustomIndicator",
+    "StrategyDeployment",
+    "StrategyDeploymentState",
     "Order",
     "Position",
     "PositionSnapshot",

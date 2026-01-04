@@ -9,6 +9,7 @@ from . import (
     auth,
     backtests,
     brokers,
+    deployments,
     groups,
     instruments,
     market_data,
@@ -167,6 +168,13 @@ router.include_router(
     prefix="/api/backtests",
     dependencies=[Depends(require_admin)],
     tags=["backtests"],
+)
+
+router.include_router(
+    deployments.router,
+    prefix="/api/deployments",
+    dependencies=[Depends(require_admin)],
+    tags=["deployments"],
 )
 
 router.include_router(

@@ -1,0 +1,244 @@
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+from app.schemas.backtests import UniverseSymbol
+from app.schemas.backtests_portfolio import BrokerName, ProductType
+from app.schemas.backtests_portfolio_strategy import (
+    PortfolioStrategyAllocationMode,
+    PortfolioStrategyRankingMetric,
+    PortfolioStrategySizingMode,
+)
+from app.schemas.backtests_strategy import StrategyDirection, StrategyTimeframe
+
+DeploymentKind = Literal["STRATEGY", "PORTFOLIO_STRATEGY"]
+ExecutionTarget = Literal["PAPER", "LIVE"]
+DeploymentStatus = Literal["STOPPED", "RUNNING", "PAUSED", "ERROR"]
+
+
+class DeploymentUniverse(BaseModel):
+    target_kind: Literal["SYMBOL", "GROUP"] = "SYMBOL"
+    group_id: Optional[int] = None
+    symbols: list[UniverseSymbol] = Field(default_factory=list)
+
+
+class DailyViaIntradaySettings(BaseModel):
+    enabled: bool = True
+    base_timeframe: Literal["1m", "5m", "15m", "30m", "1h"] = "5m"
+    proxy_close_hhmm: str = "15:25"
+    buy_window_start_hhmm: str = "15:25"
+    buy_window_end_hhmm: str = "15:30"
+    sell_window_start_hhmm: str = "09:15"
+    sell_window_end_hhmm: str = "09:20"
+    timezone: str = "Asia/Kolkata"
+
+    @classmethod
+    def _validate_hhmm(cls, raw: str, *, field: str) -> str:
+        s = (raw or "").strip()
+        if not re.fullmatch(r"\d{2}:\d{2}", s):
+            raise ValueError(f"{field} must be HH:MM.")
+        hh = int(s[0:2])
+        mm = int(s[3:5])
+        if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+            raise ValueError(f"{field} must be a valid 24h HH:MM time.")
+        return s
+
+    def normalize(self) -> "DailyViaIntradaySettings":
+        return DailyViaIntradaySettings(
+            enabled=bool(self.enabled),
+            base_timeframe=self.base_timeframe,
+            proxy_close_hhmm=self._validate_hhmm(
+                self.proxy_close_hhmm,
+                field="proxy_close_hhmm",
+            ),
+            buy_window_start_hhmm=self._validate_hhmm(
+                self.buy_window_start_hhmm, field="buy_window_start_hhmm"
+            ),
+            buy_window_end_hhmm=self._validate_hhmm(
+                self.buy_window_end_hhmm, field="buy_window_end_hhmm"
+            ),
+            sell_window_start_hhmm=self._validate_hhmm(
+                self.sell_window_start_hhmm, field="sell_window_start_hhmm"
+            ),
+            sell_window_end_hhmm=self._validate_hhmm(
+                self.sell_window_end_hhmm, field="sell_window_end_hhmm"
+            ),
+            timezone=(self.timezone or "Asia/Kolkata").strip() or "Asia/Kolkata",
+        )
+
+
+class StrategyDeploymentConfigIn(BaseModel):
+    timeframe: StrategyTimeframe = "1d"
+    daily_via_intraday: Optional[DailyViaIntradaySettings] = None
+
+    entry_dsl: str = Field(min_length=1)
+    exit_dsl: str = Field(min_length=1)
+
+    product: ProductType = "CNC"
+    direction: StrategyDirection = "LONG"
+
+    broker_name: BrokerName = "zerodha"
+    execution_target: ExecutionTarget = "PAPER"
+
+    initial_cash: float = Field(default=100000.0, ge=0.0)
+    position_size_pct: float = Field(default=100.0, ge=0.0, le=100.0)
+
+    stop_loss_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    take_profit_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    trailing_stop_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+
+    max_equity_dd_global_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    max_equity_dd_trade_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+
+
+class PortfolioStrategyDeploymentConfigIn(BaseModel):
+    timeframe: StrategyTimeframe = "1d"
+    daily_via_intraday: Optional[DailyViaIntradaySettings] = None
+
+    entry_dsl: str = Field(min_length=1)
+    exit_dsl: str = Field(min_length=1)
+
+    product: ProductType = "CNC"
+    direction: StrategyDirection = "LONG"
+
+    broker_name: BrokerName = "zerodha"
+    execution_target: ExecutionTarget = "PAPER"
+
+    initial_cash: float = Field(default=100000.0, ge=0.0)
+    max_open_positions: int = Field(default=10, ge=1, le=200)
+
+    allocation_mode: PortfolioStrategyAllocationMode = "EQUAL"
+    ranking_metric: PortfolioStrategyRankingMetric = "PERF_PCT"
+    ranking_window: int = Field(default=5, ge=1, le=400)
+
+    sizing_mode: PortfolioStrategySizingMode = "PCT_EQUITY"
+    position_size_pct: float = Field(default=20.0, ge=0.0, le=100.0)
+    fixed_cash_per_trade: float = Field(default=0.0, ge=0.0)
+
+    min_holding_bars: int = Field(default=0, ge=0, le=10000)
+    cooldown_bars: int = Field(default=0, ge=0, le=10000)
+    max_symbol_alloc_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+
+    stop_loss_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    take_profit_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    trailing_stop_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    max_equity_dd_global_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+    max_equity_dd_trade_pct: float = Field(default=0.0, ge=0.0, le=100.0)
+
+
+class StrategyDeploymentCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: Optional[str] = None
+    kind: DeploymentKind
+    enabled: bool = False
+    universe: DeploymentUniverse = Field(default_factory=DeploymentUniverse)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyDeploymentUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+    universe: Optional[DeploymentUniverse] = None
+    config: Optional[dict[str, Any]] = None
+
+
+class StrategyDeploymentStateRead(BaseModel):
+    status: DeploymentStatus
+    last_evaluated_at: Optional[datetime] = None
+    next_evaluate_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    started_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+
+
+class StrategyDeploymentStateSummary(BaseModel):
+    open_positions: int = 0
+    positions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class StrategyDeploymentRead(BaseModel):
+    id: int
+    owner_id: int
+    name: str
+    description: Optional[str] = None
+    kind: DeploymentKind
+    enabled: bool
+    universe: DeploymentUniverse
+    config: dict[str, Any]
+    state: StrategyDeploymentStateRead
+    state_summary: StrategyDeploymentStateSummary = Field(
+        default_factory=StrategyDeploymentStateSummary
+    )
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_model(cls, obj) -> "StrategyDeploymentRead":
+        universe: dict[str, Any] = {}
+        config: dict[str, Any] = {}
+        try:
+            payload = json.loads(obj.config_json or "{}")
+            universe = payload.get("universe") or {}
+            config = payload.get("config") or {}
+        except Exception:
+            universe = {}
+            config = {}
+
+        state = getattr(obj, "state", None)
+        state_read = StrategyDeploymentStateRead(
+            status=(getattr(state, "status", None) or "STOPPED"),
+            last_evaluated_at=getattr(state, "last_evaluated_at", None),
+            next_evaluate_at=getattr(state, "next_evaluate_at", None),
+            last_error=getattr(state, "last_error", None),
+            started_at=getattr(state, "started_at", None),
+            stopped_at=getattr(state, "stopped_at", None),
+        )
+
+        summary = StrategyDeploymentStateSummary()
+        raw_state = getattr(state, "state_json", None)
+        if raw_state:
+            try:
+                s = json.loads(raw_state)
+                positions = s.get("positions")
+                if isinstance(positions, list):
+                    summary.positions = positions
+                    summary.open_positions = len(positions)
+            except Exception:
+                pass
+
+        return cls(
+            id=obj.id,
+            owner_id=obj.owner_id,
+            name=obj.name,
+            description=obj.description,
+            kind=obj.kind,
+            enabled=bool(obj.enabled),
+            universe=DeploymentUniverse.parse_obj(universe),
+            config=config,
+            state=state_read,
+            state_summary=summary,
+            created_at=obj.created_at,
+            updated_at=obj.updated_at,
+        )
+
+
+__all__ = [
+    "DailyViaIntradaySettings",
+    "DeploymentKind",
+    "DeploymentStatus",
+    "DeploymentUniverse",
+    "ExecutionTarget",
+    "PortfolioStrategyDeploymentConfigIn",
+    "StrategyDeploymentConfigIn",
+    "StrategyDeploymentCreate",
+    "StrategyDeploymentRead",
+    "StrategyDeploymentStateRead",
+    "StrategyDeploymentStateSummary",
+    "StrategyDeploymentUpdate",
+]
