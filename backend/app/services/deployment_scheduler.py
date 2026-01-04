@@ -296,6 +296,78 @@ def enqueue_due_jobs_once(
             if not enabled:
                 continue
 
+            base_tf = str(daily.get("base_timeframe") or "5m")
+            if base_tf in INTRADAY_MINUTES:
+                latest_end_ist = latest_closed_bar_end_ist(
+                    now_ist=now_i,
+                    timeframe=base_tf,
+                    tolerance_seconds=tolerance_seconds,
+                )
+                if latest_end_ist is not None:
+                    for sym in symbols:
+                        exchange = sym["exchange"]
+                        symbol = sym["symbol"]
+                        cursor: StrategyDeploymentBarCursor | None = (
+                            db.query(StrategyDeploymentBarCursor)
+                            .filter(
+                                StrategyDeploymentBarCursor.deployment_id == dep.id,
+                                StrategyDeploymentBarCursor.exchange == exchange,
+                                StrategyDeploymentBarCursor.symbol == symbol,
+                                StrategyDeploymentBarCursor.timeframe == base_tf,
+                            )
+                            .one_or_none()
+                        )
+                        last_emitted_ist = (
+                            utc_to_ist_naive(cursor.last_emitted_bar_end_ts)
+                            if cursor and cursor.last_emitted_bar_end_ts
+                            else None
+                        )
+                        for bar_end_ist in iter_missing_bar_ends(
+                            last_emitted_end_ist=last_emitted_ist,
+                            latest_closed_end_ist=latest_end_ist,
+                            timeframe=base_tf,
+                            max_backfill=max_backfill,
+                        ):
+                            bar_end_utc = ist_naive_to_utc(bar_end_ist)
+                            dedupe_key = (
+                                f"DEP:{dep.id}:BAR_CLOSED:{base_tf}:{exchange}:{symbol}:"
+                                f"{bar_end_utc.isoformat()}"
+                            )
+                            job = enqueue_job(
+                                db,
+                                deployment_id=dep.id,
+                                owner_id=dep.owner_id,
+                                kind="BAR_CLOSED",
+                                dedupe_key=dedupe_key,
+                                scheduled_for=bar_end_utc,
+                                payload={
+                                    "kind": "BAR_CLOSED",
+                                    "deployment_id": dep.id,
+                                    "timeframe": base_tf,
+                                    "exchange": exchange,
+                                    "symbol": symbol,
+                                    "purpose": "RISK",
+                                    "bar_end_ist": bar_end_ist.isoformat(),
+                                    "bar_end_utc": bar_end_utc.isoformat(),
+                                },
+                            )
+                            if job is None:
+                                deduped += 1
+                            else:
+                                created += 1
+                            if cursor is None:
+                                cursor = StrategyDeploymentBarCursor(
+                                    deployment_id=dep.id,
+                                    exchange=exchange,
+                                    symbol=symbol,
+                                    timeframe=base_tf,
+                                    last_emitted_bar_end_ts=bar_end_utc,
+                                )
+                                db.add(cursor)
+                            else:
+                                cursor.last_emitted_bar_end_ts = bar_end_utc
+                                db.add(cursor)
+
             proxy_hhmm = str(daily.get("proxy_close_hhmm") or "15:25")
             buy_hhmm = str(daily.get("buy_window_start_hhmm") or proxy_hhmm)
             sell_hhmm = str(daily.get("sell_window_start_hhmm") or "09:15")

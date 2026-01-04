@@ -55,12 +55,10 @@ def _validate_universe(kind: DeploymentKind, universe: DeploymentUniverse) -> No
         return
 
     if universe.target_kind == "GROUP":
-        if universe.group_id is None and not universe.symbols:
+        if universe.group_id is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "GROUP deployments require universe.group_id or universe.symbols."
-                ),
+                detail="GROUP deployments require universe.group_id.",
             )
         if kind != "PORTFOLIO_STRATEGY":
             raise HTTPException(

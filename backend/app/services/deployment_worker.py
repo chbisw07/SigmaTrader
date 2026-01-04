@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models import StrategyDeployment, StrategyDeploymentJob
 from app.services.deployment_jobs import (
@@ -18,6 +19,7 @@ from app.services.deployment_jobs import (
     record_action,
     release_deployment_lock,
 )
+from app.services.deployment_runner import process_deployment_job
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +109,12 @@ def execute_job_once(
         return True
 
     try:
-        record_action(
+        action = record_action(
             db,
             deployment_id=dep.id,
             job_id=job.id,
-            kind="JOB_EXECUTED",
-            payload={
-                "job_kind": job.kind,
-                "job_scheduled_for": (
-                    job.scheduled_for.isoformat() if job.scheduled_for else None
-                ),
-                "payload": _json_load(job.payload_json),
-            },
+            kind="EVALUATION",
+            payload={"job_kind": job.kind},
         )
 
         if dep.state is not None:
@@ -127,6 +123,19 @@ def execute_job_once(
             dep.state.last_error = None
             dep.state.updated_at = ts
             db.add(dep.state)
+
+        payload = _json_load(job.payload_json)
+        result = process_deployment_job(
+            db,
+            settings=get_settings(),
+            dep=dep,
+            job_kind=str(job.kind),
+            scheduled_for_utc=job.scheduled_for,
+            payload=payload,
+            action=action,
+        )
+        action.payload_json = json.dumps(result.summary, ensure_ascii=False)
+        db.add(action)
 
         mark_job_done(db, job=job, now=ts)
         release_deployment_lock(db, deployment_id=dep.id, worker_id=worker_id, now=ts)

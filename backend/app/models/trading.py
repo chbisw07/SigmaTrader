@@ -199,6 +199,16 @@ class Order(Base):
         Index("ix_orders_symbol_time", "symbol", "created_at"),
         Index("ix_orders_synthetic_status", "synthetic_gtt", "status"),
         Index("ix_orders_portfolio_group_id", "portfolio_group_id"),
+        Index("ix_orders_deployment_id", "deployment_id"),
+        Index(
+            "ux_orders_client_order_id",
+            "client_order_id",
+            unique=True,
+        ),
+        Index(
+            "ix_orders_deployment_action_id",
+            "deployment_action_id",
+        ),
         Index(
             "ix_orders_broker_name_order_id",
             "broker_name",
@@ -225,6 +235,15 @@ class Order(Base):
         ForeignKey("groups.id", ondelete="SET NULL"),
         nullable=True,
     )
+    deployment_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("strategy_deployments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    deployment_action_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("strategy_deployment_actions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    client_order_id: Mapped[Optional[str]] = mapped_column(String(128))
 
     symbol: Mapped[str] = mapped_column(String(128), nullable=False)
     exchange: Mapped[Optional[str]] = mapped_column(String(64))
