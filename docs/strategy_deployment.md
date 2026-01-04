@@ -243,3 +243,64 @@ Why not “deployment first”:
 - Candle source/coverage guarantees for intraday “daily proxy close” computation.
 - Exact order types for entry/exit (market vs limit vs SL‑M) and defaults per broker.
 - How to enforce sector caps (sector mapping source and UI).
+
+---
+
+## 11) Implementation notes (current)
+
+### 11.1 Backend API (Deployments)
+
+Base CRUD:
+- `GET /api/deployments/`
+- `POST /api/deployments/`
+- `GET /api/deployments/{deployment_id}`
+- `PUT /api/deployments/{deployment_id}`
+- `DELETE /api/deployments/{deployment_id}`
+- `POST /api/deployments/{deployment_id}/start`
+- `POST /api/deployments/{deployment_id}/stop`
+
+Observability / troubleshooting:
+- `GET /api/deployments/metrics` (job counts + oldest pending)
+- `GET /api/deployments/{deployment_id}/actions` (recent evaluations/actions)
+- `GET /api/deployments/{deployment_id}/jobs/metrics` (per-deployment job lag/errors)
+- `POST /api/deployments/{deployment_id}/run-now` (enqueue an evaluation job)
+
+### 11.2 Runtime switches
+
+Deployment scheduler/worker runtime is opt-in (off by default) via env vars:
+- `ST_ENABLE_DEPLOYMENTS_RUNTIME=1` to start the scheduler/worker/sweeper/reconciler.
+- `ST_DEPLOYMENTS_RUNTIME_MODE=threads|once`
+  - `threads`: starts background threads (normal usage)
+  - `once`: runs a single pass (useful for smoke testing)
+
+### 11.3 Safety notes
+
+- Paper deployments create `orders` rows with `execution_target=PAPER` and `simulated=true`.
+- Orders created by deployments use `client_order_id` for idempotency (prevents double-fires on retries).
+- A “disaster stop” order row is created on entry when `stop_loss_pct > 0` (currently an internal scaffold for broker primitives; cancellation is best-effort).
+
+## 12) Operator runbook (quick)
+
+1) Create a deployment in the UI (or via `POST /api/deployments/`).
+2) Start it (`POST /api/deployments/{id}/start`).
+3) Ensure the runtime is enabled on the backend process:
+   - `export ST_ENABLE_DEPLOYMENTS_RUNTIME=1`
+   - (optional) `export ST_DEPLOYMENTS_RUNTIME_MODE=threads`
+4) Use:
+   - Deployments → Details → “Run now” to force an evaluation job
+   - System Events for warnings/errors and deployment reconciliations
+
+### Troubleshooting checklist
+
+- **Deployment shows RUNNING but nothing happens**
+  - Confirm `ST_ENABLE_DEPLOYMENTS_RUNTIME=1` is set on the backend process.
+  - Check `GET /api/deployments/{deployment_id}/jobs/metrics` for pending jobs.
+  - Check `GET /api/deployments/{deployment_id}/actions` for recent evaluations.
+
+- **“Run now” errors**
+  - For intraday (`TF != 1d`), “Run now” aligns to the latest closed bar and may fail if the timeframe is unsupported.
+  - For daily (`TF=1d` with daily‑via‑intraday enabled), “Run now” is only available after the proxy close time (default `15:25` IST).
+
+- **Repeated failures**
+  - Check `StrategyDeploymentState.last_error` (shown in UI) and `latest_failed_updated_at` (jobs metrics).
+  - Stop the deployment (`/stop`), fix config/DSL, then start again.

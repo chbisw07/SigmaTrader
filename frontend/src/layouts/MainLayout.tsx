@@ -33,6 +33,7 @@ import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import ViewListIcon from '@mui/icons-material/ViewList'
 import ManageSearchIcon from '@mui/icons-material/ManageSearch'
 import ScienceIcon from '@mui/icons-material/Science'
+import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import { NavLink } from 'react-router-dom'
 
 import { useHealth } from '../services/health'
@@ -64,6 +65,7 @@ const mainNavItems: NavItem[] = [
   { label: 'Screener', to: '/screener', icon: <ManageSearchIcon /> },
   { label: 'Alerts', to: '/alerts', icon: <NotificationsActiveIcon /> },
   { label: 'Backtesting', to: '/backtesting', icon: <ScienceIcon /> },
+  { label: 'Deployments', to: '/deployments', icon: <RocketLaunchIcon /> },
   { label: 'Analytics', to: '/analytics', icon: <AnalyticsIcon /> },
   { label: 'System Events', to: '/system-events', icon: <WarningIcon /> },
 ]

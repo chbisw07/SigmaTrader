@@ -11,6 +11,7 @@ from app.api.auth import get_current_user
 from app.db.session import get_db
 from app.models import (
     StrategyDeployment,
+    StrategyDeploymentAction,
     StrategyDeploymentJob,
     StrategyDeploymentState,
     User,
@@ -19,12 +20,21 @@ from app.schemas.deployments import (
     DeploymentKind,
     DeploymentUniverse,
     PortfolioStrategyDeploymentConfigIn,
+    StrategyDeploymentActionRead,
     StrategyDeploymentConfigIn,
     StrategyDeploymentCreate,
+    StrategyDeploymentJobsMetrics,
     StrategyDeploymentRead,
     StrategyDeploymentUpdate,
 )
 from app.services.alert_expression_dsl import parse_expression
+from app.services.deployment_jobs import enqueue_job
+from app.services.deployment_scheduler import (
+    DEFAULT_LATE_TOLERANCE_SECONDS,
+    ist_naive_to_utc,
+    latest_closed_bar_end_ist,
+    now_ist_naive,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -209,6 +219,144 @@ def deployments_metrics(
         "oldest_pending_created_at": oldest_pending,
         "latest_failed_updated_at": latest_error,
     }
+
+
+@router.get(
+    "/{deployment_id}/actions",
+    response_model=List[StrategyDeploymentActionRead],
+)
+def list_deployment_actions(
+    deployment_id: int,
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> List[StrategyDeploymentActionRead]:
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    actions = (
+        db.query(StrategyDeploymentAction)
+        .filter(StrategyDeploymentAction.deployment_id == dep.id)
+        .order_by(StrategyDeploymentAction.created_at.desc())
+        .limit(int(limit))
+        .all()
+    )
+    return [StrategyDeploymentActionRead.from_model(a) for a in actions]
+
+
+@router.get(
+    "/{deployment_id}/jobs/metrics",
+    response_model=StrategyDeploymentJobsMetrics,
+)
+def deployment_jobs_metrics(
+    deployment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StrategyDeploymentJobsMetrics:
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    from sqlalchemy import func
+
+    counts = (
+        db.query(StrategyDeploymentJob.status, func.count(StrategyDeploymentJob.id))
+        .filter(StrategyDeploymentJob.deployment_id == dep.id)
+        .group_by(StrategyDeploymentJob.status)
+        .all()
+    )
+    by_status = {str(s): int(c) for (s, c) in counts}
+
+    oldest_pending = (
+        db.query(func.min(StrategyDeploymentJob.scheduled_for))
+        .filter(StrategyDeploymentJob.deployment_id == dep.id)
+        .filter(StrategyDeploymentJob.status == "PENDING")
+        .scalar()
+    )
+    latest_failed = (
+        db.query(func.max(StrategyDeploymentJob.updated_at))
+        .filter(StrategyDeploymentJob.deployment_id == dep.id)
+        .filter(StrategyDeploymentJob.status == "FAILED")
+        .scalar()
+    )
+    return StrategyDeploymentJobsMetrics(
+        job_counts=by_status,
+        oldest_pending_scheduled_for=oldest_pending,
+        latest_failed_updated_at=latest_failed,
+    )
+
+
+@router.post("/{deployment_id}/run-now")
+def run_deployment_now(
+    deployment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    payload = {}
+    try:
+        payload = json.loads(dep.config_json or "{}")
+    except Exception:
+        payload = {}
+    cfg = payload.get("config") or {}
+    tf = str(cfg.get("timeframe") or dep.timeframe or "1d")
+
+    now_ist = now_ist_naive()
+    if tf != "1d":
+        bar_end_ist = latest_closed_bar_end_ist(
+            now_ist=now_ist,
+            timeframe=tf,
+            tolerance_seconds=DEFAULT_LATE_TOLERANCE_SECONDS,
+        )
+        if bar_end_ist is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported timeframe for run-now.",
+            )
+        scheduled_for = ist_naive_to_utc(bar_end_ist)
+        key = f"DEP:{dep.id}:RUN_NOW:BAR_CLOSED:{scheduled_for.isoformat()}"
+        job = enqueue_job(
+            db,
+            deployment_id=dep.id,
+            owner_id=dep.owner_id,
+            kind="BAR_CLOSED",
+            dedupe_key=key,
+            scheduled_for=scheduled_for,
+            payload={
+                "kind": "BAR_CLOSED",
+                "deployment_id": dep.id,
+                "timeframe": tf,
+                "run_now": True,
+                "bar_end_ist": bar_end_ist.isoformat(),
+                "bar_end_utc": scheduled_for.isoformat(),
+            },
+        )
+        db.commit()
+        return {"enqueued": job is not None, "scheduled_for": scheduled_for}
+
+    daily = cfg.get("daily_via_intraday") or {}
+    proxy_hhmm = str(daily.get("proxy_close_hhmm") or "15:25")
+    hh, mm = proxy_hhmm.split(":")
+    proxy_ist = now_ist.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+    if now_ist < proxy_ist:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Daily proxy close is not available yet for today.",
+        )
+    scheduled_for = ist_naive_to_utc(proxy_ist)
+    key = f"DEP:{dep.id}:RUN_NOW:DAILY_PROXY_CLOSED:{scheduled_for.date().isoformat()}"
+    job = enqueue_job(
+        db,
+        deployment_id=dep.id,
+        owner_id=dep.owner_id,
+        kind="DAILY_PROXY_CLOSED",
+        dedupe_key=key,
+        scheduled_for=scheduled_for,
+        payload={
+            "kind": "DAILY_PROXY_CLOSED",
+            "deployment_id": dep.id,
+            "run_now": True,
+            "proxy_close_ist": proxy_ist.isoformat(),
+            "proxy_close_utc": scheduled_for.isoformat(),
+        },
+    )
+    db.commit()
+    return {"enqueued": job is not None, "scheduled_for": scheduled_for}
 
 
 @router.post(

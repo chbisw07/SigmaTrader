@@ -984,6 +984,27 @@ def process_deployment_job(
     db.add(state_row)
 
     summary = {
+        "job_kind": str(job_kind),
+        "scheduled_for_utc": scheduled_for_utc.isoformat(),
+        "bar_end_ist": bar_end_ist.isoformat(),
+        "timeframe": str(timeframe),
+        "signal_timeframe": str(signal_timeframe),
+        "execution_target": str(exec_target),
+        "product": str(product),
+        "direction": str(direction),
+        "dsl": {
+            "entry": str(cfg_obj.get("entry_dsl") or ""),
+            "exit": str(cfg_obj.get("exit_dsl") or ""),
+        },
+        "daily_via_intraday": (
+            {
+                "enabled": bool(daily_enabled),
+                "base_timeframe": str(base_timeframe),
+                "proxy_close_hhmm": str(proxy_close_hhmm),
+            }
+            if timeframe == "1d"
+            else None
+        ),
         "equity": float(equity_now),
         "cash": float(state.get("cash") or 0.0),
         "open_positions": len(open_positions()),

@@ -209,6 +209,17 @@ class StrategyDeploymentRead(BaseModel):
                 if isinstance(positions, list):
                     summary.positions = positions
                     summary.open_positions = len(positions)
+                elif isinstance(positions, dict):
+                    out: list[dict[str, Any]] = []
+                    for key, pos in positions.items():
+                        if not isinstance(pos, dict):
+                            continue
+                        qty = int(pos.get("qty") or 0)
+                        if qty <= 0:
+                            continue
+                        out.append({"key": str(key), **pos})
+                    summary.positions = out
+                    summary.open_positions = len(out)
             except Exception:
                 pass
 
@@ -228,6 +239,43 @@ class StrategyDeploymentRead(BaseModel):
         )
 
 
+class StrategyDeploymentActionRead(BaseModel):
+    id: int
+    deployment_id: int
+    job_id: Optional[int] = None
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, obj) -> "StrategyDeploymentActionRead":
+        payload: dict[str, Any] = {}
+        raw = getattr(obj, "payload_json", None)
+        if raw:
+            try:
+                val = json.loads(raw)
+                if isinstance(val, dict):
+                    payload = val
+            except Exception:
+                payload = {}
+        return cls(
+            id=int(obj.id),
+            deployment_id=int(obj.deployment_id),
+            job_id=(
+                int(obj.job_id) if getattr(obj, "job_id", None) is not None else None
+            ),
+            kind=str(obj.kind or ""),
+            payload=payload,
+            created_at=obj.created_at,
+        )
+
+
+class StrategyDeploymentJobsMetrics(BaseModel):
+    job_counts: dict[str, int] = Field(default_factory=dict)
+    oldest_pending_scheduled_for: Optional[datetime] = None
+    latest_failed_updated_at: Optional[datetime] = None
+
+
 __all__ = [
     "DailyViaIntradaySettings",
     "DeploymentKind",
@@ -236,8 +284,10 @@ __all__ = [
     "ExecutionTarget",
     "PortfolioStrategyDeploymentConfigIn",
     "StrategyDeploymentConfigIn",
+    "StrategyDeploymentActionRead",
     "StrategyDeploymentCreate",
     "StrategyDeploymentRead",
+    "StrategyDeploymentJobsMetrics",
     "StrategyDeploymentStateRead",
     "StrategyDeploymentStateSummary",
     "StrategyDeploymentUpdate",

@@ -14,6 +14,7 @@ from .core.config import get_settings
 from .core.logging import RequestContextMiddleware, configure_logging
 from .db.session import SessionLocal
 from .services.alerts_v3 import schedule_alerts_v3
+from .services.deployment_runtime import start_deployments_runtime
 from .services.instruments_sync import schedule_instrument_master_sync
 from .services.market_data import schedule_market_data_sync
 from .services.synthetic_gtt import schedule_synthetic_gtt
@@ -99,6 +100,19 @@ async def _lifespan(_app: FastAPI):
             schedule_indicator_alerts()
         schedule_alerts_v3()
         schedule_synthetic_gtt()
+
+    enable_deployments = (
+        (os.getenv("ST_ENABLE_DEPLOYMENTS_RUNTIME") or "").strip().lower()
+    )
+    allow_pytest = (
+        (os.getenv("ST_ENABLE_DEPLOYMENTS_RUNTIME_UNDER_PYTEST") or "").strip().lower()
+    )
+    deployments_mode = (os.getenv("ST_DEPLOYMENTS_RUNTIME_MODE") or "threads").strip()
+    if enable_deployments in {"1", "true", "yes", "on"} and (
+        ("pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"))
+        or allow_pytest in {"1", "true", "yes", "on"}
+    ):
+        start_deployments_runtime(mode=deployments_mode)
     yield
     # Shutdown: nothing special yet (thread is daemonised).
 

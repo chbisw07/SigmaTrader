@@ -1,5 +1,6 @@
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import CloseIcon from '@mui/icons-material/Close'
+import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
@@ -24,6 +25,7 @@ import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
+import { useNavigate } from 'react-router-dom'
 
 import { KeyValueJsonDialog } from '../components/KeyValueJsonDialog'
 import { MarkdownLite } from '../components/MarkdownLite'
@@ -69,6 +71,16 @@ type StrategyDirection = 'LONG' | 'SHORT'
 type PortfolioStrategyAllocationMode = 'EQUAL' | 'RANKING'
 type PortfolioStrategySizingMode = 'PCT_EQUITY' | 'FIXED_CASH' | 'CASH_PER_SLOT'
 type PortfolioStrategyRankingMetric = 'PERF_PCT'
+
+type DeploymentPrefill = {
+  kind: 'STRATEGY' | 'PORTFOLIO_STRATEGY'
+  universe: {
+    target_kind: 'SYMBOL' | 'GROUP'
+    group_id?: number | null
+    symbols?: Array<{ exchange?: string; symbol: string }>
+  }
+  config: Record<string, unknown>
+}
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
@@ -198,6 +210,7 @@ export function BacktestingPage() {
   const smUp = useMediaQuery(theme.breakpoints.up('sm'))
   const mdUp = useMediaQuery(theme.breakpoints.up('md'))
   const { displayTimeZone } = useTimeSettings()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<BacktestTab>('SIGNAL')
   const kind: BacktestKind = tab
   const drawerEnabled = tab === 'STRATEGY' || tab === 'PORTFOLIO' || tab === 'PORTFOLIO_STRATEGY'
@@ -476,6 +489,51 @@ export function BacktestingPage() {
   const getRunConfig = useCallback((run: BacktestRun) => {
     return ((run.config as any)?.config ?? {}) as Record<string, unknown>
   }, [])
+
+  const deploymentPrefillFromRun = useCallback(
+    (run: BacktestRun): DeploymentPrefill | null => {
+      if (run.kind !== 'STRATEGY' && run.kind !== 'PORTFOLIO_STRATEGY') return null
+
+      const u = getRunUniverse(run)
+      const cfg = getRunConfig(run)
+
+      const broker = String(u.broker_name ?? 'zerodha').toLowerCase()
+      const broker_name = broker === 'angelone' ? 'angelone' : 'zerodha'
+      const baseCfg: Record<string, unknown> = {
+        ...cfg,
+        broker_name,
+        execution_target: String((cfg as any).execution_target ?? 'PAPER').toUpperCase(),
+      }
+
+      if (run.kind === 'STRATEGY') {
+        const symbols = (u.symbols as Array<Record<string, unknown>> | undefined) ?? []
+        const first = symbols[0] ?? null
+        const exchange = String(first?.exchange ?? 'NSE').trim().toUpperCase() || 'NSE'
+        const symbol = String(first?.symbol ?? '').trim().toUpperCase()
+        if (!symbol) return null
+        return {
+          kind: 'STRATEGY',
+          universe: { target_kind: 'SYMBOL', symbols: [{ exchange, symbol }] },
+          config: baseCfg,
+        }
+      }
+
+      const group_id = (u.group_id as number | null | undefined) ?? null
+      if (typeof group_id !== 'number' || !Number.isFinite(group_id)) return null
+      return {
+        kind: 'PORTFOLIO_STRATEGY',
+        universe: { target_kind: 'GROUP', group_id },
+        config: baseCfg,
+      }
+    },
+    [getRunConfig, getRunUniverse],
+  )
+
+  const drawerRun = useMemo(() => {
+    if (!drawerEnabled) return null
+    if (drawerTab === 'selected') return selectedRun
+    return pinnedRunsById[drawerTab] ?? null
+  }, [drawerEnabled, drawerTab, pinnedRunsById, selectedRun])
 
   const renderGroupLabel = useCallback(
     (run: BacktestRun): string => {
@@ -3517,6 +3575,29 @@ export function BacktestingPage() {
                 : 'Run details'
               : `Run details — #${drawerTab}`}
           </Typography>
+          {drawerRun && (drawerRun.kind === 'STRATEGY' || drawerRun.kind === 'PORTFOLIO_STRATEGY') ? (
+            <Tooltip title="Create a deployment prefilled from this backtest run">
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<RocketLaunchIcon />}
+                onClick={() => {
+                  const prefill = deploymentPrefillFromRun(drawerRun)
+                  if (!prefill) {
+                    setError(
+                      drawerRun.kind === 'PORTFOLIO_STRATEGY'
+                        ? 'Deploy requires a GROUP universe (select a group backtest run).'
+                        : 'Deploy requires a valid symbol in the run universe.',
+                    )
+                    return
+                  }
+                  navigate('/deployments', { state: { deploymentPrefill: prefill } })
+                }}
+              >
+                Deploy
+              </Button>
+            </Tooltip>
+          ) : null}
           <IconButton onClick={closeDrawer} size="small" aria-label="Close">
             <CloseIcon fontSize="small" />
           </IconButton>

@@ -12,6 +12,8 @@ import { AlertsPage } from '../views/AlertsPage'
 import { GroupsPage } from '../views/GroupsPage'
 import { ScreenerPage } from '../views/ScreenerPage'
 import { BacktestingPage } from '../views/BacktestingPage'
+import { DeploymentsPage } from '../views/DeploymentsPage'
+import { DeploymentDetailsPage } from '../views/DeploymentDetailsPage'
 
 export function AppRoutes() {
   return (
@@ -28,6 +30,8 @@ export function AppRoutes() {
       <Route path="/groups" element={<GroupsPage />} />
       <Route path="/alerts" element={<AlertsPage />} />
       <Route path="/backtesting" element={<BacktestingPage />} />
+      <Route path="/deployments" element={<DeploymentsPage />} />
+      <Route path="/deployments/:id" element={<DeploymentDetailsPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
       <Route path="/system-events" element={<SystemEventsPage />} />
       <Route path="/appearance" element={<AppearancePage />} />
