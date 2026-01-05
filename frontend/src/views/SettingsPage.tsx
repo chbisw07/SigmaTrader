@@ -1,4 +1,6 @@
 import DeleteIcon from '@mui/icons-material/Delete'
+import FileDownloadIcon from '@mui/icons-material/FileDownload'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
@@ -19,6 +21,7 @@ import TableCell from '@mui/material/TableCell'
 import TableHead from '@mui/material/TableHead'
 import TableRow from '@mui/material/TableRow'
 import TextField from '@mui/material/TextField'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -55,6 +58,16 @@ import {
 } from '../services/brokers'
 import { fetchMarketDataStatus, type MarketDataStatus } from '../services/marketData'
 import { recordAppLog } from '../services/logs'
+import {
+  downloadMarketCalendarCsv,
+  fetchMarketDefaults,
+  listMarketCalendarRows,
+  resolveMarketSession,
+  uploadMarketCalendarCsv,
+  type MarketCalendarRow,
+  type MarketDefaults,
+  type ResolvedMarketSession,
+} from '../services/marketCalendar'
 import {
   fetchTradingViewWebhookSecret,
   updateTradingViewWebhookSecret,
@@ -365,7 +378,7 @@ export function SettingsPage() {
   const { displayTimeZone, setDisplayTimeZone } = useTimeSettings()
   const systemTimeZone = getSystemTimeZone()
 
-  type SettingsTab = 'broker' | 'risk' | 'strategy' | 'time'
+  type SettingsTab = 'broker' | 'risk' | 'strategy' | 'market' | 'time'
   const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
 
   const [strategies, setStrategies] = useState<Strategy[]>([])
@@ -411,6 +424,21 @@ export function SettingsPage() {
   const [tvWebhookSecretVisible, setTvWebhookSecretVisible] = useState(false)
   const [tvWebhookSecretSaving, setTvWebhookSecretSaving] = useState(false)
   const [tvWebhookSecretError, setTvWebhookSecretError] = useState<string | null>(null)
+
+  const [marketExchange, setMarketExchange] = useState<'NSE' | 'BSE'>('NSE')
+  const [marketDefaults, setMarketDefaults] = useState<MarketDefaults | null>(null)
+  const [marketPreviewDay, setMarketPreviewDay] = useState<string>(() => {
+    const d = new Date()
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd}`
+  })
+  const [marketPreview, setMarketPreview] = useState<ResolvedMarketSession | null>(null)
+  const [marketRows, setMarketRows] = useState<MarketCalendarRow[]>([])
+  const [marketUploadBusy, setMarketUploadBusy] = useState(false)
+  const [marketUploadStatus, setMarketUploadStatus] = useState<string | null>(null)
+  const [marketUploadError, setMarketUploadError] = useState<string | null>(null)
   const displayTzIsPreset = DISPLAY_TZ_PRESETS.includes(displayTimeZone as any)
   const [showCustomTz, setShowCustomTz] = useState<boolean>(
     () => !displayTzIsPreset && displayTimeZone !== 'LOCAL',
@@ -432,7 +460,13 @@ export function SettingsPage() {
 
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get('tab')
-    if (tab === 'broker' || tab === 'risk' || tab === 'strategy' || tab === 'time') {
+    if (
+      tab === 'broker' ||
+      tab === 'risk' ||
+      tab === 'strategy' ||
+      tab === 'market' ||
+      tab === 'time'
+    ) {
       if (tab !== activeTab) setActiveTab(tab)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -456,15 +490,45 @@ export function SettingsPage() {
     })()
   }, [activeTab, tvWebhookSecretLoaded])
 
+  useEffect(() => {
+    if (activeTab !== 'market') return
+    let active = true
+    void (async () => {
+      try {
+        const defs = await fetchMarketDefaults()
+        const preview = await resolveMarketSession(marketExchange, marketPreviewDay)
+        const rows = await listMarketCalendarRows({
+          exchange: marketExchange,
+          limit: 50,
+        })
+        if (!active) return
+        setMarketDefaults(defs)
+        setMarketPreview(preview)
+        setMarketRows(rows)
+        setMarketUploadError(null)
+      } catch (err) {
+        if (!active) return
+        setMarketUploadError(
+          err instanceof Error ? err.message : 'Failed to load market configuration',
+        )
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [activeTab, marketExchange, marketPreviewDay])
+
   const handleTabChange = (_event: React.SyntheticEvent, next: string) => {
     const nextTab: SettingsTab =
       next === 'risk'
         ? 'risk'
         : next === 'strategy'
           ? 'strategy'
-          : next === 'time'
-            ? 'time'
-            : 'broker'
+          : next === 'market'
+            ? 'market'
+            : next === 'time'
+              ? 'time'
+              : 'broker'
     setActiveTab(nextTab)
     const params = new URLSearchParams(location.search)
     params.set('tab', nextTab)
@@ -472,6 +536,42 @@ export function SettingsPage() {
       { pathname: location.pathname, search: params.toString() },
       { replace: true },
     )
+  }
+
+  const handleMarketUpload = async (file: File) => {
+    setMarketUploadBusy(true)
+    setMarketUploadStatus(null)
+    setMarketUploadError(null)
+    try {
+      const res = await uploadMarketCalendarCsv(marketExchange, file)
+      setMarketUploadStatus(
+        `Imported: ${res.inserted} inserted, ${res.updated} updated`,
+      )
+      const preview = await resolveMarketSession(marketExchange, marketPreviewDay)
+      const rows = await listMarketCalendarRows({ exchange: marketExchange, limit: 50 })
+      setMarketPreview(preview)
+      setMarketRows(rows)
+    } catch (err) {
+      setMarketUploadError(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      setMarketUploadBusy(false)
+    }
+  }
+
+  const handleMarketDownload = async () => {
+    try {
+      const blob = await downloadMarketCalendarCsv(marketExchange)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `market_calendar_${marketExchange}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setMarketUploadError(err instanceof Error ? err.message : 'Export failed')
+    }
   }
 
   useEffect(() => {
@@ -897,6 +997,7 @@ export function SettingsPage() {
           <Tab value="broker" label="Broker settings" />
           <Tab value="risk" label="Risk settings" />
           <Tab value="strategy" label="Strategy settings" />
+          <Tab value="market" label="Market configuration" />
           <Tab value="time" label="Time" />
         </Tabs>
       </Paper>
@@ -1060,7 +1161,166 @@ export function SettingsPage() {
         </Box>
       )}
 
-      {activeTab === 'time' ? (
+      {activeTab === 'market' && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="h6">Market Configuration</Typography>
+            <Tooltip title="Upload a CSV holiday/session calendar for an exchange. The runtime uses this to decide market hours, proxy close, and buy/sell windows.">
+              <IconButton size="small" aria-label="market config help">
+                <HelpOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+
+          <Typography variant="body2" color="text.secondary">
+            Defaults apply unless a specific session override exists in your uploaded CSV.
+          </Typography>
+
+          <Paper sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+              <TextField
+                select
+                size="small"
+                label="Exchange"
+                value={marketExchange}
+                onChange={(e) => setMarketExchange(e.target.value as 'NSE' | 'BSE')}
+                sx={{ minWidth: 140 }}
+              >
+                <MenuItem value="NSE">NSE</MenuItem>
+                <MenuItem value="BSE">BSE</MenuItem>
+              </TextField>
+              <TextField
+                size="small"
+                type="date"
+                label="Preview date"
+                value={marketPreviewDay}
+                onChange={(e) => setMarketPreviewDay(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                sx={{ minWidth: 180 }}
+              />
+
+              <Button variant="outlined" component="label" disabled={marketUploadBusy}>
+                {marketUploadBusy ? 'Uploading…' : 'Upload CSV'}
+                <input
+                  hidden
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (!f) return
+                    void handleMarketUpload(f)
+                    e.currentTarget.value = ''
+                  }}
+                />
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<FileDownloadIcon />}
+                onClick={() => void handleMarketDownload()}
+              >
+                Download CSV
+              </Button>
+            </Box>
+
+            {marketDefaults && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', mt: 1 }}
+              >
+                Timezone: {marketDefaults.timezone} | Default session:{' '}
+                {marketDefaults.market_open}–{marketDefaults.market_close}
+              </Typography>
+            )}
+            {marketUploadStatus && (
+              <Typography
+                variant="caption"
+                color="success.main"
+                sx={{ display: 'block', mt: 1 }}
+              >
+                {marketUploadStatus}
+              </Typography>
+            )}
+            {marketUploadError && (
+              <Typography
+                variant="caption"
+                color="error"
+                sx={{ display: 'block', mt: 1 }}
+              >
+                {marketUploadError}
+              </Typography>
+            )}
+          </Paper>
+
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              Resolved session preview
+            </Typography>
+            {marketPreview ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                <Typography variant="body2">
+                  {marketPreview.exchange} {marketPreview.date}:{' '}
+                  {marketPreview.session_type}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Open/Close: {marketPreview.open_time ?? '—'}–
+                  {marketPreview.close_time ?? '—'} | Proxy close:{' '}
+                  {marketPreview.proxy_close_time ?? '—'}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Preferred sell window: {marketPreview.preferred_sell_window[0] ?? '—'}–
+                  {marketPreview.preferred_sell_window[1] ?? '—'} | Preferred buy
+                  window: {marketPreview.preferred_buy_window[0] ?? '—'}–
+                  {marketPreview.preferred_buy_window[1] ?? '—'}
+                </Typography>
+              </Box>
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                Loading preview…
+              </Typography>
+            )}
+          </Paper>
+
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              Calendar rows (latest 50)
+            </Typography>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Date</TableCell>
+                  <TableCell>Session</TableCell>
+                  <TableCell>Open</TableCell>
+                  <TableCell>Close</TableCell>
+                  <TableCell>Notes</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {marketRows.map((r) => (
+                  <TableRow key={`${r.exchange}:${r.date}`}>
+                    <TableCell>{r.date}</TableCell>
+                    <TableCell>{r.session_type}</TableCell>
+                    <TableCell>{r.open_time ?? '—'}</TableCell>
+                    <TableCell>{r.close_time ?? '—'}</TableCell>
+                    <TableCell>{r.notes ?? ''}</TableCell>
+                  </TableRow>
+                ))}
+                {marketRows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5}>
+                      <Typography variant="caption" color="text.secondary">
+                        No calendar rows found for {marketExchange}. Defaults will apply.
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Paper>
+        </Box>
+      )}
+
+      {activeTab === 'market' ? null : activeTab === 'time' ? (
         <Paper sx={{ mb: 3, p: 2 }}>
           <Typography variant="h6" gutterBottom>
             Display timezone

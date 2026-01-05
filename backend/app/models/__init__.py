@@ -12,6 +12,7 @@ from .deployments import StrategyDeployment, StrategyDeploymentState
 from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
 from .instruments import BrokerInstrument, Listing, Security
+from .market_calendar import MarketCalendar
 from .market_data import Candle, MarketInstrument
 from .rebalance import (
     RebalancePolicy,
@@ -62,6 +63,7 @@ __all__ = [
     "Listing",
     "BrokerInstrument",
     "MarketInstrument",
+    "MarketCalendar",
     "Candle",
     "RiskCovarianceCache",
     "IndicatorRule",

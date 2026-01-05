@@ -12,6 +12,7 @@ from . import (
     deployments,
     groups,
     instruments,
+    market_calendar,
     market_data,
     orders,
     paper,
@@ -109,6 +110,13 @@ router.include_router(
     prefix="/api/market",
     dependencies=[Depends(require_admin)],
     tags=["market"],
+)
+
+router.include_router(
+    market_calendar.router,
+    prefix="/api/market-calendar",
+    dependencies=[Depends(require_admin)],
+    tags=["market-calendar"],
 )
 
 router.include_router(
