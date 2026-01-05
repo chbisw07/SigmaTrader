@@ -716,13 +716,14 @@ export function DeploymentsPage() {
                   label="Exchange"
                   value={editor.exchange}
                   onChange={(e) => setEditor((p) => ({ ...p, exchange: e.target.value }))}
-                  fullWidth
+                  sx={{ width: { xs: '100%', sm: 140 } }}
                 />
                 <Autocomplete<MarketSymbol, false, false, true>
                   freeSolo
                   clearOnBlur={false}
                   options={symbolOptions}
                   loading={symbolOptionsLoading}
+                  sx={{ flex: 1, minWidth: 0 }}
                   value={
                     symbolOptions.find(
                       (o) =>
