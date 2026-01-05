@@ -83,6 +83,10 @@ class StrategyDeploymentConfigIn(BaseModel):
 
     product: ProductType = "CNC"
     direction: StrategyDirection = "LONG"
+    acknowledge_short_risk: bool = False
+
+    enter_immediately_on_start: bool = False
+    acknowledge_enter_immediately_risk: bool = False
 
     broker_name: BrokerName = "zerodha"
     execution_target: ExecutionTarget = "PAPER"
@@ -109,6 +113,10 @@ class PortfolioStrategyDeploymentConfigIn(BaseModel):
 
     product: ProductType = "CNC"
     direction: StrategyDirection = "LONG"
+    acknowledge_short_risk: bool = False
+
+    enter_immediately_on_start: bool = False
+    acknowledge_enter_immediately_risk: bool = False
 
     broker_name: BrokerName = "zerodha"
     execution_target: ExecutionTarget = "PAPER"
@@ -168,10 +176,15 @@ class StrategyDeploymentStateRead(BaseModel):
     paused_at: Optional[datetime] = None
     resumed_at: Optional[datetime] = None
     pause_reason: Optional[str] = None
+    exposure: Optional[dict[str, Any]] = None
 
 
 class StrategyDeploymentPauseRequest(BaseModel):
     reason: Optional[str] = None
+
+
+class StrategyDeploymentDirectionMismatchResolutionRequest(BaseModel):
+    action: Literal["ADOPT_EXIT_ONLY", "FLATTEN_THEN_CONTINUE", "IGNORE"]
 
 
 class StrategyDeploymentStateSummary(BaseModel):
@@ -208,6 +221,13 @@ class StrategyDeploymentRead(BaseModel):
             config = {}
 
         state = getattr(obj, "state", None)
+        exposure = None
+        raw_exposure = getattr(state, "exposure_json", None)
+        if raw_exposure:
+            try:
+                exposure = json.loads(raw_exposure)
+            except Exception:
+                exposure = None
         state_read = StrategyDeploymentStateRead(
             status=(getattr(state, "status", None) or "STOPPED"),
             last_evaluated_at=getattr(state, "last_evaluated_at", None),
@@ -224,6 +244,7 @@ class StrategyDeploymentRead(BaseModel):
             paused_at=getattr(state, "paused_at", None),
             resumed_at=getattr(state, "resumed_at", None),
             pause_reason=getattr(state, "pause_reason", None),
+            exposure=exposure,
         )
 
         summary = StrategyDeploymentStateSummary()

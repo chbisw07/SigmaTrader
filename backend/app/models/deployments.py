@@ -152,6 +152,7 @@ class StrategyDeploymentState(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="STOPPED")
 
     state_json: Mapped[Optional[str]] = mapped_column(Text())
+    exposure_json: Mapped[Optional[str]] = mapped_column(Text())
 
     # v2 legacy (kept for backwards compatibility with existing APIs/UI)
     last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())

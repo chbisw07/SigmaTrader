@@ -783,11 +783,15 @@ def process_deployment_job(
                 }
             )
 
-    # 1) Forced exits: MIS flatten window.
-    if job_kind == "WINDOW" and str(payload.get("window") or "") == "MIS_FLATTEN":
+    # 1) Forced exits: window-triggered flatten.
+    if job_kind == "WINDOW" and str(payload.get("window") or "") in {
+        "MIS_FLATTEN",
+        "FORCE_FLATTEN",
+    }:
+        reason = str(payload.get("window") or "FORCE_FLATTEN")
         for symk, pos in open_positions():
             fill_px = prices.get(symk) or float(pos.get("entry_price") or 0.0)
-            _close_position(symk, pos, reason="MIS_FLATTEN", fill_price=float(fill_px))
+            _close_position(symk, pos, reason=reason, fill_price=float(fill_px))
 
     # 2) Risk exits (SL/TP/trailing) evaluated at close for bar-close jobs.
     def _risk_exit_reason(pos: dict[str, Any], close_px: float) -> str | None:
@@ -913,7 +917,11 @@ def process_deployment_job(
                 )
 
     # 4) Entry signal (if warm and not disabled).
-    if not bool(state.get("trading_disabled")) and signal_step:
+    if (
+        not bool(state.get("trading_disabled"))
+        and signal_step
+        and not bool(state.get("exit_only"))
+    ):
         max_open = (
             int(cfg_obj.get("max_open_positions") or 1) if kind != "STRATEGY" else 1
         )

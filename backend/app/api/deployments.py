@@ -11,6 +11,8 @@ from app.api.auth import get_current_user
 from app.core.market_hours import resolve_market_session
 from app.db.session import get_db
 from app.models import (
+    GroupMember,
+    Position,
     StrategyDeployment,
     StrategyDeploymentAction,
     StrategyDeploymentEventLog,
@@ -25,6 +27,7 @@ from app.schemas.deployments import (
     StrategyDeploymentActionRead,
     StrategyDeploymentConfigIn,
     StrategyDeploymentCreate,
+    StrategyDeploymentDirectionMismatchResolutionRequest,
     StrategyDeploymentEventRead,
     StrategyDeploymentJobsMetrics,
     StrategyDeploymentPauseRequest,
@@ -33,6 +36,10 @@ from app.schemas.deployments import (
 )
 from app.services.alert_expression_dsl import parse_expression
 from app.services.deployment_event_log import emit_deployment_event
+from app.services.deployment_exposure import (
+    compute_deployment_exposure,
+    detect_direction_mismatch,
+)
 from app.services.deployment_jobs import enqueue_job
 from app.services.deployment_scheduler import (
     DEFAULT_LATE_TOLERANCE_SECONDS,
@@ -48,6 +55,14 @@ router = APIRouter()
 
 def _json_dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _json_load(raw: str | None) -> dict:
+    try:
+        out = json.loads(raw or "{}")
+        return out if isinstance(out, dict) else {}
+    except Exception:
+        return {}
 
 
 def _validate_universe(kind: DeploymentKind, universe: DeploymentUniverse) -> None:
@@ -143,6 +158,31 @@ def _parse_config(
     normalized["execution_target"] = parsed.execution_target
     normalized["direction"] = parsed.direction
 
+    product = str(parsed.product).upper()
+    direction = str(parsed.direction).upper()
+    if direction == "SHORT" and product != "MIS":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SHORT direction is only supported with product=MIS.",
+        )
+    if direction == "SHORT" and not bool(
+        getattr(parsed, "acknowledge_short_risk", False)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SHORT deployments require acknowledge_short_risk=true.",
+        )
+    if bool(getattr(parsed, "enter_immediately_on_start", False)) and not bool(
+        getattr(parsed, "acknowledge_enter_immediately_risk", False)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "enter_immediately_on_start requires "
+                "acknowledge_enter_immediately_risk=true."
+            ),
+        )
+
     return (
         normalized,
         parsed.timeframe,
@@ -168,6 +208,213 @@ def _get_owned_deployment(
             detail="Deployment not found.",
         )
     return dep
+
+
+def _update_exposure_and_maybe_pause_for_direction_mismatch(
+    db: Session,
+    *,
+    dep: StrategyDeployment,
+    now: datetime,
+) -> tuple[dict, str, str, str, str, str, list[dict]]:
+    payload = _json_load(dep.config_json or "{}")
+    cfg = payload.get("config") or {}
+    normalized_cfg, tf, broker_name, product, exec_target, direction = _parse_config(
+        dep.kind, cfg
+    )
+
+    exposure = compute_deployment_exposure(db, dep=dep)
+    if dep.state is not None:
+        dep.state.exposure_json = _json_dump(exposure)
+
+    mismatches: list[dict] = []
+    if str(exec_target).upper() == "LIVE":
+        mismatches = detect_direction_mismatch(exposure, direction=direction)
+    if mismatches and dep.state is not None:
+        dep.state.status = "PAUSED"
+        dep.state.paused_at = dep.state.paused_at or now
+        dep.state.pause_reason = (
+            "Direction mismatch with existing broker position(s). "
+            "Resolve before resuming."
+        )
+        dep.state.runtime_state = "PAUSED_DIRECTION_MISMATCH"
+        dep.state.last_decision = "PAUSED_DIRECTION_MISMATCH"
+        dep.state.last_decision_reason = dep.state.pause_reason
+        emit_deployment_event(
+            db,
+            deployment_id=dep.id,
+            kind="PAUSED_DIRECTION_MISMATCH",
+            payload={
+                "direction": direction,
+                "product": product,
+                "mismatches": mismatches,
+            },
+            created_at=now,
+        )
+
+    return normalized_cfg, tf, broker_name, product, exec_target, direction, mismatches
+
+
+def _maybe_enqueue_enter_on_start(
+    db: Session,
+    *,
+    dep: StrategyDeployment,
+    now: datetime,
+    timeframe: str,
+    primary_exchange: str,
+) -> bool:
+    now_ist = now_ist_naive(now)
+    session = resolve_market_session(db, day=now_ist.date(), exchange=primary_exchange)
+    if not session.is_trading_time(now_ist):
+        return False
+
+    tf = str(timeframe or "1d")
+    if tf == "1d":
+        return False
+
+    bar_end_ist = latest_closed_bar_end_ist(
+        now_ist=now_ist,
+        timeframe=tf,
+        tolerance_seconds=DEFAULT_LATE_TOLERANCE_SECONDS,
+    )
+    if bar_end_ist is None:
+        return False
+    if (
+        session.open_time is None
+        or session.close_time is None
+        or bar_end_ist.time() <= session.open_time
+        or bar_end_ist.time() > session.close_time
+    ):
+        return False
+
+    scheduled_for = ist_naive_to_utc(bar_end_ist)
+    key = f"DEP:{dep.id}:ENTER_ON_START:BAR_CLOSED:{scheduled_for.isoformat()}"
+    job = enqueue_job(
+        db,
+        deployment_id=dep.id,
+        owner_id=dep.owner_id,
+        kind="BAR_CLOSED",
+        dedupe_key=key,
+        scheduled_for=scheduled_for,
+        payload={
+            "kind": "BAR_CLOSED",
+            "deployment_id": dep.id,
+            "timeframe": tf,
+            "run_now": True,
+            "enter_on_start": True,
+            "bar_end_ist": bar_end_ist.isoformat(),
+            "bar_end_utc": scheduled_for.isoformat(),
+        },
+    )
+    if job is None:
+        return False
+
+    emit_deployment_event(
+        db,
+        deployment_id=dep.id,
+        job_id=job.id,
+        kind="ENTER_ON_START_ENQUEUED",
+        payload={"timeframe": tf, "scheduled_for_utc": scheduled_for.isoformat()},
+        created_at=now,
+    )
+    return True
+
+
+def _resolve_deployment_symbol_keys(db: Session, dep: StrategyDeployment) -> list[str]:
+    payload_all = _json_load(dep.config_json or "{}")
+    universe = payload_all.get("universe") or {}
+    symbols = universe.get("symbols") or []
+
+    out: list[dict] = []
+    if isinstance(symbols, list):
+        out = [s for s in symbols if isinstance(s, dict)]
+
+    if dep.target_kind == "SYMBOL" and dep.symbol and not out:
+        out = [{"exchange": dep.exchange or "NSE", "symbol": dep.symbol}]
+
+    if dep.target_kind == "GROUP" and dep.group_id and not out:
+        members: list[GroupMember] = (
+            db.query(GroupMember)
+            .filter(GroupMember.group_id == int(dep.group_id))
+            .all()
+        )
+        out = [
+            {
+                "exchange": str(m.exchange or "NSE").upper(),
+                "symbol": str(m.symbol).upper(),
+            }
+            for m in members
+        ]
+
+    keys: list[str] = []
+    for s in out:
+        exchange = str(s.get("exchange") or "NSE").strip().upper()
+        symbol = str(s.get("symbol") or "").strip().upper()
+        if symbol:
+            keys.append(f"{exchange}:{symbol}")
+    return keys
+
+
+def _import_broker_positions_into_state(
+    db: Session,
+    *,
+    dep: StrategyDeployment,
+    state: dict,
+    symbol_keys: list[str],
+    now: datetime,
+) -> list[dict]:
+    broker_name = str(dep.broker_name or "zerodha").strip().lower()
+    imported: list[dict] = []
+    pos_map = state.get("positions")
+    if not isinstance(pos_map, dict):
+        pos_map = {}
+        state["positions"] = pos_map
+
+    for symk in symbol_keys:
+        if ":" not in symk:
+            continue
+        exchange, symbol = symk.split(":", 1)
+        rows = (
+            db.query(Position)
+            .filter(Position.broker_name == broker_name)
+            .filter(Position.exchange == exchange)
+            .filter(Position.symbol == symbol)
+            .all()
+        )
+        net_qty = float(sum(float(r.qty or 0.0) for r in rows))
+        if net_qty == 0:
+            continue
+        weight = float(sum(abs(float(r.qty or 0.0)) for r in rows)) or 0.0
+        avg = None
+        if weight > 0:
+            avg = float(
+                sum(abs(float(r.qty or 0.0)) * float(r.avg_price or 0.0) for r in rows)
+                / weight
+            )
+        side = "LONG" if net_qty > 0 else "SHORT"
+        qty_int = int(round(abs(net_qty)))
+        if qty_int <= 0:
+            continue
+
+        existing = pos_map.get(symk)
+        if not isinstance(existing, dict) or int(existing.get("qty") or 0) <= 0:
+            pos_map[symk] = {
+                "qty": qty_int,
+                "side": side,
+                "entry_price": float(avg or 0.0),
+                "entry_ts": now.isoformat(),
+                "source": "BROKER_IMPORT",
+            }
+            imported.append(
+                {
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "qty": qty_int,
+                    "side": side,
+                    "avg_price": avg,
+                }
+            )
+
+    return imported
 
 
 @router.get("/", response_model=List[StrategyDeploymentRead])
@@ -619,6 +866,14 @@ def start_deployment(
     if dep.state is None:
         dep.state = StrategyDeploymentState(deployment_id=dep.id, status="RUNNING")
     now = datetime.now(UTC)
+    normalized_cfg, tf, _broker, _product, _exec, _direction, mismatches = (
+        _update_exposure_and_maybe_pause_for_direction_mismatch(db, dep=dep, now=now)
+    )
+    if mismatches:
+        db.add(dep)
+        db.commit()
+        dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+        return StrategyDeploymentRead.from_model(dep)
     prev_status = str(dep.state.status or "").upper()
     if prev_status == "PAUSED":
         dep.state.resumed_at = now
@@ -638,6 +893,14 @@ def start_deployment(
         payload={"reason": dep.state.pause_reason},
         created_at=now,
     )
+    if bool(normalized_cfg.get("enter_immediately_on_start")):
+        _maybe_enqueue_enter_on_start(
+            db,
+            dep=dep,
+            now=now,
+            timeframe=tf,
+            primary_exchange=str(dep.exchange or "NSE").upper(),
+        )
     db.add(dep)
     db.commit()
     dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
@@ -716,6 +979,14 @@ def resume_deployment(
     if dep.state is None:
         dep.state = StrategyDeploymentState(deployment_id=dep.id, status="RUNNING")
     now = datetime.now(UTC)
+    normalized_cfg, tf, _broker, _product, _exec, _direction, mismatches = (
+        _update_exposure_and_maybe_pause_for_direction_mismatch(db, dep=dep, now=now)
+    )
+    if mismatches:
+        db.add(dep)
+        db.commit()
+        dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+        return StrategyDeploymentRead.from_model(dep)
     dep.state.status = "RUNNING"
     dep.state.resumed_at = now
     dep.state.stopped_at = None
@@ -730,10 +1001,171 @@ def resume_deployment(
         payload={"reason": dep.state.pause_reason},
         created_at=now,
     )
+    if bool(normalized_cfg.get("enter_immediately_on_start")):
+        _maybe_enqueue_enter_on_start(
+            db,
+            dep=dep,
+            now=now,
+            timeframe=tf,
+            primary_exchange=str(dep.exchange or "NSE").upper(),
+        )
     db.add(dep)
     db.commit()
     dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
     return StrategyDeploymentRead.from_model(dep)
+
+
+@router.post(
+    "/{deployment_id}/direction-mismatch/resolve",
+    response_model=StrategyDeploymentRead,
+)
+def resolve_direction_mismatch(
+    deployment_id: int,
+    payload: StrategyDeploymentDirectionMismatchResolutionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StrategyDeploymentRead:
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    if dep.state is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Deployment state is not initialized yet.",
+        )
+    now = datetime.now(UTC)
+
+    cfg_obj = _json_load(dep.config_json or "{}").get("config") or {}
+    _normalized_cfg, _tf, _broker, _product, exec_target, direction = _parse_config(
+        dep.kind, cfg_obj
+    )
+    exposure = compute_deployment_exposure(db, dep=dep)
+    dep.state.exposure_json = _json_dump(exposure)
+    mismatches: list[dict] = []
+    if str(exec_target).upper() == "LIVE":
+        mismatches = detect_direction_mismatch(exposure, direction=direction)
+
+    action = str(payload.action or "").upper()
+    if action == "IGNORE":
+        dep.state.status = "PAUSED"
+        dep.state.runtime_state = "PAUSED_DIRECTION_MISMATCH"
+        dep.state.paused_at = dep.state.paused_at or now
+        dep.state.last_decision = "PAUSED_DIRECTION_MISMATCH"
+        dep.state.last_decision_reason = "Operator chose to keep deployment paused."
+        emit_deployment_event(
+            db,
+            deployment_id=dep.id,
+            kind="DIRECTION_MISMATCH_IGNORED",
+            payload={"mismatches": mismatches},
+            created_at=now,
+        )
+        db.add(dep)
+        db.commit()
+        dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+        return StrategyDeploymentRead.from_model(dep)
+
+    state = _json_load(dep.state.state_json or "{}")
+    state.setdefault("version", 1)
+    state.setdefault("cash", 0.0)
+    state.setdefault("positions", {})
+
+    symbol_keys = _resolve_deployment_symbol_keys(db, dep)
+    mismatch_keys = {
+        (
+            f"{str(m.get('exchange') or 'NSE').upper()}:"
+            f"{str(m.get('symbol') or '').upper()}"
+        )
+        for m in mismatches
+        if isinstance(m, dict) and m.get("symbol")
+    }
+    imported = _import_broker_positions_into_state(
+        db,
+        dep=dep,
+        state=state,
+        symbol_keys=sorted(mismatch_keys) if mismatch_keys else symbol_keys,
+        now=now,
+    )
+    pos_map = state.get("positions")
+    has_open = False
+    if isinstance(pos_map, dict):
+        for pv in pos_map.values():
+            if isinstance(pv, dict) and int(pv.get("qty") or 0) > 0:
+                has_open = True
+                break
+
+    if action == "ADOPT_EXIT_ONLY":
+        state["exit_only"] = True
+        dep.state.state_json = _json_dump(state)
+        dep.state.status = "RUNNING"
+        dep.state.resumed_at = now
+        dep.state.pause_reason = None
+        dep.state.runtime_state = "IN_POSITION" if has_open else "FLAT"
+        dep.state.last_decision = "RESOLVED_DIRECTION_MISMATCH"
+        dep.state.last_decision_reason = "Adopted existing position (exit-only mode)."
+        emit_deployment_event(
+            db,
+            deployment_id=dep.id,
+            kind="DIRECTION_MISMATCH_RESOLVED",
+            payload={
+                "action": "ADOPT_EXIT_ONLY",
+                "direction": direction,
+                "imported_positions": imported,
+                "mismatches": mismatches,
+            },
+            created_at=now,
+        )
+        db.add(dep)
+        db.commit()
+        dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+        return StrategyDeploymentRead.from_model(dep)
+
+    if action == "FLATTEN_THEN_CONTINUE":
+        state.pop("exit_only", None)
+        dep.state.state_json = _json_dump(state)
+        dep.state.status = "RUNNING"
+        dep.state.resumed_at = now
+        dep.state.pause_reason = None
+        dep.state.runtime_state = "IN_POSITION" if has_open else "FLAT"
+        dep.state.last_decision = "RESOLVED_DIRECTION_MISMATCH"
+        dep.state.last_decision_reason = "Enqueued immediate flatten before resuming."
+
+        key = f"DEP:{dep.id}:WINDOW:FORCE_FLATTEN:{now.date().isoformat()}"
+        job = enqueue_job(
+            db,
+            deployment_id=dep.id,
+            owner_id=dep.owner_id,
+            kind="WINDOW",
+            dedupe_key=key,
+            scheduled_for=now,
+            payload={
+                "kind": "WINDOW",
+                "deployment_id": dep.id,
+                "window": "FORCE_FLATTEN",
+                "requested_by": "operator",
+                "requested_at_utc": now.isoformat(),
+            },
+        )
+        emit_deployment_event(
+            db,
+            deployment_id=dep.id,
+            job_id=getattr(job, "id", None),
+            kind="DIRECTION_MISMATCH_RESOLVED",
+            payload={
+                "action": "FLATTEN_THEN_CONTINUE",
+                "direction": direction,
+                "imported_positions": imported,
+                "mismatches": mismatches,
+                "enqueued": bool(job is not None),
+            },
+            created_at=now,
+        )
+        db.add(dep)
+        db.commit()
+        dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+        return StrategyDeploymentRead.from_model(dep)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Unsupported resolution action.",
+    )
 
 
 @router.delete(
