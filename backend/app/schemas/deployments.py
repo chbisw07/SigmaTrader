@@ -76,6 +76,8 @@ class StrategyDeploymentConfigIn(BaseModel):
     timeframe: StrategyTimeframe = "1d"
     daily_via_intraday: Optional[DailyViaIntradaySettings] = None
 
+    source_run_id: Optional[int] = None
+
     entry_dsl: str = Field(min_length=1)
     exit_dsl: str = Field(min_length=1)
 
@@ -99,6 +101,8 @@ class StrategyDeploymentConfigIn(BaseModel):
 class PortfolioStrategyDeploymentConfigIn(BaseModel):
     timeframe: StrategyTimeframe = "1d"
     daily_via_intraday: Optional[DailyViaIntradaySettings] = None
+
+    source_run_id: Optional[int] = None
 
     entry_dsl: str = Field(min_length=1)
     exit_dsl: str = Field(min_length=1)

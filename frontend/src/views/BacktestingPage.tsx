@@ -9,6 +9,7 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import Alert from '@mui/material/Alert'
 import FormControl from '@mui/material/FormControl'
 import IconButton from '@mui/material/IconButton'
 import InputLabel from '@mui/material/InputLabel'
@@ -40,6 +41,12 @@ import {
   type BacktestKind,
   type BacktestRun,
 } from '../services/backtests'
+import {
+  createDeployment,
+  listDeployments,
+  type DeploymentKind,
+  type DeploymentUniverse,
+} from '../services/deployments'
 import { useTimeSettings } from '../timeSettingsContext'
 import { parseBackendDate } from '../utils/datetime'
 
@@ -73,13 +80,36 @@ type PortfolioStrategySizingMode = 'PCT_EQUITY' | 'FIXED_CASH' | 'CASH_PER_SLOT'
 type PortfolioStrategyRankingMetric = 'PERF_PCT'
 
 type DeploymentPrefill = {
-  kind: 'STRATEGY' | 'PORTFOLIO_STRATEGY'
-  universe: {
-    target_kind: 'SYMBOL' | 'GROUP'
-    group_id?: number | null
-    symbols?: Array<{ exchange?: string; symbol: string }>
-  }
+  kind: DeploymentKind
+  universe: DeploymentUniverse
   config: Record<string, unknown>
+}
+
+type DeployConfirmState = {
+  open: boolean
+  existingId: number
+  existingName: string
+  pending: {
+    name: string
+    kind: DeploymentKind
+    universe: DeploymentUniverse
+    config: Record<string, unknown>
+  }
+}
+
+function slugifyNamePart(raw: string, maxLen = 32): string {
+  const s = (raw || '').trim().toUpperCase()
+  const cleaned = s.replace(/[^A-Z0-9]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+  if (!cleaned) return 'UNKNOWN'
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) : cleaned
+}
+
+function shortUuid6(): string {
+  try {
+    return crypto.randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase()
+  } catch {
+    return Math.random().toString(16).slice(2, 8).toUpperCase().padEnd(6, '0')
+  }
 }
 
 function toIsoDate(d: Date): string {
@@ -335,6 +365,8 @@ export function BacktestingPage() {
   const [compareRunId, setCompareRunId] = useState<number | ''>('')
   const [compareRun, setCompareRun] = useState<BacktestRun | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [deployingRunId, setDeployingRunId] = useState<number | null>(null)
+  const [deployConfirm, setDeployConfirm] = useState<DeployConfirmState | null>(null)
   const [running, setRunning] = useState(false)
   const [selectedRunIds, setSelectedRunIds] = useState<number[]>([])
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
@@ -503,6 +535,7 @@ export function BacktestingPage() {
         ...cfg,
         broker_name,
         execution_target: String((cfg as any).execution_target ?? 'PAPER').toUpperCase(),
+        source_run_id: run.id,
       }
 
       if (run.kind === 'STRATEGY') {
@@ -527,6 +560,151 @@ export function BacktestingPage() {
       }
     },
     [getRunConfig, getRunUniverse],
+  )
+
+  const buildDeploymentNameForRun = useCallback(
+    (run: BacktestRun, prefill: DeploymentPrefill): string => {
+      const u = getRunUniverse(run)
+      const broker = String(u.broker_name ?? 'zerodha').toLowerCase()
+      const brokerPart = slugifyNamePart(broker === 'angelone' ? 'angelone' : 'zerodha', 16)
+      const suffix = shortUuid6()
+
+      if (prefill.kind === 'STRATEGY') {
+        const sym0 = prefill.universe.symbols?.[0]
+        const exchange = slugifyNamePart(String(sym0?.exchange ?? 'NSE'), 8)
+        const symbol = slugifyNamePart(String(sym0?.symbol ?? ''), 20)
+        return `DEP_SYM_${exchange}_${symbol}_${brokerPart}_run${run.id}_${suffix}`
+      }
+
+      const gid = prefill.universe.group_id
+      const groupName =
+        typeof gid === 'number'
+          ? groups.find((g) => g.id === gid)?.name ?? `${gid}`
+          : 'GROUP'
+      const groupPart = slugifyNamePart(groupName, 24)
+      return `DEP_GRP_${groupPart}_${brokerPart}_run${run.id}_${suffix}`
+    },
+    [getRunUniverse, groups],
+  )
+
+  const findExistingDeploymentForRun = useCallback(
+    (
+      run: BacktestRun,
+      prefill: DeploymentPrefill,
+      deployments: any[],
+    ): { id: number; name: string } | null => {
+      const cfg = prefill.config ?? {}
+      const tf = String(cfg.timeframe ?? '')
+      const entry = String(cfg.entry_dsl ?? '').trim()
+      const exit = String(cfg.exit_dsl ?? '').trim()
+      const broker = String(cfg.broker_name ?? '').toLowerCase()
+      const product = String(cfg.product ?? '').toUpperCase()
+      const direction = String(cfg.direction ?? '').toUpperCase()
+
+      for (const d of deployments as any[]) {
+        if (!d || d.kind !== prefill.kind) continue
+        const dCfg = (d.config ?? {}) as Record<string, unknown>
+        const sameRun = Number(dCfg.source_run_id ?? NaN) === run.id
+        const sameTf = String(dCfg.timeframe ?? '') === tf
+        const sameDsl =
+          String(dCfg.entry_dsl ?? '').trim() === entry &&
+          String(dCfg.exit_dsl ?? '').trim() === exit
+        const sameBroker = String(dCfg.broker_name ?? '').toLowerCase() === broker
+        const sameProduct = String(dCfg.product ?? '').toUpperCase() === product
+        const sameDirection = String(dCfg.direction ?? '').toUpperCase() === direction
+
+        if (prefill.kind === 'STRATEGY') {
+          const sym0 = prefill.universe.symbols?.[0]
+          const u0 = (d.universe?.symbols ?? [])[0] ?? null
+          const sameSym =
+            String(u0?.exchange ?? '').toUpperCase() ===
+              String(sym0?.exchange ?? '').toUpperCase() &&
+            String(u0?.symbol ?? '').toUpperCase() ===
+              String(sym0?.symbol ?? '').toUpperCase()
+          if (
+            (sameRun ||
+              (sameTf &&
+                sameDsl &&
+                sameBroker &&
+                sameProduct &&
+                sameDirection &&
+                sameSym)) &&
+            Number.isFinite(d.id)
+          ) {
+            return { id: Number(d.id), name: String(d.name ?? `Deployment #${d.id}`) }
+          }
+        } else {
+          const sameGroup =
+            Number(d.universe?.group_id ?? NaN) ===
+            Number(prefill.universe.group_id ?? NaN)
+          if (
+            (sameRun ||
+              (sameTf &&
+                sameDsl &&
+                sameBroker &&
+                sameProduct &&
+                sameDirection &&
+                sameGroup)) &&
+            Number.isFinite(d.id)
+          ) {
+            return { id: Number(d.id), name: String(d.name ?? `Deployment #${d.id}`) }
+          }
+        }
+      }
+      return null
+    },
+    [],
+  )
+
+  const deployNowFromRun = useCallback(
+    async (run: BacktestRun, opts: { forceNew: boolean }) => {
+      const forceNew = Boolean(opts?.forceNew)
+      const prefill = deploymentPrefillFromRun(run)
+      if (!prefill) {
+        throw new Error(
+          run.kind === 'PORTFOLIO_STRATEGY'
+            ? 'Deploy requires a GROUP universe (select a group backtest run).'
+            : 'Deploy requires a valid symbol in the run universe.',
+        )
+      }
+
+      const pending = {
+        name: buildDeploymentNameForRun(run, prefill),
+        kind: prefill.kind,
+        universe: prefill.universe,
+        config: prefill.config,
+      }
+
+      if (!forceNew) {
+        const deps = await listDeployments({ kind: prefill.kind })
+        const existing = findExistingDeploymentForRun(run, prefill, deps as any[])
+        if (existing) {
+          setDeployConfirm({
+            open: true,
+            existingId: existing.id,
+            existingName: existing.name,
+            pending,
+          })
+          return
+        }
+      }
+
+      const created = await createDeployment({
+        name: pending.name,
+        description: null,
+        kind: pending.kind,
+        enabled: false,
+        universe: pending.universe,
+        config: pending.config,
+      })
+      navigate(`/deployments/${created.id}`)
+    },
+    [
+      buildDeploymentNameForRun,
+      deploymentPrefillFromRun,
+      findExistingDeploymentForRun,
+      navigate,
+    ],
   )
 
   const drawerRun = useMemo(() => {
@@ -1463,8 +1641,64 @@ export function BacktestingPage() {
         },
       },
     ]
+    if (tab === 'STRATEGY' || tab === 'PORTFOLIO_STRATEGY') {
+      cols.push({
+        field: 'deploy',
+        headerName: '',
+        width: 130,
+        sortable: false,
+        filterable: false,
+        renderCell: (params) => {
+          const run = params.row as BacktestRun
+          const disabled =
+            run.status !== 'COMPLETED' ||
+            running ||
+            deployingRunId === run.id
+          return (
+            <Tooltip title="Create a deployment (STOPPED) from this run">
+              <span>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<RocketLaunchIcon />}
+                  disabled={disabled}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void (async () => {
+                      setError(null)
+                      setDeployingRunId(run.id)
+                      try {
+                        await deployNowFromRun(run, { forceNew: false })
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Failed to deploy')
+                      } finally {
+                        setDeployingRunId(null)
+                      }
+                    })()
+                  }}
+                >
+                  Deploy
+                </Button>
+              </span>
+            </Tooltip>
+          )
+        },
+      })
+    }
     return cols
-  }, [applyRunToInputs, displayTimeZone, openDrawerSelected, renderDetails, renderDuration, renderGroupLabel, renderSymbolLabel, tab])
+  }, [
+    applyRunToInputs,
+    deployNowFromRun,
+    deployingRunId,
+    displayTimeZone,
+    openDrawerSelected,
+    renderDetails,
+    renderDuration,
+    renderGroupLabel,
+    renderSymbolLabel,
+    running,
+    tab,
+  ])
 
   const runColumnVisibilityModel = useMemo(() => {
     return { symbol: tab === 'STRATEGY' }
@@ -3576,22 +3810,24 @@ export function BacktestingPage() {
               : `Run details — #${drawerTab}`}
           </Typography>
           {drawerRun && (drawerRun.kind === 'STRATEGY' || drawerRun.kind === 'PORTFOLIO_STRATEGY') ? (
-            <Tooltip title="Create a deployment prefilled from this backtest run">
+            <Tooltip title="Create a deployment (STOPPED) from this run">
               <Button
                 size="small"
                 variant="contained"
                 startIcon={<RocketLaunchIcon />}
+                disabled={deployingRunId === drawerRun.id}
                 onClick={() => {
-                  const prefill = deploymentPrefillFromRun(drawerRun)
-                  if (!prefill) {
-                    setError(
-                      drawerRun.kind === 'PORTFOLIO_STRATEGY'
-                        ? 'Deploy requires a GROUP universe (select a group backtest run).'
-                        : 'Deploy requires a valid symbol in the run universe.',
-                    )
-                    return
-                  }
-                  navigate('/deployments', { state: { deploymentPrefill: prefill } })
+                  void (async () => {
+                    setError(null)
+                    setDeployingRunId(drawerRun.id)
+                    try {
+                      await deployNowFromRun(drawerRun, { forceNew: false })
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'Failed to deploy')
+                    } finally {
+                      setDeployingRunId(null)
+                    }
+                  })()
                 }}
               >
                 Deploy
@@ -3734,6 +3970,66 @@ export function BacktestingPage() {
           >
             Delete
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={deployConfirm?.open === true}
+        onClose={() => setDeployConfirm(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Deployment already exists</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            This strategy already has a deployment. Creating another deployment for the same strategy can lead to
+            duplicate trades and potential losses.
+          </Alert>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Existing deployment: <b>{deployConfirm?.existingName ?? ''}</b> (#{deployConfirm?.existingId ?? ''})
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            If you still want to create a new deployment entry, click “Create new anyway (unsafe)”.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              const id = deployConfirm?.existingId
+              setDeployConfirm(null)
+              if (typeof id === 'number') navigate(`/deployments/${id}`)
+            }}
+          >
+            Open existing
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              const pending = deployConfirm?.pending
+              setDeployConfirm(null)
+              if (!pending) return
+              void (async () => {
+                setError(null)
+                try {
+                  const created = await createDeployment({
+                    name: pending.name,
+                    description: null,
+                    kind: pending.kind,
+                    enabled: false,
+                    universe: pending.universe,
+                    config: pending.config,
+                  })
+                  navigate(`/deployments/${created.id}`)
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed to create deployment')
+                }
+              })()
+            }}
+          >
+            Create new anyway (unsafe)
+          </Button>
+          <Button onClick={() => setDeployConfirm(null)}>Cancel</Button>
         </DialogActions>
       </Dialog>
     </Box>
