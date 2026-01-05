@@ -4,6 +4,7 @@ from .broker import BrokerConnection, BrokerSecret
 from .deployment_runtime import (
     StrategyDeploymentAction,
     StrategyDeploymentBarCursor,
+    StrategyDeploymentEventLog,
     StrategyDeploymentJob,
     StrategyDeploymentLock,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "StrategyDeploymentLock",
     "StrategyDeploymentBarCursor",
     "StrategyDeploymentAction",
+    "StrategyDeploymentEventLog",
     "Order",
     "Position",
     "PositionSnapshot",

@@ -156,6 +156,12 @@ class StrategyDeploymentStateRead(BaseModel):
     status: DeploymentStatus
     last_evaluated_at: Optional[datetime] = None
     next_evaluate_at: Optional[datetime] = None
+    last_eval_at: Optional[datetime] = None
+    last_eval_bar_end_ts: Optional[datetime] = None
+    runtime_state: Optional[str] = None
+    last_decision: Optional[str] = None
+    last_decision_reason: Optional[str] = None
+    next_eval_at: Optional[datetime] = None
     last_error: Optional[str] = None
     started_at: Optional[datetime] = None
     stopped_at: Optional[datetime] = None
@@ -199,6 +205,12 @@ class StrategyDeploymentRead(BaseModel):
             status=(getattr(state, "status", None) or "STOPPED"),
             last_evaluated_at=getattr(state, "last_evaluated_at", None),
             next_evaluate_at=getattr(state, "next_evaluate_at", None),
+            last_eval_at=getattr(state, "last_eval_at", None),
+            last_eval_bar_end_ts=getattr(state, "last_eval_bar_end_ts", None),
+            runtime_state=getattr(state, "runtime_state", None),
+            last_decision=getattr(state, "last_decision", None),
+            last_decision_reason=getattr(state, "last_decision_reason", None),
+            next_eval_at=getattr(state, "next_eval_at", None),
             last_error=getattr(state, "last_error", None),
             started_at=getattr(state, "started_at", None),
             stopped_at=getattr(state, "stopped_at", None),
@@ -274,6 +286,37 @@ class StrategyDeploymentActionRead(BaseModel):
         )
 
 
+class StrategyDeploymentEventRead(BaseModel):
+    id: int
+    deployment_id: int
+    job_id: Optional[int] = None
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, obj) -> "StrategyDeploymentEventRead":
+        payload: dict[str, Any] = {}
+        raw = getattr(obj, "payload_json", None)
+        if raw:
+            try:
+                val = json.loads(raw)
+                if isinstance(val, dict):
+                    payload = val
+            except Exception:
+                payload = {}
+        return cls(
+            id=int(obj.id),
+            deployment_id=int(obj.deployment_id),
+            job_id=(
+                int(obj.job_id) if getattr(obj, "job_id", None) is not None else None
+            ),
+            kind=str(obj.kind or ""),
+            payload=payload,
+            created_at=obj.created_at,
+        )
+
+
 class StrategyDeploymentJobsMetrics(BaseModel):
     job_counts: dict[str, int] = Field(default_factory=dict)
     oldest_pending_scheduled_for: Optional[datetime] = None
@@ -289,6 +332,7 @@ __all__ = [
     "PortfolioStrategyDeploymentConfigIn",
     "StrategyDeploymentConfigIn",
     "StrategyDeploymentActionRead",
+    "StrategyDeploymentEventRead",
     "StrategyDeploymentCreate",
     "StrategyDeploymentRead",
     "StrategyDeploymentJobsMetrics",

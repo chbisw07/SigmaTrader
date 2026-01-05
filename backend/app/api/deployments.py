@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models import (
     StrategyDeployment,
     StrategyDeploymentAction,
+    StrategyDeploymentEventLog,
     StrategyDeploymentJob,
     StrategyDeploymentState,
     User,
@@ -23,6 +24,7 @@ from app.schemas.deployments import (
     StrategyDeploymentActionRead,
     StrategyDeploymentConfigIn,
     StrategyDeploymentCreate,
+    StrategyDeploymentEventRead,
     StrategyDeploymentJobsMetrics,
     StrategyDeploymentRead,
     StrategyDeploymentUpdate,
@@ -240,6 +242,27 @@ def list_deployment_actions(
         .all()
     )
     return [StrategyDeploymentActionRead.from_model(a) for a in actions]
+
+
+@router.get(
+    "/{deployment_id}/events",
+    response_model=List[StrategyDeploymentEventRead],
+)
+def list_deployment_events(
+    deployment_id: int,
+    limit: int = Query(default=200, ge=1, le=2000),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> List[StrategyDeploymentEventRead]:
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    events = (
+        db.query(StrategyDeploymentEventLog)
+        .filter(StrategyDeploymentEventLog.deployment_id == dep.id)
+        .order_by(StrategyDeploymentEventLog.created_at.desc())
+        .limit(int(limit))
+        .all()
+    )
+    return [StrategyDeploymentEventRead.from_model(e) for e in events]
 
 
 @router.get(

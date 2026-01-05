@@ -552,6 +552,8 @@ def process_deployment_job(
             "exchange": exchange,
             "symbol": symbol,
             "i": i,
+            "warmup_bars": int(warmup),
+            "warm_ok": bool(warm_ok),
             "close": float(closes[i]),
             "entry_ok": bool(entry_ok),
             "exit_ok": bool(exit_ok),
@@ -596,6 +598,7 @@ def process_deployment_job(
 
     prices = {sn["key"]: float(sn["close"]) for sn in snapshots}
     equity_now = equity_at_prices(prices)
+    open_before = len(open_positions())
     state["peak_equity"] = max(
         float(state.get("peak_equity") or equity_now), float(equity_now)
     )
@@ -983,6 +986,48 @@ def process_deployment_job(
     state_row.state_json = _json_dump(state)
     db.add(state_row)
 
+    open_after = len(open_positions())
+    warm_ok_all = True
+    if snapshots:
+        warm_ok_all = all(bool(s.get("warm_ok")) for s in snapshots)
+
+    exit_events = [e for e in events if isinstance(e, dict) and e.get("type") == "EXIT"]
+    entry_events = [
+        e for e in events if isinstance(e, dict) and e.get("type") == "ENTRY"
+    ]
+
+    runtime_state = "FLAT"
+    if state_row.status == "PAUSED":
+        runtime_state = "PAUSED"
+    elif open_after > 0:
+        runtime_state = "IN_POSITION"
+    elif signal_step and not warm_ok_all:
+        runtime_state = "WARMING_UP"
+
+    last_decision = "NO_BAR" if not snapshots else "ENTRY_FALSE"
+    last_decision_reason = "No market data available."
+    if snapshots:
+        last_decision_reason = "No action."
+        if state_row.status == "PAUSED":
+            last_decision = "PAUSED"
+            last_decision_reason = "Deployment is paused."
+        elif bool(state.get("trading_disabled")):
+            last_decision = "BLOCKED_TRADING_DISABLED"
+            last_decision_reason = "Trading disabled by equity drawdown guard."
+        elif signal_step and not warm_ok_all:
+            last_decision = "WARMING_UP"
+            last_decision_reason = "Not enough candles to warm indicators."
+        elif open_before > 0:
+            last_decision = "EXIT_TRUE" if exit_events else "EXIT_FALSE"
+            last_decision_reason = (
+                "Exit triggered." if exit_events else "No exit triggered."
+            )
+        else:
+            last_decision = "ENTRY_TRUE" if entry_events else "ENTRY_FALSE"
+            last_decision_reason = (
+                "Entry triggered." if entry_events else "No entry triggered."
+            )
+
     summary = {
         "job_kind": str(job_kind),
         "scheduled_for_utc": scheduled_for_utc.isoformat(),
@@ -1008,6 +1053,13 @@ def process_deployment_job(
         "equity": float(equity_now),
         "cash": float(state.get("cash") or 0.0),
         "open_positions": len(open_positions()),
+        "heartbeat": {
+            "runtime_state": runtime_state,
+            "last_decision": last_decision,
+            "last_decision_reason": last_decision_reason,
+            "open_positions_before": int(open_before),
+            "open_positions_after": int(open_after),
+        },
         "events": events,
         "orders": [{"id": o.id, "client_order_id": o.client_order_id} for o in orders],
     }

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models import StrategyDeployment, StrategyDeploymentJob
+from app.services.deployment_event_log import emit_deployment_event
 from app.services.deployment_jobs import (
     acquire_deployment_lock,
     claim_next_job,
@@ -98,6 +99,15 @@ def execute_job_once(
         .one_or_none()
     )
     if dep is None or dep.enabled is not True:
+        if dep is not None and dep.state is not None:
+            emit_deployment_event(
+                db,
+                deployment_id=job.deployment_id,
+                job_id=job.id,
+                kind="EVAL_SKIPPED",
+                payload={"reason": "disabled", "job_kind": str(job.kind)},
+                created_at=ts,
+            )
         mark_job_done(db, job=job, now=ts)
         release_deployment_lock(
             db,
@@ -109,6 +119,27 @@ def execute_job_once(
         return True
 
     try:
+        emit_deployment_event(
+            db,
+            deployment_id=job.deployment_id,
+            job_id=job.id,
+            kind=f"{str(job.kind).upper()}_RECEIVED",
+            payload={
+                "job_kind": str(job.kind),
+                "scheduled_for_utc": (
+                    job.scheduled_for.isoformat() if job.scheduled_for else None
+                ),
+            },
+            created_at=ts,
+        )
+        emit_deployment_event(
+            db,
+            deployment_id=job.deployment_id,
+            job_id=job.id,
+            kind="EVAL_STARTED",
+            payload={"job_kind": str(job.kind)},
+            created_at=ts,
+        )
         action = record_action(
             db,
             deployment_id=dep.id,
@@ -118,8 +149,14 @@ def execute_job_once(
         )
 
         if dep.state is not None:
-            dep.state.last_evaluated_at = job.scheduled_for or ts
+            # Legacy fields (kept in sync)
+            dep.state.last_evaluated_at = ts
             dep.state.next_evaluate_at = _compute_next_eval(dep, job)
+
+            # v3 heartbeat fields
+            dep.state.last_eval_at = ts
+            dep.state.last_eval_bar_end_ts = job.scheduled_for
+            dep.state.next_eval_at = dep.state.next_evaluate_at
             dep.state.last_error = None
             dep.state.updated_at = ts
             db.add(dep.state)
@@ -136,6 +173,45 @@ def execute_job_once(
         )
         action.payload_json = json.dumps(result.summary, ensure_ascii=False)
         db.add(action)
+
+        hb = None
+        if isinstance(result.summary, dict):
+            hb = result.summary.get("heartbeat")
+        if isinstance(hb, dict) and dep.state is not None:
+            dep.state.runtime_state = hb.get("runtime_state")
+            dep.state.last_decision = hb.get("last_decision")
+            dep.state.last_decision_reason = hb.get("last_decision_reason")
+            db.add(dep.state)
+
+        # Emit journal events derived from the runner summary.
+        if isinstance(result.summary, dict):
+            emit_deployment_event(
+                db,
+                deployment_id=dep.id,
+                job_id=job.id,
+                kind="EVAL_FINISHED",
+                payload={
+                    "job_kind": str(job.kind),
+                    "heartbeat": hb if isinstance(hb, dict) else None,
+                    "orders_created": result.summary.get("orders"),
+                    "events": result.summary.get("events"),
+                },
+                created_at=ts,
+            )
+            for ev in result.summary.get("events") or []:
+                if not isinstance(ev, dict):
+                    continue
+                et = str(ev.get("type") or "").upper()
+                if not et:
+                    continue
+                emit_deployment_event(
+                    db,
+                    deployment_id=dep.id,
+                    job_id=job.id,
+                    kind=f"{et}",
+                    payload=ev,
+                    created_at=ts,
+                )
 
         mark_job_done(db, job=job, now=ts)
         release_deployment_lock(db, deployment_id=dep.id, worker_id=worker_id, now=ts)

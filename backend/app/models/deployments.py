@@ -138,6 +138,8 @@ class StrategyDeploymentState(Base):
             "last_evaluated_at",
         ),
         Index("ix_strategy_deployment_states_next_evaluate_at", "next_evaluate_at"),
+        Index("ix_strategy_deployment_states_last_eval_at", "last_eval_at"),
+        Index("ix_strategy_deployment_states_next_eval_at", "next_eval_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -151,8 +153,17 @@ class StrategyDeploymentState(Base):
 
     state_json: Mapped[Optional[str]] = mapped_column(Text())
 
+    # v2 legacy (kept for backwards compatibility with existing APIs/UI)
     last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
     next_evaluate_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+
+    # v3 heartbeat fields (sec 12)
+    last_eval_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    last_eval_bar_end_ts: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    runtime_state: Mapped[Optional[str]] = mapped_column(String(32))
+    last_decision: Mapped[Optional[str]] = mapped_column(String(32))
+    last_decision_reason: Mapped[Optional[str]] = mapped_column(String(255))
+    next_eval_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     last_error: Mapped[Optional[str]] = mapped_column(Text())
 

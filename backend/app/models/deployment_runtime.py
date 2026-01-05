@@ -187,9 +187,39 @@ class StrategyDeploymentAction(Base):
     )
 
 
+class StrategyDeploymentEventLog(Base):
+    __tablename__ = "strategy_deployment_event_logs"
+
+    __table_args__ = (
+        Index("ix_strategy_deployment_event_logs_deployment_id", "deployment_id"),
+        Index("ix_strategy_deployment_event_logs_created_at", "created_at"),
+        Index("ix_strategy_deployment_event_logs_kind", "kind"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    deployment_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("strategy_deployments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    job_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("strategy_deployment_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[Optional[str]] = mapped_column(Text())
+
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 __all__ = [
     "StrategyDeploymentAction",
     "StrategyDeploymentBarCursor",
+    "StrategyDeploymentEventLog",
     "StrategyDeploymentJob",
     "StrategyDeploymentLock",
 ]
