@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.auth import get_current_user
+from app.core.market_hours import resolve_market_session
 from app.db.session import get_db
 from app.models import (
     StrategyDeployment,
@@ -320,6 +321,20 @@ def run_deployment_now(
     tf = str(cfg.get("timeframe") or dep.timeframe or "1d")
 
     now_ist = now_ist_naive()
+    universe = payload.get("universe") or {}
+    symbols = universe.get("symbols") or []
+    primary_exchange = str(dep.exchange or "NSE").upper()
+    if isinstance(symbols, list) and symbols:
+        s0 = symbols[0]
+        if isinstance(s0, dict) and s0.get("exchange"):
+            primary_exchange = str(s0.get("exchange") or primary_exchange).upper()
+
+    session = resolve_market_session(db, day=now_ist.date(), exchange=primary_exchange)
+    if not session.is_trading_time(now_ist):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Market is closed for {primary_exchange}.",
+        )
     if tf != "1d":
         bar_end_ist = latest_closed_bar_end_ist(
             now_ist=now_ist,
@@ -330,6 +345,16 @@ def run_deployment_now(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Unsupported timeframe for run-now.",
+            )
+        if (
+            session.open_time is None
+            or session.close_time is None
+            or bar_end_ist.time() <= session.open_time
+            or bar_end_ist.time() > session.close_time
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No closed bar is available within market hours yet.",
             )
         scheduled_for = ist_naive_to_utc(bar_end_ist)
         key = f"DEP:{dep.id}:RUN_NOW:BAR_CLOSED:{scheduled_for.isoformat()}"
@@ -352,11 +377,14 @@ def run_deployment_now(
         db.commit()
         return {"enqueued": job is not None, "scheduled_for": scheduled_for}
 
-    daily = cfg.get("daily_via_intraday") or {}
-    proxy_hhmm = str(daily.get("proxy_close_hhmm") or "15:25")
-    hh, mm = proxy_hhmm.split(":")
-    proxy_ist = now_ist.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
-    if now_ist < proxy_ist:
+    if session.proxy_close_time is None or session.close_time is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Market session is not available for daily proxy evaluation.",
+        )
+    proxy_ist = datetime.combine(now_ist.date(), session.proxy_close_time)
+    close_ist = datetime.combine(now_ist.date(), session.close_time)
+    if now_ist < proxy_ist or now_ist > close_ist:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Daily proxy close is not available yet for today.",
