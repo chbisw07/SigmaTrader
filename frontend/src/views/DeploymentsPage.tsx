@@ -95,6 +95,9 @@ type EditorState = {
   execution_target: 'PAPER' | 'LIVE'
   product: 'CNC' | 'MIS'
   direction: 'LONG' | 'SHORT'
+  acknowledge_short_risk: boolean
+  enter_immediately_on_start: boolean
+  acknowledge_enter_immediately_risk: boolean
   entry_dsl: string
   exit_dsl: string
   initial_cash: number
@@ -130,6 +133,9 @@ function defaultEditorState(): EditorState {
     execution_target: 'PAPER',
     product: 'CNC',
     direction: 'LONG',
+    acknowledge_short_risk: false,
+    enter_immediately_on_start: false,
+    acknowledge_enter_immediately_risk: false,
     entry_dsl: 'PRICE(1d) > SMA(20,1d)',
     exit_dsl: 'PRICE(1d) < SMA(20,1d)',
     initial_cash: 100000,
@@ -187,6 +193,9 @@ function editorToPayload(s: EditorState): {
     exit_dsl: s.exit_dsl,
     product: s.product,
     direction: s.direction,
+    acknowledge_short_risk: s.acknowledge_short_risk,
+    enter_immediately_on_start: s.enter_immediately_on_start,
+    acknowledge_enter_immediately_risk: s.acknowledge_enter_immediately_risk,
     broker_name: s.broker_name,
     execution_target: s.execution_target,
     initial_cash: s.initial_cash,
@@ -245,6 +254,17 @@ function prefillToEditor(prefill: DeploymentPrefill): EditorState {
     product: ((cfg.product as 'CNC' | 'MIS') ?? base.product) as 'CNC' | 'MIS',
     direction: ((cfg.direction as 'LONG' | 'SHORT') ??
       base.direction) as 'LONG' | 'SHORT',
+    acknowledge_short_risk: Boolean(
+      (cfg.acknowledge_short_risk as boolean | undefined) ?? base.acknowledge_short_risk,
+    ),
+    enter_immediately_on_start: Boolean(
+      (cfg.enter_immediately_on_start as boolean | undefined) ??
+        base.enter_immediately_on_start,
+    ),
+    acknowledge_enter_immediately_risk: Boolean(
+      (cfg.acknowledge_enter_immediately_risk as boolean | undefined) ??
+        base.acknowledge_enter_immediately_risk,
+    ),
     entry_dsl: String((cfg.entry_dsl as string) ?? base.entry_dsl),
     exit_dsl: String((cfg.exit_dsl as string) ?? base.exit_dsl),
     initial_cash: Number((cfg.initial_cash as number) ?? base.initial_cash),
@@ -312,6 +332,17 @@ export function DeploymentsPage() {
   const [pauseDialogOpen, setPauseDialogOpen] = useState(false)
   const [pauseTarget, setPauseTarget] = useState<StrategyDeployment | null>(null)
   const [pauseReason, setPauseReason] = useState('')
+  const [startConfirmOpen, setStartConfirmOpen] = useState(false)
+  const [startConfirmTarget, setStartConfirmTarget] = useState<StrategyDeployment | null>(
+    null,
+  )
+  const [startConfirmMode, setStartConfirmMode] = useState<'START' | 'RESUME'>('START')
+  const [startConfirmAckShort, setStartConfirmAckShort] = useState(false)
+  const [startConfirmAckEnter, setStartConfirmAckEnter] = useState(false)
+  const [exposureWarnOpen, setExposureWarnOpen] = useState(false)
+  const [exposureWarnTarget, setExposureWarnTarget] = useState<StrategyDeployment | null>(
+    null,
+  )
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -334,6 +365,36 @@ export function DeploymentsPage() {
       setError(err instanceof Error ? err.message : 'Failed to load deployments')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const runStartOrResume = async (dep: StrategyDeployment, mode: 'START' | 'RESUME') => {
+    const dir = String((dep.config ?? {}).direction ?? '').toUpperCase()
+    const enterOnStart = Boolean((dep.config ?? {}).enter_immediately_on_start)
+    const needsShort = dir === 'SHORT'
+    const needsEnter = enterOnStart
+
+    if (needsShort || needsEnter) {
+      setStartConfirmTarget(dep)
+      setStartConfirmMode(mode)
+      setStartConfirmAckShort(false)
+      setStartConfirmAckEnter(false)
+      setStartConfirmOpen(true)
+      return
+    }
+
+    try {
+      const res =
+        mode === 'RESUME' ? await resumeDeployment(dep.id) : await startDeployment(dep.id)
+      await refresh()
+      const symbols = (res.state?.exposure?.symbols ?? []) as any[]
+      const hasBrokerExposure = symbols.some((s) => Number(s?.broker_net_qty ?? 0) !== 0)
+      if (hasBrokerExposure) {
+        setExposureWarnTarget(res)
+        setExposureWarnOpen(true)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed')
     }
   }
 
@@ -470,6 +531,10 @@ export function DeploymentsPage() {
           const dep = p.row as StrategyDeployment
           const running = String(dep.state?.status ?? '').toUpperCase() === 'RUNNING'
           const paused = String(dep.state?.status ?? '').toUpperCase() === 'PAUSED'
+          const mismatch =
+            paused &&
+            String(dep.state?.runtime_state ?? '').toUpperCase() ===
+              'PAUSED_DIRECTION_MISMATCH'
           return (
             <Stack direction="row" spacing={0.5} alignItems="center">
               <Tooltip title="Open details">
@@ -495,18 +560,18 @@ export function DeploymentsPage() {
                 </Tooltip>
               ) : null}
               {paused ? (
-                <Tooltip title="Resume">
+                <Tooltip
+                  title={
+                    mismatch
+                      ? 'Resolve direction mismatch in details first.'
+                      : 'Resume'
+                  }
+                >
                   <IconButton
                     size="small"
+                    disabled={mismatch}
                     onClick={() => {
-                      void (async () => {
-                        try {
-                          await resumeDeployment(dep.id)
-                          await refresh()
-                        } catch (err) {
-                          setError(err instanceof Error ? err.message : 'Failed')
-                        }
-                      })()
+                      void runStartOrResume(dep, 'RESUME')
                     }}
                   >
                     <PlayArrowIcon fontSize="small" />
@@ -518,14 +583,7 @@ export function DeploymentsPage() {
                   <IconButton
                     size="small"
                     onClick={() => {
-                      void (async () => {
-                        try {
-                          await startDeployment(dep.id)
-                          await refresh()
-                        } catch (err) {
-                          setError(err instanceof Error ? err.message : 'Failed')
-                        }
-                      })()
+                      void runStartOrResume(dep, 'START')
                     }}
                   >
                     <PlayArrowIcon fontSize="small" />
@@ -979,12 +1037,19 @@ export function DeploymentsPage() {
                 <Select
                   label="Product"
                   value={editor.product}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const nextProduct = e.target.value as EditorState['product']
                     setEditor((p) => ({
                       ...p,
-                      product: e.target.value as EditorState['product'],
+                      product: nextProduct,
+                      direction:
+                        nextProduct === 'CNC' && p.direction === 'SHORT'
+                          ? 'LONG'
+                          : p.direction,
+                      acknowledge_short_risk:
+                        nextProduct === 'CNC' ? false : p.acknowledge_short_risk,
                     }))
-                  }
+                  }}
                 >
                   <MenuItem value="CNC">CNC</MenuItem>
                   <MenuItem value="MIS">MIS</MenuItem>
@@ -995,18 +1060,87 @@ export function DeploymentsPage() {
                 <Select
                   label="Direction"
                   value={editor.direction}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const nextDir = e.target.value as EditorState['direction']
                     setEditor((p) => ({
                       ...p,
-                      direction: e.target.value as EditorState['direction'],
+                      direction: nextDir,
+                      product: nextDir === 'SHORT' ? 'MIS' : p.product,
+                      acknowledge_short_risk: nextDir === 'SHORT' ? p.acknowledge_short_risk : false,
                     }))
-                  }
+                  }}
                 >
                   <MenuItem value="LONG">LONG</MenuItem>
                   <MenuItem value="SHORT">SHORT</MenuItem>
                 </Select>
               </FormControl>
             </Stack>
+
+            {editor.direction === 'SHORT' ? (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={editor.acknowledge_short_risk}
+                    onChange={(e) =>
+                      setEditor((p) => ({
+                        ...p,
+                        acknowledge_short_risk: e.target.checked,
+                        product: 'MIS',
+                      }))
+                    }
+                  />
+                }
+                label={
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <span>Acknowledge short-selling risk (required)</span>
+                    <Tooltip title="Short deployments can amplify losses; only MIS is allowed.">
+                      <HelpOutlineIcon fontSize="small" />
+                    </Tooltip>
+                  </Stack>
+                }
+              />
+            ) : null}
+
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={editor.enter_immediately_on_start}
+                  onChange={(e) =>
+                    setEditor((p) => ({
+                      ...p,
+                      enter_immediately_on_start: e.target.checked,
+                      acknowledge_enter_immediately_risk: e.target.checked
+                        ? p.acknowledge_enter_immediately_risk
+                        : false,
+                    }))
+                  }
+                />
+              }
+              label={
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  <span>Enter immediately on start (advanced)</span>
+                  <Tooltip title="Enqueues an immediate evaluation on start; can trigger trades quickly.">
+                    <HelpOutlineIcon fontSize="small" />
+                  </Tooltip>
+                </Stack>
+              }
+            />
+            {editor.enter_immediately_on_start ? (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={editor.acknowledge_enter_immediately_risk}
+                    onChange={(e) =>
+                      setEditor((p) => ({
+                        ...p,
+                        acknowledge_enter_immediately_risk: e.target.checked,
+                      }))
+                    }
+                  />
+                }
+                label="I understand enter-on-start can cause immediate trades (required)"
+              />
+            ) : null}
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField
@@ -1147,7 +1281,15 @@ export function DeploymentsPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditorOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={() => void save()}>
+          <Button
+            variant="contained"
+            onClick={() => void save()}
+            disabled={
+              (editor.direction === 'SHORT' && !editor.acknowledge_short_risk) ||
+              (editor.enter_immediately_on_start &&
+                !editor.acknowledge_enter_immediately_risk)
+            }
+          >
             Save
           </Button>
         </DialogActions>
@@ -1193,6 +1335,127 @@ export function DeploymentsPage() {
             }}
           >
             Pause
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={startConfirmOpen}
+        onClose={() => setStartConfirmOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>{startConfirmMode === 'RESUME' ? 'Resume' : 'Start'} deployment</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Trading actions can have negative consequences (including losses). Confirm to
+              proceed.
+            </Typography>
+            {String((startConfirmTarget?.config ?? {}).direction ?? '').toUpperCase() ===
+            'SHORT' ? (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={startConfirmAckShort}
+                    onChange={(e) => setStartConfirmAckShort(e.target.checked)}
+                  />
+                }
+                label="I understand short-selling risks and accept responsibility."
+              />
+            ) : null}
+            {Boolean((startConfirmTarget?.config ?? {}).enter_immediately_on_start) ? (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={startConfirmAckEnter}
+                    onChange={(e) => setStartConfirmAckEnter(e.target.checked)}
+                  />
+                }
+                label="I understand “enter immediately on start” can trigger trades quickly."
+              />
+            ) : null}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStartConfirmOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={
+              (String((startConfirmTarget?.config ?? {}).direction ?? '').toUpperCase() ===
+                'SHORT' &&
+                !startConfirmAckShort) ||
+              (Boolean((startConfirmTarget?.config ?? {}).enter_immediately_on_start) &&
+                !startConfirmAckEnter)
+            }
+            onClick={() => {
+              if (!startConfirmTarget) return
+              void (async () => {
+                try {
+                  const res =
+                    startConfirmMode === 'RESUME'
+                      ? await resumeDeployment(startConfirmTarget.id)
+                      : await startDeployment(startConfirmTarget.id)
+                  setStartConfirmOpen(false)
+                  setStartConfirmTarget(null)
+                  await refresh()
+                  const symbols = (res.state?.exposure?.symbols ?? []) as any[]
+                  const hasBrokerExposure = symbols.some(
+                    (s) => Number(s?.broker_net_qty ?? 0) !== 0,
+                  )
+                  if (hasBrokerExposure) {
+                    setExposureWarnTarget(res)
+                    setExposureWarnOpen(true)
+                  }
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed')
+                }
+              })()
+            }}
+          >
+            Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={exposureWarnOpen}
+        onClose={() => setExposureWarnOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Existing exposure detected</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Existing broker positions were detected. Running this deployment may place
+              duplicate orders or increase exposure.
+            </Typography>
+            <Typography variant="body2">
+              Deployment: {exposureWarnTarget?.name ?? '—'}
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExposureWarnOpen(false)}>Keep running</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() => {
+              if (!exposureWarnTarget) return
+              void (async () => {
+                try {
+                  await pauseDeployment(exposureWarnTarget.id, 'Paused after exposure warning.')
+                  setExposureWarnOpen(false)
+                  setExposureWarnTarget(null)
+                  await refresh()
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed to pause')
+                }
+              })()
+            }}
+          >
+            Pause now
           </Button>
         </DialogActions>
       </Dialog>

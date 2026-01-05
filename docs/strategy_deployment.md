@@ -258,6 +258,9 @@ Base CRUD:
 - `DELETE /api/deployments/{deployment_id}`
 - `POST /api/deployments/{deployment_id}/start`
 - `POST /api/deployments/{deployment_id}/stop`
+- `POST /api/deployments/{deployment_id}/pause`
+- `POST /api/deployments/{deployment_id}/resume`
+- `POST /api/deployments/{deployment_id}/direction-mismatch/resolve`
 
 Observability / troubleshooting:
 - `GET /api/deployments/metrics` (job counts + oldest pending)
@@ -274,6 +277,21 @@ Deployment scheduler/worker runtime is opt-in (off by default) via env vars:
   - `once`: runs a single pass (useful for smoke testing)
 
 ### 11.3 Safety notes
+
+- **Market-hours gating (v3)**:
+  - Scheduler enqueues evaluation jobs only during market session hours.
+  - Session hours come from the Market Calendar DB (Settings → Market configuration), with sensible defaults.
+  - Daily proxy close and intraday windows are derived from the resolved session (not hardcoded 09:15/15:25/15:30).
+
+- **Pause semantics (v3)**:
+  - `PAUSED` deployments do not schedule/execute BAR_CLOSED / DAILY_PROXY jobs and `run-now` is blocked.
+  - Broker-side protections (e.g., disaster stop / GTT scaffolding) remain active.
+  - MIS square-off safety window can still run even when paused.
+
+- **Direction & exposure safety (v3)**:
+  - `direction=SHORT` is only allowed with `product=MIS` and requires explicit acknowledgement.
+  - On start/resume, SigmaTrader computes an exposure summary (broker net position + deployment exposure) for UI warnings.
+  - If a live deployment’s configured direction conflicts with an existing broker position, the deployment auto-pauses with `runtime_state=PAUSED_DIRECTION_MISMATCH` and requires an explicit operator resolution action.
 
 - Paper deployments create `orders` rows with `execution_target=PAPER` and `simulated=true`.
 - Orders created by deployments use `client_order_id` for idempotency (prevents double-fires on retries).

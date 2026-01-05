@@ -12,6 +12,24 @@ export type DeploymentUniverse = {
   symbols?: DeploymentUniverseSymbol[]
 }
 
+export type DeploymentExposureSymbol = {
+  exchange: string
+  symbol: string
+  broker_net_qty: number
+  broker_side: string
+  deployments_net_qty: number
+  deployments_side: string
+  combined_net_qty: number
+  combined_side: string
+}
+
+export type DeploymentExposureSummary = {
+  as_of_utc?: string
+  broker_name?: string
+  execution_target?: string
+  symbols?: DeploymentExposureSymbol[]
+}
+
 export type DeploymentState = {
   status: DeploymentStatus | string
   last_evaluated_at?: string | null
@@ -22,6 +40,10 @@ export type DeploymentState = {
   paused_at?: string | null
   resumed_at?: string | null
   pause_reason?: string | null
+  runtime_state?: string | null
+  last_decision?: string | null
+  last_decision_reason?: string | null
+  exposure?: DeploymentExposureSummary | null
 }
 
 export type DeploymentStateSummary = {
@@ -209,6 +231,24 @@ export async function resumeDeployment(id: number): Promise<StrategyDeployment> 
     const detail = await readApiError(res)
     throw new Error(
       `Failed to resume deployment (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as StrategyDeployment
+}
+
+export async function resolveDirectionMismatch(
+  id: number,
+  action: 'ADOPT_EXIT_ONLY' | 'FLATTEN_THEN_CONTINUE' | 'IGNORE',
+): Promise<StrategyDeployment> {
+  const res = await fetch(`/api/deployments/${id}/direction-mismatch/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  })
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to resolve direction mismatch (${res.status})${detail ? `: ${detail}` : ''}`,
     )
   }
   return (await res.json()) as StrategyDeployment

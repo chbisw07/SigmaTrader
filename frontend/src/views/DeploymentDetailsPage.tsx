@@ -8,11 +8,13 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Checkbox from '@mui/material/Checkbox'
 import Chip from '@mui/material/Chip'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
@@ -31,6 +33,7 @@ import {
   getDeploymentJobsMetrics,
   listDeploymentActions,
   pauseDeployment,
+  resolveDirectionMismatch,
   runDeploymentNow,
   resumeDeployment,
   startDeployment,
@@ -95,6 +98,15 @@ export function DeploymentDetailsPage() {
   const [runNowMsg, setRunNowMsg] = useState<string | null>(null)
   const [pauseDialogOpen, setPauseDialogOpen] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
+  const [mismatchResolveDialogOpen, setMismatchResolveDialogOpen] = useState(false)
+  const [mismatchResolveAction, setMismatchResolveAction] = useState<
+    'ADOPT_EXIT_ONLY' | 'FLATTEN_THEN_CONTINUE' | null
+  >(null)
+  const [startConfirmOpen, setStartConfirmOpen] = useState(false)
+  const [startConfirmMode, setStartConfirmMode] = useState<'START' | 'RESUME'>('START')
+  const [startConfirmAckShort, setStartConfirmAckShort] = useState(false)
+  const [startConfirmAckEnter, setStartConfirmAckEnter] = useState(false)
+  const [exposureWarnOpen, setExposureWarnOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     if (!Number.isFinite(deploymentId) || deploymentId <= 0) return
@@ -123,6 +135,44 @@ export function DeploymentDetailsPage() {
   const status = String(deployment?.state?.status ?? '').toUpperCase()
   const running = status === 'RUNNING'
   const paused = status === 'PAUSED'
+  const runtimeState = String(deployment?.state?.runtime_state ?? '').toUpperCase()
+  const exposureSymbols = (deployment?.state?.exposure?.symbols ??
+    []) as Array<Record<string, unknown>>
+  const hasBrokerExposure = exposureSymbols.some(
+    (s) => Number(s.broker_net_qty ?? 0) !== 0,
+  )
+  const hasDirectionMismatch = paused && runtimeState === 'PAUSED_DIRECTION_MISMATCH'
+
+  const runStartOrResume = useCallback(
+    async (mode: 'START' | 'RESUME') => {
+      if (!deployment) return
+      const dir = String((deployment.config ?? {}).direction ?? '').toUpperCase()
+      const enterOnStart = Boolean((deployment.config ?? {}).enter_immediately_on_start)
+      const needsShort = dir === 'SHORT'
+      const needsEnter = enterOnStart
+      if (needsShort || needsEnter) {
+        setStartConfirmMode(mode)
+        setStartConfirmAckShort(false)
+        setStartConfirmAckEnter(false)
+        setStartConfirmOpen(true)
+        return
+      }
+      try {
+        const res =
+          mode === 'RESUME'
+            ? await resumeDeployment(deployment.id)
+            : await startDeployment(deployment.id)
+        setDeployment(res)
+        const symbols = (res.state?.exposure?.symbols ?? []) as any[]
+        const hasExposure = symbols.some((s) => Number(s?.broker_net_qty ?? 0) !== 0)
+        if (hasExposure) setExposureWarnOpen(true)
+        await refresh()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed')
+      }
+    },
+    [deployment, refresh],
+  )
 
   const positions = useMemo(() => {
     return (deployment?.state_summary?.positions ?? []) as Array<Record<string, unknown>>
@@ -289,17 +339,9 @@ export function DeploymentDetailsPage() {
               startIcon={<PlayArrowIcon />}
               variant="outlined"
               onClick={() => {
-                if (!deployment) return
-                void (async () => {
-                  try {
-                    await resumeDeployment(deployment.id)
-                    await refresh()
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Failed to resume')
-                  }
-                })()
+                void runStartOrResume('RESUME')
               }}
-              disabled={!deployment || loading}
+              disabled={!deployment || loading || hasDirectionMismatch}
             >
               Resume
             </Button>
@@ -309,15 +351,7 @@ export function DeploymentDetailsPage() {
               startIcon={<PlayArrowIcon />}
               variant="outlined"
               onClick={() => {
-                if (!deployment) return
-                void (async () => {
-                  try {
-                    await startDeployment(deployment.id)
-                    await refresh()
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Failed to start')
-                  }
-                })()
+                void runStartOrResume('START')
               }}
               disabled={!deployment || loading}
             >
@@ -386,6 +420,120 @@ export function DeploymentDetailsPage() {
 
         {error ? <Alert severity="error">{error}</Alert> : null}
         {runNowMsg ? <Alert severity="success">{runNowMsg}</Alert> : null}
+        {hasBrokerExposure ? (
+          <Alert severity="warning">
+            <Stack spacing={0.5}>
+              <Typography variant="body2">
+                Existing broker exposure detected. Review before running to avoid duplicate
+                trades and unexpected losses.
+              </Typography>
+              <Stack spacing={0} sx={{ pl: 0.5 }}>
+                {exposureSymbols
+                  .filter((s) => Number(s.broker_net_qty ?? 0) !== 0)
+                  .slice(0, 6)
+                  .map((s, idx) => (
+                    <Typography
+                      key={String(s.symbol ?? idx)}
+                      variant="body2"
+                      color="text.secondary"
+                    >
+                      {String(s.exchange ?? '—')}:{String(s.symbol ?? '—')} — broker{' '}
+                      {String(s.broker_net_qty ?? 0)} ({String(s.broker_side ?? '—')})
+                      {Number(s.deployments_net_qty ?? 0) !== 0
+                        ? `; deployments ${String(s.deployments_net_qty ?? 0)}`
+                        : ''}
+                    </Typography>
+                  ))}
+              </Stack>
+            </Stack>
+          </Alert>
+        ) : null}
+        {hasDirectionMismatch ? (
+          <Alert severity="error">
+            <Stack spacing={1}>
+              <Typography variant="body2">
+                Direction mismatch detected with existing broker position(s). Resolve this
+                before resuming.
+              </Typography>
+              <Box sx={{ overflowX: 'auto' }}>
+                <Box component="table" sx={{ width: '100%', borderSpacing: 0 }}>
+                  <Box component="thead">
+                    <Box component="tr">
+                      <Box component="th" sx={{ textAlign: 'left', pr: 2 }}>
+                        Symbol
+                      </Box>
+                      <Box component="th" sx={{ textAlign: 'left', pr: 2 }}>
+                        Broker Qty
+                      </Box>
+                      <Box component="th" sx={{ textAlign: 'left', pr: 2 }}>
+                        Broker Side
+                      </Box>
+                    </Box>
+                  </Box>
+                  <Box component="tbody">
+                    {exposureSymbols
+                      .filter((s) => Number(s.broker_net_qty ?? 0) !== 0)
+                      .map((s, idx) => (
+                        <Box component="tr" key={String(s.symbol ?? idx)}>
+                          <Box component="td" sx={{ pr: 2 }}>
+                            {String(s.exchange ?? '—')}:{String(s.symbol ?? '—')}
+                          </Box>
+                          <Box component="td" sx={{ pr: 2 }}>
+                            {String(s.broker_net_qty ?? 0)}
+                          </Box>
+                          <Box component="td" sx={{ pr: 2 }}>
+                            {String(s.broker_side ?? '—')}
+                          </Box>
+                        </Box>
+                      ))}
+                  </Box>
+                </Box>
+              </Box>
+              <Stack direction="row" spacing={1} flexWrap="wrap">
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={() => {
+                    setMismatchResolveAction('ADOPT_EXIT_ONLY')
+                    setMismatchResolveDialogOpen(true)
+                  }}
+                >
+                  Adopt (exit-only)
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="warning"
+                  onClick={() => {
+                    setMismatchResolveAction('FLATTEN_THEN_CONTINUE')
+                    setMismatchResolveDialogOpen(true)
+                  }}
+                >
+                  Flatten then resume
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    if (!deployment) return
+                    void (async () => {
+                      try {
+                        await resolveDirectionMismatch(deployment.id, 'IGNORE')
+                        await refresh()
+                      } catch (err) {
+                        setError(
+                          err instanceof Error ? err.message : 'Failed to keep paused',
+                        )
+                      }
+                    })()
+                  }}
+                >
+                  Keep paused
+                </Button>
+              </Stack>
+            </Stack>
+          </Alert>
+        ) : null}
         {paused ? (
           <Alert
             severity="warning"
@@ -558,6 +706,158 @@ export function DeploymentDetailsPage() {
             }}
           >
             Pause
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={mismatchResolveDialogOpen}
+        onClose={() => setMismatchResolveDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Resolve direction mismatch</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              This can have negative consequences (including losses). Proceed only if you
+              understand the implication.
+            </Typography>
+            <Typography variant="body2">
+              Action: {mismatchResolveAction ?? '—'}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Adopt (exit-only) imports the existing broker position into this deployment
+              and only allows exits. Flatten then resume enqueues an immediate flatten
+              order and resumes normal operation afterwards.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMismatchResolveDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              if (!deployment || !mismatchResolveAction) return
+              void (async () => {
+                try {
+                  await resolveDirectionMismatch(deployment.id, mismatchResolveAction)
+                  setMismatchResolveDialogOpen(false)
+                  setMismatchResolveAction(null)
+                  await refresh()
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed to resolve')
+                }
+              })()
+            }}
+          >
+            Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={startConfirmOpen}
+        onClose={() => setStartConfirmOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>{startConfirmMode === 'RESUME' ? 'Resume' : 'Start'} deployment</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Trading actions can have negative consequences (including losses). Confirm to
+              proceed.
+            </Typography>
+            {String((deployment?.config ?? {}).direction ?? '').toUpperCase() === 'SHORT' ? (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={startConfirmAckShort}
+                    onChange={(e) => setStartConfirmAckShort(e.target.checked)}
+                  />
+                }
+                label="I understand short-selling risks and accept responsibility."
+              />
+            ) : null}
+            {Boolean((deployment?.config ?? {}).enter_immediately_on_start) ? (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={startConfirmAckEnter}
+                    onChange={(e) => setStartConfirmAckEnter(e.target.checked)}
+                  />
+                }
+                label="I understand “enter immediately on start” can trigger trades quickly."
+              />
+            ) : null}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStartConfirmOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={
+              (String((deployment?.config ?? {}).direction ?? '').toUpperCase() ===
+                'SHORT' &&
+                !startConfirmAckShort) ||
+              (Boolean((deployment?.config ?? {}).enter_immediately_on_start) &&
+                !startConfirmAckEnter)
+            }
+            onClick={() => {
+              if (!deployment) return
+              void (async () => {
+                try {
+                  const res =
+                    startConfirmMode === 'RESUME'
+                      ? await resumeDeployment(deployment.id)
+                      : await startDeployment(deployment.id)
+                  setDeployment(res)
+                  setStartConfirmOpen(false)
+                  const symbols = (res.state?.exposure?.symbols ?? []) as any[]
+                  const hasExposure = symbols.some((s) => Number(s?.broker_net_qty ?? 0) !== 0)
+                  if (hasExposure) setExposureWarnOpen(true)
+                  await refresh()
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed')
+                }
+              })()
+            }}
+          >
+            Confirm
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={exposureWarnOpen} onClose={() => setExposureWarnOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Existing exposure detected</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Existing broker positions were detected. Running this deployment may place
+              duplicate orders or increase exposure.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExposureWarnOpen(false)}>Keep running</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() => {
+              if (!deployment) return
+              void (async () => {
+                try {
+                  await pauseDeployment(deployment.id, 'Paused after exposure warning.')
+                  setExposureWarnOpen(false)
+                  await refresh()
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed to pause')
+                }
+              })()
+            }}
+          >
+            Pause now
           </Button>
         </DialogActions>
       </Dialog>
