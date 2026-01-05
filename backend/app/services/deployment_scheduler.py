@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from typing import Any, Iterator
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET, resolve_market_session
@@ -174,7 +174,10 @@ def enqueue_due_jobs_once(
     now_i = now_ist_naive(now_u)
 
     deps: list[StrategyDeployment] = (
-        db.query(StrategyDeployment).filter(StrategyDeployment.enabled.is_(True)).all()
+        db.query(StrategyDeployment)
+        .options(joinedload(StrategyDeployment.state))
+        .filter(StrategyDeployment.enabled.is_(True))
+        .all()
     )
     created = 0
     deduped = 0
@@ -183,12 +186,14 @@ def enqueue_due_jobs_once(
         payload = _load_deployment_payload(dep)
         cfg = payload.get("config") or {}
         tf = (cfg.get("timeframe") or dep.timeframe or "1d").strip()
+        status = str(getattr(dep.state, "status", None) or "STOPPED").upper()
+        product = str(cfg.get("product") or dep.product or "CNC").upper()
 
         symbols = resolve_deployment_symbols(db, dep)
         if not symbols:
             continue
 
-        if tf in INTRADAY_MINUTES:
+        if tf in INTRADAY_MINUTES and status == "RUNNING":
             for sym in symbols:
                 exchange = sym["exchange"]
                 symbol = sym["symbol"]
@@ -322,7 +327,7 @@ def enqueue_due_jobs_once(
                 continue
 
             base_tf = str(daily.get("base_timeframe") or "5m")
-            if base_tf in INTRADAY_MINUTES:
+            if base_tf in INTRADAY_MINUTES and status == "RUNNING":
                 for sym in symbols:
                     exchange = sym["exchange"]
                     symbol = sym["symbol"]
@@ -425,13 +430,11 @@ def enqueue_due_jobs_once(
                             cursor.last_emitted_bar_end_ts = bar_end_utc
                             db.add(cursor)
 
-            product = str(cfg.get("product") or dep.product or "CNC").upper()
-
             primary_exchange = symbols[0]["exchange"]
             session = resolve_market_session(
                 db, day=now_i.date(), exchange=primary_exchange
             )
-            if not session.is_trading_time(now_i):
+            if not session.is_trading_time(now_i) or status != "RUNNING":
                 continue
             if session.proxy_close_time is None or session.open_time is None:
                 continue
@@ -516,28 +519,46 @@ def enqueue_due_jobs_once(
                 else:
                     created += 1
 
-                if product == "MIS":
-                    job = enqueue_job(
-                        db,
-                        deployment_id=dep.id,
-                        owner_id=dep.owner_id,
-                        kind="WINDOW",
-                        dedupe_key=(
-                            f"DEP:{dep.id}:WINDOW:MIS_FLATTEN:{buy_dt_utc.date().isoformat()}"
-                        ),
-                        scheduled_for=buy_dt_utc,
-                        payload={
-                            "kind": "WINDOW",
-                            "window": "MIS_FLATTEN",
-                            "deployment_id": dep.id,
-                            "window_ist": buy_dt_ist.isoformat(),
-                            "window_utc": buy_dt_utc.isoformat(),
-                        },
-                    )
-                    if job is None:
-                        deduped += 1
-                    else:
-                        created += 1
+        # Safety invariant: MIS square-off runs even when a deployment is PAUSED.
+        if product == "MIS" and status in {"RUNNING", "PAUSED"}:
+            primary_exchange = symbols[0]["exchange"]
+            session = resolve_market_session(
+                db, day=now_i.date(), exchange=primary_exchange
+            )
+            if not session.is_trading_time(now_i):
+                continue
+            if session.proxy_close_time is None or session.close_time is None:
+                continue
+            buy_dt_ist = datetime.combine(now_i.date(), session.proxy_close_time)
+            close_dt_ist = datetime.combine(
+                now_i.date(), session.close_time  # type: ignore[arg-type]
+            )
+            if (
+                now_i >= (buy_dt_ist + timedelta(seconds=tolerance_seconds))
+                and now_i <= close_dt_ist
+            ):
+                buy_dt_utc = ist_naive_to_utc(buy_dt_ist)
+                job = enqueue_job(
+                    db,
+                    deployment_id=dep.id,
+                    owner_id=dep.owner_id,
+                    kind="WINDOW",
+                    dedupe_key=(
+                        f"DEP:{dep.id}:WINDOW:MIS_FLATTEN:{buy_dt_utc.date().isoformat()}"
+                    ),
+                    scheduled_for=buy_dt_utc,
+                    payload={
+                        "kind": "WINDOW",
+                        "window": "MIS_FLATTEN",
+                        "deployment_id": dep.id,
+                        "window_ist": buy_dt_ist.isoformat(),
+                        "window_utc": buy_dt_utc.isoformat(),
+                    },
+                )
+                if job is None:
+                    deduped += 1
+                else:
+                    created += 1
 
     return EnqueueResult(jobs_created=created, jobs_deduped=deduped)
 

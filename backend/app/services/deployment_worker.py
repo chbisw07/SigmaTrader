@@ -118,6 +118,49 @@ def execute_job_once(
         db.commit()
         return True
 
+    payload = _json_load(job.payload_json)
+    status = str(getattr(dep.state, "status", None) or "STOPPED").upper()
+    allow_when_paused = (
+        str(job.kind or "").upper() == "WINDOW"
+        and str(payload.get("window") or "").upper() == "MIS_FLATTEN"
+    )
+    if status != "RUNNING" and not (status == "PAUSED" and allow_when_paused):
+        emit_deployment_event(
+            db,
+            deployment_id=job.deployment_id,
+            job_id=job.id,
+            kind="EVAL_SKIPPED",
+            payload={
+                "reason": "paused" if status == "PAUSED" else "not_running",
+                "status": status,
+                "job_kind": str(job.kind),
+            },
+            created_at=ts,
+        )
+        if dep.state is not None:
+            dep.state.last_eval_at = ts
+            dep.state.last_eval_bar_end_ts = job.scheduled_for
+            if status == "PAUSED":
+                dep.state.runtime_state = "PAUSED"
+                dep.state.last_decision = "PAUSED"
+            else:
+                dep.state.last_decision = "SKIPPED"
+            dep.state.last_decision_reason = (
+                dep.state.pause_reason
+                if status == "PAUSED" and dep.state.pause_reason
+                else "Deployment is not running."
+            )
+            db.add(dep.state)
+        mark_job_done(db, job=job, now=ts)
+        release_deployment_lock(
+            db,
+            deployment_id=job.deployment_id,
+            worker_id=worker_id,
+            now=ts,
+        )
+        db.commit()
+        return True
+
     try:
         emit_deployment_event(
             db,
@@ -161,7 +204,6 @@ def execute_job_once(
             dep.state.updated_at = ts
             db.add(dep.state)
 
-        payload = _json_load(job.payload_json)
         result = process_deployment_job(
             db,
             settings=get_settings(),

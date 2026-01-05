@@ -165,6 +165,13 @@ class StrategyDeploymentStateRead(BaseModel):
     last_error: Optional[str] = None
     started_at: Optional[datetime] = None
     stopped_at: Optional[datetime] = None
+    paused_at: Optional[datetime] = None
+    resumed_at: Optional[datetime] = None
+    pause_reason: Optional[str] = None
+
+
+class StrategyDeploymentPauseRequest(BaseModel):
+    reason: Optional[str] = None
 
 
 class StrategyDeploymentStateSummary(BaseModel):
@@ -214,6 +221,9 @@ class StrategyDeploymentRead(BaseModel):
             last_error=getattr(state, "last_error", None),
             started_at=getattr(state, "started_at", None),
             stopped_at=getattr(state, "stopped_at", None),
+            paused_at=getattr(state, "paused_at", None),
+            resumed_at=getattr(state, "resumed_at", None),
+            pause_reason=getattr(state, "pause_reason", None),
         )
 
         summary = StrategyDeploymentStateSummary()

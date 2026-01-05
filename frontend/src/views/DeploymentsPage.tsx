@@ -22,6 +22,7 @@ import {
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import AddIcon from '@mui/icons-material/Add'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import PauseIcon from '@mui/icons-material/Pause'
 import StopIcon from '@mui/icons-material/Stop'
 import DeleteIcon from '@mui/icons-material/Delete'
 import EditIcon from '@mui/icons-material/Edit'
@@ -37,6 +38,8 @@ import {
   createDeployment,
   deleteDeployment,
   listDeployments,
+  pauseDeployment,
+  resumeDeployment,
   startDeployment,
   stopDeployment,
   updateDeployment,
@@ -306,6 +309,9 @@ export function DeploymentsPage() {
   const [brokerFilter, setBrokerFilter] = useState<
     'ALL' | EditorState['broker_name']
   >('ALL')
+  const [pauseDialogOpen, setPauseDialogOpen] = useState(false)
+  const [pauseTarget, setPauseTarget] = useState<StrategyDeployment | null>(null)
+  const [pauseReason, setPauseReason] = useState('')
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -463,6 +469,7 @@ export function DeploymentsPage() {
         renderCell: (p) => {
           const dep = p.row as StrategyDeployment
           const running = String(dep.state?.status ?? '').toUpperCase() === 'RUNNING'
+          const paused = String(dep.state?.status ?? '').toUpperCase() === 'PAUSED'
           return (
             <Stack direction="row" spacing={0.5} alignItems="center">
               <Tooltip title="Open details">
@@ -473,14 +480,66 @@ export function DeploymentsPage() {
                   <OpenInNewIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title={running ? 'Stop' : 'Start'}>
+              {running ? (
+                <Tooltip title="Pause (evaluations stop; protections remain active)">
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      setPauseTarget(dep)
+                      setPauseReason(dep.state?.pause_reason ?? '')
+                      setPauseDialogOpen(true)
+                    }}
+                  >
+                    <PauseIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              {paused ? (
+                <Tooltip title="Resume">
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          await resumeDeployment(dep.id)
+                          await refresh()
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Failed')
+                        }
+                      })()
+                    }}
+                  >
+                    <PlayArrowIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              {!running && !paused ? (
+                <Tooltip title="Start">
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          await startDeployment(dep.id)
+                          await refresh()
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Failed')
+                        }
+                      })()
+                    }}
+                  >
+                    <PlayArrowIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              <Tooltip title="Stop">
                 <IconButton
                   size="small"
+                  disabled={!running && !paused}
                   onClick={() => {
                     void (async () => {
                       try {
-                        if (running) await stopDeployment(dep.id)
-                        else await startDeployment(dep.id)
+                        await stopDeployment(dep.id)
                         await refresh()
                       } catch (err) {
                         setError(err instanceof Error ? err.message : 'Failed')
@@ -488,11 +547,7 @@ export function DeploymentsPage() {
                     })()
                   }}
                 >
-                  {running ? (
-                    <StopIcon fontSize="small" />
-                  ) : (
-                    <PlayArrowIcon fontSize="small" />
-                  )}
+                  <StopIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
               <Tooltip title="Edit">
@@ -1094,6 +1149,50 @@ export function DeploymentsPage() {
           <Button onClick={() => setEditorOpen(false)}>Cancel</Button>
           <Button variant="contained" onClick={() => void save()}>
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={pauseDialogOpen}
+        onClose={() => setPauseDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Pause deployment</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Pausing stops strategy evaluations and new entries/exits, but any broker-side
+              protections (like disaster stop/GTT) and MIS square-off remain active.
+            </Typography>
+            <TextField
+              label="Reason (optional)"
+              value={pauseReason}
+              onChange={(e) => setPauseReason(e.target.value)}
+              fullWidth
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPauseDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              if (!pauseTarget) return
+              void (async () => {
+                try {
+                  await pauseDeployment(pauseTarget.id, pauseReason)
+                  setPauseDialogOpen(false)
+                  setPauseTarget(null)
+                  await refresh()
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed to pause')
+                }
+              })()
+            }}
+          >
+            Pause
           </Button>
         </DialogActions>
       </Dialog>

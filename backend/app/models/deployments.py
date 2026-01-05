@@ -169,6 +169,9 @@ class StrategyDeploymentState(Base):
 
     started_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
     stopped_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    paused_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    resumed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    pause_reason: Mapped[Optional[str]] = mapped_column(String(255))
 
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(),

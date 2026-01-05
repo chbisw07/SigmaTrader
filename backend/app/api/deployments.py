@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.auth import get_current_user
@@ -27,10 +27,12 @@ from app.schemas.deployments import (
     StrategyDeploymentCreate,
     StrategyDeploymentEventRead,
     StrategyDeploymentJobsMetrics,
+    StrategyDeploymentPauseRequest,
     StrategyDeploymentRead,
     StrategyDeploymentUpdate,
 )
 from app.services.alert_expression_dsl import parse_expression
+from app.services.deployment_event_log import emit_deployment_event
 from app.services.deployment_jobs import enqueue_job
 from app.services.deployment_scheduler import (
     DEFAULT_LATE_TOLERANCE_SECONDS,
@@ -312,6 +314,11 @@ def run_deployment_now(
     user: User = Depends(get_current_user),
 ) -> dict:
     dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    if dep.state is not None and str(dep.state.status or "").upper() == "PAUSED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Deployment is paused. Resume it before running now.",
+        )
     payload = {}
     try:
         payload = json.loads(dep.config_json or "{}")
@@ -586,12 +593,14 @@ def update_deployment(
         if dep.state is not None:
             now = datetime.now(UTC)
             if dep.enabled:
-                dep.state.status = "RUNNING"
+                if str(dep.state.status or "").upper() != "PAUSED":
+                    dep.state.status = "RUNNING"
                 dep.state.started_at = dep.state.started_at or now
                 dep.state.stopped_at = None
             else:
                 dep.state.status = "STOPPED"
                 dep.state.stopped_at = now
+                dep.state.pause_reason = None
 
     db.add(dep)
     db.commit()
@@ -610,10 +619,25 @@ def start_deployment(
     if dep.state is None:
         dep.state = StrategyDeploymentState(deployment_id=dep.id, status="RUNNING")
     now = datetime.now(UTC)
+    prev_status = str(dep.state.status or "").upper()
+    if prev_status == "PAUSED":
+        dep.state.resumed_at = now
     dep.state.status = "RUNNING"
     dep.state.started_at = dep.state.started_at or now
     dep.state.stopped_at = None
     dep.state.last_error = None
+    dep.state.runtime_state = dep.state.runtime_state or "FLAT"
+    dep.state.last_decision = "RESUMED" if prev_status == "PAUSED" else "STARTED"
+    dep.state.last_decision_reason = (
+        "Resumed by operator." if prev_status == "PAUSED" else "Started by operator."
+    )
+    emit_deployment_event(
+        db,
+        deployment_id=dep.id,
+        kind="RESUMED" if prev_status == "PAUSED" else "STARTED",
+        payload={"reason": dep.state.pause_reason},
+        created_at=now,
+    )
     db.add(dep)
     db.commit()
     dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
@@ -633,6 +657,79 @@ def stop_deployment(
     now = datetime.now(UTC)
     dep.state.status = "STOPPED"
     dep.state.stopped_at = now
+    dep.state.pause_reason = None
+    dep.state.runtime_state = "FLAT"
+    dep.state.last_decision = "STOPPED"
+    dep.state.last_decision_reason = "Stopped by operator."
+    emit_deployment_event(
+        db,
+        deployment_id=dep.id,
+        kind="STOPPED",
+        payload={},
+        created_at=now,
+    )
+    db.add(dep)
+    db.commit()
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    return StrategyDeploymentRead.from_model(dep)
+
+
+@router.post("/{deployment_id}/pause", response_model=StrategyDeploymentRead)
+def pause_deployment(
+    deployment_id: int,
+    payload: StrategyDeploymentPauseRequest | None = Body(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StrategyDeploymentRead:
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    if dep.state is None:
+        dep.state = StrategyDeploymentState(deployment_id=dep.id, status="STOPPED")
+    now = datetime.now(UTC)
+    reason = str(getattr(payload, "reason", "") or "").strip() or None
+    dep.state.status = "PAUSED"
+    dep.state.paused_at = dep.state.paused_at or now
+    dep.state.pause_reason = reason
+    dep.state.runtime_state = "PAUSED"
+    dep.state.last_decision = "PAUSED"
+    dep.state.last_decision_reason = reason or "Paused by operator."
+    emit_deployment_event(
+        db,
+        deployment_id=dep.id,
+        kind="PAUSED",
+        payload={"reason": reason},
+        created_at=now,
+    )
+    db.add(dep)
+    db.commit()
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    return StrategyDeploymentRead.from_model(dep)
+
+
+@router.post("/{deployment_id}/resume", response_model=StrategyDeploymentRead)
+def resume_deployment(
+    deployment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StrategyDeploymentRead:
+    dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
+    dep.enabled = True
+    if dep.state is None:
+        dep.state = StrategyDeploymentState(deployment_id=dep.id, status="RUNNING")
+    now = datetime.now(UTC)
+    dep.state.status = "RUNNING"
+    dep.state.resumed_at = now
+    dep.state.stopped_at = None
+    dep.state.last_error = None
+    dep.state.runtime_state = dep.state.runtime_state or "FLAT"
+    dep.state.last_decision = "RESUMED"
+    dep.state.last_decision_reason = "Resumed by operator."
+    emit_deployment_event(
+        db,
+        deployment_id=dep.id,
+        kind="RESUMED",
+        payload={"reason": dep.state.pause_reason},
+        created_at=now,
+    )
     db.add(dep)
     db.commit()
     dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)

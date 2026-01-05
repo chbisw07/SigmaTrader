@@ -1,6 +1,7 @@
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import PauseIcon from '@mui/icons-material/Pause'
 import StopIcon from '@mui/icons-material/Stop'
 import BoltIcon from '@mui/icons-material/Bolt'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -29,7 +30,9 @@ import {
   getDeployment,
   getDeploymentJobsMetrics,
   listDeploymentActions,
+  pauseDeployment,
   runDeploymentNow,
+  resumeDeployment,
   startDeployment,
   stopDeployment,
   type DeploymentAction,
@@ -90,6 +93,8 @@ export function DeploymentDetailsPage() {
   const [actionDialogOpen, setActionDialogOpen] = useState(false)
   const [selectedAction, setSelectedAction] = useState<DeploymentAction | null>(null)
   const [runNowMsg, setRunNowMsg] = useState<string | null>(null)
+  const [pauseDialogOpen, setPauseDialogOpen] = useState(false)
+  const [pauseReason, setPauseReason] = useState('')
 
   const refresh = useCallback(async () => {
     if (!Number.isFinite(deploymentId) || deploymentId <= 0) return
@@ -115,7 +120,9 @@ export function DeploymentDetailsPage() {
     void refresh()
   }, [refresh])
 
-  const running = String(deployment?.state?.status ?? '').toUpperCase() === 'RUNNING'
+  const status = String(deployment?.state?.status ?? '').toUpperCase()
+  const running = status === 'RUNNING'
+  const paused = status === 'PAUSED'
 
   const positions = useMemo(() => {
     return (deployment?.state_summary?.positions ?? []) as Array<Record<string, unknown>>
@@ -262,52 +269,110 @@ export function DeploymentDetailsPage() {
                 : 'filled'
             }
           />
+          {running ? (
+            <Button
+              size="small"
+              startIcon={<PauseIcon />}
+              variant="outlined"
+              onClick={() => {
+                if (!deployment) return
+                setPauseReason(deployment.state?.pause_reason ?? '')
+                setPauseDialogOpen(true)
+              }}
+              disabled={!deployment || loading}
+            >
+              Pause
+            </Button>
+          ) : paused ? (
+            <Button
+              size="small"
+              startIcon={<PlayArrowIcon />}
+              variant="outlined"
+              onClick={() => {
+                if (!deployment) return
+                void (async () => {
+                  try {
+                    await resumeDeployment(deployment.id)
+                    await refresh()
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to resume')
+                  }
+                })()
+              }}
+              disabled={!deployment || loading}
+            >
+              Resume
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              startIcon={<PlayArrowIcon />}
+              variant="outlined"
+              onClick={() => {
+                if (!deployment) return
+                void (async () => {
+                  try {
+                    await startDeployment(deployment.id)
+                    await refresh()
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to start')
+                  }
+                })()
+              }}
+              disabled={!deployment || loading}
+            >
+              Start
+            </Button>
+          )}
           <Button
             size="small"
-            startIcon={running ? <StopIcon /> : <PlayArrowIcon />}
+            startIcon={<StopIcon />}
             variant="outlined"
             onClick={() => {
               if (!deployment) return
               void (async () => {
                 try {
-                  if (running) await stopDeployment(deployment.id)
-                  else await startDeployment(deployment.id)
+                  await stopDeployment(deployment.id)
                   await refresh()
                 } catch (err) {
-                  setError(err instanceof Error ? err.message : 'Failed to toggle')
+                  setError(err instanceof Error ? err.message : 'Failed to stop')
                 }
               })()
             }}
-            disabled={!deployment || loading}
+            disabled={!deployment || loading || (!running && !paused)}
           >
-            {running ? 'Stop' : 'Start'}
+            Stop
           </Button>
-          <Button
-            size="small"
-            startIcon={<BoltIcon />}
-            variant="contained"
-            onClick={() => {
-              if (!deployment) return
-              void (async () => {
-                setRunNowMsg(null)
-                try {
-                  const res = await runDeploymentNow(deployment.id)
-                  const when = res.scheduled_for ? fmtTs(String(res.scheduled_for)) : '—'
-                  setRunNowMsg(
-                    res.enqueued
-                      ? `Enqueued evaluation job for ${when}`
-                      : 'Job already queued for this bar (deduped).',
-                  )
-                  await refresh()
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : 'Failed to enqueue')
-                }
-              })()
-            }}
-            disabled={!deployment || loading}
-          >
-            Run now
-          </Button>
+          <Tooltip title={paused ? 'Resume before running now.' : 'Enqueue an evaluation job immediately.'}>
+            <span>
+              <Button
+                size="small"
+                startIcon={<BoltIcon />}
+                variant="contained"
+                onClick={() => {
+                  if (!deployment) return
+                  void (async () => {
+                    setRunNowMsg(null)
+                    try {
+                      const res = await runDeploymentNow(deployment.id)
+                      const when = res.scheduled_for ? fmtTs(String(res.scheduled_for)) : '—'
+                      setRunNowMsg(
+                        res.enqueued
+                          ? `Enqueued evaluation job for ${when}`
+                          : 'Job already queued for this bar (deduped).',
+                      )
+                      await refresh()
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'Failed to enqueue')
+                    }
+                  })()
+                }}
+                disabled={!deployment || loading || paused}
+              >
+                Run now
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             size="small"
             startIcon={<RefreshIcon />}
@@ -321,6 +386,22 @@ export function DeploymentDetailsPage() {
 
         {error ? <Alert severity="error">{error}</Alert> : null}
         {runNowMsg ? <Alert severity="success">{runNowMsg}</Alert> : null}
+        {paused ? (
+          <Alert
+            severity="warning"
+            action={
+              <Tooltip title="While paused, evaluations stop but broker-side protections and MIS square-off remain active.">
+                <IconButton size="small">
+                  <HelpOutlineIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            }
+          >
+            Paused
+            {deployment?.state?.paused_at ? ` at ${fmtTs(deployment.state.paused_at)}` : ''}
+            {deployment?.state?.pause_reason ? ` — ${deployment.state.pause_reason}` : ''}
+          </Alert>
+        ) : null}
 
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Stack spacing={2}>
@@ -338,6 +419,12 @@ export function DeploymentDetailsPage() {
                 label={`Open positions: ${deployment?.state_summary?.open_positions ?? 0}`}
                 variant="outlined"
               />
+              {paused ? (
+                <Chip
+                  label={`Paused at: ${fmtTs(deployment?.state?.paused_at ?? null)}`}
+                  variant="outlined"
+                />
+              ) : null}
               {metrics?.oldest_pending_scheduled_for ? (
                 <Chip
                   label={`Oldest pending: ${fmtTs(metrics.oldest_pending_scheduled_for)} (${fmtAge(metrics.oldest_pending_scheduled_for)})`}
@@ -429,6 +516,49 @@ export function DeploymentDetailsPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setHelpOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={pauseDialogOpen}
+        onClose={() => setPauseDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Pause deployment</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ pt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Pausing stops strategy evaluations and new entries/exits, but any broker-side
+              protections (like disaster stop/GTT) and MIS square-off remain active.
+            </Typography>
+            <TextField
+              label="Reason (optional)"
+              value={pauseReason}
+              onChange={(e) => setPauseReason(e.target.value)}
+              fullWidth
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPauseDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              if (!deployment) return
+              void (async () => {
+                try {
+                  await pauseDeployment(deployment.id, pauseReason)
+                  setPauseDialogOpen(false)
+                  await refresh()
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Failed to pause')
+                }
+              })()
+            }}
+          >
+            Pause
+          </Button>
         </DialogActions>
       </Dialog>
 

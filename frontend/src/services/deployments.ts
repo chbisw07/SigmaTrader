@@ -19,6 +19,9 @@ export type DeploymentState = {
   last_error?: string | null
   started_at?: string | null
   stopped_at?: string | null
+  paused_at?: string | null
+  resumed_at?: string | null
+  pause_reason?: string | null
 }
 
 export type DeploymentStateSummary = {
@@ -182,6 +185,35 @@ export async function stopDeployment(id: number): Promise<StrategyDeployment> {
   return (await res.json()) as StrategyDeployment
 }
 
+export async function pauseDeployment(
+  id: number,
+  reason?: string,
+): Promise<StrategyDeployment> {
+  const res = await fetch(`/api/deployments/${id}/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: reason ?? null }),
+  })
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to pause deployment (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as StrategyDeployment
+}
+
+export async function resumeDeployment(id: number): Promise<StrategyDeployment> {
+  const res = await fetch(`/api/deployments/${id}/resume`, { method: 'POST' })
+  if (!res.ok) {
+    const detail = await readApiError(res)
+    throw new Error(
+      `Failed to resume deployment (${res.status})${detail ? `: ${detail}` : ''}`,
+    )
+  }
+  return (await res.json()) as StrategyDeployment
+}
+
 export async function runDeploymentNow(id: number): Promise<{
   enqueued: boolean
   scheduled_for?: string
@@ -222,4 +254,3 @@ export async function getDeploymentJobsMetrics(id: number): Promise<DeploymentJo
   }
   return (await res.json()) as DeploymentJobsMetrics
 }
-
