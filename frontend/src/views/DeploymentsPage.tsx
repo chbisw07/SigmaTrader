@@ -26,6 +26,7 @@ import StopIcon from '@mui/icons-material/Stop'
 import DeleteIcon from '@mui/icons-material/Delete'
 import EditIcon from '@mui/icons-material/Edit'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import Autocomplete from '@mui/material/Autocomplete'
 import IconButton from '@mui/material/IconButton'
 import Chip from '@mui/material/Chip'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
@@ -44,6 +45,7 @@ import {
   type StrategyDeployment,
 } from '../services/deployments'
 import { listGroups } from '../services/groups'
+import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 
 type DeploymentPrefill = {
   kind: DeploymentKind
@@ -296,6 +298,9 @@ export function DeploymentsPage() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editor, setEditor] = useState<EditorState>(() => defaultEditorState())
   const [groups, setGroups] = useState<Array<{ id: number; name: string }>>([])
+  const [symbolOptions, setSymbolOptions] = useState<MarketSymbol[]>([])
+  const [symbolOptionsLoading, setSymbolOptionsLoading] = useState(false)
+  const [symbolOptionsError, setSymbolOptionsError] = useState<string | null>(null)
   const [kindFilter, setKindFilter] = useState<DeploymentKind | 'ALL'>('ALL')
   const [execFilter, setExecFilter] = useState<'ALL' | 'PAPER' | 'LIVE'>('ALL')
   const [brokerFilter, setBrokerFilter] = useState<
@@ -337,6 +342,48 @@ export function DeploymentsPage() {
       }
     })()
   }, [])
+
+  useEffect(() => {
+    if (!editorOpen) return
+    if (editor.kind !== 'STRATEGY') return
+
+    const q = editor.symbol.trim()
+    if (q.length < 1) {
+      setSymbolOptions([])
+      setSymbolOptionsError(null)
+      return
+    }
+
+    let active = true
+    setSymbolOptionsLoading(true)
+    setSymbolOptionsError(null)
+    const id = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await searchMarketSymbols({
+            q,
+            exchange: editor.exchange.trim().toUpperCase() || undefined,
+            limit: 30,
+          })
+          if (!active) return
+          setSymbolOptions(res)
+        } catch (err) {
+          if (!active) return
+          setSymbolOptions([])
+          setSymbolOptionsError(
+            err instanceof Error ? err.message : 'Failed to search symbols',
+          )
+        } finally {
+          if (!active) return
+          setSymbolOptionsLoading(false)
+        }
+      })()
+    }, 200)
+    return () => {
+      active = false
+      window.clearTimeout(id)
+    }
+  }, [editor.exchange, editor.kind, editor.symbol, editorOpen])
 
   const filteredDeployments = useMemo(() => {
     const getCfgStr = (dep: StrategyDeployment, key: string): string => {
@@ -671,11 +718,75 @@ export function DeploymentsPage() {
                   onChange={(e) => setEditor((p) => ({ ...p, exchange: e.target.value }))}
                   fullWidth
                 />
-                <TextField
-                  label="Symbol"
-                  value={editor.symbol}
-                  onChange={(e) => setEditor((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))}
-                  fullWidth
+                <Autocomplete<MarketSymbol, false, false, true>
+                  freeSolo
+                  clearOnBlur={false}
+                  options={symbolOptions}
+                  loading={symbolOptionsLoading}
+                  value={
+                    symbolOptions.find(
+                      (o) =>
+                        o.symbol.toUpperCase() === editor.symbol.trim().toUpperCase()
+                        && o.exchange.toUpperCase() === editor.exchange.trim().toUpperCase(),
+                    ) ?? null
+                  }
+                  onChange={(_e, value) => {
+                    if (typeof value === 'string') {
+                      setEditor((p) => ({ ...p, symbol: value.toUpperCase() }))
+                      return
+                    }
+                    if (value?.exchange) {
+                      setEditor((p) => ({
+                        ...p,
+                        exchange: value.exchange.toUpperCase(),
+                        symbol: value.symbol.toUpperCase(),
+                      }))
+                      return
+                    }
+                    if (value?.symbol) {
+                      setEditor((p) => ({ ...p, symbol: value.symbol.toUpperCase() }))
+                    }
+                  }}
+                  inputValue={editor.symbol}
+                  onInputChange={(_e, value) =>
+                    setEditor((p) => ({ ...p, symbol: value.toUpperCase() }))
+                  }
+                  getOptionLabel={(o) => (typeof o === 'string' ? o : o.symbol)}
+                  isOptionEqualToValue={(a, b) =>
+                    typeof b === 'string'
+                      ? a.symbol === b
+                      : a.symbol === b.symbol && a.exchange === b.exchange
+                  }
+                  renderOption={(props, option) => (
+                    <li {...props} key={`${option.exchange}:${option.symbol}`}>
+                      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                        <Typography variant="body2">
+                          {option.symbol}{' '}
+                          <Typography
+                            component="span"
+                            variant="caption"
+                            color="text.secondary"
+                          >
+                            ({option.exchange})
+                          </Typography>
+                        </Typography>
+                        {option.name ? (
+                          <Typography variant="caption" color="text.secondary">
+                            {option.name}
+                          </Typography>
+                        ) : null}
+                      </Box>
+                    </li>
+                  )}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Symbol"
+                      fullWidth
+                      helperText={symbolOptionsError ?? undefined}
+                      error={!!symbolOptionsError}
+                    />
+                  )}
                 />
               </Stack>
             ) : (
