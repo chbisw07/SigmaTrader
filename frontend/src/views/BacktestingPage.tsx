@@ -49,6 +49,11 @@ import {
 } from '../services/deployments'
 import { useTimeSettings } from '../timeSettingsContext'
 import { parseBackendDate } from '../utils/datetime'
+import {
+  computeClosedTradeAnalysisRows,
+  computeEquityPeriodPnlRows,
+  computeTradePeriodSummaryRows,
+} from '../utils/backtestAnalysis'
 
 import backtestingHelpText from '../../../docs/backtesting_page_help.md?raw'
 import portfolioBacktestingHelpText from '../../../docs/backtesting_portfolio_help.md?raw'
@@ -4044,10 +4049,12 @@ function StrategyRunEquityCard({
   displayTimeZone: 'LOCAL' | string
 }) {
   const [showTrades, setShowTrades] = useState(false)
+  const [showAnalysis, setShowAnalysis] = useState(false)
   const [viewportHeight, setViewportHeight] = useState(() =>
     typeof window === 'undefined' ? 900 : window.innerHeight,
   )
   const result = (run.result as Record<string, unknown> | null | undefined) ?? null
+  const meta = (result?.meta as Record<string, unknown> | undefined) ?? null
   const series = (result?.series as Record<string, unknown> | undefined) ?? null
   const metrics = (result?.metrics as Record<string, unknown> | undefined) ?? null
   const tradeStats = (result?.trade_stats as Record<string, unknown> | undefined) ?? null
@@ -4216,8 +4223,139 @@ function StrategyRunEquityCard({
     ]
   }, [displayTimeZone])
 
+  const equityWeeklyRows = useMemo(() => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    return computeEquityPeriodPnlRows(ts, equity, 'WEEK')
+  }, [series])
+
+  const equityMonthlyRows = useMemo(() => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    return computeEquityPeriodPnlRows(ts, equity, 'MONTH')
+  }, [series])
+
+  const closedTrades = useMemo(() => {
+    const sym = String(meta?.symbol ?? '')
+    const rows = trades.map((t) => (t ?? {}) as Record<string, unknown>)
+    return computeClosedTradeAnalysisRows(rows, { defaultSymbol: sym })
+  }, [meta, trades])
+
+  const monthlyTradeSummaryRows = useMemo(
+    () => computeTradePeriodSummaryRows(closedTrades, 'MONTH'),
+    [closedTrades],
+  )
+
+  const analysisEquityPeriodColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'period', headerName: 'Period', width: 110 },
+      { field: 'start_ymd', headerName: 'Start', width: 110 },
+      { field: 'end_ymd', headerName: 'End', width: 110 },
+      {
+        field: 'pnl',
+        headerName: 'P&L',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'pnl_pct',
+        headerName: 'P&L %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'end_equity',
+        headerName: 'End equity',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+    ]
+  }, [])
+
+  const analysisTradeSummaryColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'period', headerName: 'Month', width: 110 },
+      { field: 'trades', headerName: 'Trades', width: 90, type: 'number' },
+      { field: 'wins', headerName: 'Wins', width: 80, type: 'number' },
+      { field: 'losses', headerName: 'Losses', width: 90, type: 'number' },
+      {
+        field: 'pnl_inr',
+        headerName: 'P&L (₹)',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'avg_pnl_pct',
+        headerName: 'Avg %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'avg_hold_days',
+        headerName: 'Avg age (d)',
+        width: 110,
+        type: 'number',
+        valueFormatter: (value) => {
+          const n = Number((value as { value?: unknown })?.value ?? value)
+          return Number.isFinite(n) ? n.toFixed(1) : '—'
+        },
+      },
+    ]
+  }, [])
+
+  const analysisClosedTradeColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'month', headerName: 'Month', width: 110 },
+      { field: 'symbol', headerName: 'Symbol', width: 140 },
+      {
+        field: 'entry_ts',
+        headerName: 'Entry',
+        width: 220,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      {
+        field: 'exit_ts',
+        headerName: 'Exit',
+        width: 220,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      { field: 'side', headerName: 'Side', width: 90 },
+      { field: 'qty', headerName: 'Qty', width: 80, type: 'number' },
+      {
+        field: 'pnl_pct',
+        headerName: 'P&L %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'pnl_inr',
+        headerName: 'P&L (₹)',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'hold_days',
+        headerName: 'Age (d)',
+        width: 100,
+        type: 'number',
+        valueFormatter: (value) => {
+          const n = Number((value as { value?: unknown })?.value ?? value)
+          return Number.isFinite(n) ? String(n) : '—'
+        },
+      },
+      { field: 'reason', headerName: 'Reason', minWidth: 140, flex: 1 },
+    ]
+  }, [displayTimeZone])
+
   useEffect(() => {
     setShowTrades(false)
+    setShowAnalysis(false)
   }, [run.id])
 
   useEffect(() => {
@@ -4226,7 +4364,7 @@ function StrategyRunEquityCard({
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  const chartsExpanded = !showTrades || tradeRows.length === 0
+  const chartsExpanded = (!showTrades || tradeRows.length === 0) && !showAnalysis
   const { equityHeight, drawdownHeight } = useMemo(() => {
     if (!chartsExpanded) return { equityHeight: 260, drawdownHeight: 180 }
     const available = Math.max(520, viewportHeight - 420)
@@ -4256,6 +4394,15 @@ function StrategyRunEquityCard({
       <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
         <Typography variant="subtitle2">Equity curve</Typography>
         <Box sx={{ flexGrow: 1 }} />
+        {closedTrades.length > 0 ? (
+          <Button
+            size="small"
+            variant={showAnalysis ? 'contained' : 'outlined'}
+            onClick={() => setShowAnalysis((v) => !v)}
+          >
+            {showAnalysis ? 'Hide analysis' : 'Show analysis'}
+          </Button>
+        ) : null}
         {tradeRows.length > 0 ? (
           <Button
             size="small"
@@ -4327,6 +4474,167 @@ function StrategyRunEquityCard({
         </Box>
       ) : null}
 
+      {showAnalysis && (equityWeeklyRows.length > 0 || equityMonthlyRows.length > 0 || closedTrades.length > 0) ? (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2">Trade analysis</Typography>
+
+          {equityWeeklyRows.length > 0 ? (
+            <Box sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Weekly P&amp;L (equity)</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    downloadCsv(
+                      `strategy_weekly_pnl_run_${run.id}.csv`,
+                      equityWeeklyRows.map((r) => ({
+                        week_start: r.period,
+                        start: r.start_ymd,
+                        end: r.end_ymd,
+                        pnl_inr: r.pnl,
+                        pnl_pct: r.pnl_pct,
+                        end_equity: r.end_equity,
+                      })),
+                    )
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 240 }}>
+                <DataGrid
+                  rows={equityWeeklyRows}
+                  columns={analysisEquityPeriodColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[5, 10, 25]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+
+          {equityMonthlyRows.length > 0 ? (
+            <Box sx={{ mt: 2 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Monthly P&amp;L (equity)</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    downloadCsv(
+                      `strategy_monthly_pnl_run_${run.id}.csv`,
+                      equityMonthlyRows.map((r) => ({
+                        month: r.period,
+                        start: r.start_ymd,
+                        end: r.end_ymd,
+                        pnl_inr: r.pnl,
+                        pnl_pct: r.pnl_pct,
+                        end_equity: r.end_equity,
+                      })),
+                    )
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 240 }}>
+                <DataGrid
+                  rows={equityMonthlyRows}
+                  columns={analysisEquityPeriodColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[5, 10, 25]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+
+          {monthlyTradeSummaryRows.length > 0 ? (
+            <Box sx={{ mt: 2 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Monthly closed-trade summary</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    downloadCsv(
+                      `strategy_monthly_closed_trade_summary_run_${run.id}.csv`,
+                      monthlyTradeSummaryRows.map((r) => ({
+                        month: r.period,
+                        trades: r.trades,
+                        wins: r.wins,
+                        losses: r.losses,
+                        pnl_inr_approx: r.pnl_inr,
+                        avg_pnl_pct: r.avg_pnl_pct,
+                        avg_hold_days: r.avg_hold_days,
+                      })),
+                    )
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 240 }}>
+                <DataGrid
+                  rows={monthlyTradeSummaryRows}
+                  columns={analysisTradeSummaryColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[5, 10, 25]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+
+          {closedTrades.length > 0 ? (
+            <Box sx={{ mt: 2 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Closed trades (by exit month)</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    const rows = closedTrades.map((r) => ({
+                      month: r.month,
+                      symbol: r.symbol,
+                      entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
+                      exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
+                      side: r.side,
+                      qty: r.qty,
+                      pnl_pct: r.pnl_pct,
+                      pnl_inr_approx: r.pnl_inr,
+                      age_days: r.hold_days,
+                      reason: r.reason,
+                    }))
+                    downloadCsv(`strategy_closed_trades_run_${run.id}.csv`, rows)
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 320 }}>
+                <DataGrid
+                  rows={closedTrades}
+                  columns={analysisClosedTradeColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[10, 25, 50, 100]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+        </Box>
+      ) : null}
+
       {showTrades && tradeRows.length > 0 ? (
         <Box sx={{ mt: 2 }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
@@ -4377,6 +4685,7 @@ function PortfolioStrategyRunDetailsCard({
 }) {
   const [showTrades, setShowTrades] = useState(false)
   const [showPerSymbolStats, setShowPerSymbolStats] = useState(false)
+  const [showAnalysis, setShowAnalysis] = useState(false)
   const [viewportHeight, setViewportHeight] = useState(() =>
     typeof window === 'undefined' ? 900 : window.innerHeight,
   )
@@ -4388,6 +4697,7 @@ function PortfolioStrategyRunDetailsCard({
   useEffect(() => {
     setShowTrades(false)
     setShowPerSymbolStats(false)
+    setShowAnalysis(false)
   }, [run.id])
 
   useEffect(() => {
@@ -4527,6 +4837,132 @@ function PortfolioStrategyRunDetailsCard({
     ]
   }, [displayTimeZone])
 
+  const equityWeeklyRows = useMemo(() => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    return computeEquityPeriodPnlRows(ts, equity, 'WEEK')
+  }, [series])
+
+  const equityMonthlyRows = useMemo(() => {
+    const ts = (series?.ts as unknown[] | undefined) ?? []
+    const equity = (series?.equity as unknown[] | undefined) ?? []
+    return computeEquityPeriodPnlRows(ts, equity, 'MONTH')
+  }, [series])
+
+  const closedTrades = useMemo(() => computeClosedTradeAnalysisRows(trades), [trades])
+
+  const monthlyTradeSummaryRows = useMemo(
+    () => computeTradePeriodSummaryRows(closedTrades, 'MONTH'),
+    [closedTrades],
+  )
+
+  const analysisEquityPeriodColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'period', headerName: 'Period', width: 110 },
+      { field: 'start_ymd', headerName: 'Start', width: 110 },
+      { field: 'end_ymd', headerName: 'End', width: 110 },
+      {
+        field: 'pnl',
+        headerName: 'P&L',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'pnl_pct',
+        headerName: 'P&L %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'end_equity',
+        headerName: 'End equity',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+    ]
+  }, [])
+
+  const analysisTradeSummaryColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'period', headerName: 'Month', width: 110 },
+      { field: 'trades', headerName: 'Trades', width: 90, type: 'number' },
+      { field: 'wins', headerName: 'Wins', width: 80, type: 'number' },
+      { field: 'losses', headerName: 'Losses', width: 90, type: 'number' },
+      {
+        field: 'pnl_inr',
+        headerName: 'P&L (₹)',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'avg_pnl_pct',
+        headerName: 'Avg %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'avg_hold_days',
+        headerName: 'Avg age (d)',
+        width: 110,
+        type: 'number',
+        valueFormatter: (value) => {
+          const n = Number((value as { value?: unknown })?.value ?? value)
+          return Number.isFinite(n) ? n.toFixed(1) : '—'
+        },
+      },
+    ]
+  }, [])
+
+  const analysisClosedTradeColumns = useMemo((): GridColDef[] => {
+    return [
+      { field: 'month', headerName: 'Month', width: 110 },
+      { field: 'symbol', headerName: 'Symbol', width: 140 },
+      {
+        field: 'entry_ts',
+        headerName: 'Entry',
+        width: 220,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      {
+        field: 'exit_ts',
+        headerName: 'Exit',
+        width: 220,
+        valueFormatter: (value) =>
+          formatYmdHmsAmPm((value as { value?: unknown })?.value ?? value, displayTimeZone),
+      },
+      { field: 'side', headerName: 'Side', width: 90 },
+      { field: 'qty', headerName: 'Qty', width: 80, type: 'number' },
+      {
+        field: 'pnl_pct',
+        headerName: 'P&L %',
+        width: 110,
+        valueFormatter: (value) => fmtPct((value as { value?: unknown })?.value ?? value, 2),
+      },
+      {
+        field: 'pnl_inr',
+        headerName: 'P&L (₹)',
+        width: 140,
+        type: 'number',
+        valueFormatter: (value) => fmtInr((value as { value?: unknown })?.value ?? value, 0),
+      },
+      {
+        field: 'hold_days',
+        headerName: 'Age (d)',
+        width: 100,
+        type: 'number',
+        valueFormatter: (value) => {
+          const n = Number((value as { value?: unknown })?.value ?? value)
+          return Number.isFinite(n) ? String(n) : '—'
+        },
+      },
+      { field: 'reason', headerName: 'Reason', minWidth: 140, flex: 1 },
+    ]
+  }, [displayTimeZone])
+
   const perSymbolStats = useMemo(() => {
     const rows = (result?.per_symbol_stats as unknown[] | undefined) ?? []
     return rows.map((s) => (s ?? {}) as Record<string, unknown>)
@@ -4585,7 +5021,7 @@ function PortfolioStrategyRunDetailsCard({
     )
   }
 
-  const chartsExpanded = !showTrades && !showPerSymbolStats
+  const chartsExpanded = !showTrades && !showPerSymbolStats && !showAnalysis
   const { equityHeight, drawdownHeight } = useMemo(() => {
     if (!chartsExpanded) return { equityHeight: 260, drawdownHeight: 180 }
     const available = Math.max(520, viewportHeight - 420)
@@ -4599,6 +5035,15 @@ function PortfolioStrategyRunDetailsCard({
       <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
         <Typography variant="subtitle2">Equity curve</Typography>
         <Box sx={{ flexGrow: 1 }} />
+        {closedTrades.length > 0 ? (
+          <Button
+            size="small"
+            variant={showAnalysis ? 'contained' : 'outlined'}
+            onClick={() => setShowAnalysis((v) => !v)}
+          >
+            {showAnalysis ? 'Hide analysis' : 'Show analysis'}
+          </Button>
+        ) : null}
         <Button
           size="small"
           variant={showTrades ? 'contained' : 'outlined'}
@@ -4670,6 +5115,167 @@ function PortfolioStrategyRunDetailsCard({
           <Box sx={{ mt: 1 }}>
             <PriceChart candles={drawdownCandles} chartType="line" height={drawdownHeight} />
           </Box>
+        </Box>
+      ) : null}
+
+      {showAnalysis && (equityWeeklyRows.length > 0 || equityMonthlyRows.length > 0 || closedTrades.length > 0) ? (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="subtitle2">Trade analysis</Typography>
+
+          {equityWeeklyRows.length > 0 ? (
+            <Box sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Weekly P&amp;L (equity)</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    downloadCsv(
+                      `portfolio_strategy_weekly_pnl_run_${run.id}.csv`,
+                      equityWeeklyRows.map((r) => ({
+                        week_start: r.period,
+                        start: r.start_ymd,
+                        end: r.end_ymd,
+                        pnl_inr: r.pnl,
+                        pnl_pct: r.pnl_pct,
+                        end_equity: r.end_equity,
+                      })),
+                    )
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 240 }}>
+                <DataGrid
+                  rows={equityWeeklyRows}
+                  columns={analysisEquityPeriodColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[5, 10, 25]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+
+          {equityMonthlyRows.length > 0 ? (
+            <Box sx={{ mt: 2 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Monthly P&amp;L (equity)</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    downloadCsv(
+                      `portfolio_strategy_monthly_pnl_run_${run.id}.csv`,
+                      equityMonthlyRows.map((r) => ({
+                        month: r.period,
+                        start: r.start_ymd,
+                        end: r.end_ymd,
+                        pnl_inr: r.pnl,
+                        pnl_pct: r.pnl_pct,
+                        end_equity: r.end_equity,
+                      })),
+                    )
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 240 }}>
+                <DataGrid
+                  rows={equityMonthlyRows}
+                  columns={analysisEquityPeriodColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[5, 10, 25]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+
+          {monthlyTradeSummaryRows.length > 0 ? (
+            <Box sx={{ mt: 2 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Monthly closed-trade summary</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    downloadCsv(
+                      `portfolio_strategy_monthly_closed_trade_summary_run_${run.id}.csv`,
+                      monthlyTradeSummaryRows.map((r) => ({
+                        month: r.period,
+                        trades: r.trades,
+                        wins: r.wins,
+                        losses: r.losses,
+                        pnl_inr_approx: r.pnl_inr,
+                        avg_pnl_pct: r.avg_pnl_pct,
+                        avg_hold_days: r.avg_hold_days,
+                      })),
+                    )
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 240 }}>
+                <DataGrid
+                  rows={monthlyTradeSummaryRows}
+                  columns={analysisTradeSummaryColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[5, 10, 25]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
+
+          {closedTrades.length > 0 ? (
+            <Box sx={{ mt: 2 }}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2">Closed trades (by exit month)</Typography>
+                <Box sx={{ flexGrow: 1 }} />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    const rows = closedTrades.map((r) => ({
+                      month: r.month,
+                      symbol: r.symbol,
+                      entry: formatYmdHmsAmPm(r.entry_ts, displayTimeZone),
+                      exit: formatYmdHmsAmPm(r.exit_ts, displayTimeZone),
+                      side: r.side,
+                      qty: r.qty,
+                      pnl_pct: r.pnl_pct,
+                      pnl_inr_approx: r.pnl_inr,
+                      age_days: r.hold_days,
+                      reason: r.reason,
+                    }))
+                    downloadCsv(`portfolio_strategy_closed_trades_run_${run.id}.csv`, rows)
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </Stack>
+              <Box sx={{ height: 320 }}>
+                <DataGrid
+                  rows={closedTrades}
+                  columns={analysisClosedTradeColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  pageSizeOptions={[10, 25, 50, 100]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+                />
+              </Box>
+            </Box>
+          ) : null}
         </Box>
       ) : null}
 
