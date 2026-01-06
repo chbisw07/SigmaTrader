@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("ST_CRYPTO_KEY", "test-deployments-api-secret")
 
 from app.core.auth import hash_password
 from app.db.base import Base
@@ -118,6 +121,50 @@ def test_deployment_crud_and_toggle() -> None:
 
     resp = client.get(f"/api/deployments/{dep_id}")
     assert resp.status_code == 404
+
+
+def test_deployment_update_accepts_universe_dict() -> None:
+    _login("dep-user-1")
+
+    name = f"test-deployment-update-universe-{uuid4().hex}"
+    resp = client.post(
+        "/api/deployments/",
+        json={
+            "name": name,
+            "kind": "STRATEGY",
+            "enabled": True,
+            "universe": {
+                "target_kind": "SYMBOL",
+                "symbols": [{"exchange": "NSE", "symbol": "RELIANCE"}],
+            },
+            "config": {
+                "timeframe": "1d",
+                "entry_dsl": "PRICE(1d) > 0",
+                "exit_dsl": "PRICE(1d) > 0",
+                "product": "CNC",
+                "direction": "LONG",
+                "broker_name": "zerodha",
+                "execution_target": "PAPER",
+                "position_size_pct": 100.0,
+            },
+        },
+    )
+    assert resp.status_code == 201
+    created = resp.json()
+    dep_id = created["id"]
+
+    resp = client.put(
+        f"/api/deployments/{dep_id}",
+        json={
+            "enabled": False,
+            "universe": created["universe"],
+        },
+    )
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["enabled"] is False
+    assert updated["universe"]["target_kind"] == "SYMBOL"
+    assert updated["universe"]["symbols"][0]["symbol"] == "RELIANCE"
 
 
 def test_deployment_ownership_enforced() -> None:

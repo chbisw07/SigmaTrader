@@ -772,7 +772,8 @@ def update_deployment(
     config = None
     kind: DeploymentKind = dep.kind  # type: ignore[assignment]
     if "universe" in update_data:
-        universe = update_data.pop("universe")
+        universe_raw = update_data.pop("universe")
+        universe = DeploymentUniverse.parse_obj(universe_raw or {})
     if "config" in update_data:
         config = update_data.pop("config")
 

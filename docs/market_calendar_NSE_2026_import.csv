@@ -1,0 +1,19 @@
+date,exchange,session_type,open_time,close_time,notes
+2026-01-26,NSE,CLOSED,,,Republic Day
+2026-02-19,NSE,SETTLEMENT_ONLY,09:15,15:30,Chhatrapati Shivaji Maharaj Jayanti (Settlement holiday)
+2026-03-03,NSE,CLOSED,,,Holi
+2026-03-26,NSE,CLOSED,,,Shri Ram Navami
+2026-03-31,NSE,CLOSED,,,Shri Mahavir Jayanti
+2026-04-01,NSE,SETTLEMENT_ONLY,09:15,15:30,Annual Bank closing (Settlement holiday)
+2026-04-03,NSE,CLOSED,,,Good Friday
+2026-04-14,NSE,CLOSED,,,Dr. Baba Saheb Ambedkar Jayanti
+2026-05-01,NSE,CLOSED,,,Maharashtra Day
+2026-05-28,NSE,CLOSED,,,Bakri Eid
+2026-06-26,NSE,CLOSED,,,Moharram
+2026-08-27,NSE,SETTLEMENT_ONLY,09:15,15:30,Id-E-Milad (Settlement holiday)
+2026-09-14,NSE,CLOSED,,,Ganesh Chaturthi
+2026-10-02,NSE,CLOSED,,,Mahatma Gandhi Jayanti
+2026-10-20,NSE,CLOSED,,,Dussehra
+2026-11-10,NSE,CLOSED,,,Diwali-Balipratipada
+2026-11-24,NSE,CLOSED,,,Prakash Gurpurb Sri Guru Nanak Dev
+2026-12-25,NSE,CLOSED,,,Christmas
