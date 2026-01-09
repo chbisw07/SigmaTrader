@@ -1,2 +1,2 @@
-cloudflared tunnel run sigmatrader
+cloudflared tunnel run --protocol http2 sigmatrader
 

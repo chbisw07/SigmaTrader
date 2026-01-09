@@ -3662,22 +3662,23 @@ export function HoldingsPage() {
   const importColumns: GridColDef[] = activeGroupDataset?.columns?.length
     ? activeGroupDataset.columns.map((c) => {
         const field = `import_${c.key}`
-        const isNumber = c.type === 'number'
         return {
           field,
           headerName: c.label,
-          type: isNumber ? 'number' : 'string',
+          headerClassName: 'st-imported-column-header',
+          type: c.type === 'number' ? 'number' : 'string',
           minWidth: 140,
           flex: 1,
           valueGetter: (_value, row) =>
             (row as unknown as Record<string, unknown>)[field] ?? null,
           valueFormatter: (value: unknown) => {
             if (value == null) return '—'
-            if (isNumber) {
-              const n = Number(value)
-              return Number.isFinite(n) ? n.toFixed(2) : String(value)
-            }
-            return String(value)
+            const n = Number(value)
+            return Number.isFinite(n) ? n.toFixed(2) : String(value)
+          },
+          cellClassName: (params: GridCellParams) => {
+            const n = Number(params.value)
+            return Number.isFinite(n) && n < 0 ? 'st-imported-negative' : ''
           },
         } satisfies GridColDef
       })
@@ -5311,6 +5312,18 @@ export function HoldingsPage() {
         disableRowSelectionOnClick
         sx={{
           '& .pnl-negative': {
+            color: 'error.main',
+          },
+          '& .MuiDataGrid-columnHeader.st-imported-column-header': {
+            backgroundColor: (theme) =>
+              theme.palette.mode === 'dark'
+                ? 'rgba(144, 202, 249, 0.18)'
+                : 'rgba(25, 118, 210, 0.08)',
+          },
+          '& .MuiDataGrid-columnHeader.st-imported-column-header .MuiDataGrid-columnHeaderTitle': {
+            fontWeight: 600,
+          },
+          '& .st-imported-negative': {
             color: 'error.main',
           },
         }}

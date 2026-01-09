@@ -186,25 +186,6 @@ function dedupeHeaders(headers: string[]): {
   return { keys, labels }
 }
 
-function disallowedColumnReason(label: string): string | null {
-  const s = (label || '').trim()
-  if (!s) return 'Empty column.'
-  const rules: Array<[RegExp, string]> = [
-    [/\b(open|high|low|close|ohlc)\b/i, 'OHLC price fields are not importable.'],
-    [/\b(volume|vol)\b/i, 'Volume fields are not importable.'],
-    [/\b(price|ltp|last\s*price|bid|ask)\b/i, 'Price fields are not importable.'],
-    [/\b(pnl|p&l|p\/l|profit|loss)\b/i, 'P&L fields are not importable.'],
-    [/\b(return|ret|change|chg|drawdown|dd)\b/i, 'Performance fields are not importable.'],
-    [/\b(rsi|sma|ema|atr|macd|stoch|boll|stddev|vwap|obv)\b/i, 'Indicator fields are not importable.'],
-    [/\b(beta|alpha|sharpe|sortino|volatility|iv)\b/i, 'Risk/volatility metrics are not importable.'],
-    [/\b(p\s*\/\s*e|p\s*\/\s*b|pe\b|pb\b|eps\b|roe\b|roce\b|ratio)\b/i, 'Fundamental ratio fields are not importable.'],
-  ]
-  for (const [pat, reason] of rules) {
-    if (pat.test(s)) return reason
-  }
-  return null
-}
-
 function formatPercent(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(Number(value))) return '—'
   return `${(Number(value) * 100).toFixed(1)}%`
@@ -731,9 +712,7 @@ export function GroupsPage() {
       const likelyExchange = keys.find((h) => /exch/i.test(labels[h] ?? h)) ?? ''
       setImportExchangeColumn(likelyExchange)
 
-      const defaults = keys
-        .filter((h) => h !== likelySymbol && h !== likelyExchange)
-        .filter((h) => disallowedColumnReason(labels[h] ?? h) == null)
+      const defaults = keys.filter((h) => h !== likelySymbol && h !== likelyExchange)
       setImportSelectedColumns(defaults)
       setImportStep(1)
     } catch (err) {
@@ -1987,7 +1966,7 @@ export function GroupsPage() {
             <Box>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                 Upload a TradingView (or similar) CSV export. SigmaTrader validates symbols against broker
-                instruments (NSE/BSE) and only imports metadata-like columns.
+                instruments (NSE/BSE) and stores selected columns as imported metadata.
               </Typography>
               <Button variant="contained" component="label" disabled={importBusy}>
                 Choose CSV
@@ -2199,7 +2178,6 @@ export function GroupsPage() {
                     .filter((h) => h !== importSymbolColumn && h !== importExchangeColumn)
                     .map((h) => {
                       const label = importHeaderLabels[h] ?? h
-                      const reason = disallowedColumnReason(label)
                       const reservedByMapping =
                         isPortfolioImport &&
                         (h === importRefQtyColumn ||
@@ -2212,7 +2190,7 @@ export function GroupsPage() {
                           control={
                             <Checkbox
                               checked={checked}
-                              disabled={reason != null || reservedByMapping}
+                              disabled={reservedByMapping}
                               onChange={(e) => {
                                 const nextChecked = e.target.checked
                                 setImportSelectedColumns((current) => {
@@ -2225,16 +2203,14 @@ export function GroupsPage() {
                           label={
                             reservedByMapping
                               ? `${label} (mapped)`
-                              : reason
-                                ? `${label} (blocked)`
-                                : label
+                              : label
                           }
                         />
                       )
                     })}
                 </Box>
                 <Typography variant="caption" color="text.secondary">
-                  Price/volume/performance/indicator/ratio-like fields are blocked because SigmaTrader computes them internally from candles.
+                  Imported columns are stored as metadata and shown in the holdings grid when you open this group.
                 </Typography>
                 {isPortfolioImport && (
                   <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>

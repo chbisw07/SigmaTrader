@@ -35,7 +35,9 @@ def setup_module() -> None:  # type: ignore[override]
         db.commit()
 
 
-def test_import_watchlist_skips_disallowed_columns_and_unknown_symbols() -> None:
+def test_import_watchlist_imports_all_selected_columns_and_skips_unknown_symbols() -> (
+    None
+):
     payload = {
         "group_name": "tv-watchlist",
         "symbol_column": "Symbol",
@@ -55,8 +57,8 @@ def test_import_watchlist_skips_disallowed_columns_and_unknown_symbols() -> None
     assert res.status_code == 200
     data = res.json()
     assert data["imported_members"] == 2
-    assert data["imported_columns"] == 1
-    assert len(data["skipped_columns"]) == 1
+    assert data["imported_columns"] == 2
+    assert len(data["skipped_columns"]) == 0
     assert len(data["skipped_symbols"]) == 1
 
     group_id = data["group_id"]
@@ -65,8 +67,8 @@ def test_import_watchlist_skips_disallowed_columns_and_unknown_symbols() -> None
     res = client.get(f"/api/groups/{group_id}/dataset")
     assert res.status_code == 200
     ds = res.json()
-    assert len(ds["columns"]) == 1
-    assert ds["columns"][0]["label"] == "Sector"
+    assert len(ds["columns"]) == 2
+    assert [c["label"] for c in ds["columns"]] == ["Sector", "Close"]
 
     # Values exist for the resolved symbols only.
     res = client.get(f"/api/groups/{group_id}/dataset/values")

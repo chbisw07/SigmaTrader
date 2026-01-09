@@ -73,7 +73,7 @@ def _bootstrap_admin_user() -> None:
             if "users" not in inspector.get_table_names():
                 # Database has not been migrated/created yet; skip bootstrapping.
                 return
-            ensure_default_admin(db)
+            ensure_default_admin(db, settings=settings)
         except OperationalError:
             # If the users table is not yet available (e.g., during early test
             # setup or before migrations), silently skip bootstrapping.

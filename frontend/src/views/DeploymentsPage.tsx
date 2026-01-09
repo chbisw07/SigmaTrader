@@ -1142,7 +1142,13 @@ export function DeploymentsPage() {
               />
             ) : null}
 
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            <Box
+              sx={{
+                display: 'grid',
+                gap: 2,
+                gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: 'repeat(4, 1fr)' },
+              }}
+            >
               <TextField
                 label="Initial cash (paper)"
                 type="number"
@@ -1162,6 +1168,15 @@ export function DeploymentsPage() {
                 fullWidth
               />
               <TextField
+                label="Take profit %"
+                type="number"
+                value={editor.take_profit_pct}
+                onChange={(e) =>
+                  setEditor((p) => ({ ...p, take_profit_pct: Number(e.target.value) }))
+                }
+                fullWidth
+              />
+              <TextField
                 label="Trailing stop %"
                 type="number"
                 value={editor.trailing_stop_pct}
@@ -1173,7 +1188,7 @@ export function DeploymentsPage() {
                 }
                 fullWidth
               />
-            </Stack>
+            </Box>
 
             {editor.kind === 'PORTFOLIO_STRATEGY' ? (
               <>

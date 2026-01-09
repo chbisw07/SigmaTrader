@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 from uuid import uuid4
@@ -167,6 +168,92 @@ def test_webhook_accepts_flat_payload_fields() -> None:
         assert order is not None
         assert order.qty == 2
         assert order.price == 320.3
+
+
+def test_webhook_accepts_tradingview_text_plain_json_body() -> None:
+    unique_strategy = f"webhook-test-strategy-text-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:INFY",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "BUY", "quantity": 1, "price": 1500.0},
+    }
+
+    response = client.post(
+        "/webhook/tradingview",
+        data=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+
+def test_webhook_root_accepts_tradingview_text_plain_json_body() -> None:
+    unique_strategy = f"webhook-test-strategy-root-text-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:BSE",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "BUY", "quantity": 1, "price": 320.29},
+    }
+
+    response = client.post(
+        "/webhook",
+        data=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+
+def test_webhook_accepts_price_with_thousands_separator() -> None:
+    unique_strategy = f"webhook-test-strategy-commas-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:BSE",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "BUY", "quantity": "1", "price": "2,673.10"},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+
+def test_webhook_accepts_text_plain_body_with_unquoted_thousands_number() -> None:
+    unique_strategy = f"webhook-test-strategy-raw-commas-{uuid4().hex}"
+    # This is not valid JSON until the server strips thousands separators.
+    body = (
+        "{"
+        f'"secret":"test-secret","platform":"TRADINGVIEW","st_user_id":"webhook-user","strategy_name":"{unique_strategy}",'
+        '"symbol":"NSE:BSE","exchange":"NSE","interval":"5",'
+        '"trade_details":{"order_action":"BUY","quantity":1,"price":2,673.10,"product":"CNC"}'
+        "}"
+    )
+
+    response = client.post(
+        "/webhook/tradingview",
+        data=body,
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
 
 
 def test_webhook_auto_strategy_routes_to_auto_and_executes(monkeypatch: Any) -> None:

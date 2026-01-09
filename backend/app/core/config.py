@@ -1,6 +1,7 @@
 import os
 import sys
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 try:  # Pydantic v2 prefers pydantic-settings.
@@ -20,6 +21,17 @@ except Exception:  # pragma: no cover - Pydantic v1 compatibility
         # this lightweight compatibility path.
         from pydantic import BaseModel as BaseSettings  # type: ignore[assignment]
 
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = _BACKEND_ROOT.parent
+_ENV_FILES = tuple(
+    str(p)
+    for p in (
+        _REPO_ROOT / ".env",
+        _REPO_ROOT / "backend" / ".env",
+    )
+    if p.exists()
+)
+
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables and .env files."""
@@ -28,7 +40,9 @@ class Settings(BaseSettings):
     environment: str = "dev"
     debug: bool = True
     version: str = "0.1.0"
-    database_url: str = "sqlite:///./sigma_trader.db"
+    # Keep the default SQLite DB colocated with the backend so it is stable
+    # regardless of the process working directory.
+    database_url: str = f"sqlite:///{_BACKEND_ROOT / 'sigma_trader.db'}"
     database_echo: bool = False
     zerodha_api_key: str | None = None
     crypto_key: str | None = None
@@ -50,7 +64,7 @@ class Settings(BaseSettings):
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.
         model_config = SettingsConfigDict(
-            env_file=".env",
+            env_file=_ENV_FILES or ".env",
             env_file_encoding="utf-8",
             env_prefix="ST_",
             extra="ignore",
@@ -58,7 +72,7 @@ class Settings(BaseSettings):
     else:  # pragma: no cover - Pydantic v1 configuration
 
         class Config:
-            env_file = ".env"
+            env_file = _ENV_FILES or ".env"
             env_file_encoding = "utf-8"
             env_prefix = "ST_"
             extra = "ignore"
@@ -93,7 +107,7 @@ def get_settings() -> Settings:
         settings.enable_legacy_alerts = True
         # Use an isolated SQLite DB for tests so running pytest does not
         # wipe the primary sigma_trader.db that is used for real data.
-        settings.database_url = "sqlite:///./sigma_trader_test.db"
+        settings.database_url = f"sqlite:///{_BACKEND_ROOT / 'sigma_trader_test.db'}"
 
     return settings
 

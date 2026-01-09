@@ -28,9 +28,11 @@ import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
 import { useNavigate } from 'react-router-dom'
 
+import { DslEditor } from '../components/DslEditor'
 import { KeyValueJsonDialog } from '../components/KeyValueJsonDialog'
 import { MarkdownLite } from '../components/MarkdownLite'
 import { PriceChart, type PriceCandle, type PriceSignalMarker } from '../components/PriceChart'
+import { useCustomIndicators } from '../hooks/useCustomIndicators'
 import { fetchHoldings } from '../services/positions'
 import { fetchGroup, listGroups, type Group, type GroupDetail } from '../services/groups'
 import {
@@ -249,6 +251,8 @@ export function BacktestingPage() {
   const [tab, setTab] = useState<BacktestTab>('SIGNAL')
   const kind: BacktestKind = tab
   const drawerEnabled = tab === 'STRATEGY' || tab === 'PORTFOLIO' || tab === 'PORTFOLIO_STRATEGY'
+
+  const { customIndicators } = useCustomIndicators()
 
   const [helpOpen, setHelpOpen] = useState(false)
 
@@ -2993,25 +2997,39 @@ export function BacktestingPage() {
                   </FormControl>
                 </Stack>
 
-                <TextField
-                  label="Entry DSL (evaluate at close)"
-                  size="small"
-                  multiline
-                  minRows={2}
-                  value={portfolioStrategyEntryDsl}
-                  onChange={(e) => setPortfolioStrategyEntryDsl(e.target.value)}
-                  placeholder="Example: RSI(14) < 30"
-                />
+                <Box>
+                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                    Entry DSL (evaluate at close)
+                  </Typography>
+                  <DslEditor
+                    languageId="st-dsl-backtest-portfolio-strategy-entry"
+                    value={portfolioStrategyEntryDsl}
+                    onChange={setPortfolioStrategyEntryDsl}
+                    customIndicators={customIndicators}
+                    height={120}
+                    onCtrlEnter={() => void handleRun()}
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    Example: <code>RSI(14) &lt; 30</code>
+                  </Typography>
+                </Box>
 
-                <TextField
-                  label="Exit DSL (evaluate at close)"
-                  size="small"
-                  multiline
-                  minRows={2}
-                  value={portfolioStrategyExitDsl}
-                  onChange={(e) => setPortfolioStrategyExitDsl(e.target.value)}
-                  placeholder="Example: RSI(14) > 70"
-                />
+                <Box>
+                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                    Exit DSL (evaluate at close)
+                  </Typography>
+                  <DslEditor
+                    languageId="st-dsl-backtest-portfolio-strategy-exit"
+                    value={portfolioStrategyExitDsl}
+                    onChange={setPortfolioStrategyExitDsl}
+                    customIndicators={customIndicators}
+                    height={120}
+                    onCtrlEnter={() => void handleRun()}
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    Example: <code>RSI(14) &gt; 70</code>
+                  </Typography>
+                </Box>
 
                 <Stack direction="row" spacing={1}>
                   <TextField
@@ -3401,24 +3419,38 @@ export function BacktestingPage() {
                   </FormControl>
                 </Stack>
 
-                <TextField
-                  label="Entry DSL (evaluate at close)"
-                  size="small"
-                  multiline
-                  minRows={2}
-                  value={strategyEntryDsl}
-                  onChange={(e) => setStrategyEntryDsl(e.target.value)}
-                  placeholder="Example: RSI(14) < 30"
-                />
-                <TextField
-                  label="Exit DSL (evaluate at close)"
-                  size="small"
-                  multiline
-                  minRows={2}
-                  value={strategyExitDsl}
-                  onChange={(e) => setStrategyExitDsl(e.target.value)}
-                  placeholder="Example: RSI(14) > 70"
-                />
+                <Box>
+                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                    Entry DSL (evaluate at close)
+                  </Typography>
+                  <DslEditor
+                    languageId="st-dsl-backtest-strategy-entry"
+                    value={strategyEntryDsl}
+                    onChange={setStrategyEntryDsl}
+                    customIndicators={customIndicators}
+                    height={120}
+                    onCtrlEnter={() => void handleRun()}
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    Example: <code>RSI(14) &lt; 30</code>
+                  </Typography>
+                </Box>
+                <Box>
+                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                    Exit DSL (evaluate at close)
+                  </Typography>
+                  <DslEditor
+                    languageId="st-dsl-backtest-strategy-exit"
+                    value={strategyExitDsl}
+                    onChange={setStrategyExitDsl}
+                    customIndicators={customIndicators}
+                    height={120}
+                    onCtrlEnter={() => void handleRun()}
+                  />
+                  <Typography variant="caption" color="text.secondary">
+                    Example: <code>RSI(14) &gt; 70</code>
+                  </Typography>
+                </Box>
 
                 <Stack direction="row" spacing={1}>
                   <TextField

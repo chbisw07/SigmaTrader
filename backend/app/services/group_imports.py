@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
@@ -11,50 +11,6 @@ from app.core.config import Settings
 from app.models import Group, GroupImport, GroupImportValue, GroupMember
 from app.schemas.group_imports import TargetWeightUnits
 from app.services.market_data import resolve_listings_bulk
-
-_DISALLOWED_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (
-        re.compile(r"\b(open|high|low|close|ohlc)\b", re.I),
-        "OHLC price fields are not importable.",
-    ),
-    (re.compile(r"\b(volume|vol)\b", re.I), "Volume fields are not importable."),
-    (
-        re.compile(r"\b(price|ltp|last\s*price|bid|ask)\b", re.I),
-        "Price fields are not importable.",
-    ),
-    (
-        re.compile(r"\b(pnl|p&l|p/l|profit|loss)\b", re.I),
-        "P&L fields are not importable.",
-    ),
-    (
-        re.compile(r"\b(return|ret|change|chg|drawdown|dd)\b", re.I),
-        "Performance fields are not importable.",
-    ),
-    (
-        re.compile(r"\b(rsi|sma|ema|atr|macd|stoch|boll|stddev|vwap|obv)\b", re.I),
-        "Indicator fields are not importable.",
-    ),
-    (
-        re.compile(r"\b(beta|alpha|sharpe|sortino|volatility|iv)\b", re.I),
-        "Risk/volatility metrics are not importable.",
-    ),
-    (
-        re.compile(
-            r"\b(p\s*/\s*e|p\s*/\s*b|pe\b|pb\b|eps\b|roe\b|roce\b|ratio)\b", re.I
-        ),
-        "Fundamental ratio fields are not importable.",
-    ),
-]
-
-
-def is_import_column_allowed(header: str) -> tuple[bool, Optional[str]]:
-    cleaned = (header or "").strip()
-    if not cleaned:
-        return False, "Empty header."
-    for pat, reason in _DISALLOWED_PATTERNS:
-        if pat.search(cleaned):
-            return False, reason
-    return True, None
 
 
 def _slugify_key(header: str) -> str:
@@ -173,17 +129,19 @@ def import_watchlist_dataset(
         target_weight_column,
     }
 
-    # Decide final imported columns after applying restrictions.
+    # Decide final imported columns (all user-selected, excluding reserved mappings).
     imported_headers: list[str] = []
     for header in selected_columns:
         if header in reserved_headers:
             continue
         label = header_labels.get(header) or header
-        allowed, reason = is_import_column_allowed(label)
-        if not allowed:
+        if header not in rows[0]:
             skipped_columns.append(
-                {"header": label, "reason": reason or "Not allowed."}
+                {"header": str(label), "reason": "Header not found in rows."}
             )
+            continue
+        if not str(label or "").strip():
+            skipped_columns.append({"header": str(label), "reason": "Empty header."})
             continue
         imported_headers.append(header)
 

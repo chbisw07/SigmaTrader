@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any, Dict
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -28,6 +32,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_THOUSANDS_SEP_RE = re.compile(r"(?<=\d),(?=\d{3}(?:\D|$))")
+_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+
+
+def _strip_thousands_separators(raw: str) -> str:
+    # TradingView templates sometimes expand numbers with commas (e.g. 2,673.10),
+    # which makes the JSON invalid if the value is not quoted. We only strip
+    # commas that look like thousands separators between digits.
+    return _THOUSANDS_SEP_RE.sub("", raw)
+
+
+def _strip_trailing_commas(raw: str) -> str:
+    """Remove trailing commas before closing braces/brackets.
+
+    TradingView alert templates often end up with a trailing comma, which is
+    invalid JSON but easy to recover from.
+    """
+
+    previous = None
+    while previous != raw:
+        previous = raw
+        raw = _TRAILING_COMMA_RE.sub(r"\1", raw)
+    return raw
+
+
+def _redact_webhook_body_for_logging(raw: str) -> str:
+    """Best-effort redaction for storing webhook debug snippets."""
+
+    redacted = raw
+    for key in ("secret", "st_user_id"):
+        redacted = re.sub(
+            rf'("{key}"\s*:\s*")[^"]*(")',
+            r"\1***\2",
+            redacted,
+            flags=re.IGNORECASE,
+        )
+    return redacted
+
+
 @router.get(
     "",
     summary="Webhook root (compat)",
@@ -46,7 +89,7 @@ def webhook_root() -> Dict[str, str]:
     include_in_schema=False,
 )
 def tradingview_webhook_compat(
-    payload: TradingViewWebhookPayload,
+    payload: TradingViewWebhookPayload | Dict[str, Any] | str,
     request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -71,7 +114,7 @@ def tradingview_webhook_compat(
     summary="Receive TradingView webhook alerts",
 )
 def tradingview_webhook(
-    payload: TradingViewWebhookPayload | Dict[str, Any],
+    payload: TradingViewWebhookPayload | Dict[str, Any] | str,
     request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -85,14 +128,97 @@ def tradingview_webhook(
     correlation_id = getattr(request.state, "correlation_id", None)
 
     expected_secret = get_tradingview_webhook_secret(db, settings)
+    expected_secret = (expected_secret or "").strip() or None
+
+    # TradingView sends webhooks as text/plain, even when the body is JSON.
+    # Accept both application/json and text/plain payloads.
+    if isinstance(payload, str):
+        raw_body = payload.strip()
+        if not raw_body:
+            payload = {}
+        else:
+            candidates = [
+                raw_body,
+                _strip_trailing_commas(raw_body),
+                _strip_thousands_separators(raw_body),
+                _strip_trailing_commas(_strip_thousands_separators(raw_body)),
+                _strip_thousands_separators(_strip_trailing_commas(raw_body)),
+            ]
+            parsed_json: dict[str, Any] | None = None
+            for candidate in dict.fromkeys(candidates):
+                try:
+                    parsed_json = json.loads(candidate)
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+            if parsed_json is not None:
+                payload = parsed_json
+            else:
+                # Some setups send key=value pairs (rare); support minimal parsing.
+                parsed_kv = {k: v[-1] for k, v in parse_qs(raw_body).items() if v}
+                if parsed_kv:
+                    payload = parsed_kv
+                else:
+                    preview = _redact_webhook_body_for_logging(raw_body[:500])
+                    record_system_event(
+                        db,
+                        level="WARNING",
+                        category="webhook",
+                        message="TradingView webhook rejected: invalid JSON body",
+                        correlation_id=correlation_id,
+                        details={
+                            "content_type": request.headers.get("content-type"),
+                            "body_len": len(raw_body),
+                            "body_preview": preview,
+                        },
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid TradingView payload. Body must be valid JSON.",
+                    )
+
     provided_secret = request.headers.get("X-SIGMATRADER-SECRET")
     if not provided_secret:
         if isinstance(payload, TradingViewWebhookPayload):
             provided_secret = payload.secret
         else:
             provided_secret = str(payload.get("secret") or "")
+    provided_secret = (provided_secret or "").strip()
 
     if expected_secret and provided_secret != expected_secret:
+        record_system_event(
+            db,
+            level="WARNING",
+            category="webhook",
+            message="TradingView webhook rejected: invalid secret",
+            correlation_id=correlation_id,
+            details={
+                "platform": (
+                    payload.platform
+                    if isinstance(payload, TradingViewWebhookPayload)
+                    else payload.get("platform")
+                ),
+                "strategy": (
+                    payload.strategy_name
+                    if isinstance(payload, TradingViewWebhookPayload)
+                    else payload.get("strategy_name")
+                ),
+                "st_user_id": (
+                    payload.st_user_id
+                    if isinstance(payload, TradingViewWebhookPayload)
+                    else payload.get("st_user_id")
+                ),
+                "auth": {
+                    "header_present": bool(request.headers.get("X-SIGMATRADER-SECRET")),
+                    "body_present": (
+                        bool(getattr(payload, "secret", None))
+                        if isinstance(payload, TradingViewWebhookPayload)
+                        else bool(payload.get("secret"))
+                    ),
+                },
+            },
+        )
         logger.warning(
             "Received webhook with invalid secret",
             extra={
@@ -127,17 +253,37 @@ def tradingview_webhook(
         payload_with_secret.setdefault("secret", provided_secret or "")
         try:
             if PYDANTIC_V2 and hasattr(TradingViewWebhookPayload, "model_validate"):
-                payload = TradingViewWebhookPayload.model_validate(  # type: ignore[assignment]
-                    payload_with_secret
-                )
+                payload = TradingViewWebhookPayload.model_validate(payload_with_secret)
             else:
-                payload = TradingViewWebhookPayload.parse_obj(  # type: ignore[assignment]
-                    payload_with_secret
-                )
+                payload = TradingViewWebhookPayload.parse_obj(payload_with_secret)
         except Exception as exc:
+            details: dict[str, Any] = {
+                "content_type": request.headers.get("content-type"),
+                "payload_keys": sorted(list(payload_with_secret.keys())),
+            }
+            if isinstance(exc, ValidationError):
+                details["validation_errors"] = [
+                    {
+                        "loc": list(err.get("loc") or []),
+                        "msg": err.get("msg"),
+                        "type": err.get("type"),
+                    }
+                    for err in exc.errors()
+                ]
+            record_system_event(
+                db,
+                level="WARNING",
+                category="webhook",
+                message="TradingView webhook rejected: invalid payload schema",
+                correlation_id=correlation_id,
+                details=details,
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid TradingView payload. Missing required fields.",
+                detail=(
+                    "Invalid TradingView payload. Missing required fields "
+                    "or invalid schema."
+                ),
             ) from exc
 
     # For now we only process alerts targeting Zerodha / generic TradingView.

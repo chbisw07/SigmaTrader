@@ -20,11 +20,32 @@ class TradeDetails(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _map_alternate_field_names(cls, values: dict[str, Any]) -> dict[str, Any]:
+        def _coerce_float(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                cleaned = value.strip().replace(",", "")
+                if not cleaned:
+                    return None
+                try:
+                    return float(cleaned)
+                except ValueError:
+                    return value
+            return value
+
         # Support TradingView payloads that use order_contracts / order_price
         if "quantity" not in values and "order_contracts" in values:
             values["quantity"] = values.get("order_contracts")
         if "price" not in values and "order_price" in values:
             values["price"] = values.get("order_price")
+
+        if "quantity" in values:
+            values["quantity"] = _coerce_float(values.get("quantity"))
+        if "price" in values:
+            values["price"] = _coerce_float(values.get("price"))
+
         # Derive product from trade_type when product is not explicitly set.
         product = values.get("product")
         trade_type = values.get("trade_type")
