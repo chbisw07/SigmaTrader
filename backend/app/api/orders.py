@@ -29,6 +29,8 @@ from app.services.instruments_sync import sync_smartapi_instrument_master
 from app.services.paper_trading import submit_paper_order
 from app.services.price_ticks import round_price_to_tick
 from app.services.risk import evaluate_order_risk
+from app.services.risk_policy import evaluate_execution_risk_policy
+from app.services.risk_policy_store import get_risk_policy
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -609,10 +611,15 @@ def execute_order_internal(
             detail="Order has invalid quantity.",
         )
 
-    # Apply risk checks before contacting Zerodha. This runs for both
-    # manual queue execution and AUTO strategies (which call this endpoint
-    # internally from the webhook handler).
-    risk = evaluate_order_risk(db, order)
+    # Apply risk checks before contacting the broker (covers manual executes,
+    # webhook AUTO, and other internal flows). The policy is configured in
+    # Settings and uses MANUAL equity as the baseline.
+    policy, _src = get_risk_policy(db, settings)
+    if getattr(policy, "enabled", False):
+        risk = evaluate_execution_risk_policy(db, settings, order=order, policy=policy)
+    else:
+        legacy = evaluate_order_risk(db, order)
+        risk = legacy  # type: ignore[assignment]
     if risk.blocked:
         order.status = "REJECTED_RISK"
         order.error_message = risk.reason

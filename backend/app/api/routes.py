@@ -18,6 +18,7 @@ from . import (
     paper,
     positions,
     rebalance,
+    risk_policy,
     risk_settings,
     screener_v3,
     signal_strategies,
@@ -210,6 +211,13 @@ router.include_router(
     prefix="/api/webhook-settings",
     dependencies=[Depends(require_admin)],
     tags=["webhook-settings"],
+)
+
+router.include_router(
+    risk_policy.router,
+    prefix="/api/risk-policy",
+    dependencies=[Depends(require_admin)],
+    tags=["risk-policy"],
 )
 
 router.include_router(

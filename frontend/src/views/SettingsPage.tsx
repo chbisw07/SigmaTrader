@@ -8,10 +8,13 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import Divider from '@mui/material/Divider'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
+import Switch from '@mui/material/Switch'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import Table from '@mui/material/Table'
@@ -26,11 +29,13 @@ import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
-  fetchRiskSettings,
-  createRiskSettings,
-  deleteRiskSettings,
-  type RiskSettings,
-} from '../services/admin'
+  fetchRiskPolicy,
+  resetRiskPolicy,
+  updateRiskPolicy,
+  type OrderSourceBucket,
+  type ProductType,
+  type RiskPolicy,
+} from '../services/riskPolicy'
 
 import {
   connectZerodha,
@@ -376,10 +381,6 @@ export function SettingsPage() {
   type SettingsTab = 'broker' | 'risk' | 'webhook' | 'market' | 'time'
   const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
 
-  const [riskSettings, setRiskSettings] = useState<RiskSettings[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
   const [brokerStatus, setBrokerStatus] = useState<ZerodhaStatus | null>(null)
   const [angeloneStatus, setAngeloneStatus] = useState<AngeloneStatus | null>(null)
   const [zerodhaError, setZerodhaError] = useState<string | null>(null)
@@ -393,16 +394,6 @@ export function SettingsPage() {
   const [isConnectingAngelone, setIsConnectingAngelone] = useState(false)
   const [angeloneOtpPromptOpen, setAngeloneOtpPromptOpen] = useState(false)
   const [angeloneOtpDraft, setAngeloneOtpDraft] = useState('')
-  const [savingRisk, setSavingRisk] = useState(false)
-  const [deletingRiskId, setDeletingRiskId] = useState<number | null>(null)
-  const riskScope: 'GLOBAL' = 'GLOBAL'
-  const [riskMaxOrderValue, setRiskMaxOrderValue] = useState<string>('')
-  const [riskMaxQty, setRiskMaxQty] = useState<string>('')
-  const [riskMaxDailyLoss, setRiskMaxDailyLoss] = useState<string>('')
-  const [riskClampMode, setRiskClampMode] = useState<'CLAMP' | 'REJECT'>('CLAMP')
-  const [riskShortSelling, setRiskShortSelling] = useState<'ALLOWED' | 'DISABLED'>(
-    'ALLOWED',
-  )
 
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
   const [tvWebhookSecret, setTvWebhookSecret] = useState<string>('')
@@ -446,6 +437,12 @@ export function SettingsPage() {
   const [customTzDraft, setCustomTzDraft] = useState<string>(() =>
     !displayTzIsPreset && displayTimeZone !== 'LOCAL' ? displayTimeZone : '',
   )
+
+  const [riskPolicyLoaded, setRiskPolicyLoaded] = useState(false)
+  const [riskPolicySource, setRiskPolicySource] = useState<'db' | 'default'>('default')
+  const [riskPolicyDraft, setRiskPolicyDraft] = useState<RiskPolicy | null>(null)
+  const [riskPolicyBusy, setRiskPolicyBusy] = useState(false)
+  const [riskPolicyError, setRiskPolicyError] = useState<string | null>(null)
 
   useEffect(() => {
     const isPreset = DISPLAY_TZ_PRESETS.includes(displayTimeZone as any)
@@ -509,6 +506,29 @@ export function SettingsPage() {
       }
     })()
   }, [activeTab, tvWebhookConfigLoaded])
+
+  useEffect(() => {
+    if (activeTab !== 'risk' || riskPolicyLoaded) return
+    let active = true
+    void (async () => {
+      try {
+        const data = await fetchRiskPolicy()
+        if (!active) return
+        setRiskPolicySource(data.source)
+        setRiskPolicyDraft(JSON.parse(JSON.stringify(data.policy)) as RiskPolicy)
+        setRiskPolicyError(null)
+        setRiskPolicyLoaded(true)
+      } catch (err) {
+        if (!active) return
+        setRiskPolicyError(
+          err instanceof Error ? err.message : 'Failed to load risk policy',
+        )
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [activeTab, riskPolicyLoaded])
 
   useEffect(() => {
     if (activeTab !== 'market') return
@@ -593,30 +613,6 @@ export function SettingsPage() {
       setMarketUploadError(err instanceof Error ? err.message : 'Export failed')
     }
   }
-
-  useEffect(() => {
-    let active = true
-
-    const load = async () => {
-      try {
-        const riskData = await fetchRiskSettings()
-        if (!active) return
-        setRiskSettings(riskData)
-        setError(null)
-      } catch (err) {
-        if (!active) return
-        setError(err instanceof Error ? err.message : 'Failed to load settings')
-      } finally {
-        if (active) setLoading(false)
-      }
-    }
-
-    void load()
-
-    return () => {
-      active = false
-    }
-  }, [])
 
   useEffect(() => {
     let active = true
@@ -726,85 +722,6 @@ export function SettingsPage() {
       recordAppLog('ERROR', msg)
     } finally {
       setIsConnectingAngelone(false)
-    }
-  }
-
-  const handleSaveRiskSettings = async () => {
-    try {
-      const payload: {
-        scope: RiskSettings['scope']
-        strategy_id: number | null
-        max_order_value?: number
-        max_quantity_per_order?: number
-        max_daily_loss?: number
-        allow_short_selling: boolean
-        max_open_positions?: number | null
-        clamp_mode: RiskSettings['clamp_mode']
-        symbol_whitelist?: string | null
-        symbol_blacklist?: string | null
-      } = {
-        scope: riskScope,
-        strategy_id: null,
-        allow_short_selling: riskShortSelling === 'ALLOWED',
-        clamp_mode: riskClampMode,
-      }
-
-      if (riskMaxOrderValue.trim() !== '') {
-        const v = Number(riskMaxOrderValue)
-        if (!Number.isFinite(v) || v <= 0) {
-          setError('Max order value must be a positive number.')
-          return
-        }
-        payload.max_order_value = v
-      }
-
-      if (riskMaxQty.trim() !== '') {
-        const v = Number(riskMaxQty)
-        if (!Number.isFinite(v) || v <= 0) {
-          setError('Max quantity per order must be a positive number.')
-          return
-        }
-        payload.max_quantity_per_order = v
-      }
-
-      if (riskMaxDailyLoss.trim() !== '') {
-        const v = Number(riskMaxDailyLoss)
-        if (!Number.isFinite(v) || v <= 0) {
-          setError('Max daily loss must be a positive number.')
-          return
-        }
-        payload.max_daily_loss = v
-      }
-
-      setSavingRisk(true)
-      const created = await createRiskSettings(payload)
-      setRiskSettings((prev) => [...prev, created])
-      setError(null)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to save risk settings',
-      )
-    } finally {
-      setSavingRisk(false)
-    }
-  }
-
-  const handleDeleteRiskSettings = async (riskId: number) => {
-    const confirmed = window.confirm('Delete this risk row?')
-    if (!confirmed) return
-    setDeletingRiskId(riskId)
-    try {
-      await deleteRiskSettings(riskId)
-      setRiskSettings((prev) => prev.filter((rs) => rs.id !== riskId))
-      setError(null)
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to delete risk settings',
-      )
-    } finally {
-      setDeletingRiskId(null)
     }
   }
 
@@ -1302,21 +1219,6 @@ export function SettingsPage() {
             })()}
           </Box>
         </Paper>
-      ) : activeTab !== 'broker' && loading ? (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CircularProgress size={20} />
-          <Typography variant="body2">
-            {activeTab === 'risk'
-              ? 'Loading risk settings...'
-              : activeTab === 'webhook'
-                ? 'Loading webhook settings...'
-                : 'Loading settings...'}
-          </Typography>
-        </Box>
-      ) : activeTab !== 'broker' && error ? (
-        <Typography color="error" variant="body2">
-          {error}
-        </Typography>
       ) : activeTab === 'webhook' ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
             <Paper sx={{ p: 2 }}>
@@ -1485,123 +1387,953 @@ export function SettingsPage() {
             </Paper>
           </Box>
       ) : activeTab === 'risk' ? (
-          <Paper sx={{ mb: 3, p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Risk Settings
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Define global limits. Leave fields blank to skip a particular limit; new rows are
-              added to the table below.
-            </Typography>
-            <Box
-              sx={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 1.5,
-                alignItems: 'center',
-                mb: 2,
-              }}
-            >
-              <TextField
-                label="Max Order Value"
-                size="small"
-                type="number"
-                value={riskMaxOrderValue}
-                onChange={(e) => setRiskMaxOrderValue(e.target.value)}
-              />
-              <TextField
-                label="Max Qty/Order"
-                size="small"
-                type="number"
-                value={riskMaxQty}
-                onChange={(e) => setRiskMaxQty(e.target.value)}
-              />
-              <TextField
-                label="Max Daily Loss"
-                size="small"
-                type="number"
-                value={riskMaxDailyLoss}
-                onChange={(e) => setRiskMaxDailyLoss(e.target.value)}
-              />
-              <TextField
-                select
-                label="Clamp Mode"
-                size="small"
-                value={riskClampMode}
-                onChange={(e) =>
-                  setRiskClampMode(e.target.value as 'CLAMP' | 'REJECT')
-                }
-              >
-                <MenuItem value="CLAMP">CLAMP</MenuItem>
-                <MenuItem value="REJECT">REJECT</MenuItem>
-              </TextField>
-              <TextField
-                select
-                label="Short Selling"
-                size="small"
-                value={riskShortSelling}
-                onChange={(e) =>
-                  setRiskShortSelling(
-                    e.target.value as 'ALLOWED' | 'DISABLED',
-                  )
-                }
-              >
-                <MenuItem value="ALLOWED">Allowed</MenuItem>
-                <MenuItem value="DISABLED">Disabled</MenuItem>
-              </TextField>
-              <Button
-                size="small"
-                variant="contained"
-                onClick={handleSaveRiskSettings}
-                disabled={savingRisk}
-              >
-                {savingRisk ? 'Saving…' : 'Add Risk Row'}
-              </Button>
-            </Box>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Scope</TableCell>
-                  <TableCell>Max Order Value</TableCell>
-                  <TableCell>Max Qty/Order</TableCell>
-                  <TableCell>Max Daily Loss</TableCell>
-                  <TableCell>Clamp Mode</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {riskSettings.filter((rs) => rs.scope === 'GLOBAL').map((rs) => (
-                  <TableRow key={rs.id}>
-                    <TableCell>{rs.scope}</TableCell>
-                    <TableCell>{rs.max_order_value ?? '-'}</TableCell>
-                    <TableCell>{rs.max_quantity_per_order ?? '-'}</TableCell>
-                    <TableCell>{rs.max_daily_loss ?? '-'}</TableCell>
-                    <TableCell>{rs.clamp_mode}</TableCell>
-                    <TableCell align="right">
-                      <Button
-                        size="small"
-                        color="error"
-                        variant="text"
-                        onClick={() => void handleDeleteRiskSettings(rs.id)}
-                        disabled={deletingRiskId === rs.id}
-                      >
-                        {deletingRiskId === rs.id ? 'Deleting…' : 'Delete'}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {riskSettings.filter((rs) => rs.scope === 'GLOBAL').length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={6}>
-                      <Typography variant="body2" color="text.secondary">
-                        No risk settings configured yet.
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </Paper>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
+            <Paper sx={{ p: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
+                  Risk policy
+                </Typography>
+                <Chip
+                  size="small"
+                  label={`Source: ${riskPolicySource}`}
+                  color={riskPolicySource === 'db' ? 'success' : 'default'}
+                />
+              </Box>
+
+              {!riskPolicyLoaded || !riskPolicyDraft ? (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                  <CircularProgress size={20} />
+                  <Typography variant="body2">Loading risk policy…</Typography>
+                </Box>
+              ) : (
+                <>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                    Enforced at order dispatch/execute time (manual queue, TradingView AUTO, deployments).
+                  </Typography>
+
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', mt: 1.5 }}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.enabled}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev ? { ...prev, enabled: e.target.checked } : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Enable enforcement"
+                    />
+                    <Button
+                      size="small"
+                      variant="contained"
+                      disabled={riskPolicyBusy}
+                      onClick={async () => {
+                        if (!riskPolicyDraft) return
+                        setRiskPolicyBusy(true)
+                        try {
+                          const updated = await updateRiskPolicy(riskPolicyDraft)
+                          setRiskPolicyDraft(JSON.parse(JSON.stringify(updated)) as RiskPolicy)
+                          setRiskPolicySource('db')
+                          setRiskPolicyError(null)
+                        } catch (err) {
+                          setRiskPolicyError(
+                            err instanceof Error ? err.message : 'Failed to save risk policy',
+                          )
+                        } finally {
+                          setRiskPolicyBusy(false)
+                        }
+                      }}
+                    >
+                      {riskPolicyBusy ? 'Saving…' : 'Save'}
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={riskPolicyBusy}
+                      onClick={async () => {
+                        const confirmed = window.confirm('Reset risk policy to defaults?')
+                        if (!confirmed) return
+                        setRiskPolicyBusy(true)
+                        try {
+                          const defaults = await resetRiskPolicy()
+                          setRiskPolicyDraft(JSON.parse(JSON.stringify(defaults)) as RiskPolicy)
+                          setRiskPolicySource('db')
+                          setRiskPolicyError(null)
+                        } catch (err) {
+                          setRiskPolicyError(
+                            err instanceof Error ? err.message : 'Failed to reset risk policy',
+                          )
+                        } finally {
+                          setRiskPolicyBusy(false)
+                        }
+                      }}
+                    >
+                      Reset to defaults
+                    </Button>
+                  </Box>
+
+                  {riskPolicyError && (
+                    <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+                      {riskPolicyError}
+                    </Typography>
+                  )}
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Equity baseline (manual)
+                  </Typography>
+                  <TextField
+                    size="small"
+                    type="number"
+                    label="Manual equity (INR)"
+                    value={riskPolicyDraft.equity.manual_equity_inr}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (!Number.isFinite(v)) return
+                      setRiskPolicyDraft((prev) =>
+                        prev ? { ...prev, equity: { ...prev.equity, manual_equity_inr: v } } : prev,
+                      )
+                    }}
+                    sx={{ minWidth: 260 }}
+                  />
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Account-level risk (GLOBAL)
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max daily loss (%)"
+                      value={riskPolicyDraft.account_risk.max_daily_loss_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, account_risk: { ...prev.account_risk, max_daily_loss_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max daily loss (abs INR)"
+                      value={riskPolicyDraft.account_risk.max_daily_loss_abs ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        const v = raw.trim() === '' ? null : Number(raw)
+                        if (v !== null && !Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, account_risk: { ...prev.account_risk, max_daily_loss_abs: v } }
+                            : prev,
+                        )
+                      }}
+                      helperText="Blank = auto from equity + %"
+                      sx={{ minWidth: 220 }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max open positions"
+                      value={riskPolicyDraft.account_risk.max_open_positions}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, account_risk: { ...prev.account_risk, max_open_positions: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max concurrent symbols"
+                      value={riskPolicyDraft.account_risk.max_concurrent_symbols}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, account_risk: { ...prev.account_risk, max_concurrent_symbols: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max exposure (%)"
+                      value={riskPolicyDraft.account_risk.max_exposure_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, account_risk: { ...prev.account_risk, max_exposure_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Per-trade risk
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max risk per trade (%)"
+                      value={riskPolicyDraft.trade_risk.max_risk_per_trade_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, trade_risk: { ...prev.trade_risk, max_risk_per_trade_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Hard max risk (%)"
+                      value={riskPolicyDraft.trade_risk.hard_max_risk_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, trade_risk: { ...prev.trade_risk, hard_max_risk_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      select
+                      size="small"
+                      label="Stop reference"
+                      value={riskPolicyDraft.trade_risk.stop_reference}
+                      onChange={(e) =>
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                trade_risk: {
+                                  ...prev.trade_risk,
+                                  stop_reference: e.target.value as 'ATR' | 'FIXED_PCT',
+                                },
+                              }
+                            : prev,
+                        )
+                      }
+                      sx={{ minWidth: 160 }}
+                    >
+                      <MenuItem value="ATR">ATR</MenuItem>
+                      <MenuItem value="FIXED_PCT">FIXED_PCT</MenuItem>
+                    </TextField>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.trade_risk.stop_loss_mandatory}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    trade_risk: { ...prev.trade_risk, stop_loss_mandatory: e.target.checked },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Stop mandatory"
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Position sizing
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Capital per trade (INR)"
+                      value={riskPolicyDraft.position_sizing.capital_per_trade}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, position_sizing: { ...prev.position_sizing, capital_per_trade: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max order value (% of equity)"
+                      value={riskPolicyDraft.execution_safety.max_order_value_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, execution_safety: { ...prev.execution_safety, max_order_value_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.position_sizing.allow_scale_in}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    position_sizing: {
+                                      ...prev.position_sizing,
+                                      allow_scale_in: e.target.checked,
+                                    },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Allow scale-in"
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Pyramiding"
+                      value={riskPolicyDraft.position_sizing.pyramiding}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, position_sizing: { ...prev.position_sizing, pyramiding: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Stop rules (used for risk checks only)
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="ATR stop (xATR)"
+                      value={riskPolicyDraft.stop_rules.initial_stop_atr}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, stop_rules: { ...prev.stop_rules, initial_stop_atr: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Fallback stop (%)"
+                      value={riskPolicyDraft.stop_rules.fallback_stop_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, stop_rules: { ...prev.stop_rules, fallback_stop_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Min stop (%)"
+                      value={riskPolicyDraft.stop_rules.min_stop_distance_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, stop_rules: { ...prev.stop_rules, min_stop_distance_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max stop (%)"
+                      value={riskPolicyDraft.stop_rules.max_stop_distance_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, stop_rules: { ...prev.stop_rules, max_stop_distance_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.stop_rules.trailing_stop_enabled}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    stop_rules: {
+                                      ...prev.stop_rules,
+                                      trailing_stop_enabled: e.target.checked,
+                                    },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Trailing enabled"
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Trail activation (xATR)"
+                      value={riskPolicyDraft.stop_rules.trail_activation_atr}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, stop_rules: { ...prev.stop_rules, trail_activation_atr: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Trade frequency
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max trades/symbol/day"
+                      value={riskPolicyDraft.trade_frequency.max_trades_per_symbol_per_day}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                trade_frequency: {
+                                  ...prev.trade_frequency,
+                                  max_trades_per_symbol_per_day: v,
+                                },
+                              }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Min bars between trades"
+                      value={riskPolicyDraft.trade_frequency.min_bars_between_trades}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                trade_frequency: {
+                                  ...prev.trade_frequency,
+                                  min_bars_between_trades: v,
+                                },
+                              }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Cooldown after loss (bars)"
+                      value={riskPolicyDraft.trade_frequency.cooldown_after_loss_bars}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                trade_frequency: {
+                                  ...prev.trade_frequency,
+                                  cooldown_after_loss_bars: v,
+                                },
+                              }
+                            : prev,
+                        )
+                      }}
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Loss controls (not fully enforced yet)
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max consecutive losses"
+                      value={riskPolicyDraft.loss_controls.max_consecutive_losses}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                loss_controls: { ...prev.loss_controls, max_consecutive_losses: v },
+                              }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.loss_controls.pause_after_loss_streak}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    loss_controls: {
+                                      ...prev.loss_controls,
+                                      pause_after_loss_streak: e.target.checked,
+                                    },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Pause after streak"
+                    />
+                    <TextField
+                      size="small"
+                      label="Pause duration"
+                      value={riskPolicyDraft.loss_controls.pause_duration}
+                      onChange={(e) =>
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                loss_controls: { ...prev.loss_controls, pause_duration: e.target.value },
+                              }
+                            : prev,
+                        )
+                      }
+                      sx={{ minWidth: 160 }}
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Correlation & symbol control (not enforced yet)
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max same-sector positions"
+                      value={riskPolicyDraft.correlation_rules.max_same_sector_positions}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                correlation_rules: {
+                                  ...prev.correlation_rules,
+                                  max_same_sector_positions: v,
+                                },
+                              }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Sector correlation limit"
+                      value={riskPolicyDraft.correlation_rules.sector_correlation_limit}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                correlation_rules: {
+                                  ...prev.correlation_rules,
+                                  sector_correlation_limit: v,
+                                },
+                              }
+                            : prev,
+                        )
+                      }}
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Execution safety (GLOBAL)
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.execution_safety.allow_mis}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? { ...prev, execution_safety: { ...prev.execution_safety, allow_mis: e.target.checked } }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Allow MIS (global)"
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.execution_safety.allow_cnc}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? { ...prev, execution_safety: { ...prev.execution_safety, allow_cnc: e.target.checked } }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Allow CNC (global)"
+                    />
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max order value (% of equity)"
+                      value={riskPolicyDraft.execution_safety.max_order_value_pct}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (!Number.isFinite(v)) return
+                        setRiskPolicyDraft((prev) =>
+                          prev
+                            ? { ...prev, execution_safety: { ...prev.execution_safety, max_order_value_pct: v } }
+                            : prev,
+                        )
+                      }}
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.execution_safety.reject_if_margin_exceeded}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    execution_safety: {
+                                      ...prev.execution_safety,
+                                      reject_if_margin_exceeded: e.target.checked,
+                                    },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="Reject if margin exceeded"
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Emergency controls
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.emergency_controls.panic_stop}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    emergency_controls: { ...prev.emergency_controls, panic_stop: e.target.checked },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="panic_stop"
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.emergency_controls.stop_all_trading_on_error}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    emergency_controls: {
+                                      ...prev.emergency_controls,
+                                      stop_all_trading_on_error: e.target.checked,
+                                    },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="stop_all_trading_on_error"
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.emergency_controls.stop_on_unexpected_qty}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    emergency_controls: {
+                                      ...prev.emergency_controls,
+                                      stop_on_unexpected_qty: e.target.checked,
+                                    },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label="stop_on_unexpected_qty"
+                    />
+                  </Box>
+
+                  <Divider sx={{ my: 2 }} />
+
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Overrides (source × product)
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Leave a field blank to inherit from GLOBAL.
+                  </Typography>
+
+                  {(() => {
+                    const sources: OrderSourceBucket[] = ['TRADINGVIEW', 'SIGMATRADER']
+                    const products: ProductType[] = ['MIS', 'CNC']
+                    const setOverride = (
+                      source: OrderSourceBucket,
+                      product: ProductType,
+                      key: string,
+                      value: any,
+                    ) => {
+                      setRiskPolicyDraft((prev) => {
+                        if (!prev) return prev
+                        const existing = (prev.overrides?.[source]?.[product] ?? {}) as any
+                        return {
+                          ...prev,
+                          overrides: {
+                            ...prev.overrides,
+                            [source]: {
+                              ...prev.overrides[source],
+                              [product]: { ...existing, [key]: value },
+                            },
+                          },
+                        }
+                      })
+                    }
+
+                    return (
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Source</TableCell>
+                            <TableCell>Product</TableCell>
+                            <TableCell>Allow</TableCell>
+                            <TableCell>Max order value (abs)</TableCell>
+                            <TableCell>Max qty/order</TableCell>
+                            <TableCell>Capital/trade</TableCell>
+                            <TableCell>Max risk (%)</TableCell>
+                            <TableCell>Hard max risk (%)</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {sources.flatMap((src) =>
+                            products.map((prod) => {
+                              const ovr = riskPolicyDraft.overrides?.[src]?.[prod] ?? {}
+                              return (
+                                <TableRow key={`${src}_${prod}`}>
+                                  <TableCell>{src}</TableCell>
+                                  <TableCell>{prod}</TableCell>
+                                  <TableCell>
+                                    <TextField
+                                      select
+                                      size="small"
+                                      value={
+                                        ovr.allow === true
+                                          ? 'ALLOW'
+                                          : ovr.allow === false
+                                            ? 'DISALLOW'
+                                            : 'DEFAULT'
+                                      }
+                                      onChange={(e) => {
+                                        const v = e.target.value
+                                        setOverride(
+                                          src,
+                                          prod,
+                                          'allow',
+                                          v === 'ALLOW' ? true : v === 'DISALLOW' ? false : null,
+                                        )
+                                      }}
+                                      sx={{ minWidth: 130 }}
+                                    >
+                                      <MenuItem value="DEFAULT">DEFAULT</MenuItem>
+                                      <MenuItem value="ALLOW">ALLOW</MenuItem>
+                                      <MenuItem value="DISALLOW">DISALLOW</MenuItem>
+                                    </TextField>
+                                  </TableCell>
+                                  <TableCell>
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      value={ovr.max_order_value_abs ?? ''}
+                                      onChange={(e) => {
+                                        const raw = e.target.value
+                                        const v = raw.trim() === '' ? null : Number(raw)
+                                        if (v !== null && !Number.isFinite(v)) return
+                                        setOverride(src, prod, 'max_order_value_abs', v)
+                                      }}
+                                      sx={{ minWidth: 170 }}
+                                    />
+                                  </TableCell>
+                                  <TableCell>
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      value={ovr.max_quantity_per_order ?? ''}
+                                      onChange={(e) => {
+                                        const raw = e.target.value
+                                        const v = raw.trim() === '' ? null : Number(raw)
+                                        if (v !== null && !Number.isFinite(v)) return
+                                        setOverride(src, prod, 'max_quantity_per_order', v)
+                                      }}
+                                      sx={{ minWidth: 140 }}
+                                    />
+                                  </TableCell>
+                                  <TableCell>
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      value={ovr.capital_per_trade ?? ''}
+                                      onChange={(e) => {
+                                        const raw = e.target.value
+                                        const v = raw.trim() === '' ? null : Number(raw)
+                                        if (v !== null && !Number.isFinite(v)) return
+                                        setOverride(src, prod, 'capital_per_trade', v)
+                                      }}
+                                      sx={{ minWidth: 140 }}
+                                    />
+                                  </TableCell>
+                                  <TableCell>
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      value={ovr.max_risk_per_trade_pct ?? ''}
+                                      onChange={(e) => {
+                                        const raw = e.target.value
+                                        const v = raw.trim() === '' ? null : Number(raw)
+                                        if (v !== null && !Number.isFinite(v)) return
+                                        setOverride(src, prod, 'max_risk_per_trade_pct', v)
+                                      }}
+                                      sx={{ minWidth: 140 }}
+                                    />
+                                  </TableCell>
+                                  <TableCell>
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      value={ovr.hard_max_risk_pct ?? ''}
+                                      onChange={(e) => {
+                                        const raw = e.target.value
+                                        const v = raw.trim() === '' ? null : Number(raw)
+                                        if (v !== null && !Number.isFinite(v)) return
+                                        setOverride(src, prod, 'hard_max_risk_pct', v)
+                                      }}
+                                      sx={{ minWidth: 140 }}
+                                    />
+                                  </TableCell>
+                                </TableRow>
+                              )
+                            }),
+                          )}
+                        </TableBody>
+                      </Table>
+                    )
+                  })()}
+                </>
+              )}
+            </Paper>
+          </Box>
       ) : null}
     </Box>
   )
