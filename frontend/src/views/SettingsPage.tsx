@@ -85,6 +85,37 @@ const DISPLAY_TZ_PRESETS = [
   'America/Los_Angeles',
 ] as const
 
+function HelpTip({
+  title,
+}: {
+  title: string
+}) {
+  return (
+    <Tooltip title={title} arrow placement="top">
+      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center' }}>
+        <HelpOutlineIcon
+          sx={{ fontSize: 16, color: 'text.secondary', cursor: 'help' }}
+        />
+      </Box>
+    </Tooltip>
+  )
+}
+
+function LabelWithHelp({
+  label,
+  help,
+}: {
+  label: string
+  help?: string
+}) {
+  return (
+    <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}>
+      <span>{label}</span>
+      {help ? <HelpTip title={help} /> : null}
+    </Box>
+  )
+}
+
 function BrokerSecretsTable({
   brokerName,
 }: {
@@ -1423,7 +1454,12 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Enable enforcement"
+                      label={
+                        <LabelWithHelp
+                          label="Enable enforcement"
+                          help="When enabled, SigmaTrader blocks/clamps orders at dispatch/execute time (manual queue, TradingView AUTO, deployments). When disabled, the legacy v1 risk checks (if any) are used."
+                        />
+                      }
                     />
                     <Button
                       size="small"
@@ -1482,13 +1518,27 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Equity baseline (manual)
+                    <HelpTip title="This equity is the baseline for all % limits (daily loss %, risk per trade %, order value %, exposure %). It is not fetched from the broker yet." />
                   </Typography>
                   <TextField
                     size="small"
                     type="number"
-                    label="Manual equity (INR)"
+                    label={
+                      <LabelWithHelp
+                        label="Manual equity (INR)"
+                        help="Used as the primary equity baseline for risk calculations. Example: with 1,000,000 INR equity and 0.5% risk per trade, max risk per trade is 5,000 INR."
+                      />
+                    }
                     value={riskPolicyDraft.equity.manual_equity_inr}
                     onChange={(e) => {
                       const v = Number(e.target.value)
@@ -1502,14 +1552,28 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Account-level risk (GLOBAL)
+                    <HelpTip title="These limits apply across all sources and products. They are evaluated at execute time using cached positions/snapshots (so syncing positions improves accuracy)." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
                       type="number"
-                      label="Max daily loss (%)"
+                      label={
+                        <LabelWithHelp
+                          label="Max daily loss (%)"
+                          help="HARD STOP. If today's PnL is <= -(% of equity), new executions are rejected. Uses cached position PnL (PositionSnapshot/Position)."
+                        />
+                      }
                       value={riskPolicyDraft.account_risk.max_daily_loss_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1524,7 +1588,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Max daily loss (abs INR)"
+                      label={
+                        <LabelWithHelp
+                          label="Max daily loss (abs INR)"
+                          help="Optional HARD STOP override. If set, this absolute INR limit is used (instead of deriving from equity + %)."
+                        />
+                      }
                       value={riskPolicyDraft.account_risk.max_daily_loss_abs ?? ''}
                       onChange={(e) => {
                         const raw = e.target.value
@@ -1542,7 +1611,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Max open positions"
+                      label={
+                        <LabelWithHelp
+                          label="Max open positions"
+                          help="Rejects executions once the number of open positions (non-zero qty in cached positions table) reaches this limit."
+                        />
+                      }
                       value={riskPolicyDraft.account_risk.max_open_positions}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1557,7 +1631,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Max concurrent symbols"
+                      label={
+                        <LabelWithHelp
+                          label="Max concurrent symbols"
+                          help="Rejects executions once the number of distinct symbols held concurrently reaches this limit (based on cached positions)."
+                        />
+                      }
                       value={riskPolicyDraft.account_risk.max_concurrent_symbols}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1572,7 +1651,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Max exposure (%)"
+                      label={
+                        <LabelWithHelp
+                          label="Max exposure (%)"
+                          help="Total deployed capital cap. Blocks BUY orders if estimated exposure (sum(|qty×avg_price|) + this order value) exceeds % of equity."
+                        />
+                      }
                       value={riskPolicyDraft.account_risk.max_exposure_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1588,14 +1672,28 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Per-trade risk
+                    <HelpTip title="For sizing checks, SigmaTrader estimates a stop distance and clamps qty so worst-case loss (qty × stop distance) stays within the configured % of equity. It does NOT place stop-loss orders yet." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
                       type="number"
-                      label="Max risk per trade (%)"
+                      label={
+                        <LabelWithHelp
+                          label="Max risk per trade (%)"
+                          help="Default target risk per trade. Qty is clamped so (qty × stop_distance) ≤ this % of equity."
+                        />
+                      }
                       value={riskPolicyDraft.trade_risk.max_risk_per_trade_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1610,7 +1708,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Hard max risk (%)"
+                      label={
+                        <LabelWithHelp
+                          label="Hard max risk (%)"
+                          help="Absolute ceiling. Even if other settings allow higher risk, qty is clamped to never exceed this % of equity."
+                        />
+                      }
                       value={riskPolicyDraft.trade_risk.hard_max_risk_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1625,7 +1728,12 @@ export function SettingsPage() {
                     <TextField
                       select
                       size="small"
-                      label="Stop reference"
+                      label={
+                        <LabelWithHelp
+                          label="Stop reference"
+                          help="ATR: uses daily-candle ATR for sizing checks (fallback stop% if ATR unavailable). FIXED_PCT: always uses the fallback stop%."
+                        />
+                      }
                       value={riskPolicyDraft.trade_risk.stop_reference}
                       onChange={(e) =>
                         setRiskPolicyDraft((prev) =>
@@ -1661,20 +1769,39 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Stop mandatory"
+                      label={
+                        <LabelWithHelp
+                          label="Stop mandatory"
+                          help="If enabled and SigmaTrader cannot estimate stop distance (missing price/candles), the execution is rejected."
+                        />
+                      }
                     />
                   </Box>
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Position sizing
+                    <HelpTip title="SigmaTrader clamps incoming qty; it does not derive a new qty from scratch. These settings cap how big a single order can be." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
                       type="number"
-                      label="Capital per trade (INR)"
+                      label={
+                        <LabelWithHelp
+                          label="Capital per trade (INR)"
+                          help="Additional per-order value cap in INR. If an order exceeds this amount, qty is clamped (and rejected if it would become < 1 share)."
+                        />
+                      }
                       value={riskPolicyDraft.position_sizing.capital_per_trade}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1720,12 +1847,22 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Allow scale-in"
+                      label={
+                        <LabelWithHelp
+                          label="Allow scale-in"
+                          help="Not enforced yet. Intended to control whether adding to an existing position is allowed."
+                        />
+                      }
                     />
                     <TextField
                       size="small"
                       type="number"
-                      label="Pyramiding"
+                      label={
+                        <LabelWithHelp
+                          label="Pyramiding"
+                          help="Not enforced yet. Intended to cap the number of scale-ins per symbol/position."
+                        />
+                      }
                       value={riskPolicyDraft.position_sizing.pyramiding}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1741,14 +1878,28 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Stop rules (used for risk checks only)
+                    <HelpTip title="These parameters are used only to estimate stop distance for risk sizing checks. SigmaTrader does not place linked SL/trailing orders yet." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
                       type="number"
-                      label="ATR stop (xATR)"
+                      label={
+                        <LabelWithHelp
+                          label="ATR stop (xATR)"
+                          help="When Stop reference=ATR, stop distance is estimated as ATR × this multiplier (then clamped by Min/Max stop%)."
+                        />
+                      }
                       value={riskPolicyDraft.stop_rules.initial_stop_atr}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1763,7 +1914,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Fallback stop (%)"
+                      label={
+                        <LabelWithHelp
+                          label="Fallback stop (%)"
+                          help="Used when ATR data is unavailable (and Stop mandatory is enabled), or when Stop reference=FIXED_PCT."
+                        />
+                      }
                       value={riskPolicyDraft.stop_rules.fallback_stop_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1778,7 +1934,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Min stop (%)"
+                      label={
+                        <LabelWithHelp
+                          label="Min stop (%)"
+                          help="Lower bound for stop distance as % of price (prevents unrealistically tight stops for sizing checks)."
+                        />
+                      }
                       value={riskPolicyDraft.stop_rules.min_stop_distance_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1793,7 +1954,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Max stop (%)"
+                      label={
+                        <LabelWithHelp
+                          label="Max stop (%)"
+                          help="Upper bound for stop distance as % of price (prevents excessively loose stops for sizing checks)."
+                        />
+                      }
                       value={riskPolicyDraft.stop_rules.max_stop_distance_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1824,12 +1990,22 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Trailing enabled"
+                      label={
+                        <LabelWithHelp
+                          label="Trailing enabled"
+                          help="Not enforced yet (no trailing orders placed). Kept for future trailing-stop automation."
+                        />
+                      }
                     />
                     <TextField
                       size="small"
                       type="number"
-                      label="Trail activation (xATR)"
+                      label={
+                        <LabelWithHelp
+                          label="Trail activation (xATR)"
+                          help="Not enforced yet. Intended to start trailing only after price moves in favor by this many ATRs."
+                        />
+                      }
                       value={riskPolicyDraft.stop_rules.trail_activation_atr}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1845,14 +2021,28 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Trade frequency
+                    <HelpTip title="Overtrading protection. Currently only Max trades/symbol/day is enforced (IST day) at execute time." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
                       type="number"
-                      label="Max trades/symbol/day"
+                      label={
+                        <LabelWithHelp
+                          label="Max trades/symbol/day"
+                          help="Enforced. Blocks further executions for the same symbol+product after this many SENT/EXECUTED orders in the current IST day."
+                        />
+                      }
                       value={riskPolicyDraft.trade_frequency.max_trades_per_symbol_per_day}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1873,7 +2063,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Min bars between trades"
+                      label={
+                        <LabelWithHelp
+                          label="Min bars between trades"
+                          help="Not enforced yet. Intended to prevent rapid re-entries on the same symbol."
+                        />
+                      }
                       value={riskPolicyDraft.trade_frequency.min_bars_between_trades}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1894,7 +2089,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Cooldown after loss (bars)"
+                      label={
+                        <LabelWithHelp
+                          label="Cooldown after loss (bars)"
+                          help="Not enforced yet. Intended to pause re-entries after a losing trade for N bars."
+                        />
+                      }
                       value={riskPolicyDraft.trade_frequency.cooldown_after_loss_bars}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1916,14 +2116,28 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Loss controls (not fully enforced yet)
+                    <HelpTip title="These are critical protections, but they require per-trade PnL and streak tracking. The UI is ready; enforcement will be wired once PnL accounting is finalized." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
                       type="number"
-                      label="Max consecutive losses"
+                      label={
+                        <LabelWithHelp
+                          label="Max consecutive losses"
+                          help="Not enforced yet. Intended to stop trading after N consecutive losing trades."
+                        />
+                      }
                       value={riskPolicyDraft.loss_controls.max_consecutive_losses}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -1957,11 +2171,21 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Pause after streak"
+                      label={
+                        <LabelWithHelp
+                          label="Pause after streak"
+                          help="Not enforced yet. Intended to pause new executions after hitting the loss streak threshold."
+                        />
+                      }
                     />
                     <TextField
                       size="small"
-                      label="Pause duration"
+                      label={
+                        <LabelWithHelp
+                          label="Pause duration"
+                          help="Not enforced yet. Example values: EOD (end of day), 30m, 2h."
+                        />
+                      }
                       value={riskPolicyDraft.loss_controls.pause_duration}
                       onChange={(e) =>
                         setRiskPolicyDraft((prev) =>
@@ -1979,14 +2203,28 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Correlation & symbol control (not enforced yet)
+                    <HelpTip title="These controls help avoid concentration in correlated sectors. Enforcement needs sector classification/correlation inputs." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
                       type="number"
-                      label="Max same-sector positions"
+                      label={
+                        <LabelWithHelp
+                          label="Max same-sector positions"
+                          help="Not enforced yet. Intended to cap the number of open positions from the same sector/theme."
+                        />
+                      }
                       value={riskPolicyDraft.correlation_rules.max_same_sector_positions}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -2007,7 +2245,12 @@ export function SettingsPage() {
                     <TextField
                       size="small"
                       type="number"
-                      label="Sector correlation limit"
+                      label={
+                        <LabelWithHelp
+                          label="Sector correlation limit"
+                          help="Not enforced yet. Intended to block adding positions when correlation exceeds this threshold."
+                        />
+                      }
                       value={riskPolicyDraft.correlation_rules.sector_correlation_limit}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -2029,8 +2272,17 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Execution safety (GLOBAL)
+                    <HelpTip title="Execution-layer guardrails. allow_mis/allow_cnc and max order value % are enforced. Margin checks are not wired yet." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <FormControlLabel
@@ -2046,7 +2298,12 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Allow MIS (global)"
+                      label={
+                        <LabelWithHelp
+                          label="Allow MIS (global)"
+                          help="Enforced. If disabled, MIS executions are rejected unless an override allows it."
+                        />
+                      }
                     />
                     <FormControlLabel
                       control={
@@ -2061,12 +2318,22 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Allow CNC (global)"
+                      label={
+                        <LabelWithHelp
+                          label="Allow CNC (global)"
+                          help="Enforced. If disabled, CNC executions are rejected unless an override allows it."
+                        />
+                      }
                     />
                     <TextField
                       size="small"
                       type="number"
-                      label="Max order value (% of equity)"
+                      label={
+                        <LabelWithHelp
+                          label="Max order value (% of equity)"
+                          help="Enforced. Qty is clamped so order value (qty × price) does not exceed this % of equity (also combined with Capital per trade and overrides)."
+                        />
+                      }
                       value={riskPolicyDraft.execution_safety.max_order_value_pct}
                       onChange={(e) => {
                         const v = Number(e.target.value)
@@ -2097,14 +2364,28 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="Reject if margin exceeded"
+                      label={
+                        <LabelWithHelp
+                          label="Reject if margin exceeded"
+                          help="Not enforced yet. Intended to block orders when broker margin is insufficient."
+                        />
+                      }
                     />
                   </Box>
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Emergency controls
+                    <HelpTip title="Kill-switch style controls. panic_stop is enforced immediately. The other toggles are currently placeholders for future automation." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <FormControlLabel
@@ -2123,7 +2404,12 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="panic_stop"
+                      label={
+                        <LabelWithHelp
+                          label="panic_stop"
+                          help="Enforced. Blocks all executions immediately (global kill switch)."
+                        />
+                      }
                     />
                     <FormControlLabel
                       control={
@@ -2144,7 +2430,12 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="stop_all_trading_on_error"
+                      label={
+                        <LabelWithHelp
+                          label="stop_all_trading_on_error"
+                          help="Not enforced yet. Intended to stop trading after unexpected broker/system errors."
+                        />
+                      }
                     />
                     <FormControlLabel
                       control={
@@ -2165,14 +2456,28 @@ export function SettingsPage() {
                           }
                         />
                       }
-                      label="stop_on_unexpected_qty"
+                      label={
+                        <LabelWithHelp
+                          label="stop_on_unexpected_qty"
+                          help="Not enforced yet. Intended to stop trading if order qty changes unexpectedly after normalization/clamping."
+                        />
+                      }
                     />
                   </Box>
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                    }}
+                  >
                     Overrides (source × product)
+                    <HelpTip title="Overrides let you apply different caps to TradingView vs SigmaTrader orders, separately for MIS and CNC. Blank means inherit from GLOBAL settings above." />
                   </Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                     Leave a field blank to inherit from GLOBAL.
@@ -2207,14 +2512,54 @@ export function SettingsPage() {
                       <Table size="small">
                         <TableHead>
                           <TableRow>
-                            <TableCell>Source</TableCell>
-                            <TableCell>Product</TableCell>
-                            <TableCell>Allow</TableCell>
-                            <TableCell>Max order value (abs)</TableCell>
-                            <TableCell>Max qty/order</TableCell>
-                            <TableCell>Capital/trade</TableCell>
-                            <TableCell>Max risk (%)</TableCell>
-                            <TableCell>Hard max risk (%)</TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Source"
+                                help="Which engine produced the order: TradingView webhooks vs internal SigmaTrader alerts/strategies/deployments."
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Product"
+                                help="MIS vs CNC. Use this to enforce stricter limits for intraday (MIS) compared to delivery (CNC)."
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Allow"
+                                help="DEFAULT inherits from global allow_mis/allow_cnc. You can explicitly ALLOW/DISALLOW for this source+product."
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Max order value (abs)"
+                                help="Absolute INR cap for a single order (applies in addition to % of equity and capital/trade caps)."
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Max qty/order"
+                                help="Hard cap on quantity for a single order."
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Capital/trade"
+                                help="Overrides global Capital per trade for this source+product."
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Max risk (%)"
+                                help="Overrides global max risk per trade for this source+product (qty × stop distance)."
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <LabelWithHelp
+                                label="Hard max risk (%)"
+                                help="Overrides global hard max risk per trade for this source+product (absolute ceiling)."
+                              />
+                            </TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
