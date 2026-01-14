@@ -12,7 +12,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
-from app.models import Alert, Order, Strategy, User
+from app.models import Alert, BrokerSecret, Order, Strategy, User
 
 client = TestClient(app)
 
@@ -370,6 +370,45 @@ def test_tradingview_secret_can_be_overridden_via_settings_api() -> None:
         json={"value": ""},
     )
     assert response.status_code == 200
+
+
+def test_tradingview_webhook_config_roundtrip_via_settings_api() -> None:
+    response = client.get("/api/webhook-settings/tradingview-config")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "MANUAL"
+    assert data["broker_name"] == "zerodha"
+    assert data["execution_target"] == "LIVE"
+    assert data["fallback_to_waiting_on_error"] is True
+
+    response = client.put(
+        "/api/webhook-settings/tradingview-config",
+        json={
+            "mode": "AUTO",
+            "broker_name": "zerodha",
+            "execution_target": "LIVE",
+            "fallback_to_waiting_on_error": False,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "AUTO"
+    assert data["broker_name"] == "zerodha"
+    assert data["execution_target"] == "LIVE"
+    assert data["fallback_to_waiting_on_error"] is False
+
+    # Clean up: remove the config row so other tests keep using the legacy
+    # strategy-driven behavior.
+    from app.services.tradingview_webhook_config import TRADINGVIEW_WEBHOOK_CONFIG_KEY
+    from app.services.webhook_secrets import WEBHOOK_BROKER_NAME
+
+    with SessionLocal() as session:
+        session.query(BrokerSecret).filter(
+            BrokerSecret.broker_name == WEBHOOK_BROKER_NAME,
+            BrokerSecret.key == TRADINGVIEW_WEBHOOK_CONFIG_KEY,
+            BrokerSecret.user_id.is_(None),
+        ).delete()
+        session.commit()
 
 
 def test_webhook_manual_strategy_creates_waiting_order_for_user() -> None:

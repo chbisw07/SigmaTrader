@@ -17,8 +17,10 @@ from app.models import Alert, Strategy, User
 from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
-from app.services.paper_trading import submit_paper_order
 from app.services.system_events import record_system_event
+from app.services.tradingview_webhook_config import (
+    get_tradingview_webhook_config_with_source,
+)
 from app.services.tradingview_zerodha_adapter import (
     NormalizedAlert,
     normalize_tradingview_payload_for_zerodha,
@@ -360,9 +362,55 @@ def tradingview_webhook(
             "st_user_id": st_user,
         }
 
+    # NOTE: Backward compatibility
+    # If webhook routing config is not explicitly set, fall back to the
+    # historical strategy-based AUTO/MANUAL behavior (tests and existing setups).
+    cfg, cfg_source = get_tradingview_webhook_config_with_source(
+        db,
+        settings,
+        user_id=user.id,
+    )
     strategy: Strategy | None = (
         db.query(Strategy).filter(Strategy.name == payload.strategy_name).one_or_none()
     )
+    use_strategy_mode = (
+        cfg_source == "default" and strategy is not None and strategy.enabled
+    )
+
+    mode = (
+        (
+            getattr(strategy, "execution_mode", "MANUAL")
+            if use_strategy_mode
+            else cfg.mode
+        )
+        .strip()
+        .upper()
+    )
+    if mode not in {"MANUAL", "AUTO"}:
+        mode = "MANUAL"
+    auto_execute = mode == "AUTO"
+
+    exec_target = (
+        (
+            getattr(strategy, "execution_target", "LIVE")
+            if use_strategy_mode
+            else cfg.execution_target
+        )
+        .strip()
+        .upper()
+    )
+    if exec_target not in {"LIVE", "PAPER"}:
+        exec_target = "LIVE"
+
+    # Broker selection is config-driven (strategies are broker-agnostic).
+    broker_name = (cfg.broker_name or "zerodha").strip().lower()
+
+    try:
+        from app.api.orders import _ensure_supported_broker
+
+        broker_name = _ensure_supported_broker(broker_name)
+    except Exception:
+        broker_name = "zerodha"
 
     normalized: NormalizedAlert = normalize_tradingview_payload_for_zerodha(
         payload=payload,
@@ -371,7 +419,12 @@ def tradingview_webhook(
 
     alert = Alert(
         user_id=normalized.user_id,
-        strategy_id=strategy.id if strategy else None,
+        # Keep legacy strategy linkage only when operating in legacy
+        # strategy-driven mode. When the new webhook config is set, avoid linking
+        # so TradingView orders are governed by GLOBAL risk settings only.
+        strategy_id=(
+            strategy.id if use_strategy_mode and strategy is not None else None
+        ),
         symbol=normalized.symbol_display,
         exchange=normalized.broker_exchange,
         interval=normalized.timeframe,
@@ -379,6 +432,7 @@ def tradingview_webhook(
         qty=normalized.qty,
         price=normalized.price,
         platform=payload.platform,
+        source="TRADINGVIEW",
         raw_payload=normalized.raw_payload,
         bar_time=normalized.bar_time,
         reason=normalized.reason,
@@ -388,61 +442,40 @@ def tradingview_webhook(
     db.commit()
     db.refresh(alert)
 
-    # Determine execution mode routing based on strategy configuration.
-    mode = "MANUAL"
-    auto_execute = False
-    if strategy is not None and strategy.enabled:
-        if strategy.execution_mode == "AUTO":
-            mode = "AUTO"
-            auto_execute = True
-
     order = create_order_from_alert(
         db=db,
         alert=alert,
         mode=mode,
         product=normalized.product,
         order_type=normalized.order_type,
+        broker_name=broker_name,
+        execution_target=exec_target,
         user_id=alert.user_id,
     )
 
-    # For AUTO strategies we immediately execute the order via the same
-    # execution path used by the manual queue endpoint. When the
-    # strategy is configured for PAPER execution we instead submit the
-    # order to the paper engine and skip contacting Zerodha. Paper
-    # execution respects market hours to avoid filling on stale prices.
+    # For AUTO webhooks we immediately execute the order via the same execution
+    # path used by the manual queue endpoint. When configured for PAPER
+    # execution we respect market hours and (when closed) fall back to the
+    # manual waiting queue so the user can execute later.
     if auto_execute:
         try:
-            exec_target = "LIVE"
-            if strategy is not None:
-                exec_target = getattr(strategy, "execution_target", "LIVE")
-
-            if exec_target == "PAPER":
-                if not is_market_open_now():
-                    order.simulated = True
-                    order.status = "FAILED"
-                    order.error_message = "Paper AUTO order rejected: market is closed."
-                    db.add(order)
-                    db.commit()
-                    db.refresh(order)
-                    record_system_event(
-                        db,
-                        level="WARNING",
-                        category="paper",
-                        message="AUTO paper order rejected: market closed",
-                        correlation_id=correlation_id,
-                        details={
-                            "order_id": order.id,
-                            "symbol": order.symbol,
-                            "strategy": payload.strategy_name,
-                        },
-                    )
-                else:
-                    submit_paper_order(
-                        db,
-                        settings,
-                        order,
-                        correlation_id=correlation_id,
-                    )
+            # New-config AUTO(PAPER) prefers to fall back to Waiting Queue if
+            # market is closed; legacy strategy AUTO uses the existing paper
+            # execution behavior (which fails fast).
+            if (
+                not use_strategy_mode
+                and exec_target == "PAPER"
+                and not is_market_open_now()
+            ):
+                order.mode = "MANUAL"
+                order.status = "WAITING"
+                order.error_message = (
+                    "AUTO(PAPER) dispatch skipped: market is closed. "
+                    "Moved to Waiting Queue."
+                )
+                db.add(order)
+                db.commit()
+                db.refresh(order)
             else:
                 from app.api.orders import execute_order as execute_order_api
 
@@ -453,32 +486,73 @@ def tradingview_webhook(
                     settings=settings,
                 )
         except HTTPException as exc:
-            # The execute_order handler will have updated order status /
-            # error_message appropriately. When Zerodha is not connected
-            # we ensure the order records a clear failure reason so the
-            # manual queue and history views reflect what happened.
-            if exc.status_code == status.HTTP_400_BAD_REQUEST and isinstance(
-                exc.detail,
-                str,
+            # Legacy strategy-driven AUTO behavior: surface the broker error and
+            # mark the order as FAILED (so history shows what happened).
+            if use_strategy_mode:
+                db.refresh(order)
+                detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                if exc.status_code == status.HTTP_400_BAD_REQUEST and isinstance(
+                    detail,
+                    str,
+                ):
+                    if "is not connected" in detail.lower():
+                        order.status = "FAILED"
+                        if broker_name.lower() == "zerodha":
+                            order.error_message = (
+                                "Zerodha is not connected for AUTO mode."
+                            )
+                        else:
+                            order.error_message = (
+                                f"{broker_name} is not connected for AUTO mode."
+                            )
+                        db.add(order)
+                        db.commit()
+                        db.refresh(order)
+                logger.exception(
+                    "AUTO execution failed for alert id=%s order id=%s strategy=%s",
+                    alert.id,
+                    order.id,
+                    payload.strategy_name,
+                )
+                raise
+
+            # New-config AUTO behavior: optionally fall back to Waiting Queue so
+            # the user can retry after fixing broker connectivity or market-hours.
+            db.refresh(order)
+            detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            transient = any(
+                s in detail.lower()
+                for s in (
+                    "is not connected",
+                    "market is closed",
+                    "paper order rejected",
+                )
+            )
+            if (
+                cfg.fallback_to_waiting_on_error
+                and order.status == "WAITING"
+                and transient
             ):
-                if "Zerodha is not connected" in exc.detail:
-                    order.status = "FAILED"
-                    order.error_message = "Zerodha is not connected for AUTO mode."
-                    db.add(order)
-                    db.commit()
-                    db.refresh(order)
-                    record_system_event(
-                        db,
-                        level="WARNING",
-                        category="order",
-                        message="AUTO order rejected: broker not connected",
-                        correlation_id=correlation_id,
-                        details={
-                            "order_id": order.id,
-                            "symbol": order.symbol,
-                            "strategy": payload.strategy_name,
-                        },
-                    )
+                order.mode = "MANUAL"
+                order.error_message = (
+                    f"AUTO dispatch failed: {detail}. Moved to Waiting Queue."
+                )
+                db.add(order)
+                db.commit()
+                db.refresh(order)
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="order",
+                    message="AUTO order moved to waiting queue",
+                    correlation_id=correlation_id,
+                    details={
+                        "order_id": order.id,
+                        "symbol": order.symbol,
+                        "reason": detail,
+                        "broker_name": broker_name,
+                    },
+                )
             logger.exception(
                 "AUTO execution failed for alert id=%s order id=%s strategy=%s",
                 alert.id,

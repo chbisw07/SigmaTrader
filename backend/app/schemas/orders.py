@@ -29,6 +29,7 @@ class OrderRead(BaseModel):
     alert_id: Optional[int]
     strategy_id: Optional[int]
     portfolio_group_id: Optional[int] = None
+    origin: str = "MANUAL"
     broker_name: str = "zerodha"
     symbol: str
     exchange: Optional[str]

@@ -18,6 +18,7 @@ export type Order = {
   alert_id?: number | null
   strategy_id?: number | null
   portfolio_group_id?: number | null
+  origin?: string | null
   broker_name?: string | null
   symbol: string
   exchange?: string | null

@@ -57,21 +57,14 @@ def evaluate_order_risk(db: Session, order: Order) -> RiskResult:
             final_qty=original_qty,
         )
 
-    # Prefer global first, then strategy-specific for this order (if any).
+    # Prefer GLOBAL rows only. Strategy-scoped rows exist in the DB schema for
+    # legacy/experimental use, but the current product surface configures risk
+    # globally (including TradingView webhook orders).
     global_settings: List[RiskSettings] = [
         rs for rs in settings_rows if rs.scope == "GLOBAL"
     ]
-    strategy_settings: List[RiskSettings] = []
-    if order.strategy_id is not None:
-        strategy_settings = [
-            rs
-            for rs in settings_rows
-            if rs.scope == "STRATEGY" and rs.strategy_id == order.strategy_id
-        ]
-
     ordered_settings: List[RiskSettings] = []
     ordered_settings.extend(global_settings)
-    ordered_settings.extend(strategy_settings)
 
     # Helper to emit a blocked result.
     def _blocked(reason: str) -> RiskResult:

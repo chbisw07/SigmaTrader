@@ -59,6 +59,8 @@ def test_queue_listing_and_cancel_flow() -> None:
     queue_items = resp_queue.json()
     ids = [item["id"] for item in queue_items]
     assert order_id in ids
+    item = next(x for x in queue_items if x["id"] == order_id)
+    assert item.get("origin") == "TRADINGVIEW"
 
     # Cancel the order via status update
     resp_cancel = client.patch(
@@ -100,6 +102,7 @@ def test_edit_order_in_waiting_queue() -> None:
     assert resp_edit.status_code == 200
     edited = resp_edit.json()
     assert edited["id"] == order_id
+    assert edited.get("origin") == "TRADINGVIEW"
     assert edited["qty"] == 5
     assert edited["price"] == 3600.0
     assert edited["order_type"] == "LIMIT"

@@ -294,6 +294,17 @@ class Order(Base):
     alert: Mapped[Optional[Alert]] = relationship(back_populates="orders")
     strategy: Mapped[Optional[Strategy]] = relationship(back_populates="orders")
 
+    @property
+    def origin(self) -> str:
+        """Best-effort label for where this order came from (for UI display)."""
+
+        if self.alert is None:
+            return "MANUAL"
+        src = getattr(self.alert, "source", None) or getattr(
+            self.alert, "platform", None
+        )
+        return str(src).strip().upper() or "ALERT"
+
 
 class IndicatorRule(Base):
     __tablename__ = "indicator_rules"

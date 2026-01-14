@@ -512,6 +512,17 @@ export function WaitingQueuePanel({
       },
     },
     {
+      field: 'origin',
+      headerName: 'Source',
+      width: 120,
+      valueGetter: (_value, row) => {
+        const order = row as Order
+        const raw = String(order.origin ?? 'MANUAL').trim().toUpperCase()
+        if (raw === 'TRADINGVIEW') return 'TradingView'
+        return raw || 'MANUAL'
+      },
+    },
+    {
       field: 'symbol',
       headerName: 'Symbol',
       width: 200,

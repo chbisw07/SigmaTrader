@@ -13,6 +13,8 @@ def create_order_from_alert(
     mode: str = "MANUAL",
     product: str = "MIS",
     order_type: str = "MARKET",
+    broker_name: str | None = None,
+    execution_target: str | None = None,
     user_id: int | None = None,
 ) -> Order:
     """Create and persist an Order in WAITING state derived from an Alert.
@@ -39,6 +41,8 @@ def create_order_from_alert(
         gtt=False,
         status="WAITING",
         mode=mode,
+        broker_name=(broker_name or "zerodha").strip().lower() or "zerodha",
+        execution_target=(execution_target or "LIVE").strip().upper() or "LIVE",
         simulated=False,
     )
 

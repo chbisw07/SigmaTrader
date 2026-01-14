@@ -1,4 +1,3 @@
-import DeleteIcon from '@mui/icons-material/Delete'
 import FileDownloadIcon from '@mui/icons-material/FileDownload'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import Box from '@mui/material/Box'
@@ -28,15 +27,9 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
   fetchRiskSettings,
-  fetchStrategies,
   createRiskSettings,
   deleteRiskSettings,
-  updateStrategyExecutionMode,
-  updateStrategyExecutionTarget,
-  updateStrategyPaperPollInterval,
-  deleteStrategy,
   type RiskSettings,
-  type Strategy,
 } from '../services/admin'
 
 import {
@@ -70,7 +63,9 @@ import {
 } from '../services/marketCalendar'
 import {
   fetchTradingViewWebhookSecret,
+  fetchTradingViewWebhookConfig,
   updateTradingViewWebhookSecret,
+  updateTradingViewWebhookConfig,
 } from '../services/webhookSettings'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
@@ -378,10 +373,9 @@ export function SettingsPage() {
   const { displayTimeZone, setDisplayTimeZone } = useTimeSettings()
   const systemTimeZone = getSystemTimeZone()
 
-  type SettingsTab = 'broker' | 'risk' | 'strategy' | 'market' | 'time'
+  type SettingsTab = 'broker' | 'risk' | 'webhook' | 'market' | 'time'
   const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
 
-  const [strategies, setStrategies] = useState<Strategy[]>([])
   const [riskSettings, setRiskSettings] = useState<RiskSettings[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -399,12 +393,9 @@ export function SettingsPage() {
   const [isConnectingAngelone, setIsConnectingAngelone] = useState(false)
   const [angeloneOtpPromptOpen, setAngeloneOtpPromptOpen] = useState(false)
   const [angeloneOtpDraft, setAngeloneOtpDraft] = useState('')
-  const [updatingStrategyId, setUpdatingStrategyId] = useState<number | null>(null)
-  const [deletingStrategyId, setDeletingStrategyId] = useState<number | null>(null)
   const [savingRisk, setSavingRisk] = useState(false)
   const [deletingRiskId, setDeletingRiskId] = useState<number | null>(null)
-  const [riskScope, setRiskScope] = useState<'GLOBAL' | 'STRATEGY'>('GLOBAL')
-  const [riskStrategyId, setRiskStrategyId] = useState<string>('')
+  const riskScope: 'GLOBAL' = 'GLOBAL'
   const [riskMaxOrderValue, setRiskMaxOrderValue] = useState<string>('')
   const [riskMaxQty, setRiskMaxQty] = useState<string>('')
   const [riskMaxDailyLoss, setRiskMaxDailyLoss] = useState<string>('')
@@ -414,7 +405,6 @@ export function SettingsPage() {
   )
 
   const [requestTokenVisible, setRequestTokenVisible] = useState(false)
-  const [paperPollDrafts, setPaperPollDrafts] = useState<Record<number, string>>({})
   const [tvWebhookSecret, setTvWebhookSecret] = useState<string>('')
   const [tvWebhookSecretDraft, setTvWebhookSecretDraft] = useState<string>('')
   const [tvWebhookSecretSource, setTvWebhookSecretSource] = useState<
@@ -424,6 +414,16 @@ export function SettingsPage() {
   const [tvWebhookSecretVisible, setTvWebhookSecretVisible] = useState(false)
   const [tvWebhookSecretSaving, setTvWebhookSecretSaving] = useState(false)
   const [tvWebhookSecretError, setTvWebhookSecretError] = useState<string | null>(null)
+  const [tvWebhookConfigLoaded, setTvWebhookConfigLoaded] = useState(false)
+  const [tvWebhookMode, setTvWebhookMode] = useState<'MANUAL' | 'AUTO'>('MANUAL')
+  const [tvWebhookExecutionTarget, setTvWebhookExecutionTarget] = useState<
+    'LIVE' | 'PAPER'
+  >('LIVE')
+  const [tvWebhookBrokerName, setTvWebhookBrokerName] = useState<string>('zerodha')
+  const [tvWebhookFallbackToWaiting, setTvWebhookFallbackToWaiting] =
+    useState<boolean>(true)
+  const [tvWebhookConfigSaving, setTvWebhookConfigSaving] = useState(false)
+  const [tvWebhookConfigError, setTvWebhookConfigError] = useState<string | null>(null)
 
   const [marketExchange, setMarketExchange] = useState<'NSE' | 'BSE'>('NSE')
   const [marketDefaults, setMarketDefaults] = useState<MarketDefaults | null>(null)
@@ -460,20 +460,21 @@ export function SettingsPage() {
 
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get('tab')
+    const normalizedTab = tab === 'strategy' ? 'webhook' : tab
     if (
-      tab === 'broker' ||
-      tab === 'risk' ||
-      tab === 'strategy' ||
-      tab === 'market' ||
-      tab === 'time'
+      normalizedTab === 'broker' ||
+      normalizedTab === 'risk' ||
+      normalizedTab === 'webhook' ||
+      normalizedTab === 'market' ||
+      normalizedTab === 'time'
     ) {
-      if (tab !== activeTab) setActiveTab(tab)
+      if (normalizedTab !== activeTab) setActiveTab(normalizedTab as SettingsTab)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search])
 
   useEffect(() => {
-    if (activeTab !== 'strategy' || tvWebhookSecretLoaded) return
+    if (activeTab !== 'webhook' || tvWebhookSecretLoaded) return
     void (async () => {
       try {
         const data = await fetchTradingViewWebhookSecret()
@@ -489,6 +490,25 @@ export function SettingsPage() {
       }
     })()
   }, [activeTab, tvWebhookSecretLoaded])
+
+  useEffect(() => {
+    if (activeTab !== 'webhook' || tvWebhookConfigLoaded) return
+    void (async () => {
+      try {
+        const data = await fetchTradingViewWebhookConfig()
+        setTvWebhookMode(data.mode)
+        setTvWebhookBrokerName(data.broker_name ?? 'zerodha')
+        setTvWebhookExecutionTarget(data.execution_target)
+        setTvWebhookFallbackToWaiting(Boolean(data.fallback_to_waiting_on_error))
+        setTvWebhookConfigError(null)
+        setTvWebhookConfigLoaded(true)
+      } catch (err) {
+        setTvWebhookConfigError(
+          err instanceof Error ? err.message : 'Failed to load webhook settings',
+        )
+      }
+    })()
+  }, [activeTab, tvWebhookConfigLoaded])
 
   useEffect(() => {
     if (activeTab !== 'market') return
@@ -522,8 +542,8 @@ export function SettingsPage() {
     const nextTab: SettingsTab =
       next === 'risk'
         ? 'risk'
-        : next === 'strategy'
-          ? 'strategy'
+        : next === 'webhook'
+          ? 'webhook'
           : next === 'market'
             ? 'market'
             : next === 'time'
@@ -579,12 +599,8 @@ export function SettingsPage() {
 
     const load = async () => {
       try {
-        const [strategiesData, riskData] = await Promise.all([
-          fetchStrategies(),
-          fetchRiskSettings(),
-        ])
+        const riskData = await fetchRiskSettings()
         if (!active) return
-        setStrategies(strategiesData)
         setRiskSettings(riskData)
         setError(null)
       } catch (err) {
@@ -713,156 +729,8 @@ export function SettingsPage() {
     }
   }
 
-  const handleChangeExecutionMode = async (
-    strategy: Strategy,
-    newMode: Strategy['execution_mode'],
-  ) => {
-    if (strategy.execution_mode === newMode) return
-    setUpdatingStrategyId(strategy.id)
-    try {
-      const updated = await updateStrategyExecutionMode(strategy.id, newMode)
-      setStrategies((prev) =>
-        prev.map((s) => (s.id === updated.id ? updated : s)),
-      )
-      setError(null)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to update strategy mode',
-      )
-    } finally {
-      setUpdatingStrategyId(null)
-    }
-  }
-
-  const handleChangeExecutionTarget = async (
-    strategy: Strategy,
-    newTarget: Strategy['execution_target'],
-  ) => {
-    if (strategy.execution_target === newTarget) return
-    setUpdatingStrategyId(strategy.id)
-    try {
-      const updated = await updateStrategyExecutionTarget(strategy.id, newTarget)
-      setStrategies((prev) =>
-        prev.map((s) => (s.id === updated.id ? updated : s)),
-      )
-      setError(null)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to update strategy execution target',
-      )
-    } finally {
-      setUpdatingStrategyId(null)
-    }
-  }
-
-  const handleChangePaperPollInterval = async (
-    strategy: Strategy,
-    value: string,
-  ) => {
-    const trimmed = value.trim()
-    const parsed =
-      trimmed === '' ? null : Number.isFinite(Number(trimmed)) ? Number(trimmed) : null
-    if (trimmed !== '' && parsed == null) {
-      setError('Paper poll interval must be a number of seconds.')
-      return
-    }
-    setUpdatingStrategyId(strategy.id)
-    try {
-      const updated = await updateStrategyPaperPollInterval(
-        strategy.id,
-        parsed,
-      )
-      setStrategies((prev) =>
-        prev.map((s) => (s.id === updated.id ? updated : s)),
-      )
-      setPaperPollDrafts((prev) => {
-        const next = { ...prev }
-        delete next[strategy.id]
-        return next
-      })
-      setError(null)
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Failed to update paper poll interval'
-      if (
-        msg.includes('paper_poll_interval_sec') &&
-        (msg.includes('number.not_ge') || msg.includes('number.not_le'))
-      ) {
-        setError('Paper poll interval must be between 15 and 14400 seconds.')
-      } else {
-        setError(msg)
-      }
-    } finally {
-      setUpdatingStrategyId(null)
-    }
-  }
-
-  const handleToggleAvailableForAlert = async (
-    strategy: Strategy,
-    value: boolean,
-  ) => {
-    if (strategy.available_for_alert === value) return
-    setUpdatingStrategyId(strategy.id)
-    try {
-      const res = await fetch(`/api/strategies/${strategy.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ available_for_alert: value }),
-      })
-      if (!res.ok) {
-        const body = await res.text()
-        throw new Error(
-          `Failed to update strategy (${res.status})${
-            body ? `: ${body}` : ''
-          }`,
-        )
-      }
-      const updated = (await res.json()) as Strategy
-      setStrategies((prev) =>
-        prev.map((s) => (s.id === updated.id ? updated : s)),
-      )
-      setError(null)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to update alert availability',
-      )
-    } finally {
-      setUpdatingStrategyId(null)
-    }
-  }
-
-  const handleDeleteStrategy = async (strategy: Strategy) => {
-    const confirmed = window.confirm(
-      `Delete strategy "${strategy.name}"?\n\nThis will also remove any linked alerts/risk rows for this strategy.`,
-    )
-    if (!confirmed) return
-    setDeletingStrategyId(strategy.id)
-    try {
-      await deleteStrategy(strategy.id)
-      setStrategies((prev) => prev.filter((s) => s.id !== strategy.id))
-      setError(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete strategy')
-    } finally {
-      setDeletingStrategyId(null)
-    }
-  }
-
   const handleSaveRiskSettings = async () => {
     try {
-      if (riskScope === 'STRATEGY' && !riskStrategyId) {
-        setError('Please select a strategy for STRATEGY scope risk settings.')
-        return
-      }
-
       const payload: {
         scope: RiskSettings['scope']
         strategy_id: number | null
@@ -876,8 +744,7 @@ export function SettingsPage() {
         symbol_blacklist?: string | null
       } = {
         scope: riskScope,
-        strategy_id:
-          riskScope === 'STRATEGY' ? Number(riskStrategyId) : null,
+        strategy_id: null,
         allow_short_selling: riskShortSelling === 'ALLOWED',
         clamp_mode: riskClampMode,
       }
@@ -984,7 +851,7 @@ export function SettingsPage() {
         Settings
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Manage strategies, risk settings, and broker connection details.
+        Manage TradingView webhook, risk settings, and broker connection details.
       </Typography>
 
       <Paper sx={{ mb: 2 }}>
@@ -996,7 +863,7 @@ export function SettingsPage() {
         >
           <Tab value="broker" label="Broker settings" />
           <Tab value="risk" label="Risk settings" />
-          <Tab value="strategy" label="Strategy settings" />
+          <Tab value="webhook" label="TradingView webhook" />
           <Tab value="market" label="Market configuration" />
           <Tab value="time" label="Time" />
         </Tabs>
@@ -1441,8 +1308,8 @@ export function SettingsPage() {
           <Typography variant="body2">
             {activeTab === 'risk'
               ? 'Loading risk settings...'
-              : activeTab === 'strategy'
-                ? 'Loading strategy settings...'
+              : activeTab === 'webhook'
+                ? 'Loading webhook settings...'
                 : 'Loading settings...'}
           </Typography>
         </Box>
@@ -1450,7 +1317,7 @@ export function SettingsPage() {
         <Typography color="error" variant="body2">
           {error}
         </Typography>
-      ) : activeTab === 'strategy' ? (
+      ) : activeTab === 'webhook' ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
             <Paper sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -1532,150 +1399,89 @@ export function SettingsPage() {
 
             <Paper sx={{ p: 2 }}>
               <Typography variant="h6" gutterBottom>
-                Strategies
+                Routing
               </Typography>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Name</TableCell>
-                    <TableCell>Mode</TableCell>
-                    <TableCell>Execution Target</TableCell>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                        <Typography variant="body2">
-                          Paper Poll Interval (sec)
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          15–14400 sec (leave blank for default)
-                        </Typography>
-                      </Box>
-                    </TableCell>
-                    <TableCell>Enabled</TableCell>
-                    <TableCell>Available for alert</TableCell>
-                    <TableCell>Description</TableCell>
-                    <TableCell>Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {strategies.map((strategy) => (
-                    <TableRow key={strategy.id}>
-                      <TableCell>{strategy.name}</TableCell>
-                      <TableCell>
-                        <TextField
-                          select
-                          size="small"
-                          value={strategy.execution_mode}
-                          onChange={(e) =>
-                            handleChangeExecutionMode(
-                              strategy,
-                              e.target.value as Strategy['execution_mode'],
-                            )
-                          }
-                          disabled={updatingStrategyId === strategy.id}
-                        >
-                          <MenuItem value="MANUAL">MANUAL</MenuItem>
-                          <MenuItem value="AUTO">AUTO</MenuItem>
-                        </TextField>
-                      </TableCell>
-                      <TableCell>
-                        <TextField
-                          select
-                          size="small"
-                          value={strategy.execution_target}
-                          onChange={(e) =>
-                            handleChangeExecutionTarget(
-                              strategy,
-                              e.target.value as Strategy['execution_target'],
-                            )
-                          }
-                          disabled={updatingStrategyId === strategy.id}
-                        >
-                          <MenuItem value="LIVE">LIVE</MenuItem>
-                          <MenuItem value="PAPER">PAPER</MenuItem>
-                        </TextField>
-                      </TableCell>
-                      <TableCell>
-                        <TextField
-                          size="small"
-                          type="number"
-                          placeholder="60"
-                          value={
-                            paperPollDrafts[strategy.id] ??
-                            (strategy.paper_poll_interval_sec != null
-                              ? String(strategy.paper_poll_interval_sec)
-                              : '')
-                          }
-                          onChange={(e) =>
-                            setPaperPollDrafts((prev) => ({
-                              ...prev,
-                              [strategy.id]: e.target.value,
-                            }))
-                          }
-                          onBlur={(e) =>
-                            void handleChangePaperPollInterval(
-                              strategy,
-                              e.target.value,
-                            )
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              void handleChangePaperPollInterval(
-                                strategy,
-                                (e.target as HTMLInputElement).value,
-                              )
-                            }
-                          }}
-                        />
-                      </TableCell>
-                      <TableCell>{strategy.enabled ? 'Yes' : 'No'}</TableCell>
-                      <TableCell>
-                        <Chip
-                          label={strategy.available_for_alert ? 'Yes' : 'No'}
-                          size="small"
-                          color={strategy.available_for_alert ? 'success' : 'default'}
-                          onClick={() =>
-                            void handleToggleAvailableForAlert(
-                              strategy,
-                              !strategy.available_for_alert,
-                            )
-                          }
-                          sx={{ cursor: 'pointer' }}
-                        />
-                      </TableCell>
-                      <TableCell>{strategy.description}</TableCell>
-                      <TableCell>
-                        <IconButton
-                          size="small"
-                          color="error"
-                          aria-label={`delete strategy ${strategy.name}`}
-                          disabled={
-                            Boolean(strategy.is_builtin) ||
-                            updatingStrategyId === strategy.id ||
-                            deletingStrategyId === strategy.id
-                          }
-                          onClick={() => void handleDeleteStrategy(strategy)}
-                          title={
-                            strategy.is_builtin
-                              ? 'Built-in strategies cannot be deleted.'
-                              : 'Delete strategy'
-                          }
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {strategies.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={8}>
-                        <Typography variant="body2" color="text.secondary">
-                          No strategies configured yet.
-                        </Typography>
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Controls what happens after an alert is converted into an order. AUTO attempts to
+                dispatch immediately; MANUAL places it into the Waiting Queue. Risk settings apply
+                on dispatch.
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                <TextField
+                  select
+                  size="small"
+                  label="Mode"
+                  value={tvWebhookMode}
+                  onChange={(e) => setTvWebhookMode(e.target.value as 'MANUAL' | 'AUTO')}
+                  sx={{ minWidth: 160 }}
+                >
+                  <MenuItem value="MANUAL">MANUAL</MenuItem>
+                  <MenuItem value="AUTO">AUTO</MenuItem>
+                </TextField>
+                <TextField
+                  select
+                  size="small"
+                  label="Execution target"
+                  value={tvWebhookExecutionTarget}
+                  onChange={(e) => setTvWebhookExecutionTarget(e.target.value as 'LIVE' | 'PAPER')}
+                  sx={{ minWidth: 180 }}
+                >
+                  <MenuItem value="LIVE">LIVE</MenuItem>
+                  <MenuItem value="PAPER">PAPER</MenuItem>
+                </TextField>
+                <TextField
+                  select
+                  size="small"
+                  label="Broker"
+                  value={tvWebhookBrokerName}
+                  onChange={(e) => setTvWebhookBrokerName(e.target.value)}
+                  sx={{ minWidth: 180 }}
+                >
+                  <MenuItem value="zerodha">Zerodha (Kite)</MenuItem>
+                  <MenuItem value="angelone">AngelOne (SmartAPI)</MenuItem>
+                </TextField>
+                <TextField
+                  select
+                  size="small"
+                  label="On AUTO failure"
+                  value={tvWebhookFallbackToWaiting ? 'WAITING' : 'FAIL'}
+                  onChange={(e) => setTvWebhookFallbackToWaiting(e.target.value === 'WAITING')}
+                  sx={{ minWidth: 180 }}
+                >
+                  <MenuItem value="WAITING">Move to Waiting Queue</MenuItem>
+                  <MenuItem value="FAIL">Keep as failed</MenuItem>
+                </TextField>
+                <Button
+                  size="small"
+                  variant="contained"
+                  disabled={tvWebhookConfigSaving}
+                  onClick={async () => {
+                    setTvWebhookConfigSaving(true)
+                    try {
+                      await updateTradingViewWebhookConfig({
+                        mode: tvWebhookMode,
+                        broker_name: tvWebhookBrokerName,
+                        execution_target: tvWebhookExecutionTarget,
+                        fallback_to_waiting_on_error: tvWebhookFallbackToWaiting,
+                      })
+                      setTvWebhookConfigError(null)
+                    } catch (err) {
+                      setTvWebhookConfigError(
+                        err instanceof Error ? err.message : 'Failed to save webhook settings',
+                      )
+                    } finally {
+                      setTvWebhookConfigSaving(false)
+                    }
+                  }}
+                >
+                  {tvWebhookConfigSaving ? 'Saving…' : 'Save'}
+                </Button>
+              </Box>
+              {tvWebhookConfigError && (
+                <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+                  {tvWebhookConfigError}
+                </Typography>
+              )}
             </Paper>
           </Box>
       ) : activeTab === 'risk' ? (
@@ -1684,8 +1490,8 @@ export function SettingsPage() {
               Risk Settings
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Define global or per-strategy limits. Leave fields blank to skip a particular
-              limit; new rows are added to the table below.
+              Define global limits. Leave fields blank to skip a particular limit; new rows are
+              added to the table below.
             </Typography>
             <Box
               sx={{
@@ -1696,34 +1502,6 @@ export function SettingsPage() {
                 mb: 2,
               }}
             >
-              <TextField
-                select
-                label="Scope"
-                size="small"
-                value={riskScope}
-                onChange={(e) =>
-                  setRiskScope(e.target.value as 'GLOBAL' | 'STRATEGY')
-                }
-              >
-                <MenuItem value="GLOBAL">GLOBAL</MenuItem>
-                <MenuItem value="STRATEGY">STRATEGY</MenuItem>
-              </TextField>
-              {riskScope === 'STRATEGY' && (
-                <TextField
-                  select
-                  label="Strategy"
-                  size="small"
-                  sx={{ minWidth: 160 }}
-                  value={riskStrategyId}
-                  onChange={(e) => setRiskStrategyId(e.target.value)}
-                >
-                  {strategies.map((s) => (
-                    <MenuItem key={s.id} value={s.id}>
-                      {s.name}
-                    </MenuItem>
-                  ))}
-                </TextField>
-              )}
               <TextField
                 label="Max Order Value"
                 size="small"
@@ -1784,7 +1562,6 @@ export function SettingsPage() {
               <TableHead>
                 <TableRow>
                   <TableCell>Scope</TableCell>
-                  <TableCell>Strategy ID</TableCell>
                   <TableCell>Max Order Value</TableCell>
                   <TableCell>Max Qty/Order</TableCell>
                   <TableCell>Max Daily Loss</TableCell>
@@ -1793,10 +1570,9 @@ export function SettingsPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {riskSettings.map((rs) => (
+                {riskSettings.filter((rs) => rs.scope === 'GLOBAL').map((rs) => (
                   <TableRow key={rs.id}>
                     <TableCell>{rs.scope}</TableCell>
-                    <TableCell>{rs.strategy_id ?? '-'}</TableCell>
                     <TableCell>{rs.max_order_value ?? '-'}</TableCell>
                     <TableCell>{rs.max_quantity_per_order ?? '-'}</TableCell>
                     <TableCell>{rs.max_daily_loss ?? '-'}</TableCell>
@@ -1814,9 +1590,9 @@ export function SettingsPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {riskSettings.length === 0 && (
+                {riskSettings.filter((rs) => rs.scope === 'GLOBAL').length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={6}>
                       <Typography variant="body2" color="text.secondary">
                         No risk settings configured yet.
                       </Typography>

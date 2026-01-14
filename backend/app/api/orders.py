@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.auth import get_current_user, get_current_user_optional
 from app.clients import AngelOneClient, AngelOneSession, ZerodhaClient
@@ -196,7 +196,7 @@ def list_orders(
 ) -> List[Order]:
     """Return a simple order history list with basic filters."""
 
-    query = db.query(Order)
+    query = db.query(Order).options(joinedload(Order.alert))
     if user is not None:
         query = query.filter(
             (Order.user_id == user.id) | (Order.user_id.is_(None)),
@@ -392,10 +392,14 @@ def list_manual_queue(
 ) -> List[Order]:
     """Return orders currently in the manual WAITING queue."""
 
-    query = db.query(Order).filter(
-        Order.status == "WAITING",
-        Order.mode == "MANUAL",
-        Order.simulated.is_(False),
+    query = (
+        db.query(Order)
+        .options(joinedload(Order.alert))
+        .filter(
+            Order.status == "WAITING",
+            Order.mode == "MANUAL",
+            Order.simulated.is_(False),
+        )
     )
     if user is not None:
         query = query.filter(
