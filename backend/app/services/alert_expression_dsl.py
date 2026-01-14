@@ -185,10 +185,17 @@ class _Parser:
         # Long-form operators like CROSS_ABOVE / CROSS_BELOW
         if tok.kind == "IDENT":
             op_ident = tok.value.upper()
-            if op_ident in {"CROSS_ABOVE", "CROSS_BELOW"}:
+            cross_aliases = {
+                "CROSS_ABOVE": "CROSS_ABOVE",
+                "CROSS_BELOW": "CROSS_BELOW",
+                # TradingView-ish / UI-friendly variants used across the app/docs.
+                "CROSSES_ABOVE": "CROSS_ABOVE",
+                "CROSSES_BELOW": "CROSS_BELOW",
+            }
+            if op_ident in cross_aliases:
                 self._consume("IDENT")
                 right = self._parse_primary()
-                return ComparisonNode(left, op_ident, right)
+                return ComparisonNode(left, cross_aliases[op_ident], right)
 
         # Symbolic operators: >, >=, <, <=, ==, !=
         if tok.kind == "OP":

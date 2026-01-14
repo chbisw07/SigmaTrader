@@ -137,6 +137,23 @@ def test_dsl_parses_and_evaluates_complex_expression() -> None:
     assert matched
 
 
+def test_dsl_accepts_crosses_above_alias() -> None:
+    dsl = "(PRICE(1d) > 100) AND PRICE(1d) CROSSES_ABOVE 104"
+    expr = parse_expression(dsl)
+
+    settings = get_settings()
+    with SessionLocal() as session:
+        matched, _ = evaluate_expression_for_symbol(
+            session,
+            settings,
+            symbol="TEST",
+            exchange="NSE",
+            expr=expr,
+        )
+
+    assert matched
+
+
 def test_dsl_can_use_fields_and_indicators() -> None:
     # With qty=10, avg_price=100 and last close=106, INVESTED=1000 and
     # PNL_PCT ~= 6%, so the field-based subexpression should match.
