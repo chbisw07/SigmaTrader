@@ -375,6 +375,13 @@ def run_strategy_backtest(
     ):
         needed.add(_series_key(op))
 
+    reentry_enabled = (
+        bool(cfg.allow_reentry_after_trailing_stop) and cfg.direction == "LONG"
+    )
+    if reentry_enabled:
+        needed.add(_IndicatorKey(kind="MA", period=9))
+        needed.add(_IndicatorKey(kind="MA", period=45))
+
     max_period = max([k.period for k in needed if k.period] + [20])
     if cfg.timeframe == "1d":
         lookback_days = max(30, int(max_period) * 3)
@@ -488,10 +495,20 @@ def run_strategy_backtest(
     take_profit_price: float | None = None
     trail_price: float | None = None
     trailing_active = False
+    entry_reason: str | None = None
     peak_equity_since_entry: float | None = None
     trading_disabled = False
 
-    pending_entry: tuple[int, str] | None = None  # (exec_index, side)
+    last_exit_reason: str | None = None
+    cooldown_remaining = 0
+    trend_id = 0
+    trend_prev_active = False
+    trend_had_break = False
+    reentries_in_trend = 0
+
+    pending_entry: tuple[int, str, str] | None = (
+        None  # (exec_index, side, entry_reason)
+    )
     pending_exit: tuple[int, str, str] | None = None  # (exec_index, side, reason)
 
     equity: list[float] = []
@@ -509,6 +526,7 @@ def run_strategy_backtest(
     def force_close_position(i: int, *, reason: str) -> None:
         nonlocal cash, qty, entry_fill, entry_ts, peak_since_entry, trough_since_entry
         nonlocal initial_sl_price, take_profit_price, trail_price, trailing_active
+        nonlocal entry_reason, last_exit_reason, cooldown_remaining
         nonlocal total_turnover, total_charges
 
         if qty == 0:
@@ -544,6 +562,7 @@ def run_strategy_backtest(
                     "qty": int(abs(int(qty))),
                     "pnl_pct": float(ret_pct),
                     "reason": reason,
+                    "entry_reason": entry_reason,
                 }
             )
 
@@ -556,11 +575,14 @@ def run_strategy_backtest(
         take_profit_price = None
         trail_price = None
         trailing_active = False
+        entry_reason = None
+        last_exit_reason = reason
+        cooldown_remaining = 0
 
     for i in range(sim_start, sim_end + 1):
         # Execute pending orders at this candle open.
         if pending_entry and pending_entry[0] == i and qty == 0:
-            _, side = pending_entry
+            _, side, ent_reason = pending_entry
             if side == "BUY":
                 fill_px = float(opens[i]) * (1.0 + slip)
             else:
@@ -598,6 +620,12 @@ def run_strategy_backtest(
                         )
                         trailing_active = False
                         trail_price = float(entry_fill) if trail_pct > 0 else None
+                        entry_reason = (
+                            ent_reason if ent_reason == "REENTRY_TREND" else None
+                        )
+                        if ent_reason == "REENTRY_TREND":
+                            reentries_in_trend += 1
+                        last_exit_reason = None
                         if first_long_entry_idx is None:
                             first_long_entry_idx = i
                         peak_equity_since_entry = float(cash) + float(qty) * float(
@@ -627,11 +655,14 @@ def run_strategy_backtest(
                     )
                     trailing_active = False
                     trail_price = float(entry_fill) if trail_pct > 0 else None
+                    entry_reason = None
+                    last_exit_reason = None
                     peak_equity_since_entry = float(cash) + float(qty) * float(fill_px)
             pending_entry = None
 
         if pending_exit and pending_exit[0] == i and qty != 0:
             _, side, reason = pending_exit
+            exit_reason = reason
             if side == "BUY":
                 fill_px = float(opens[i]) * (1.0 + slip)
             else:
@@ -647,7 +678,6 @@ def run_strategy_backtest(
                 cash -= qty_int * fill_px + ch
 
             if entry_fill is not None and entry_ts is not None:
-                exit_reason = reason
                 if reason == "TRAILING_STOP":
                     # Trailing stop is profit-protecting: never attribute a losing
                     # exit to trailing (gaps/slippage can still produce a loss).
@@ -671,6 +701,7 @@ def run_strategy_backtest(
                         "qty": int(qty_int),
                         "pnl_pct": float(ret_pct),
                         "reason": exit_reason,
+                        "entry_reason": entry_reason,
                     }
                 )
             qty = 0
@@ -683,6 +714,13 @@ def run_strategy_backtest(
             trail_price = None
             trailing_active = False
             peak_equity_since_entry = None
+            entry_reason = None
+            if exit_reason == "TRAILING_STOP" and reentry_enabled:
+                last_exit_reason = "TRAILING_STOP"
+                cooldown_remaining = int(cfg.reentry_cooldown_bars) + 1
+            else:
+                last_exit_reason = exit_reason
+                cooldown_remaining = 0
             pending_exit = None
 
         # Risk controls evaluated at close; schedule exit next open.
@@ -772,14 +810,66 @@ def run_strategy_backtest(
                         else:
                             pending_exit = (next_i, "BUY", "TRAILING_STOP")
 
+        # Trend / re-entry bookkeeping (evaluate at close).
+        trend_active = False
+        fast_ma = None
+        slow_ma = None
+        if reentry_enabled:
+            ma9 = series.get(_IndicatorKey(kind="MA", period=9))
+            ma45 = series.get(_IndicatorKey(kind="MA", period=45))
+            if ma9 is not None and ma45 is not None and 0 <= i < len(closes):
+                fast_ma = ma9[i]
+                slow_ma = ma45[i]
+                if fast_ma is not None and slow_ma is not None:
+                    close_px = float(closes[i])
+                    trend_active = close_px > float(slow_ma) and float(
+                        fast_ma
+                    ) >= float(slow_ma)
+
+            if trend_prev_active and not trend_active:
+                trend_had_break = True
+            if (not trend_prev_active) and trend_active and trend_had_break:
+                trend_id += 1
+                trend_had_break = False
+                reentries_in_trend = 0
+                last_exit_reason = None
+                cooldown_remaining = 0
+            trend_prev_active = trend_active
+
+            if cooldown_remaining > 0:
+                cooldown_remaining -= 1
+
         # Signal evaluation at close; schedule orders for next open.
         if i < sim_end:
             if qty == 0 and pending_entry is None and not trading_disabled:
                 if _eval_expr_at(entry_expr, series, i):
                     if cfg.direction == "LONG":
-                        pending_entry = (i + 1, "BUY")
+                        pending_entry = (i + 1, "BUY", "ENTRY_SIGNAL")
                     elif cfg.product == "MIS":
-                        pending_entry = (i + 1, "SELL")
+                        pending_entry = (i + 1, "SELL", "ENTRY_SIGNAL")
+                elif reentry_enabled and last_exit_reason == "TRAILING_STOP":
+                    max_re = int(cfg.max_reentries_per_trend or 0)
+                    if max_re <= 0 or reentries_in_trend < max_re:
+                        if cooldown_remaining == 0 and trend_active:
+                            if (
+                                cfg.reentry_trigger == "CLOSE_CROSSES_ABOVE_FAST_MA"
+                                and fast_ma is not None
+                                and i - 1 >= 0
+                            ):
+                                ma9 = series.get(_IndicatorKey(kind="MA", period=9))
+                                prev_fast = (
+                                    ma9[i - 1]
+                                    if ma9 is not None and i - 1 < len(ma9)
+                                    else None
+                                )
+                                prev_close = float(closes[i - 1])
+                                close_px = float(closes[i])
+                                if (
+                                    prev_fast is not None
+                                    and prev_close <= float(prev_fast)
+                                    and close_px > float(fast_ma)
+                                ):
+                                    pending_entry = (i + 1, "BUY", "REENTRY_TREND")
             if qty != 0 and pending_exit is None:
                 if _eval_expr_at(exit_expr, series, i):
                     pending_exit = (i + 1, "SELL" if qty > 0 else "BUY", "EXIT_SIGNAL")

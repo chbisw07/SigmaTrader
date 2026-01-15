@@ -106,6 +106,15 @@ Optional risk controls (set to `0` to disable):
 
 Note: in v1 these are evaluated at **bar close** and filled at **next open** (not intrabar).
 
+### Re-entry after trailing stop (optional)
+If enabled, SigmaTrader can “re-board” the same trend **after an exit due to `TRAILING_STOP`**, without waiting for a full MA cross entry again.
+
+- Default: **OFF** (feature gated; existing backtests unchanged).
+- Currently: **LONG-only**.
+- Mode: `TREND_PULLBACK` (pullback + confirmation).
+- Conditions (high level): last exit was `TRAILING_STOP` → wait `cooldown` bars → trend still active → close crosses back above fast MA.
+- Trade annotations: entries created by this logic are tagged as `REENTRY_TREND` in the Trades table.
+
 ### Max equity DD (global) / Max equity DD (per‑trade)
 Optional equity‑based risk controls (set to `0` to disable). These are different from price stops:
 - **Global max equity DD (%)**: monitors your **equity curve drawdown** (cash + position mark‑to‑market) from the **peak since backtest start**.  
@@ -162,7 +171,8 @@ Every executed trade pair (entry→exit), including:
 - side (LONG/SHORT)
 - qty
 - P&L %
-- exit reason (EXIT_SIGNAL, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP, EQUITY_DD_TRADE, EQUITY_DD_GLOBAL, EOD_SQUARE_OFF, END_OF_TEST)
+- reason: typically an exit reason (EXIT_SIGNAL, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP, EQUITY_DD_TRADE, EQUITY_DD_GLOBAL, EOD_SQUARE_OFF, END_OF_TEST).  
+  If an entry came from re-entry logic, SigmaTrader shows `REENTRY_TREND → <exit_reason>`.
 
 ---
 

@@ -11,12 +11,14 @@ import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
 import Alert from '@mui/material/Alert'
 import FormControl from '@mui/material/FormControl'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import InputLabel from '@mui/material/InputLabel'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Select from '@mui/material/Select'
 import Stack from '@mui/material/Stack'
+import Switch from '@mui/material/Switch'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import TextField from '@mui/material/TextField'
@@ -96,6 +98,9 @@ type BrokerName = 'zerodha' | 'angelone'
 type GateSource = 'NONE' | 'GROUP_INDEX' | 'SYMBOL'
 type StrategyTimeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '1d'
 type StrategyDirection = 'LONG' | 'SHORT'
+type StrategyReentryMode = 'TREND_PULLBACK'
+type StrategyReentryTrigger = 'CLOSE_CROSSES_ABOVE_FAST_MA'
+type StrategyReentryTrendFilter = 'CLOSE_ABOVE_SLOW_MA'
 type PortfolioStrategyAllocationMode = 'EQUAL' | 'RANKING'
 type PortfolioStrategySizingMode = 'PCT_EQUITY' | 'FIXED_CASH' | 'CASH_PER_SLOT'
 type PortfolioStrategyRankingMetric = 'PERF_PCT'
@@ -417,6 +422,15 @@ export function BacktestingPage() {
   const [strategyStopLossPct, setStrategyStopLossPct] = useState(0)
   const [strategyTakeProfitPct, setStrategyTakeProfitPct] = useState(0)
   const [strategyTrailingStopPct, setStrategyTrailingStopPct] = useState(0)
+  const [strategyReentryEnabled, setStrategyReentryEnabled] = useState(false)
+  const [strategyReentryMode, setStrategyReentryMode] =
+    useState<StrategyReentryMode>('TREND_PULLBACK')
+  const [strategyReentryCooldownBars, setStrategyReentryCooldownBars] = useState(1)
+  const [strategyReentryTrigger, setStrategyReentryTrigger] =
+    useState<StrategyReentryTrigger>('CLOSE_CROSSES_ABOVE_FAST_MA')
+  const [strategyReentryTrendFilter, setStrategyReentryTrendFilter] =
+    useState<StrategyReentryTrendFilter>('CLOSE_ABOVE_SLOW_MA')
+  const [strategyMaxReentriesPerTrend, setStrategyMaxReentriesPerTrend] = useState(999)
   const [strategyMaxEquityDdGlobalPct, setStrategyMaxEquityDdGlobalPct] = useState(0)
   const [strategyMaxEquityDdTradePct, setStrategyMaxEquityDdTradePct] = useState(0)
   const [strategySlippageBps, setStrategySlippageBps] = useState(0)
@@ -1165,6 +1179,31 @@ export function BacktestingPage() {
         setStrategyStopLossPct(Number(cfg.stop_loss_pct ?? 0) || 0)
         setStrategyTakeProfitPct(Number(cfg.take_profit_pct ?? 0) || 0)
         setStrategyTrailingStopPct(Number(cfg.trailing_stop_pct ?? 0) || 0)
+        setStrategyReentryEnabled(Boolean(cfg.allow_reentry_after_trailing_stop))
+        setStrategyReentryMode(
+          String(cfg.reentry_mode ?? 'TREND_PULLBACK').toUpperCase() ===
+            'TREND_PULLBACK'
+            ? 'TREND_PULLBACK'
+            : 'TREND_PULLBACK',
+        )
+        setStrategyReentryCooldownBars(
+          Math.min(20, Math.max(0, Number(cfg.reentry_cooldown_bars ?? 1) || 0)),
+        )
+        setStrategyReentryTrigger(
+          String(cfg.reentry_trigger ?? 'CLOSE_CROSSES_ABOVE_FAST_MA').toUpperCase() ===
+            'CLOSE_CROSSES_ABOVE_FAST_MA'
+            ? 'CLOSE_CROSSES_ABOVE_FAST_MA'
+            : 'CLOSE_CROSSES_ABOVE_FAST_MA',
+        )
+        setStrategyReentryTrendFilter(
+          String(cfg.reentry_trend_filter ?? 'CLOSE_ABOVE_SLOW_MA').toUpperCase() ===
+            'CLOSE_ABOVE_SLOW_MA'
+            ? 'CLOSE_ABOVE_SLOW_MA'
+            : 'CLOSE_ABOVE_SLOW_MA',
+        )
+        setStrategyMaxReentriesPerTrend(
+          Math.min(9999, Math.max(0, Number(cfg.max_reentries_per_trend ?? 999) || 0)),
+        )
         setStrategyMaxEquityDdGlobalPct(Number(cfg.max_equity_dd_global_pct ?? 0) || 0)
         setStrategyMaxEquityDdTradePct(Number(cfg.max_equity_dd_trade_pct ?? 0) || 0)
         setStrategySlippageBps(Number(cfg.slippage_bps ?? 0) || 0)
@@ -1739,6 +1778,12 @@ export function BacktestingPage() {
                   stop_loss_pct: strategyStopLossPct,
                   take_profit_pct: strategyTakeProfitPct,
                   trailing_stop_pct: strategyTrailingStopPct,
+                  allow_reentry_after_trailing_stop: strategyReentryEnabled,
+                  reentry_mode: strategyReentryMode,
+                  reentry_cooldown_bars: strategyReentryCooldownBars,
+                  reentry_trigger: strategyReentryTrigger,
+                  reentry_trend_filter: strategyReentryTrendFilter,
+                  max_reentries_per_trend: strategyMaxReentriesPerTrend,
                   max_equity_dd_global_pct: strategyMaxEquityDdGlobalPct,
                   max_equity_dd_trade_pct: strategyMaxEquityDdTradePct,
                   slippage_bps: strategySlippageBps,
@@ -3837,6 +3882,119 @@ export function BacktestingPage() {
                     />
                   </Stack>
 
+                  <DividerBlock title="Re-entry" />
+
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={strategyReentryEnabled}
+                        onChange={(e) => setStrategyReentryEnabled(e.target.checked)}
+                      />
+                    }
+                    label="Allow re-entry after trailing stop"
+                  />
+
+                  {strategyReentryEnabled ? (
+                    <Stack spacing={1}>
+                      <Stack direction="row" spacing={1}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-strategy-reentry-mode-label">
+                            Re-entry mode
+                          </InputLabel>
+                          <Select
+                            labelId="bt-strategy-reentry-mode-label"
+                            label="Re-entry mode"
+                            value={strategyReentryMode}
+                            onChange={(e) =>
+                              setStrategyReentryMode(
+                                e.target.value === 'TREND_PULLBACK'
+                                  ? 'TREND_PULLBACK'
+                                  : 'TREND_PULLBACK',
+                              )
+                            }
+                          >
+                            <MenuItem value="TREND_PULLBACK">TREND_PULLBACK</MenuItem>
+                          </Select>
+                        </FormControl>
+                        <TextField
+                          label="Cooldown (bars)"
+                          size="small"
+                          type="number"
+                          value={strategyReentryCooldownBars}
+                          onChange={(e) => {
+                            const n = Number(e.target.value)
+                            if (!Number.isFinite(n)) return
+                            setStrategyReentryCooldownBars(
+                              Math.min(20, Math.max(0, Math.round(n))),
+                            )
+                          }}
+                          inputProps={{ min: 0, max: 20 }}
+                          fullWidth
+                        />
+                      </Stack>
+                      <Stack direction="row" spacing={1}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-strategy-reentry-trigger-label">
+                            Re-entry trigger
+                          </InputLabel>
+                          <Select
+                            labelId="bt-strategy-reentry-trigger-label"
+                            label="Re-entry trigger"
+                            value={strategyReentryTrigger}
+                            onChange={(e) =>
+                              setStrategyReentryTrigger(
+                                e.target.value === 'CLOSE_CROSSES_ABOVE_FAST_MA'
+                                  ? 'CLOSE_CROSSES_ABOVE_FAST_MA'
+                                  : 'CLOSE_CROSSES_ABOVE_FAST_MA',
+                              )
+                            }
+                          >
+                            <MenuItem value="CLOSE_CROSSES_ABOVE_FAST_MA">
+                              CLOSE_CROSSES_ABOVE_FAST_MA
+                            </MenuItem>
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-strategy-reentry-trend-filter-label">
+                            Trend filter
+                          </InputLabel>
+                          <Select
+                            labelId="bt-strategy-reentry-trend-filter-label"
+                            label="Trend filter"
+                            value={strategyReentryTrendFilter}
+                            onChange={(e) =>
+                              setStrategyReentryTrendFilter(
+                                e.target.value === 'CLOSE_ABOVE_SLOW_MA'
+                                  ? 'CLOSE_ABOVE_SLOW_MA'
+                                  : 'CLOSE_ABOVE_SLOW_MA',
+                              )
+                            }
+                          >
+                            <MenuItem value="CLOSE_ABOVE_SLOW_MA">
+                              CLOSE_ABOVE_SLOW_MA
+                            </MenuItem>
+                          </Select>
+                        </FormControl>
+                      </Stack>
+                      <TextField
+                        label="Max re-entries per trend"
+                        size="small"
+                        type="number"
+                        value={strategyMaxReentriesPerTrend}
+                        onChange={(e) => {
+                          const n = Number(e.target.value)
+                          if (!Number.isFinite(n)) return
+                          setStrategyMaxReentriesPerTrend(
+                            Math.min(9999, Math.max(0, Math.round(n))),
+                          )
+                        }}
+                        inputProps={{ min: 0, max: 9999 }}
+                        fullWidth
+                        helperText="0 = unlimited"
+                      />
+                    </Stack>
+                  ) : null}
+
                   <Typography variant="caption" color="text.secondary">
                     Use Advanced… for costs and equity drawdowns.
                   </Typography>
@@ -5520,7 +5678,11 @@ function PortfolioStrategyRunDetailsCard({
       })(),
       qty: t.qty ?? null,
       pnl_pct: t.pnl_pct ?? null,
-      reason: String(t.reason ?? ''),
+      reason: (() => {
+        const exitReason = String(t.reason ?? '')
+        const entryReason = String(t.entry_reason ?? '')
+        return entryReason ? `${entryReason} → ${exitReason}` : exitReason
+      })(),
     }))
   }, [trades])
 

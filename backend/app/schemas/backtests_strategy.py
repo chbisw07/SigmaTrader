@@ -9,6 +9,9 @@ from app.schemas.backtests_portfolio import BrokerName, ChargesModel, ProductTyp
 
 StrategyTimeframe = Literal["1m", "5m", "15m", "30m", "1h", "1d"]
 StrategyDirection = Literal["LONG", "SHORT"]
+StrategyReentryMode = Literal["TREND_PULLBACK"]
+StrategyReentryTrigger = Literal["CLOSE_CROSSES_ABOVE_FAST_MA"]
+StrategyReentryTrendFilter = Literal["CLOSE_ABOVE_SLOW_MA"]
 
 
 class StrategyBacktestConfigIn(BaseModel):
@@ -31,6 +34,15 @@ class StrategyBacktestConfigIn(BaseModel):
     take_profit_pct: float = Field(default=0.0, ge=0.0, le=100.0)
     trailing_stop_pct: float = Field(default=0.0, ge=0.0, le=100.0)
 
+    # Re-entry after trailing stop (feature-gated; Strategy tab only)
+    allow_reentry_after_trailing_stop: bool = False
+    reentry_mode: StrategyReentryMode = "TREND_PULLBACK"
+    reentry_cooldown_bars: int = Field(default=1, ge=0, le=20)
+    reentry_trigger: StrategyReentryTrigger = "CLOSE_CROSSES_ABOVE_FAST_MA"
+    reentry_trend_filter: StrategyReentryTrendFilter = "CLOSE_ABOVE_SLOW_MA"
+    # 0 = unlimited
+    max_reentries_per_trend: int = Field(default=999, ge=0, le=9999)
+
     # Equity drawdown controls (optional; set to 0 to disable)
     # - global: from peak since start ("kill switch"; stops new entries)
     # - trade: from peak since last entry (equity trailing stop for the current trade)
@@ -45,4 +57,11 @@ class StrategyBacktestConfigIn(BaseModel):
     include_dp_charges: bool = True
 
 
-__all__ = ["StrategyBacktestConfigIn", "StrategyDirection", "StrategyTimeframe"]
+__all__ = [
+    "StrategyBacktestConfigIn",
+    "StrategyDirection",
+    "StrategyReentryMode",
+    "StrategyReentryTrendFilter",
+    "StrategyReentryTrigger",
+    "StrategyTimeframe",
+]
