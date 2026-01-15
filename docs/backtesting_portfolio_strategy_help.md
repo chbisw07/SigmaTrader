@@ -32,6 +32,21 @@ Key rules:
 - Equity drawdown: global kill-switch and per-trade equity DD (both in %)
 - Constraints: min holding (bars), cooldown (bars), max allocation per symbol (%)
 
+## Re-entry after trailing stop (optional)
+
+Feature-gated (default **OFF**). When enabled, a symbol that exits due to `TRAILING_STOP` can be re-entered later without requiring the original Entry DSL to fire again.
+
+High-level flow (evaluated at close, filled next open):
+- Track symbols whose last exit reason was `TRAILING_STOP`.
+- After `reentry_cooldown_bars`, a symbol becomes eligible if the re-entry trigger fires (default: close crosses above fast MA).
+- Portfolio gates apply:
+  - **Rank gate** (default ON): only re-enter if the symbol is within top `(max_open_positions + buffer)` for that bar’s ranking.
+  - **Replace policy** (when portfolio is full): optionally rotate out the worst-ranked holding and enter the re-entry candidate.
+
+Trade annotations:
+- Re-entry entries are tagged as `REENTRY_TREND` (shown as `REENTRY_TREND → <exit_reason>`).
+- Forced replacement exits use `PORTFOLIO_ROTATE_OUT`.
+
 ## Outputs
 
 - Combined **equity curve** and **drawdown** curve

@@ -104,6 +104,12 @@ type StrategyReentryTrendFilter = 'CLOSE_ABOVE_SLOW_MA'
 type PortfolioStrategyAllocationMode = 'EQUAL' | 'RANKING'
 type PortfolioStrategySizingMode = 'PCT_EQUITY' | 'FIXED_CASH' | 'CASH_PER_SLOT'
 type PortfolioStrategyRankingMetric = 'PERF_PCT'
+type PortfolioStrategyReentryMode = 'TREND_PULLBACK'
+type PortfolioStrategyReentryTrigger = 'CLOSE_CROSSES_ABOVE_FAST_MA'
+type PortfolioStrategyReentryTrendFilter = 'NONE' | 'CLOSE_ABOVE_SLOW_MA'
+type PortfolioStrategyReentryReplacePolicy =
+  | 'REQUIRE_FREE_SLOT'
+  | 'REQUIRE_FREE_SLOT_OR_REPLACE_WORST'
 
 type DeploymentPrefill = {
   kind: DeploymentKind
@@ -494,6 +500,39 @@ export function BacktestingPage() {
     useState<BrokerName>('zerodha')
   const [portfolioStrategyIncludeDpCharges, setPortfolioStrategyIncludeDpCharges] =
     useState(true)
+
+  const [
+    portfolioStrategyReentryEnabled,
+    setPortfolioStrategyReentryEnabled,
+  ] = useState(false)
+  const [portfolioStrategyReentryMode, setPortfolioStrategyReentryMode] =
+    useState<PortfolioStrategyReentryMode>('TREND_PULLBACK')
+  const [
+    portfolioStrategyReentryCooldownBars,
+    setPortfolioStrategyReentryCooldownBars,
+  ] = useState(3)
+  const [
+    portfolioStrategyReentryMaxPerSymbolPerTrend,
+    setPortfolioStrategyReentryMaxPerSymbolPerTrend,
+  ] = useState(1)
+  const [
+    portfolioStrategyReentryRankGateEnabled,
+    setPortfolioStrategyReentryRankGateEnabled,
+  ] = useState(true)
+  const [
+    portfolioStrategyReentryRankGateBuffer,
+    setPortfolioStrategyReentryRankGateBuffer,
+  ] = useState(2)
+  const [
+    portfolioStrategyReentryReplacePolicy,
+    setPortfolioStrategyReentryReplacePolicy,
+  ] = useState<PortfolioStrategyReentryReplacePolicy>(
+    'REQUIRE_FREE_SLOT_OR_REPLACE_WORST',
+  )
+  const [portfolioStrategyReentryTrendFilter, setPortfolioStrategyReentryTrendFilter] =
+    useState<PortfolioStrategyReentryTrendFilter>('CLOSE_ABOVE_SLOW_MA')
+  const [portfolioStrategyReentryTrigger, setPortfolioStrategyReentryTrigger] =
+    useState<PortfolioStrategyReentryTrigger>('CLOSE_CROSSES_ABOVE_FAST_MA')
 
   const [holdingsSymbols, setHoldingsSymbols] = useState<
     Array<{ symbol: string; exchange: string }>
@@ -1289,6 +1328,48 @@ export function BacktestingPage() {
             : 'zerodha',
         )
         setPortfolioStrategyIncludeDpCharges(cfg.include_dp_charges !== false)
+
+        setPortfolioStrategyReentryEnabled(
+          Boolean(cfg.allow_reentry_after_trailing_stop ?? false),
+        )
+        const reMode = String(cfg.reentry_mode ?? 'TREND_PULLBACK').toUpperCase()
+        setPortfolioStrategyReentryMode(
+          reMode === 'TREND_PULLBACK' ? 'TREND_PULLBACK' : 'TREND_PULLBACK',
+        )
+        setPortfolioStrategyReentryCooldownBars(
+          Number(cfg.reentry_cooldown_bars ?? 3) || 0,
+        )
+        setPortfolioStrategyReentryMaxPerSymbolPerTrend(
+          Number(cfg.reentry_max_per_symbol_per_trend ?? 1) || 0,
+        )
+        setPortfolioStrategyReentryRankGateEnabled(
+          cfg.reentry_rank_gate_enabled !== false,
+        )
+        setPortfolioStrategyReentryRankGateBuffer(
+          Number(cfg.reentry_rank_gate_buffer ?? 2) || 0,
+        )
+        const rp = String(
+          cfg.reentry_replace_policy ?? 'REQUIRE_FREE_SLOT_OR_REPLACE_WORST',
+        ).toUpperCase()
+        setPortfolioStrategyReentryReplacePolicy(
+          rp === 'REQUIRE_FREE_SLOT'
+            ? 'REQUIRE_FREE_SLOT'
+            : 'REQUIRE_FREE_SLOT_OR_REPLACE_WORST',
+        )
+        const tfilt = String(
+          cfg.reentry_trend_filter ?? 'CLOSE_ABOVE_SLOW_MA',
+        ).toUpperCase()
+        setPortfolioStrategyReentryTrendFilter(
+          tfilt === 'NONE' ? 'NONE' : 'CLOSE_ABOVE_SLOW_MA',
+        )
+        const trig = String(
+          cfg.reentry_trigger ?? 'CLOSE_CROSSES_ABOVE_FAST_MA',
+        ).toUpperCase()
+        setPortfolioStrategyReentryTrigger(
+          trig === 'CLOSE_CROSSES_ABOVE_FAST_MA'
+            ? 'CLOSE_CROSSES_ABOVE_FAST_MA'
+            : 'CLOSE_CROSSES_ABOVE_FAST_MA',
+        )
         return
       }
 
@@ -1812,13 +1893,23 @@ export function BacktestingPage() {
                     min_holding_bars: portfolioStrategyMinHoldingBars,
                     cooldown_bars: portfolioStrategyCooldownBars,
                     max_symbol_alloc_pct: portfolioStrategyMaxSymbolAllocPct,
-                    stop_loss_pct: portfolioStrategyStopLossPct,
-                    take_profit_pct: portfolioStrategyTakeProfitPct,
-                    trailing_stop_pct: portfolioStrategyTrailingStopPct,
-                    max_equity_dd_global_pct: portfolioStrategyMaxEquityDdGlobalPct,
-                    max_equity_dd_trade_pct: portfolioStrategyMaxEquityDdTradePct,
-                    slippage_bps: portfolioStrategySlippageBps,
-                    charges_model: portfolioStrategyChargesModel,
+	                    stop_loss_pct: portfolioStrategyStopLossPct,
+	                    take_profit_pct: portfolioStrategyTakeProfitPct,
+	                    trailing_stop_pct: portfolioStrategyTrailingStopPct,
+	                    allow_reentry_after_trailing_stop: portfolioStrategyReentryEnabled,
+	                    reentry_mode: portfolioStrategyReentryMode,
+	                    reentry_cooldown_bars: portfolioStrategyReentryCooldownBars,
+	                    reentry_max_per_symbol_per_trend:
+	                      portfolioStrategyReentryMaxPerSymbolPerTrend,
+	                    reentry_rank_gate_enabled: portfolioStrategyReentryRankGateEnabled,
+	                    reentry_rank_gate_buffer: portfolioStrategyReentryRankGateBuffer,
+	                    reentry_replace_policy: portfolioStrategyReentryReplacePolicy,
+	                    reentry_trend_filter: portfolioStrategyReentryTrendFilter,
+	                    reentry_trigger: portfolioStrategyReentryTrigger,
+	                    max_equity_dd_global_pct: portfolioStrategyMaxEquityDdGlobalPct,
+	                    max_equity_dd_trade_pct: portfolioStrategyMaxEquityDdTradePct,
+	                    slippage_bps: portfolioStrategySlippageBps,
+	                    charges_model: portfolioStrategyChargesModel,
                     charges_bps: portfolioStrategyChargesBps,
                     charges_broker: portfolioStrategyChargesBroker,
                     include_dp_charges: portfolioStrategyIncludeDpCharges,
@@ -3465,7 +3556,9 @@ export function BacktestingPage() {
                             value={portfolioStrategyEntryDsl}
                             onChange={setPortfolioStrategyEntryDsl}
                             customIndicators={customIndicators}
-                            height={120}
+                            height={96}
+                            fontSize={11}
+                            paddingY={6}
                             onCtrlEnter={() => void handleRun()}
                           />
                           <Typography variant="caption" color="text.secondary">
@@ -3486,7 +3579,9 @@ export function BacktestingPage() {
                             value={portfolioStrategyExitDsl}
                             onChange={setPortfolioStrategyExitDsl}
                             customIndicators={customIndicators}
-                            height={120}
+                            height={96}
+                            fontSize={11}
+                            paddingY={6}
                             onCtrlEnter={() => void handleRun()}
                           />
                           <Typography variant="caption" color="text.secondary">
@@ -3667,6 +3762,177 @@ export function BacktestingPage() {
                       fullWidth
                     />
                   </Stack>
+
+                  <DividerBlock title="Re-entry" />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={portfolioStrategyReentryEnabled}
+                        onChange={(e) =>
+                          setPortfolioStrategyReentryEnabled(e.target.checked)
+                        }
+                        disabled={portfolioStrategyDirection !== 'LONG'}
+                      />
+                    }
+                    label="Allow re-entry after trailing stop"
+                  />
+                  {portfolioStrategyDirection !== 'LONG' && (
+                    <Typography variant="caption" color="text.secondary">
+                      Re-entry is LONG-only for now.
+                    </Typography>
+                  )}
+                  {portfolioStrategyReentryEnabled ? (
+                    <Stack spacing={1}>
+                      <Stack direction="row" spacing={1}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-pfs-reentry-mode-label">
+                            Re-entry mode
+                          </InputLabel>
+                          <Select
+                            labelId="bt-pfs-reentry-mode-label"
+                            label="Re-entry mode"
+                            value={portfolioStrategyReentryMode}
+                            onChange={(e) =>
+                              setPortfolioStrategyReentryMode(
+                                e.target.value as PortfolioStrategyReentryMode,
+                              )
+                            }
+                          >
+                            <MenuItem value="TREND_PULLBACK">Trend + pullback</MenuItem>
+                          </Select>
+                        </FormControl>
+                        <TextField
+                          label="Cooldown (bars)"
+                          size="small"
+                          type="number"
+                          value={portfolioStrategyReentryCooldownBars}
+                          onChange={(e) =>
+                            setPortfolioStrategyReentryCooldownBars(
+                              Number(e.target.value),
+                            )
+                          }
+                          inputProps={{ min: 0, max: 50 }}
+                          fullWidth
+                        />
+                        <TextField
+                          label="Max re-entries / trend"
+                          size="small"
+                          type="number"
+                          value={portfolioStrategyReentryMaxPerSymbolPerTrend}
+                          onChange={(e) =>
+                            setPortfolioStrategyReentryMaxPerSymbolPerTrend(
+                              Number(e.target.value),
+                            )
+                          }
+                          inputProps={{ min: 0, max: 9999 }}
+                          fullWidth
+                          helperText="0 = unlimited"
+                        />
+                      </Stack>
+
+                      <Stack direction="row" spacing={1}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={portfolioStrategyReentryRankGateEnabled}
+                              onChange={(e) =>
+                                setPortfolioStrategyReentryRankGateEnabled(
+                                  e.target.checked,
+                                )
+                              }
+                            />
+                          }
+                          label="Rank gate"
+                        />
+                        <TextField
+                          label="Rank buffer"
+                          size="small"
+                          type="number"
+                          value={portfolioStrategyReentryRankGateBuffer}
+                          onChange={(e) =>
+                            setPortfolioStrategyReentryRankGateBuffer(
+                              Number(e.target.value),
+                            )
+                          }
+                          inputProps={{ min: 0, max: 50 }}
+                          fullWidth
+                          helperText="Allow if rank ≤ maxPos + buffer"
+                        />
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-pfs-reentry-replace-policy-label">
+                            Replace policy
+                          </InputLabel>
+                          <Select
+                            labelId="bt-pfs-reentry-replace-policy-label"
+                            label="Replace policy"
+                            value={portfolioStrategyReentryReplacePolicy}
+                            onChange={(e) =>
+                              setPortfolioStrategyReentryReplacePolicy(
+                                e.target.value as PortfolioStrategyReentryReplacePolicy,
+                              )
+                            }
+                          >
+                            <MenuItem value="REQUIRE_FREE_SLOT">
+                              Require free slot
+                            </MenuItem>
+                            <MenuItem value="REQUIRE_FREE_SLOT_OR_REPLACE_WORST">
+                              Free slot or replace worst
+                            </MenuItem>
+                          </Select>
+                        </FormControl>
+                      </Stack>
+
+                      <Stack direction="row" spacing={1}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-pfs-reentry-trend-filter-label">
+                            Trend filter
+                          </InputLabel>
+                          <Select
+                            labelId="bt-pfs-reentry-trend-filter-label"
+                            label="Trend filter"
+                            value={portfolioStrategyReentryTrendFilter}
+                            onChange={(e) =>
+                              setPortfolioStrategyReentryTrendFilter(
+                                e.target.value as PortfolioStrategyReentryTrendFilter,
+                              )
+                            }
+                          >
+                            <MenuItem value="CLOSE_ABOVE_SLOW_MA">
+                              Close above slow MA
+                            </MenuItem>
+                            <MenuItem value="NONE">None</MenuItem>
+                          </Select>
+                        </FormControl>
+                        <FormControl fullWidth size="small">
+                          <InputLabel id="bt-pfs-reentry-trigger-label">
+                            Re-entry trigger
+                          </InputLabel>
+                          <Select
+                            labelId="bt-pfs-reentry-trigger-label"
+                            label="Re-entry trigger"
+                            value={portfolioStrategyReentryTrigger}
+                            onChange={(e) =>
+                              setPortfolioStrategyReentryTrigger(
+                                e.target.value as PortfolioStrategyReentryTrigger,
+                              )
+                            }
+                          >
+                            <MenuItem value="CLOSE_CROSSES_ABOVE_FAST_MA">
+                              Close crosses above fast MA
+                            </MenuItem>
+                          </Select>
+                        </FormControl>
+                      </Stack>
+
+                      <Typography variant="caption" color="text.secondary">
+                        Rank gate: only re-enter if still among top{' '}
+                        {portfolioStrategyMaxOpenPositions +
+                          portfolioStrategyReentryRankGateBuffer}{' '}
+                        ranked symbols on that bar. Replace policy can rotate out the
+                        worst-ranked holding when the portfolio is full.
+                      </Typography>
+                    </Stack>
+                  ) : null}
                   <Typography variant="caption" color="text.secondary">
                     Use Advanced… for costs, drawdowns, and constraints.
                   </Typography>
@@ -3793,7 +4059,9 @@ export function BacktestingPage() {
                             value={strategyEntryDsl}
                             onChange={setStrategyEntryDsl}
                             customIndicators={customIndicators}
-                            height={120}
+                            height={96}
+                            fontSize={11}
+                            paddingY={6}
                             onCtrlEnter={() => void handleRun()}
                           />
                           <Typography variant="caption" color="text.secondary">
@@ -3814,7 +4082,9 @@ export function BacktestingPage() {
                             value={strategyExitDsl}
                             onChange={setStrategyExitDsl}
                             customIndicators={customIndicators}
-                            height={120}
+                            height={96}
+                            fontSize={11}
+                            paddingY={6}
                             onCtrlEnter={() => void handleRun()}
                           />
                           <Typography variant="caption" color="text.secondary">

@@ -18,6 +18,8 @@ type DslEditorProps = {
   value: string
   onChange: (next: string) => void
   height?: number
+  fontSize?: number
+  paddingY?: number
   operands?: string[]
   customIndicators?: CustomIndicatorForDsl[]
   onCtrlEnter?: () => void
@@ -30,22 +32,24 @@ function _snippetForCustomIndicator(ci: CustomIndicatorForDsl): string {
   return `${ci.name}(${args})`
 }
 
-	export function DslEditor({
+export function DslEditor({
   languageId,
   value,
   onChange,
   height = 160,
+  fontSize = 13,
+  paddingY = 8,
   operands = [],
   customIndicators = [],
   onCtrlEnter,
-	  }: DslEditorProps) {
-	  const theme = useTheme()
-	  const monaco = useMonaco()
-	  const ctrlEnterRef = useRef<(() => void) | undefined>(onCtrlEnter)
+}: DslEditorProps) {
+  const theme = useTheme()
+  const monaco = useMonaco()
+  const ctrlEnterRef = useRef<(() => void) | undefined>(onCtrlEnter)
 
-	  useEffect(() => {
-	    ctrlEnterRef.current = onCtrlEnter
-	  }, [onCtrlEnter])
+  useEffect(() => {
+    ctrlEnterRef.current = onCtrlEnter
+  }, [onCtrlEnter])
 
   const completions = useMemo(() => {
     const uniqOperands = Array.from(
@@ -221,30 +225,30 @@ function _snippetForCustomIndicator(ci: CustomIndicatorForDsl): string {
       <Editor
         language={languageId}
         theme={theme.palette.mode === 'dark' ? 'vs-dark' : 'vs'}
-	        height={height}
-	        value={value}
-	        onChange={(v) => onChange(v ?? '')}
-	        onMount={(editor, editorMonaco) => {
-	          if (!ctrlEnterRef.current) return
-	          editor.addCommand(
-	            // Ctrl+Enter on Windows/Linux, Cmd+Enter on macOS.
-	            editorMonaco.KeyMod.CtrlCmd | editorMonaco.KeyCode.Enter,
-	            () => {
-	              if (ctrlEnterRef.current) ctrlEnterRef.current()
-	            },
-	          )
-	        }}
+        height={height}
+        value={value}
+        onChange={(v) => onChange(v ?? '')}
+        onMount={(editor, editorMonaco) => {
+          if (!ctrlEnterRef.current) return
+          editor.addCommand(
+            // Ctrl+Enter on Windows/Linux, Cmd+Enter on macOS.
+            editorMonaco.KeyMod.CtrlCmd | editorMonaco.KeyCode.Enter,
+            () => {
+              if (ctrlEnterRef.current) ctrlEnterRef.current()
+            },
+          )
+        }}
         options={{
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
           wordWrap: 'on',
           lineNumbers: 'off',
-          fontSize: 13,
+          fontSize,
           tabCompletion: 'on',
           quickSuggestions: true,
           suggestOnTriggerCharacters: true,
           snippetSuggestions: 'inline',
-          padding: { top: 8, bottom: 8 },
+          padding: { top: paddingY, bottom: paddingY },
           renderLineHighlight: 'none',
           scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
         }}

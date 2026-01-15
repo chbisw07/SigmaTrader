@@ -57,6 +57,7 @@ class _PositionState:
     entry_fill: float | None = None
     entry_ts: datetime | None = None
     entry_gi: int | None = None
+    entry_reason: str | None = None
     peak_since_entry: float | None = None
     trough_since_entry: float | None = None
     initial_sl_price: float | None = None
@@ -64,6 +65,17 @@ class _PositionState:
     trail_price: float | None = None
     trailing_active: bool = False
     peak_equity_since_entry: float | None = None
+    last_exit_gi: int | None = None
+
+
+@dataclass
+class _ReentryState:
+    last_exit_reason: str | None = None
+    cooldown_remaining: int = 0
+    trend_id: int = 0
+    trend_prev_active: bool = False
+    trend_had_break: bool = False
+    reentries_in_trend: int = 0
     last_exit_gi: int | None = None
 
 
@@ -122,6 +134,14 @@ def run_portfolio_strategy_backtest(
         _iter_indicator_operands(exit_expr)
     ):
         needed.add(_series_key(op))
+
+    reentry_enabled = (
+        bool(config.allow_reentry_after_trailing_stop) and config.direction == "LONG"
+    )
+    if reentry_enabled:
+        needed.add(_IndicatorKey(kind="MA", period=9))
+        if config.reentry_trend_filter != "NONE":
+            needed.add(_IndicatorKey(kind="MA", period=45))
 
     max_period = max(
         [k.period for k in needed if k.period]
@@ -310,8 +330,14 @@ def run_portfolio_strategy_backtest(
     positions: dict[str, _PositionState] = {
         k: _PositionState() for k in bars_by_key.keys()
     }
-    pending_entry_ts: dict[str, datetime] = {}
+    pending_entry_ts: dict[str, tuple[datetime, str | None]] = (
+        {}
+    )  # exec_ts, entry_reason
     pending_exit_ts: dict[str, tuple[datetime, str]] = {}  # exec_ts, reason
+
+    reentry_state: dict[str, _ReentryState] = {
+        k: _ReentryState() for k in bars_by_key.keys()
+    }
 
     last_close: dict[str, float] = {}
     last_ts_seen: dict[str, datetime] = {}
@@ -396,19 +422,20 @@ def run_portfolio_strategy_backtest(
                 trade_pnl_pct.append(float(ret_pct))
                 realized = float(st.qty) * (float(fill_px) - float(st.entry_fill))
                 realized_pnl[key] = float(realized_pnl.get(key, 0.0) + realized)
-                trades.append(
-                    {
-                        "symbol": key,
-                        "entry_ts": _iso_ist(st.entry_ts),
-                        "exit_ts": _iso_ist(t),
-                        "side": "LONG" if st.qty > 0 else "SHORT",
-                        "entry_price": float(st.entry_fill),
-                        "exit_price": float(fill_px),
-                        "qty": int(qty_int),
-                        "pnl_pct": float(ret_pct),
-                        "reason": exit_reason,
-                    }
-                )
+                tr: dict[str, Any] = {
+                    "symbol": key,
+                    "entry_ts": _iso_ist(st.entry_ts),
+                    "exit_ts": _iso_ist(t),
+                    "side": "LONG" if st.qty > 0 else "SHORT",
+                    "entry_price": float(st.entry_fill),
+                    "exit_price": float(fill_px),
+                    "qty": int(qty_int),
+                    "pnl_pct": float(ret_pct),
+                    "reason": exit_reason,
+                }
+                if st.entry_reason is not None:
+                    tr["entry_reason"] = st.entry_reason
+                trades.append(tr)
                 markers.append(
                     {
                         "ts": _iso_ist(st.entry_ts),
@@ -428,6 +455,7 @@ def run_portfolio_strategy_backtest(
             st.entry_fill = None
             st.entry_ts = None
             st.entry_gi = None
+            st.entry_reason = None
             st.peak_since_entry = None
             st.trough_since_entry = None
             st.initial_sl_price = None
@@ -437,6 +465,15 @@ def run_portfolio_strategy_backtest(
             st.peak_equity_since_entry = None
             st.last_exit_gi = gi
             del pending_exit_ts[key]
+
+            if reentry_enabled:
+                rs = reentry_state[key]
+                rs.last_exit_reason = exit_reason
+                rs.last_exit_gi = gi
+                if exit_reason == "TRAILING_STOP":
+                    rs.cooldown_remaining = int(config.reentry_cooldown_bars) + 1
+                else:
+                    rs.cooldown_remaining = 0
 
         # 2) Execute entries at this bar open.
         if pending_entry_ts:
@@ -450,7 +487,8 @@ def run_portfolio_strategy_backtest(
 
             # Deterministic fill order.
             for key in sorted(list(pending_entry_ts.keys())):
-                if pending_entry_ts.get(key) != t:
+                exec_ts, ent_reason = pending_entry_ts.get(key) or (None, None)
+                if exec_ts != t:
                     continue
                 if open_positions_count() >= int(config.max_open_positions):
                     del pending_entry_ts[key]
@@ -547,7 +585,14 @@ def run_portfolio_strategy_backtest(
                 st.trailing_active = False
                 st.trail_price = float(st.entry_fill) if trail_pct > 0 else None
                 st.peak_equity_since_entry = float(decision_equity)
+                st.entry_reason = ent_reason
                 del pending_entry_ts[key]
+
+                if reentry_enabled and ent_reason == "REENTRY_TREND":
+                    rs = reentry_state[key]
+                    rs.reentries_in_trend += 1
+                    rs.last_exit_reason = None
+                    rs.cooldown_remaining = 0
 
         # 3) Update last seen prices for mark-to-market.
         for key, b in bars_by_key.items():
@@ -662,6 +707,59 @@ def run_portfolio_strategy_backtest(
             candidates: list[str] = []
             scored: list[tuple[str, float]] = []
 
+            rank_pos: dict[str, int] = {}
+            if (
+                reentry_enabled
+                and config.reentry_rank_gate_enabled
+                and config.allocation_mode == "RANKING"
+            ):
+                ranked: list[tuple[str, float]] = []
+                for key, b in bars_by_key.items():
+                    si = b.idx_by_ts.get(t)
+                    if si is None or b.rank_series is None:
+                        continue
+                    score = b.rank_series[si]
+                    if score is None:
+                        continue
+                    ranked.append((key, float(score)))
+                ranked_sorted = sorted(ranked, key=lambda x: (-x[1], x[0]))
+                for i, (key, _score) in enumerate(ranked_sorted, start=1):
+                    rank_pos[key] = i
+
+            if reentry_enabled:
+                for key, b in bars_by_key.items():
+                    rs = reentry_state[key]
+                    if rs.cooldown_remaining > 0:
+                        rs.cooldown_remaining -= 1
+                    if config.reentry_trend_filter == "NONE":
+                        continue
+                    si = b.idx_by_ts.get(t)
+                    if si is None:
+                        continue
+                    fast = b.series.get(_IndicatorKey(kind="MA", period=9))
+                    slow = b.series.get(_IndicatorKey(kind="MA", period=45))
+                    fast_ma = fast[si] if fast is not None and si < len(fast) else None
+                    slow_ma = slow[si] if slow is not None and si < len(slow) else None
+                    trend_active = False
+                    if fast_ma is not None and slow_ma is not None:
+                        close_px = float(b.closes[si])
+                        trend_active = close_px > float(slow_ma) and float(
+                            fast_ma
+                        ) >= float(slow_ma)
+                    if rs.trend_prev_active and not trend_active:
+                        rs.trend_had_break = True
+                    if (
+                        (not rs.trend_prev_active)
+                        and trend_active
+                        and rs.trend_had_break
+                    ):
+                        rs.trend_id += 1
+                        rs.trend_had_break = False
+                        rs.reentries_in_trend = 0
+                        rs.last_exit_reason = None
+                        rs.cooldown_remaining = 0
+                    rs.trend_prev_active = trend_active
+
             for key, b in bars_by_key.items():
                 si = b.idx_by_ts.get(t)
                 if si is None:
@@ -732,7 +830,136 @@ def run_portfolio_strategy_backtest(
                 si = b.idx_by_ts.get(t)
                 if si is None or si + 1 > b.sim_end:
                     continue
-                pending_entry_ts[key] = b.ts[si + 1]
+                pending_entry_ts[key] = (b.ts[si + 1], None)
+
+            # Portfolio-aware re-entry candidates (after normal entry selection).
+            if reentry_enabled:
+                max_open = int(config.max_open_positions)
+                buffer = int(config.reentry_rank_gate_buffer or 0)
+                max_re = int(config.reentry_max_per_symbol_per_trend or 0)
+
+                # Build re-entry candidate list sorted by rank position.
+                reentry_candidates: list[tuple[int, str]] = []
+                for key, b in bars_by_key.items():
+                    st = positions[key]
+                    if st.qty != 0 or key in pending_entry_ts:
+                        continue
+
+                    rs = reentry_state[key]
+                    if rs.last_exit_reason != "TRAILING_STOP":
+                        continue
+                    if rs.cooldown_remaining != 0:
+                        continue
+                    if max_re > 0 and rs.reentries_in_trend >= max_re:
+                        continue
+
+                    si = b.idx_by_ts.get(t)
+                    if si is None or si <= 0 or si >= b.sim_end:
+                        continue
+
+                    if config.reentry_trend_filter != "NONE":
+                        fast = b.series.get(_IndicatorKey(kind="MA", period=9))
+                        slow = b.series.get(_IndicatorKey(kind="MA", period=45))
+                        fast_ma = (
+                            fast[si] if fast is not None and si < len(fast) else None
+                        )
+                        slow_ma = (
+                            slow[si] if slow is not None and si < len(slow) else None
+                        )
+                        if fast_ma is None or slow_ma is None:
+                            continue
+                        close_px = float(b.closes[si])
+                        if not (
+                            close_px > float(slow_ma)
+                            and float(fast_ma) >= float(slow_ma)
+                        ):
+                            continue
+
+                    if config.reentry_trigger == "CLOSE_CROSSES_ABOVE_FAST_MA":
+                        fast = b.series.get(_IndicatorKey(kind="MA", period=9))
+                        if fast is None:
+                            continue
+                        prev_fast = fast[si - 1] if si - 1 < len(fast) else None
+                        fast_ma = fast[si] if si < len(fast) else None
+                        if prev_fast is None or fast_ma is None:
+                            continue
+                        prev_close = float(b.closes[si - 1])
+                        close_px = float(b.closes[si])
+                        if not (
+                            prev_close <= float(prev_fast) and close_px > float(fast_ma)
+                        ):
+                            continue
+
+                    if config.reentry_rank_gate_enabled:
+                        pos = rank_pos.get(key)
+                        if pos is None:
+                            continue
+                        if pos > max_open + buffer:
+                            continue
+                        sort_pos = pos
+                    else:
+                        sort_pos = 1_000_000
+
+                    reentry_candidates.append((sort_pos, key))
+
+                reentry_candidates_sorted = sorted(
+                    reentry_candidates, key=lambda x: (x[0], x[1])
+                )
+
+                # Apply policy: free slot or replace worst-ranked holding.
+                rotate_out_scheduled: set[str] = set()
+                for _pos, key in reentry_candidates_sorted:
+                    if key in pending_entry_ts:
+                        continue
+                    b = bars_by_key[key]
+                    si = b.idx_by_ts.get(t)
+                    if si is None or si + 1 > b.sim_end:
+                        continue
+                    entry_exec_ts = b.ts[si + 1]
+
+                    if open_positions_count() + len(pending_entry_ts) < max_open:
+                        pending_entry_ts[key] = (entry_exec_ts, "REENTRY_TREND")
+                        continue
+
+                    if config.reentry_replace_policy == "REQUIRE_FREE_SLOT":
+                        continue
+                    if not config.reentry_rank_gate_enabled:
+                        continue
+                    cand_rank = rank_pos.get(key)
+                    if cand_rank is None:
+                        continue
+
+                    worst_key: str | None = None
+                    worst_rank = -1
+                    for held_key, st in positions.items():
+                        if st.qty == 0:
+                            continue
+                        if (
+                            held_key in pending_exit_ts
+                            or held_key in rotate_out_scheduled
+                        ):
+                            continue
+                        held_rank = rank_pos.get(held_key)
+                        if held_rank is None:
+                            continue
+                        if held_rank > worst_rank:
+                            worst_rank = held_rank
+                            worst_key = held_key
+                    if worst_key is None:
+                        continue
+                    if cand_rank >= worst_rank:
+                        continue
+
+                    wb = bars_by_key[worst_key]
+                    wsi = wb.idx_by_ts.get(t)
+                    if wsi is None or wsi + 1 > wb.sim_end:
+                        continue
+                    worst_exec_ts = wb.ts[wsi + 1]
+                    if worst_exec_ts != entry_exec_ts:
+                        continue
+                    pending_exit_ts[worst_key] = (worst_exec_ts, "PORTFOLIO_ROTATE_OUT")
+                    rotate_out_scheduled.add(worst_key)
+                    pending_entry_ts[key] = (entry_exec_ts, "REENTRY_TREND")
 
         # 6) MIS square-off at last bar of day (close at close price).
         if config.product == "MIS":
@@ -766,19 +993,20 @@ def run_portfolio_strategy_backtest(
                     trade_pnl_pct.append(float(ret_pct))
                     realized = float(st.qty) * (float(fill_px) - float(st.entry_fill))
                     realized_pnl[key] = float(realized_pnl.get(key, 0.0) + realized)
-                    trades.append(
-                        {
-                            "symbol": key,
-                            "entry_ts": _iso_ist(st.entry_ts or t),
-                            "exit_ts": _iso_ist(t),
-                            "side": "LONG" if st.qty > 0 else "SHORT",
-                            "entry_price": float(st.entry_fill),
-                            "exit_price": float(fill_px),
-                            "qty": int(qty_int),
-                            "pnl_pct": float(ret_pct),
-                            "reason": "EOD_SQUARE_OFF",
-                        }
-                    )
+                    tr: dict[str, Any] = {
+                        "symbol": key,
+                        "entry_ts": _iso_ist(st.entry_ts or t),
+                        "exit_ts": _iso_ist(t),
+                        "side": "LONG" if st.qty > 0 else "SHORT",
+                        "entry_price": float(st.entry_fill),
+                        "exit_price": float(fill_px),
+                        "qty": int(qty_int),
+                        "pnl_pct": float(ret_pct),
+                        "reason": "EOD_SQUARE_OFF",
+                    }
+                    if st.entry_reason is not None:
+                        tr["entry_reason"] = st.entry_reason
+                    trades.append(tr)
                     markers.append(
                         {
                             "ts": _iso_ist(st.entry_ts or t),
@@ -797,12 +1025,19 @@ def run_portfolio_strategy_backtest(
                     st.entry_fill = None
                     st.entry_ts = None
                     st.entry_gi = None
+                    st.entry_reason = None
                     st.last_exit_gi = gi
                     st.peak_since_entry = None
                     st.trough_since_entry = None
                     st.peak_equity_since_entry = None
                     pending_entry_ts.pop(key, None)
                     pending_exit_ts.pop(key, None)
+
+                    if reentry_enabled:
+                        rs = reentry_state[key]
+                        rs.last_exit_reason = "EOD_SQUARE_OFF"
+                        rs.cooldown_remaining = 0
+                        rs.last_exit_gi = gi
 
         # 7) Combined equity + drawdown at this bar close.
         v = equity_now_for_close()
@@ -943,6 +1178,19 @@ def run_portfolio_strategy_backtest(
             "trailing_stop_pct": float(config.trailing_stop_pct),
             "max_equity_dd_global_pct": float(config.max_equity_dd_global_pct),
             "max_equity_dd_trade_pct": float(config.max_equity_dd_trade_pct),
+            "allow_reentry_after_trailing_stop": bool(
+                config.allow_reentry_after_trailing_stop
+            ),
+            "reentry_mode": config.reentry_mode,
+            "reentry_cooldown_bars": int(config.reentry_cooldown_bars),
+            "reentry_max_per_symbol_per_trend": int(
+                config.reentry_max_per_symbol_per_trend
+            ),
+            "reentry_rank_gate_enabled": bool(config.reentry_rank_gate_enabled),
+            "reentry_rank_gate_buffer": int(config.reentry_rank_gate_buffer),
+            "reentry_replace_policy": config.reentry_replace_policy,
+            "reentry_trend_filter": config.reentry_trend_filter,
+            "reentry_trigger": config.reentry_trigger,
             "slippage_bps": float(config.slippage_bps),
             "charges_model": config.charges_model,
             "charges_bps": float(config.charges_bps),

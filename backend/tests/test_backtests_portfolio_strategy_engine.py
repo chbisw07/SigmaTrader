@@ -255,3 +255,350 @@ def test_portfolio_strategy_trailing_stop_short_symmetry(monkeypatch) -> None:
     assert len(trades) == 1
     assert trades[0]["reason"] == "TRAILING_STOP"
     assert abs(float(trades[0]["pnl_pct"])) < 1e-9
+
+
+def test_portfolio_strategy_reentry_disabled_does_not_change_results(
+    monkeypatch,
+) -> None:
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+
+    d = date(2025, 1, 2)
+    closes = [100.0, 100.0, 103.0, 105.0, 104.0, 101.8, 101.8, 100.0, 100.0, 100.0]
+    bars = _bars_5m_closes(d, closes)
+
+    def _stub_load_series(*_args, symbol: str, exchange: str, **_kwargs) -> list[dict]:
+        assert exchange == "NSE"
+        assert symbol in {"AAA", "BBB"}
+        return bars
+
+    monkeypatch.setattr(ps, "load_series", _stub_load_series)
+
+    cfg_base = PortfolioStrategyBacktestConfigIn(
+        timeframe="5m",
+        start_date=d,
+        end_date=d,
+        entry_dsl="PRICE() > 0",
+        exit_dsl="PRICE() < 0",
+        product="MIS",
+        direction="LONG",
+        initial_cash=10000.0,
+        max_open_positions=2,
+        allocation_mode="RANKING",
+        ranking_metric="PERF_PCT",
+        ranking_window=1,
+        sizing_mode="PCT_EQUITY",
+        position_size_pct=100.0,
+        trailing_stop_pct=3.0,
+        charges_model="BPS",
+        charges_bps=0.0,
+        include_dp_charges=False,
+    )
+    cfg_disabled = cfg_base.copy(
+        update={
+            "allow_reentry_after_trailing_stop": False,
+            "reentry_cooldown_bars": 3,
+            "reentry_rank_gate_enabled": True,
+            "reentry_rank_gate_buffer": 2,
+        }
+    )
+
+    with SessionLocal() as db:
+        res_base = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[
+                UniverseSymbolRef(exchange="NSE", symbol="AAA"),
+                UniverseSymbolRef(exchange="NSE", symbol="BBB"),
+            ],
+            config=cfg_base,
+            allow_fetch=False,
+        )
+        res_disabled = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[
+                UniverseSymbolRef(exchange="NSE", symbol="AAA"),
+                UniverseSymbolRef(exchange="NSE", symbol="BBB"),
+            ],
+            config=cfg_disabled,
+            allow_fetch=False,
+        )
+
+    assert res_base["metrics"] == res_disabled["metrics"]
+    assert res_base["series"] == res_disabled["series"]
+    assert res_base["trades"] == res_disabled["trades"]
+
+
+def test_portfolio_strategy_reentry_triggers_with_free_slot(monkeypatch) -> None:
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+
+    d = date(2025, 1, 2)
+    aaa_closes = (
+        [100.0] * 10 + [103.0, 105.0, 104.0, 101.8, 101.8] + [100.0] * 9 + [120.0] * 6
+    )
+    bbb_closes = [100.0] * len(aaa_closes)
+    bars_by_symbol = {
+        "AAA": _bars_5m_closes(d, aaa_closes),
+        "BBB": _bars_5m_closes(d, bbb_closes),
+    }
+
+    def _stub_load_series(*_args, symbol: str, exchange: str, **_kwargs) -> list[dict]:
+        assert exchange == "NSE"
+        return bars_by_symbol[symbol]
+
+    monkeypatch.setattr(ps, "load_series", _stub_load_series)
+
+    cfg = PortfolioStrategyBacktestConfigIn(
+        timeframe="5m",
+        start_date=d,
+        end_date=d,
+        entry_dsl="PRICE() > 0",
+        exit_dsl="PRICE() < 0",
+        product="MIS",
+        direction="LONG",
+        initial_cash=100000.0,
+        max_open_positions=2,
+        allocation_mode="RANKING",
+        ranking_metric="PERF_PCT",
+        ranking_window=1,
+        sizing_mode="PCT_EQUITY",
+        position_size_pct=50.0,
+        trailing_stop_pct=3.0,
+        cooldown_bars=999,
+        allow_reentry_after_trailing_stop=True,
+        reentry_cooldown_bars=0,
+        reentry_max_per_symbol_per_trend=1,
+        reentry_rank_gate_enabled=True,
+        reentry_rank_gate_buffer=2,
+        reentry_replace_policy="REQUIRE_FREE_SLOT",
+        reentry_trend_filter="NONE",
+        reentry_trigger="CLOSE_CROSSES_ABOVE_FAST_MA",
+        charges_model="BPS",
+        charges_bps=0.0,
+        include_dp_charges=False,
+    )
+
+    with SessionLocal() as db:
+        res = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[
+                UniverseSymbolRef(exchange="NSE", symbol="AAA"),
+                UniverseSymbolRef(exchange="NSE", symbol="BBB"),
+            ],
+            config=cfg,
+            allow_fetch=False,
+        )
+
+    aaa_trades = [t for t in res["trades"] if t["symbol"] == "NSE:AAA"]
+    assert len(aaa_trades) >= 2
+    assert aaa_trades[0]["reason"] == "TRAILING_STOP"
+    assert aaa_trades[-1]["reason"] == "EOD_SQUARE_OFF"
+    assert aaa_trades[-1]["entry_reason"] == "REENTRY_TREND"
+
+
+def test_portfolio_strategy_reentry_blocked_by_rank_gate(monkeypatch) -> None:
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+
+    d = date(2025, 1, 2)
+    aaa_closes = (
+        [100.0] * 10 + [103.0, 105.0, 104.0, 101.8, 101.8] + [100.0] * 9 + [120.0] * 6
+    )
+    bbb_closes = [100.0] * 24 + [150.0] + [150.0] * (len(aaa_closes) - 25)
+    ccc_closes = [100.0] * 24 + [200.0] + [200.0] * (len(aaa_closes) - 25)
+    bars_by_symbol = {
+        "AAA": _bars_5m_closes(d, aaa_closes),
+        "BBB": _bars_5m_closes(d, bbb_closes),
+        "CCC": _bars_5m_closes(d, ccc_closes),
+    }
+
+    def _stub_load_series(*_args, symbol: str, exchange: str, **_kwargs) -> list[dict]:
+        assert exchange == "NSE"
+        return bars_by_symbol[symbol]
+
+    monkeypatch.setattr(ps, "load_series", _stub_load_series)
+
+    cfg = PortfolioStrategyBacktestConfigIn(
+        timeframe="5m",
+        start_date=d,
+        end_date=d,
+        entry_dsl="PRICE() > 0",
+        exit_dsl="PRICE() < 0",
+        product="MIS",
+        direction="LONG",
+        initial_cash=100000.0,
+        max_open_positions=2,
+        allocation_mode="RANKING",
+        ranking_metric="PERF_PCT",
+        ranking_window=1,
+        sizing_mode="PCT_EQUITY",
+        position_size_pct=50.0,
+        trailing_stop_pct=3.0,
+        cooldown_bars=999,
+        allow_reentry_after_trailing_stop=True,
+        reentry_cooldown_bars=0,
+        reentry_rank_gate_enabled=True,
+        reentry_rank_gate_buffer=0,
+        reentry_replace_policy="REQUIRE_FREE_SLOT_OR_REPLACE_WORST",
+        reentry_trend_filter="NONE",
+        charges_model="BPS",
+        charges_bps=0.0,
+        include_dp_charges=False,
+    )
+
+    with SessionLocal() as db:
+        res = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[
+                UniverseSymbolRef(exchange="NSE", symbol="AAA"),
+                UniverseSymbolRef(exchange="NSE", symbol="BBB"),
+                UniverseSymbolRef(exchange="NSE", symbol="CCC"),
+            ],
+            config=cfg,
+            allow_fetch=False,
+        )
+
+    aaa_trades = [t for t in res["trades"] if t["symbol"] == "NSE:AAA"]
+    assert len(aaa_trades) == 1
+    assert aaa_trades[0]["reason"] == "TRAILING_STOP"
+
+
+def test_portfolio_strategy_reentry_can_replace_worst_holding(monkeypatch) -> None:
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+
+    d = date(2025, 1, 2)
+    aaa_closes = (
+        [100.0] * 10 + [103.0, 105.0, 104.0, 101.8, 101.8] + [100.0] * 9 + [120.0] * 6
+    )
+    bbb_closes = [100.0] * len(aaa_closes)
+    bars_by_symbol = {
+        "AAA": _bars_5m_closes(d, aaa_closes),
+        "BBB": _bars_5m_closes(d, bbb_closes),
+    }
+
+    def _stub_load_series(*_args, symbol: str, exchange: str, **_kwargs) -> list[dict]:
+        assert exchange == "NSE"
+        return bars_by_symbol[symbol]
+
+    monkeypatch.setattr(ps, "load_series", _stub_load_series)
+
+    cfg = PortfolioStrategyBacktestConfigIn(
+        timeframe="5m",
+        start_date=d,
+        end_date=d,
+        entry_dsl="PRICE() > 0",
+        exit_dsl="PRICE() < 0",
+        product="MIS",
+        direction="LONG",
+        initial_cash=100000.0,
+        max_open_positions=1,
+        allocation_mode="RANKING",
+        ranking_metric="PERF_PCT",
+        ranking_window=1,
+        sizing_mode="PCT_EQUITY",
+        position_size_pct=100.0,
+        trailing_stop_pct=3.0,
+        cooldown_bars=1,
+        allow_reentry_after_trailing_stop=True,
+        reentry_cooldown_bars=0,
+        reentry_rank_gate_enabled=True,
+        reentry_rank_gate_buffer=2,
+        reentry_replace_policy="REQUIRE_FREE_SLOT_OR_REPLACE_WORST",
+        reentry_trend_filter="NONE",
+        charges_model="BPS",
+        charges_bps=0.0,
+        include_dp_charges=False,
+    )
+
+    with SessionLocal() as db:
+        res = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[
+                UniverseSymbolRef(exchange="NSE", symbol="AAA"),
+                UniverseSymbolRef(exchange="NSE", symbol="BBB"),
+            ],
+            config=cfg,
+            allow_fetch=False,
+        )
+
+    bbb_trades = [t for t in res["trades"] if t["symbol"] == "NSE:BBB"]
+    assert any(t["reason"] == "PORTFOLIO_ROTATE_OUT" for t in bbb_trades)
+
+    aaa_trades = [t for t in res["trades"] if t["symbol"] == "NSE:AAA"]
+    assert any(t.get("entry_reason") == "REENTRY_TREND" for t in aaa_trades)
+
+
+def test_portfolio_strategy_reentry_cooldown_and_max_cap(monkeypatch) -> None:
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+
+    d = date(2025, 1, 2)
+    aaa_closes = (
+        [100.0] * 10
+        + [103.0, 105.0, 104.0, 101.8, 101.8]
+        + [100.0] * 4
+        + [120.0, 110.0, 120.0]  # early trigger then later trigger
+        + [130.0, 126.0, 126.0]  # ensure trailing stop exits the re-entry trade
+        + [110.0, 130.0, 130.0]  # trigger again (should be blocked by max)
+    )
+    bbb_closes = [100.0] * len(aaa_closes)
+    bars_by_symbol = {
+        "AAA": _bars_5m_closes(d, aaa_closes),
+        "BBB": _bars_5m_closes(d, bbb_closes),
+    }
+
+    def _stub_load_series(*_args, symbol: str, exchange: str, **_kwargs) -> list[dict]:
+        assert exchange == "NSE"
+        return bars_by_symbol[symbol]
+
+    monkeypatch.setattr(ps, "load_series", _stub_load_series)
+
+    cfg = PortfolioStrategyBacktestConfigIn(
+        timeframe="5m",
+        start_date=d,
+        end_date=d,
+        entry_dsl="PRICE() > 0",
+        exit_dsl="PRICE() < 0",
+        product="MIS",
+        direction="LONG",
+        initial_cash=100000.0,
+        max_open_positions=2,
+        allocation_mode="RANKING",
+        ranking_metric="PERF_PCT",
+        ranking_window=1,
+        sizing_mode="PCT_EQUITY",
+        position_size_pct=50.0,
+        trailing_stop_pct=3.0,
+        cooldown_bars=999,
+        allow_reentry_after_trailing_stop=True,
+        reentry_cooldown_bars=3,
+        reentry_max_per_symbol_per_trend=1,
+        reentry_rank_gate_enabled=True,
+        reentry_rank_gate_buffer=2,
+        reentry_replace_policy="REQUIRE_FREE_SLOT",
+        reentry_trend_filter="NONE",
+        charges_model="BPS",
+        charges_bps=0.0,
+        include_dp_charges=False,
+    )
+
+    with SessionLocal() as db:
+        res = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[
+                UniverseSymbolRef(exchange="NSE", symbol="AAA"),
+                UniverseSymbolRef(exchange="NSE", symbol="BBB"),
+            ],
+            config=cfg,
+            allow_fetch=False,
+        )
+
+    aaa_trades = [t for t in res["trades"] if t["symbol"] == "NSE:AAA"]
+    assert sum(1 for t in aaa_trades if t.get("entry_reason") == "REENTRY_TREND") == 1
