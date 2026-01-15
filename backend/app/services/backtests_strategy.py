@@ -484,6 +484,10 @@ def run_strategy_backtest(
     first_long_entry_idx: int | None = None
     peak_since_entry: float | None = None
     trough_since_entry: float | None = None
+    initial_sl_price: float | None = None
+    take_profit_price: float | None = None
+    trail_price: float | None = None
+    trailing_active = False
     peak_equity_since_entry: float | None = None
     trading_disabled = False
 
@@ -504,6 +508,7 @@ def run_strategy_backtest(
 
     def force_close_position(i: int, *, reason: str) -> None:
         nonlocal cash, qty, entry_fill, entry_ts, peak_since_entry, trough_since_entry
+        nonlocal initial_sl_price, take_profit_price, trail_price, trailing_active
         nonlocal total_turnover, total_charges
 
         if qty == 0:
@@ -547,6 +552,10 @@ def run_strategy_backtest(
         entry_ts = None
         peak_since_entry = None
         trough_since_entry = None
+        initial_sl_price = None
+        take_profit_price = None
+        trail_price = None
+        trailing_active = False
 
     for i in range(sim_start, sim_end + 1):
         # Execute pending orders at this candle open.
@@ -572,9 +581,25 @@ def run_strategy_backtest(
                         qty = qty_int
                         entry_fill = float(fill_px)
                         entry_ts = ts[i]
+                        peak_since_entry = float(entry_fill)
+                        trough_since_entry = float(entry_fill)
+                        stop_pct = float(cfg.stop_loss_pct or 0.0)
+                        tp_pct = float(cfg.take_profit_pct or 0.0)
+                        trail_pct = float(cfg.trailing_stop_pct or 0.0)
+                        initial_sl_price = (
+                            float(entry_fill) * (1.0 - stop_pct / 100.0)
+                            if stop_pct > 0
+                            else None
+                        )
+                        take_profit_price = (
+                            float(entry_fill) * (1.0 + tp_pct / 100.0)
+                            if tp_pct > 0
+                            else None
+                        )
+                        trailing_active = False
+                        trail_price = float(entry_fill) if trail_pct > 0 else None
                         if first_long_entry_idx is None:
                             first_long_entry_idx = i
-                        peak_since_entry = float(closes[i])
                         peak_equity_since_entry = float(cash) + float(qty) * float(
                             fill_px
                         )
@@ -585,7 +610,23 @@ def run_strategy_backtest(
                     qty = -qty_int
                     entry_fill = float(fill_px)
                     entry_ts = ts[i]
-                    trough_since_entry = float(closes[i])
+                    peak_since_entry = float(entry_fill)
+                    trough_since_entry = float(entry_fill)
+                    stop_pct = float(cfg.stop_loss_pct or 0.0)
+                    tp_pct = float(cfg.take_profit_pct or 0.0)
+                    trail_pct = float(cfg.trailing_stop_pct or 0.0)
+                    initial_sl_price = (
+                        float(entry_fill) * (1.0 + stop_pct / 100.0)
+                        if stop_pct > 0
+                        else None
+                    )
+                    take_profit_price = (
+                        float(entry_fill) * (1.0 - tp_pct / 100.0)
+                        if tp_pct > 0
+                        else None
+                    )
+                    trailing_active = False
+                    trail_price = float(entry_fill) if trail_pct > 0 else None
                     peak_equity_since_entry = float(cash) + float(qty) * float(fill_px)
             pending_entry = None
 
@@ -606,6 +647,14 @@ def run_strategy_backtest(
                 cash -= qty_int * fill_px + ch
 
             if entry_fill is not None and entry_ts is not None:
+                exit_reason = reason
+                if reason == "TRAILING_STOP":
+                    # Trailing stop is profit-protecting: never attribute a losing
+                    # exit to trailing (gaps/slippage can still produce a loss).
+                    if qty > 0 and fill_px < entry_fill:
+                        exit_reason = "STOP_LOSS"
+                    if qty < 0 and fill_px > entry_fill:
+                        exit_reason = "STOP_LOSS"
                 ret_pct = (
                     (fill_px / entry_fill - 1.0) * 100.0
                     if qty > 0
@@ -621,7 +670,7 @@ def run_strategy_backtest(
                         "exit_price": float(fill_px),
                         "qty": int(qty_int),
                         "pnl_pct": float(ret_pct),
-                        "reason": reason,
+                        "reason": exit_reason,
                     }
                 )
             qty = 0
@@ -629,6 +678,10 @@ def run_strategy_backtest(
             entry_ts = None
             peak_since_entry = None
             trough_since_entry = None
+            initial_sl_price = None
+            take_profit_price = None
+            trail_price = None
+            trailing_active = False
             peak_equity_since_entry = None
             pending_exit = None
 
@@ -637,50 +690,87 @@ def run_strategy_backtest(
             close_px = float(closes[i])
             next_i = i + 1
             if qty > 0:
-                peak_since_entry = max(float(peak_since_entry or close_px), close_px)
-                stop_price = None
-                if cfg.stop_loss_pct:
-                    stop_price = entry_fill * (1.0 - float(cfg.stop_loss_pct) / 100.0)
-                tp_price = None
-                if cfg.take_profit_pct:
-                    tp_price = entry_fill * (1.0 + float(cfg.take_profit_pct) / 100.0)
-                trail_price = None
-                if cfg.trailing_stop_pct and peak_since_entry is not None:
-                    trail_price = float(peak_since_entry) * (
-                        1.0 - float(cfg.trailing_stop_pct) / 100.0
-                    )
-
-                if next_i <= sim_end:
-                    if stop_price is not None and close_px <= stop_price:
-                        pending_exit = (next_i, "SELL", "STOP_LOSS")
-                    elif tp_price is not None and close_px >= tp_price:
-                        pending_exit = (next_i, "SELL", "TAKE_PROFIT")
-                    elif trail_price is not None and close_px <= trail_price:
-                        pending_exit = (next_i, "SELL", "TRAILING_STOP")
-            else:
-                trough_since_entry = min(
-                    float(trough_since_entry or close_px),
+                peak_since_entry = max(
+                    float(peak_since_entry or entry_fill),
                     close_px,
                 )
-                stop_price = None
-                if cfg.stop_loss_pct:
-                    stop_price = entry_fill * (1.0 + float(cfg.stop_loss_pct) / 100.0)
-                tp_price = None
-                if cfg.take_profit_pct:
-                    tp_price = entry_fill * (1.0 - float(cfg.take_profit_pct) / 100.0)
-                trail_price = None
-                if cfg.trailing_stop_pct and trough_since_entry is not None:
-                    trail_price = float(trough_since_entry) * (
-                        1.0 + float(cfg.trailing_stop_pct) / 100.0
+                trail_pct = float(cfg.trailing_stop_pct or 0.0)
+                if trail_pct > 0 and peak_since_entry is not None:
+                    activate_when = float(entry_fill) * (1.0 + trail_pct / 100.0)
+                    if float(peak_since_entry) >= activate_when:
+                        trailing_active = True
+                    if trailing_active:
+                        candidate = float(peak_since_entry) * (1.0 - trail_pct / 100.0)
+                        prev = float(
+                            trail_price if trail_price is not None else entry_fill
+                        )
+                        trail_price = max(prev, candidate, float(entry_fill))
+
+                effective_stop = initial_sl_price
+                if trailing_active and trail_price is not None:
+                    effective_stop = (
+                        float(trail_price)
+                        if effective_stop is None
+                        else max(float(effective_stop), float(trail_price))
                     )
 
                 if next_i <= sim_end:
-                    if stop_price is not None and close_px >= stop_price:
-                        pending_exit = (next_i, "BUY", "STOP_LOSS")
-                    elif tp_price is not None and close_px <= tp_price:
+                    if take_profit_price is not None and close_px >= float(
+                        take_profit_price
+                    ):
+                        pending_exit = (next_i, "SELL", "TAKE_PROFIT")
+                    elif effective_stop is not None and close_px <= float(
+                        effective_stop
+                    ):
+                        if (not trailing_active) or (
+                            initial_sl_price is not None
+                            and close_px <= float(initial_sl_price)
+                        ):
+                            pending_exit = (next_i, "SELL", "STOP_LOSS")
+                        else:
+                            pending_exit = (next_i, "SELL", "TRAILING_STOP")
+            else:
+                trough_since_entry = min(
+                    float(trough_since_entry or entry_fill),
+                    close_px,
+                )
+                trail_pct = float(cfg.trailing_stop_pct or 0.0)
+                if trail_pct > 0 and trough_since_entry is not None:
+                    activate_when = float(entry_fill) * (1.0 - trail_pct / 100.0)
+                    if float(trough_since_entry) <= activate_when:
+                        trailing_active = True
+                    if trailing_active:
+                        candidate = float(trough_since_entry) * (
+                            1.0 + trail_pct / 100.0
+                        )
+                        prev = float(
+                            trail_price if trail_price is not None else entry_fill
+                        )
+                        trail_price = min(prev, candidate, float(entry_fill))
+
+                effective_stop = initial_sl_price
+                if trailing_active and trail_price is not None:
+                    effective_stop = (
+                        float(trail_price)
+                        if effective_stop is None
+                        else min(float(effective_stop), float(trail_price))
+                    )
+
+                if next_i <= sim_end:
+                    if take_profit_price is not None and close_px <= float(
+                        take_profit_price
+                    ):
                         pending_exit = (next_i, "BUY", "TAKE_PROFIT")
-                    elif trail_price is not None and close_px >= trail_price:
-                        pending_exit = (next_i, "BUY", "TRAILING_STOP")
+                    elif effective_stop is not None and close_px >= float(
+                        effective_stop
+                    ):
+                        if (not trailing_active) or (
+                            initial_sl_price is not None
+                            and close_px >= float(initial_sl_price)
+                        ):
+                            pending_exit = (next_i, "BUY", "STOP_LOSS")
+                        else:
+                            pending_exit = (next_i, "BUY", "TRAILING_STOP")
 
         # Signal evaluation at close; schedule orders for next open.
         if i < sim_end:

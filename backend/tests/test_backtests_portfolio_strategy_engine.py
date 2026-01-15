@@ -28,6 +28,27 @@ def _bars_5m(d: date, n: int = 8, *, px: float = 100.0) -> list[dict]:
     return out
 
 
+def _bars_5m_closes(d: date, closes: list[float]) -> list[dict]:
+    start = datetime.combine(d, time(9, 15))
+    out: list[dict] = []
+    prev_close = closes[0]
+    for i, close_px in enumerate(closes):
+        ts = start + timedelta(minutes=5 * i)
+        open_px = prev_close if i > 0 else close_px
+        out.append(
+            {
+                "ts": ts,
+                "open": float(open_px),
+                "high": float(max(open_px, close_px)),
+                "low": float(min(open_px, close_px)),
+                "close": float(close_px),
+                "volume": 1000.0,
+            }
+        )
+        prev_close = close_px
+    return out
+
+
 def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
@@ -132,3 +153,105 @@ def test_portfolio_strategy_min_holding_bars_blocks_early_exit(monkeypatch) -> N
     tr = trades[0]
     assert _parse_iso(tr["entry_ts"]).time() == time(9, 20)
     assert _parse_iso(tr["exit_ts"]).time() == time(9, 35)
+
+
+def test_portfolio_strategy_trailing_activation_allows_breakeven_exit(
+    monkeypatch,
+) -> None:
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+
+    d = date(2025, 1, 2)
+    bars = _bars_5m_closes(d, [100.0, 100.0, 103.0, 100.0, 100.0])
+
+    def _stub_load_series(*_args, symbol: str, exchange: str, **_kwargs) -> list[dict]:
+        assert exchange == "NSE"
+        assert symbol == "AAA"
+        return bars
+
+    monkeypatch.setattr(ps, "load_series", _stub_load_series)
+
+    cfg = PortfolioStrategyBacktestConfigIn(
+        timeframe="5m",
+        start_date=d,
+        end_date=d,
+        entry_dsl="PRICE() > 0",
+        exit_dsl="PRICE() < 0",
+        product="CNC",
+        direction="LONG",
+        initial_cash=10000.0,
+        max_open_positions=1,
+        allocation_mode="EQUAL",
+        sizing_mode="PCT_EQUITY",
+        position_size_pct=100.0,
+        stop_loss_pct=0.0,
+        take_profit_pct=0.0,
+        trailing_stop_pct=3.0,
+        charges_model="BPS",
+        charges_bps=0.0,
+        include_dp_charges=False,
+    )
+
+    with SessionLocal() as db:
+        res = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[UniverseSymbolRef(exchange="NSE", symbol="AAA")],
+            config=cfg,
+            allow_fetch=False,
+        )
+
+    trades = res["trades"]
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "TRAILING_STOP"
+    assert abs(float(trades[0]["pnl_pct"])) < 1e-9
+
+
+def test_portfolio_strategy_trailing_stop_short_symmetry(monkeypatch) -> None:
+    os.environ.setdefault("ST_ENVIRONMENT", "test")
+    get_settings.cache_clear()
+
+    d = date(2025, 1, 2)
+    bars = _bars_5m_closes(d, [100.0, 100.0, 97.0, 100.0, 100.0])
+
+    def _stub_load_series(*_args, symbol: str, exchange: str, **_kwargs) -> list[dict]:
+        assert exchange == "NSE"
+        assert symbol == "AAA"
+        return bars
+
+    monkeypatch.setattr(ps, "load_series", _stub_load_series)
+
+    cfg = PortfolioStrategyBacktestConfigIn(
+        timeframe="5m",
+        start_date=d,
+        end_date=d,
+        entry_dsl="PRICE() > 0",
+        exit_dsl="PRICE() < 0",
+        product="MIS",
+        direction="SHORT",
+        initial_cash=10000.0,
+        max_open_positions=1,
+        allocation_mode="EQUAL",
+        sizing_mode="PCT_EQUITY",
+        position_size_pct=100.0,
+        stop_loss_pct=0.0,
+        take_profit_pct=0.0,
+        trailing_stop_pct=3.0,
+        charges_model="BPS",
+        charges_bps=0.0,
+        include_dp_charges=False,
+    )
+
+    with SessionLocal() as db:
+        res = ps.run_portfolio_strategy_backtest(
+            db,
+            get_settings(),
+            symbols=[UniverseSymbolRef(exchange="NSE", symbol="AAA")],
+            config=cfg,
+            allow_fetch=False,
+        )
+
+    trades = res["trades"]
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "TRAILING_STOP"
+    assert abs(float(trades[0]["pnl_pct"])) < 1e-9
