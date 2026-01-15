@@ -13,6 +13,24 @@ export type OrderStatus =
 export type ExecutionMode = 'MANUAL' | 'AUTO'
 export type ExecutionTarget = 'LIVE' | 'PAPER'
 
+export type DistanceMode = 'ABS' | 'PCT' | 'ATR'
+
+export type DistanceSpec = {
+  enabled: boolean
+  mode: DistanceMode
+  value: number
+  atr_period?: number
+  atr_tf?: string
+}
+
+export type RiskSpec = {
+  stop_loss: DistanceSpec
+  trailing_stop: DistanceSpec
+  trailing_activation: DistanceSpec
+  exit_order_type: 'MARKET'
+  cooldown_ms?: number | null
+}
+
 export type Order = {
   id: number
   alert_id?: number | null
@@ -62,6 +80,7 @@ export async function createManualOrder(payload: {
   gtt?: boolean
   mode?: ExecutionMode
   execution_target?: ExecutionTarget
+  risk_spec?: RiskSpec | null
 }): Promise<Order> {
   const res = await fetch('/api/orders/', {
     method: 'POST',

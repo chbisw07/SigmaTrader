@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     # expressions ("recommended" is intentionally small; "extended" keeps all
     # experimental functions).
     dsl_profile: str = "recommended"  # recommended|extended
+    # Managed risk exits (SigmaTrader-managed SL / trailing SL / trailing profit).
+    managed_risk_enabled: bool = True
+    managed_risk_poll_interval_sec: float = 2.0
+    managed_risk_max_per_cycle: int = 200
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.

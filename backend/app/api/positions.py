@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user, get_current_user_optional
@@ -20,8 +21,23 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_preopen_now
 from app.db.session import get_db
-from app.models import BrokerConnection, Order, Position, PositionSnapshot, User
+from app.models import (
+    AnalyticsTrade,
+    BrokerConnection,
+    Order,
+    Position,
+    PositionSnapshot,
+    User,
+)
 from app.schemas.positions import HoldingRead, PositionRead, PositionSnapshotRead
+from app.schemas.positions_analysis import (
+    ClosedTradeRead,
+    MonthlyPositionsAnalyticsRead,
+    PositionsAnalysisRead,
+    PositionsAnalysisSummaryRead,
+    SymbolPnlRead,
+)
+from app.services.analytics import rebuild_trades
 from app.services.broker_instruments import (
     resolve_broker_symbol_and_token,
     resolve_listing_for_broker_symbol,
@@ -415,6 +431,423 @@ def list_daily_positions(
 
         out.append(item)
     return out
+
+
+def _month_key(d: date) -> str:
+    return f"{d.year:04d}-{d.month:02d}"
+
+
+def _as_float(v: object | None) -> float:
+    try:
+        return float(v) if v is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _day_window_ist(d: date) -> tuple[datetime, datetime]:
+    try:
+        from zoneinfo import ZoneInfo
+
+        ist = ZoneInfo("Asia/Kolkata")
+        opened = datetime(d.year, d.month, d.day, 9, 15, tzinfo=ist).astimezone(UTC)
+        closed = datetime(d.year, d.month, d.day, 15, 30, tzinfo=ist).astimezone(UTC)
+        return opened, closed
+    except Exception:
+        opened = datetime(d.year, d.month, d.day, tzinfo=UTC)
+        return opened, opened
+
+
+@router.get("/analysis", response_model=PositionsAnalysisRead)
+def positions_analysis(
+    broker_name: Annotated[str, Query(min_length=1)] = "zerodha",
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    symbol: Optional[str] = None,
+    top_n: int = 10,
+    db: Session = Depends(get_db),
+) -> PositionsAnalysisRead:
+    """Return a lightweight trading/position analytics dashboard payload.
+
+    This is a best-effort view:
+    - Closed trades are sourced from `analytics_trades` (derived from executed orders).
+    - Turnover is estimated from daily position snapshots (day_buy/sell fields).
+    - Open positions come from the cached `positions` table.
+    """
+
+    broker = (broker_name or "").strip().lower()
+    if top_n <= 0:
+        top_n = 10
+    top_n = min(int(top_n), 50)
+
+    # Determine date range defaults based on available snapshots.
+    if start_date is None and end_date is None:
+        latest = (
+            db.query(PositionSnapshot.as_of_date)
+            .filter(PositionSnapshot.broker_name == broker)
+            .order_by(PositionSnapshot.as_of_date.desc())
+            .limit(1)
+            .scalar()
+        )
+        if latest is None:
+            empty_summary = PositionsAnalysisSummaryRead(
+                date_from=date.today(),
+                date_to=date.today(),
+                broker_name=broker,
+            )
+            return PositionsAnalysisRead(
+                summary=empty_summary,
+                monthly=[],
+                winners=[],
+                losers=[],
+                open_positions=[],
+                closed_trades=[],
+            )
+        end_date = latest
+        start_date = date.fromordinal(latest.toordinal() - 30)
+
+    assert start_date is not None
+    assert end_date is not None
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    # Snapshot-based turnover aggregation (per month).
+    snap_q = (
+        db.query(PositionSnapshot)
+        .filter(
+            PositionSnapshot.broker_name == broker,
+            PositionSnapshot.as_of_date >= start_date,
+            PositionSnapshot.as_of_date <= end_date,
+        )
+        .order_by(PositionSnapshot.as_of_date.asc())
+    )
+    if symbol:
+        like = f"%{symbol.strip().upper()}%"
+        snap_q = snap_q.filter(PositionSnapshot.symbol.like(like))
+    snaps: list[PositionSnapshot] = list(snap_q.all())
+
+    monthly_turnover: dict[str, dict[str, float]] = {}
+    for s in snaps:
+        m = _month_key(s.as_of_date)
+        entry = monthly_turnover.setdefault(
+            m,
+            {"buy": 0.0, "sell": 0.0},
+        )
+        day_buy_qty = _as_float(s.day_buy_qty)
+        day_sell_qty = _as_float(s.day_sell_qty)
+        buy_qty = day_buy_qty or _as_float(s.buy_qty)
+        sell_qty = day_sell_qty or _as_float(s.sell_qty)
+
+        if day_buy_qty > 0:
+            buy_px = (
+                _as_float(s.day_buy_avg_price)
+                or _as_float(s.buy_avg_price)
+                or _as_float(s.avg_price)
+            )
+        else:
+            buy_px = _as_float(s.buy_avg_price) or _as_float(s.avg_price)
+        if day_sell_qty > 0:
+            sell_px = (
+                _as_float(s.day_sell_avg_price)
+                or _as_float(s.sell_avg_price)
+                or _as_float(s.avg_price)
+            )
+        else:
+            sell_px = _as_float(s.sell_avg_price) or _as_float(s.avg_price)
+
+        if buy_qty > 0 and buy_px > 0:
+            entry["buy"] += buy_qty * buy_px
+        if sell_qty > 0 and sell_px > 0:
+            entry["sell"] += sell_qty * sell_px
+
+    # Trade-based aggregation (AnalyticsTrade joined to entry order for
+    # symbol/product/broker).
+    start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=UTC)
+    end_dt = datetime.combine(end_date, datetime.max.time(), tzinfo=UTC)
+    trade_query = (
+        db.query(AnalyticsTrade, Order)
+        .join(Order, AnalyticsTrade.entry_order_id == Order.id)
+        .filter(
+            Order.broker_name == broker,
+            AnalyticsTrade.closed_at >= start_dt,
+            AnalyticsTrade.closed_at <= end_dt,
+        )
+        .order_by(AnalyticsTrade.closed_at.asc())
+    )
+    if symbol:
+        like = f"%{symbol.strip().upper()}%"
+        trade_query = trade_query.filter(Order.symbol.like(like))
+    trade_rows = trade_query.all()
+    if not trade_rows:
+        # Best-effort: auto-rebuild analytics trades on demand so users don't
+        # have to manually call the maintenance endpoint after a restart.
+        try:
+            rebuild_trades(db)
+        except Exception:
+            pass
+        trade_rows = trade_query.all()
+
+    monthly_trades: dict[str, dict[str, float | int]] = {}
+    by_symbol: dict[tuple[str, str | None], dict[str, float | int]] = {}
+    closed_trades: list[ClosedTradeRead] = []
+    trades_pnl = 0.0
+    wins_total = 0
+    losses_total = 0
+
+    trades_count = 0
+
+    if trade_rows:
+        for t, entry in trade_rows:
+            closed_at = t.closed_at
+            if closed_at.tzinfo is None:
+                closed_at = closed_at.replace(tzinfo=UTC)
+            m = f"{closed_at.year:04d}-{closed_at.month:02d}"
+
+            bucket = monthly_trades.setdefault(
+                m,
+                {"pnl": 0.0, "count": 0, "wins": 0, "losses": 0},
+            )
+            bucket["pnl"] = float(bucket["pnl"]) + float(t.pnl)
+            bucket["count"] = int(bucket["count"]) + 1
+            if float(t.pnl) > 0:
+                bucket["wins"] = int(bucket["wins"]) + 1
+                wins_total += 1
+            else:
+                bucket["losses"] = int(bucket["losses"]) + 1
+                losses_total += 1
+
+            key = (entry.symbol, entry.product)
+            sb = by_symbol.setdefault(key, {"pnl": 0.0, "count": 0, "wins": 0})
+            sb["pnl"] = float(sb["pnl"]) + float(t.pnl)
+            sb["count"] = int(sb["count"]) + 1
+            if float(t.pnl) > 0:
+                sb["wins"] = int(sb["wins"]) + 1
+
+            opened_at = t.opened_at
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=UTC)
+            closed_trades.append(
+                ClosedTradeRead(
+                    symbol=entry.symbol,
+                    product=entry.product,
+                    opened_at=opened_at,
+                    closed_at=closed_at,
+                    pnl=float(t.pnl),
+                )
+            )
+            trades_pnl += float(t.pnl)
+        trades_count = len(trade_rows)
+    else:
+        # Fallback: derive a daily closed-position P&L stream from broker
+        # position snapshots. This works even when `analytics_trades` is empty
+        # (common after restarts or when market order prices aren't stored).
+        for s in snaps:
+            net_qty = float(s.qty or 0.0)
+            if net_qty != 0:
+                continue
+            buy_qty = _as_float(s.day_buy_qty) or _as_float(s.buy_qty)
+            sell_qty = _as_float(s.day_sell_qty) or _as_float(s.sell_qty)
+            if buy_qty <= 0 and sell_qty <= 0:
+                continue
+            pnl_val = (
+                float(s.realised)
+                if getattr(s, "realised", None) is not None
+                else float(s.pnl or 0.0)
+            )
+            if pnl_val == 0.0:
+                continue
+            opened_at, closed_at = _day_window_ist(s.as_of_date)
+            m = _month_key(s.as_of_date)
+            bucket = monthly_trades.setdefault(
+                m,
+                {"pnl": 0.0, "count": 0, "wins": 0, "losses": 0},
+            )
+            bucket["pnl"] = float(bucket["pnl"]) + float(pnl_val)
+            bucket["count"] = int(bucket["count"]) + 1
+            if pnl_val > 0:
+                bucket["wins"] = int(bucket["wins"]) + 1
+                wins_total += 1
+            else:
+                bucket["losses"] = int(bucket["losses"]) + 1
+                losses_total += 1
+
+            key = (str(s.symbol), str(s.product))
+            sb = by_symbol.setdefault(key, {"pnl": 0.0, "count": 0, "wins": 0})
+            sb["pnl"] = float(sb["pnl"]) + float(pnl_val)
+            sb["count"] = int(sb["count"]) + 1
+            if pnl_val > 0:
+                sb["wins"] = int(sb["wins"]) + 1
+
+            closed_trades.append(
+                ClosedTradeRead(
+                    symbol=str(s.symbol),
+                    product=str(s.product),
+                    opened_at=opened_at,
+                    closed_at=closed_at,
+                    pnl=float(pnl_val),
+                )
+            )
+            trades_pnl += float(pnl_val)
+        trades_count = len(closed_trades)
+
+    # Monthly merge (turnover + trades).
+    months = sorted(set(monthly_turnover.keys()) | set(monthly_trades.keys()))
+    monthly_out: list[MonthlyPositionsAnalyticsRead] = []
+    for m in months:
+        t = monthly_trades.get(m, {"pnl": 0.0, "count": 0, "wins": 0, "losses": 0})
+        tv = monthly_turnover.get(m, {"buy": 0.0, "sell": 0.0})
+        count = int(t["count"])
+        wins = int(t["wins"])
+        losses = int(t["losses"])
+        win_rate = (wins / count) if count else 0.0
+        buy = float(tv["buy"])
+        sell = float(tv["sell"])
+        monthly_out.append(
+            MonthlyPositionsAnalyticsRead(
+                month=m,
+                trades_pnl=float(t["pnl"]),
+                trades_count=count,
+                wins=wins,
+                losses=losses,
+                win_rate=win_rate,
+                turnover_buy=buy,
+                turnover_sell=sell,
+                turnover_total=buy + sell,
+            )
+        )
+
+    # Winners / losers by symbol based on trade PnL.
+    symbols_out: list[SymbolPnlRead] = []
+    for (sym, prod), agg in by_symbol.items():
+        count = int(agg["count"])
+        wins = int(agg["wins"])
+        win_rate = (wins / count) if count else 0.0
+        symbols_out.append(
+            SymbolPnlRead(
+                symbol=sym,
+                product=prod,
+                pnl=float(agg["pnl"]),
+                trades=count,
+                win_rate=win_rate,
+            )
+        )
+    winners = sorted(symbols_out, key=lambda x: x.pnl, reverse=True)[:top_n]
+    losers = sorted(symbols_out, key=lambda x: x.pnl)[:top_n]
+
+    # Open positions (prefer latest daily snapshot for stability after restarts;
+    # fall back to cached positions table).
+    open_positions: list[PositionRead] = []
+    latest_snap_date = None
+    if snaps:
+        latest_snap_date = max(s.as_of_date for s in snaps)
+    else:
+        q_latest = db.query(PositionSnapshot.as_of_date).filter(
+            PositionSnapshot.broker_name == broker,
+            PositionSnapshot.as_of_date <= end_date,
+        )
+        if symbol:
+            like = f"%{symbol.strip().upper()}%"
+            q_latest = q_latest.filter(PositionSnapshot.symbol.like(like))
+        latest_snap_date = (
+            q_latest.order_by(PositionSnapshot.as_of_date.desc()).limit(1).scalar()
+        )
+
+    if latest_snap_date is not None:
+        q_open = db.query(PositionSnapshot).filter(
+            PositionSnapshot.broker_name == broker,
+            PositionSnapshot.as_of_date == latest_snap_date,
+            or_(
+                PositionSnapshot.qty != 0,
+                PositionSnapshot.holding_qty.is_not(None),
+            ),
+        )
+        if symbol:
+            like = f"%{symbol.strip().upper()}%"
+            q_open = q_open.filter(PositionSnapshot.symbol.like(like))
+        open_snaps = q_open.order_by(
+            PositionSnapshot.symbol.asc(),
+            PositionSnapshot.exchange.asc(),
+            PositionSnapshot.product.asc(),
+        ).all()
+        for s in open_snaps:
+            last_updated = s.captured_at
+            if last_updated.tzinfo is None:
+                last_updated = last_updated.replace(tzinfo=UTC)
+            net_qty = float(s.qty or 0.0)
+            holding_qty = (
+                float(s.holding_qty or 0.0) if s.holding_qty is not None else 0.0
+            )
+            qty = net_qty if net_qty != 0 else holding_qty
+            if qty == 0:
+                continue
+            avg_price = float(s.avg_price or 0.0)
+            if avg_price <= 0:
+                avg_price = (
+                    _as_float(s.buy_avg_price)
+                    or _as_float(s.day_buy_avg_price)
+                    or _as_float(s.sell_avg_price)
+                    or _as_float(s.day_sell_avg_price)
+                )
+            open_positions.append(
+                PositionRead(
+                    id=int(s.id),
+                    symbol=str(s.symbol),
+                    exchange=str(s.exchange or "NSE"),
+                    product=str(s.product),
+                    qty=float(qty),
+                    avg_price=float(avg_price),
+                    pnl=float(s.pnl or 0.0),
+                    last_updated=last_updated,
+                )
+            )
+
+    if not open_positions:
+        open_positions_raw: list[Position] = (
+            db.query(Position)
+            .filter(
+                Position.broker_name == broker,
+                Position.qty != 0,
+            )
+            .order_by(
+                Position.symbol.asc(),
+                Position.exchange.asc(),
+                Position.product.asc(),
+            )
+            .all()
+        )
+        open_positions = [_model_validate(PositionRead, p) for p in open_positions_raw]
+
+    summary = PositionsAnalysisSummaryRead(
+        date_from=start_date,
+        date_to=end_date,
+        broker_name=broker,
+        trades_pnl=trades_pnl,
+        trades_count=trades_count,
+        trades_win_rate=(
+            (wins_total / (wins_total + losses_total))
+            if (wins_total + losses_total)
+            else 0.0
+        ),
+        turnover_buy=sum(v["buy"] for v in monthly_turnover.values()),
+        turnover_sell=sum(v["sell"] for v in monthly_turnover.values()),
+        turnover_total=sum(v["buy"] + v["sell"] for v in monthly_turnover.values()),
+        open_positions_count=len(open_positions),
+    )
+
+    # Recent closed trades (most recent first; cap).
+    closed_trades_sorted = sorted(
+        closed_trades,
+        key=lambda x: x.closed_at,
+        reverse=True,
+    )[: min(50, max(10, top_n * 5))]
+
+    return PositionsAnalysisRead(
+        summary=summary,
+        monthly=monthly_out,
+        winners=winners,
+        losers=losers,
+        open_positions=open_positions,
+        closed_trades=closed_trades_sorted,
+    )
 
 
 @router.get("/holdings", response_model=List[HoldingRead])

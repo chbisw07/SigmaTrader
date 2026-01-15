@@ -60,6 +60,56 @@ export type Holding = {
   broker_name?: string | null
 }
 
+export type PositionsAnalysisSummary = {
+  date_from: string
+  date_to: string
+  broker_name: string
+  trades_pnl: number
+  trades_count: number
+  trades_win_rate: number
+  turnover_buy: number
+  turnover_sell: number
+  turnover_total: number
+  open_positions_count: number
+}
+
+export type MonthlyPositionsAnalytics = {
+  month: string // YYYY-MM
+  trades_pnl: number
+  trades_count: number
+  wins: number
+  losses: number
+  win_rate: number
+  turnover_buy: number
+  turnover_sell: number
+  turnover_total: number
+}
+
+export type SymbolPnlRow = {
+  symbol: string
+  product?: string | null
+  pnl: number
+  trades: number
+  win_rate: number
+}
+
+export type ClosedTradeRow = {
+  symbol: string
+  product?: string | null
+  opened_at: string
+  closed_at: string
+  pnl: number
+}
+
+export type PositionsAnalysis = {
+  summary: PositionsAnalysisSummary
+  monthly: MonthlyPositionsAnalytics[]
+  winners: SymbolPnlRow[]
+  losers: SymbolPnlRow[]
+  open_positions: Position[]
+  closed_trades: ClosedTradeRow[]
+}
+
 export async function syncPositions(
   brokerName = 'zerodha',
 ): Promise<{ updated: number }> {
@@ -130,4 +180,27 @@ export async function fetchHoldings(
     )
   }
   return (await res.json()) as Holding[]
+}
+
+export async function fetchPositionsAnalysis(params?: {
+  broker_name?: string
+  start_date?: string
+  end_date?: string
+  symbol?: string
+  top_n?: number
+}): Promise<PositionsAnalysis> {
+  const url = new URL('/api/positions/analysis', window.location.origin)
+  if (params?.broker_name) url.searchParams.set('broker_name', params.broker_name)
+  if (params?.start_date) url.searchParams.set('start_date', params.start_date)
+  if (params?.end_date) url.searchParams.set('end_date', params.end_date)
+  if (params?.symbol) url.searchParams.set('symbol', params.symbol)
+  if (params?.top_n != null) url.searchParams.set('top_n', String(params.top_n))
+  const res = await fetch(url.toString(), { cache: 'no-store' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(
+      `Failed to load positions analysis (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as PositionsAnalysis
 }

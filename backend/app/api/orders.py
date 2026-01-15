@@ -319,6 +319,9 @@ def create_manual_order(
     if synthetic_gtt and payload.mode == "AUTO":
         armed_at = _now_utc()
 
+    risk_spec_json = (
+        payload.risk_spec.to_json() if payload.risk_spec is not None else None
+    )
     order = Order(
         user_id=user.id,
         broker_name=broker,
@@ -341,6 +344,8 @@ def create_manual_order(
         mode=payload.mode,
         execution_target=payload.execution_target,
         simulated=False,
+        risk_spec_json=risk_spec_json,
+        is_exit=False,
     )
 
     db.add(order)

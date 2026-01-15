@@ -214,6 +214,17 @@ def evaluate_execution_risk_policy(
     order: Order,
     policy: RiskPolicy,
 ) -> RiskPolicyDecision:
+    if bool(getattr(order, "is_exit", False)):
+        original_qty = float(order.qty or 0.0)
+        return RiskPolicyDecision(
+            blocked=False,
+            clamped=False,
+            reason=None,
+            original_qty=original_qty,
+            final_qty=original_qty,
+            effective_price=_resolve_price_for_checks(db, settings, order=order),
+            source_bucket=_bucket_for_order(order),
+        )
     original_qty = float(order.qty or 0.0)
     current_qty = float(order.qty or 0.0)
     reasons: list[str] = []

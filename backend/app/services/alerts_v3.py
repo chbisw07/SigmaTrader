@@ -12,6 +12,8 @@ from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET, is_market_open_now
 from app.db.session import SessionLocal
 from app.models import AlertDefinition, AlertEvent, Group, GroupMember, User
+from app.pydantic_compat import PYDANTIC_V2
+from app.schemas.managed_risk import RiskSpec
 from app.schemas.positions import HoldingRead
 from app.services.alerts_v3_compiler import (
     CustomIndicatorMap,
@@ -486,6 +488,18 @@ def _create_order_for_alert_match(
     trigger_price = round_price_to_tick(trigger_price)
     gtt = bool(params.get("gtt") or False)
 
+    risk_spec_json: str | None = None
+    raw_risk = params.get("risk_spec")
+    if isinstance(raw_risk, dict):
+        try:
+            if PYDANTIC_V2:
+                risk = RiskSpec.model_validate(raw_risk)
+            else:
+                risk = RiskSpec.parse_obj(raw_risk)
+            risk_spec_json = risk.to_json()
+        except Exception:
+            risk_spec_json = None
+
     order = Order(
         user_id=alert.user_id,
         symbol=symbol,
@@ -502,6 +516,8 @@ def _create_order_for_alert_match(
         execution_target=execution_target,
         simulated=False,
         broker_name=broker_name,
+        risk_spec_json=risk_spec_json,
+        is_exit=False,
     )
     db.add(order)
     db.flush()

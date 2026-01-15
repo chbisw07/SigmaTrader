@@ -6,6 +6,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from app.pydantic_compat import PYDANTIC_V2, ConfigDict
+from app.schemas.managed_risk import RiskSpec
 
 AllowedOrderStatus = Literal[
     "WAITING",
@@ -105,6 +106,7 @@ class ManualOrderCreate(BaseModel):
     gtt: bool = False
     mode: ExecutionMode = "MANUAL"
     execution_target: ExecutionTarget = "LIVE"
+    risk_spec: Optional[RiskSpec] = None
 
 
 __all__ = [

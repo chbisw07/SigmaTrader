@@ -1,11 +1,16 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
+import Divider from '@mui/material/Divider'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import Checkbox from '@mui/material/Checkbox'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
+import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
+import Tab from '@mui/material/Tab'
+import Tabs from '@mui/material/Tabs'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
@@ -15,7 +20,9 @@ import ClearIcon from '@mui/icons-material/Clear'
 
 import {
   fetchDailyPositions,
+  fetchPositionsAnalysis,
   syncPositions,
+  type PositionsAnalysis,
   type PositionSnapshot,
 } from '../services/positions'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
@@ -41,16 +48,43 @@ const defaultDateRange = (): { from: string; to: string } => {
   }
 }
 
+const formatInr = (n: number | null | undefined, opts?: { fractionDigits?: number }) => {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  const fractionDigits = opts?.fractionDigits ?? 0
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: fractionDigits,
+    minimumFractionDigits: fractionDigits,
+  }).format(Number(n))
+}
+
+const formatPct = (n: number | null | undefined) => {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  return `${(Number(n) * 100).toFixed(1)}%`
+}
+
+function PnlChip({ value }: { value: number }) {
+  const color = value > 0 ? 'success' : value < 0 ? 'error' : 'default'
+  return <Chip size="small" label={formatInr(value, { fractionDigits: 0 })} color={color as any} />
+}
+
 export function PositionsPage() {
   const { displayTimeZone } = useTimeSettings()
   const defaults = defaultDateRange()
+  type PositionsTab = 'snapshots' | 'analysis'
+  const [activeTab, setActiveTab] = useState<PositionsTab>('snapshots')
   const [positions, setPositions] = useState<PositionSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [analysis, setAnalysis] = useState<PositionsAnalysis | null>(null)
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
   const loadSeqRef = useRef(0)
+  const analysisSeqRef = useRef(0)
   const symbolApplyTimeoutRef = useRef<number | null>(null)
   const symbolAutoApplyMountedRef = useRef(false)
 
@@ -59,7 +93,7 @@ export function PositionsPage() {
   const [symbolQuery, setSymbolQuery] = useState<string>('')
   const [includeZero, setIncludeZero] = useState(true)
 
-  const load = async (opts?: { preferLatest?: boolean }) => {
+  const loadSnapshots = async (opts?: { preferLatest?: boolean }) => {
     const seq = (loadSeqRef.current += 1)
     try {
       setLoading(true)
@@ -85,6 +119,28 @@ export function PositionsPage() {
     }
   }
 
+  const loadAnalysis = async () => {
+    const seq = (analysisSeqRef.current += 1)
+    try {
+      setAnalysisLoading(true)
+      const data = await fetchPositionsAnalysis({
+        broker_name: selectedBroker,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+        symbol: symbolQuery || undefined,
+        top_n: 10,
+      })
+      if (seq !== analysisSeqRef.current) return
+      setAnalysis(data)
+      setAnalysisError(null)
+    } catch (err) {
+      if (seq !== analysisSeqRef.current) return
+      setAnalysisError(err instanceof Error ? err.message : 'Failed to load analysis')
+    } finally {
+      if (seq === analysisSeqRef.current) setAnalysisLoading(false)
+    }
+  }
+
   useEffect(() => {
     void (async () => {
       try {
@@ -97,7 +153,7 @@ export function PositionsPage() {
         // Ignore; page can still operate with defaults.
       }
     })()
-    void load({ preferLatest: true })
+    void loadSnapshots({ preferLatest: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -106,7 +162,8 @@ export function PositionsPage() {
     // the grid doesn't look "stuck" on the old broker while the request runs.
     setPositions([])
     setError(null)
-    void load()
+    void loadSnapshots()
+    if (activeTab === 'analysis') void loadAnalysis()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBroker])
 
@@ -125,7 +182,7 @@ export function PositionsPage() {
     // Other filters still use the "Apply" button.
     symbolApplyTimeoutRef.current = window.setTimeout(() => {
       symbolApplyTimeoutRef.current = null
-      void load()
+      if (activeTab === 'snapshots') void loadSnapshots()
     }, 350)
 
     return () => {
@@ -141,7 +198,11 @@ export function PositionsPage() {
     setRefreshing(true)
     try {
       await syncPositions(selectedBroker)
-      await load({ preferLatest: true })
+      if (activeTab === 'snapshots') {
+        await loadSnapshots({ preferLatest: true })
+      } else {
+        await loadAnalysis()
+      }
     } catch (err) {
       setError(
         err instanceof Error
@@ -158,7 +219,11 @@ export function PositionsPage() {
       window.clearTimeout(symbolApplyTimeoutRef.current)
       symbolApplyTimeoutRef.current = null
     }
-    await load()
+    if (activeTab === 'snapshots') {
+      await loadSnapshots()
+    } else {
+      await loadAnalysis()
+    }
   }
 
   const columns: GridColDef[] = [
@@ -258,6 +323,110 @@ export function PositionsPage() {
     },
   ]
 
+  const monthlyColumns: GridColDef[] = [
+    { field: 'month', headerName: 'Month', width: 110 },
+    {
+      field: 'trades_pnl',
+      headerName: 'Closed trades P&L',
+      width: 170,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    {
+      field: 'trades_count',
+      headerName: '# Trades',
+      width: 95,
+      type: 'number',
+    },
+    {
+      field: 'win_rate',
+      headerName: 'Win rate',
+      width: 105,
+      valueFormatter: (v) => formatPct(Number(v)),
+    },
+    {
+      field: 'turnover_total',
+      headerName: 'Turnover',
+      width: 140,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+    },
+  ]
+
+  const symbolPnlColumns: GridColDef[] = [
+    { field: 'symbol', headerName: 'Symbol', width: 130 },
+    { field: 'product', headerName: 'Product', width: 90 },
+    {
+      field: 'pnl',
+      headerName: 'P&L',
+      width: 130,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+    { field: 'trades', headerName: 'Trades', width: 90, type: 'number' },
+    {
+      field: 'win_rate',
+      headerName: 'Win rate',
+      width: 110,
+      valueFormatter: (v) => formatPct(Number(v)),
+    },
+  ]
+
+  const openPositionsColumns: GridColDef[] = [
+    { field: 'symbol', headerName: 'Symbol', width: 140 },
+    { field: 'exchange', headerName: 'Exch', width: 80 },
+    { field: 'product', headerName: 'Product', width: 90 },
+    { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
+    {
+      field: 'avg_price',
+      headerName: 'Avg',
+      width: 110,
+      type: 'number',
+      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+    },
+    {
+      field: 'pnl',
+      headerName: 'P&L',
+      width: 120,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+  ]
+
+  const closedTradesColumns: GridColDef[] = [
+    { field: 'symbol', headerName: 'Symbol', width: 140 },
+    { field: 'product', headerName: 'Product', width: 90 },
+    {
+      field: 'opened_at',
+      headerName: 'Opened',
+      width: 180,
+      valueFormatter: (v) =>
+        v ? formatInDisplayTimeZone(String(v), displayTimeZone) : '',
+    },
+    {
+      field: 'closed_at',
+      headerName: 'Closed',
+      width: 180,
+      valueFormatter: (v) =>
+        v ? formatInDisplayTimeZone(String(v), displayTimeZone) : '',
+    },
+    {
+      field: 'pnl',
+      headerName: 'P&L',
+      width: 120,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+      cellClassName: (params: GridCellParams) =>
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
+    },
+  ]
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -274,7 +443,9 @@ export function PositionsPage() {
         }}
       >
         <Typography color="text.secondary">
-          Daily position snapshots (from broker positions). Refresh captures a new snapshot for today.
+          {activeTab === 'snapshots'
+            ? 'Daily position snapshots (from broker positions). Refresh captures a new snapshot for today.'
+            : 'Trading insights from executed orders (closed trades) + daily position snapshots (turnover).'}
         </Typography>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {brokers.length > 0 && (
@@ -359,40 +530,191 @@ export function PositionsPage() {
         </Stack>
       </Box>
 
-      {loading ? (
+      <Paper sx={{ mb: 2 }}>
+        <Tabs
+          value={activeTab}
+          onChange={(_e, v) => {
+            setActiveTab(v)
+            if (v === 'analysis' && analysis == null && !analysisLoading) void loadAnalysis()
+          }}
+          variant="scrollable"
+          scrollButtons="auto"
+        >
+          <Tab value="snapshots" label="Daily snapshots" />
+          <Tab value="analysis" label="Positions analysis" />
+        </Tabs>
+      </Paper>
+
+      {activeTab === 'snapshots' ? (
+        loading ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CircularProgress size={20} />
+            <Typography variant="body2">Loading positions…</Typography>
+          </Box>
+        ) : error ? (
+          <Typography variant="body2" color="error">
+            {error}
+          </Typography>
+        ) : (
+          <Box sx={{ height: 'calc(100vh - 280px)', minHeight: 360 }}>
+            <DataGrid
+              rows={positions}
+              columns={columns}
+              getRowId={(r) => r.id}
+              density="compact"
+              disableRowSelectionOnClick
+              sx={{
+                '& .pnl-negative': {
+                  color: 'error.main',
+                },
+              }}
+              slots={{ toolbar: GridToolbar }}
+              slotProps={{
+                toolbar: {
+                  showQuickFilter: true,
+                  quickFilterProps: { debounceMs: 300 },
+                },
+              }}
+              initialState={{
+                pagination: { paginationModel: { pageSize: 25 } },
+              }}
+              pageSizeOptions={[25, 50, 100]}
+            />
+          </Box>
+        )
+      ) : analysisLoading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
-          <Typography variant="body2">Loading positions...</Typography>
+          <Typography variant="body2">Loading analysis…</Typography>
         </Box>
-      ) : error ? (
+      ) : analysisError ? (
         <Typography variant="body2" color="error">
-          {error}
+          {analysisError}
+        </Typography>
+      ) : !analysis ? (
+        <Typography variant="body2" color="text.secondary">
+          No analysis available yet. Try selecting a date range with executed trades, then click Apply.
         </Typography>
       ) : (
-        <Box sx={{ height: 'calc(100vh - 230px)', minHeight: 360 }}>
-          <DataGrid
-            rows={positions}
-            columns={columns}
-            getRowId={(r) => r.id}
-            density="compact"
-            disableRowSelectionOnClick
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Overview
+            </Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+              <Chip
+                size="small"
+                label={`Range: ${analysis.summary.date_from} → ${analysis.summary.date_to}`}
+              />
+              <Chip size="small" label={`Broker: ${analysis.summary.broker_name}`} />
+              <Chip size="small" label={`Closed trades: ${analysis.summary.trades_count}`} />
+              <Chip size="small" label={`Win rate: ${formatPct(analysis.summary.trades_win_rate)}`} />
+              <Chip size="small" label={`Open positions: ${analysis.summary.open_positions_count}`} />
+              <Chip size="small" label={`Turnover: ${formatInr(analysis.summary.turnover_total)}`} />
+              <PnlChip value={analysis.summary.trades_pnl} />
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              Turnover is estimated from daily position snapshots (day buy/sell fields). Closed trade P&L is from analytics trades.
+            </Typography>
+          </Paper>
+
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Monthly performance
+            </Typography>
+            <Box sx={{ height: 340 }}>
+              <DataGrid
+                rows={analysis.monthly}
+                columns={monthlyColumns}
+                getRowId={(r) => r.month}
+                density="compact"
+                disableRowSelectionOnClick
+                sx={{ '& .pnl-negative': { color: 'error.main' } }}
+                initialState={{ pagination: { paginationModel: { pageSize: 12 } } }}
+                pageSizeOptions={[12, 24, 60]}
+              />
+            </Box>
+          </Paper>
+
+          <Box
             sx={{
-              '& .pnl-negative': {
-                color: 'error.main',
-              },
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+              gap: 2,
             }}
-            slots={{ toolbar: GridToolbar }}
-            slotProps={{
-              toolbar: {
-                showQuickFilter: true,
-                quickFilterProps: { debounceMs: 300 },
-              },
-            }}
-            initialState={{
-              pagination: { paginationModel: { pageSize: 25 } },
-            }}
-            pageSizeOptions={[25, 50, 100]}
-          />
+          >
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                Winners (closed trades)
+              </Typography>
+              <Box sx={{ height: 320 }}>
+                <DataGrid
+                  rows={analysis.winners}
+                  columns={symbolPnlColumns}
+                  getRowId={(r) => `${r.symbol}:${r.product || ''}`}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  sx={{ '& .pnl-negative': { color: 'error.main' } }}
+                  initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+                  pageSizeOptions={[10]}
+                />
+              </Box>
+            </Paper>
+
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                Losers (closed trades)
+              </Typography>
+              <Box sx={{ height: 320 }}>
+                <DataGrid
+                  rows={analysis.losers}
+                  columns={symbolPnlColumns}
+                  getRowId={(r) => `${r.symbol}:${r.product || ''}`}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  sx={{ '& .pnl-negative': { color: 'error.main' } }}
+                  initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+                  pageSizeOptions={[10]}
+                />
+              </Box>
+            </Paper>
+          </Box>
+
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Open positions (current)
+            </Typography>
+            <Box sx={{ height: 360 }}>
+              <DataGrid
+                rows={analysis.open_positions}
+                columns={openPositionsColumns}
+                getRowId={(r) => r.id}
+                density="compact"
+                disableRowSelectionOnClick
+                sx={{ '& .pnl-negative': { color: 'error.main' } }}
+                initialState={{ pagination: { paginationModel: { pageSize: 15 } } }}
+                pageSizeOptions={[15, 30, 100]}
+              />
+            </Box>
+          </Paper>
+
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Recent closed trades
+            </Typography>
+            <Divider sx={{ mb: 2 }} />
+            <Box sx={{ height: 360 }}>
+              <DataGrid
+                rows={analysis.closed_trades.map((r, idx) => ({ id: idx, ...r }))}
+                columns={closedTradesColumns}
+                density="compact"
+                disableRowSelectionOnClick
+                sx={{ '& .pnl-negative': { color: 'error.main' } }}
+                initialState={{ pagination: { paginationModel: { pageSize: 15 } } }}
+                pageSizeOptions={[15, 30, 100]}
+              />
+            </Box>
+          </Paper>
         </Box>
       )}
     </Box>

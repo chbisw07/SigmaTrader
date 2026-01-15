@@ -57,6 +57,46 @@ def test_create_manual_market_order_without_price() -> None:
     assert data["execution_target"] == "LIVE"
 
 
+def test_create_manual_order_accepts_risk_spec() -> None:
+    resp = client.post(
+        "/api/orders/",
+        json={
+            "symbol": "TCS",
+            "exchange": "NSE",
+            "side": "BUY",
+            "qty": 1,
+            "order_type": "MARKET",
+            "product": "CNC",
+            "gtt": False,
+            "risk_spec": {
+                "stop_loss": {
+                    "enabled": True,
+                    "mode": "PCT",
+                    "value": 2.0,
+                    "atr_period": 14,
+                    "atr_tf": "5m",
+                },
+                "trailing_stop": {
+                    "enabled": True,
+                    "mode": "PCT",
+                    "value": 1.0,
+                    "atr_period": 14,
+                    "atr_tf": "5m",
+                },
+                "trailing_activation": {
+                    "enabled": True,
+                    "mode": "PCT",
+                    "value": 3.0,
+                    "atr_period": 14,
+                    "atr_tf": "5m",
+                },
+                "exit_order_type": "MARKET",
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+
 def test_create_manual_limit_requires_positive_price() -> None:
     resp_missing = client.post(
         "/api/orders/",

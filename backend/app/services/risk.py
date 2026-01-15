@@ -44,6 +44,16 @@ def evaluate_order_risk(db: Session, order: Order) -> RiskResult:
     current_qty = original_qty
     reasons: List[str] = []
 
+    # Managed exit orders should not be blocked/clamped by the entry risk rules.
+    if bool(getattr(order, "is_exit", False)):
+        return RiskResult(
+            blocked=False,
+            clamped=False,
+            reason=None,
+            original_qty=original_qty,
+            final_qty=original_qty,
+        )
+
     # No risk rows defined → accept as-is.
     settings_rows: List[RiskSettings] = list(
         db.query(RiskSettings).order_by(RiskSettings.scope, RiskSettings.id).all()

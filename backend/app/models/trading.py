@@ -280,6 +280,10 @@ class Order(Base):
     broker_account_id: Mapped[Optional[str]] = mapped_column(String(64))
     error_message: Mapped[Optional[str]] = mapped_column(Text())
     simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Optional: SigmaTrader-managed risk exit configuration for this order (JSON).
+    risk_spec_json: Mapped[Optional[str]] = mapped_column(Text())
+    # Marks an order created as a managed exit (skip risk policy blocks, etc.).
+    is_exit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
@@ -467,6 +471,83 @@ class PositionSnapshot(Base):
     holding_qty: Mapped[Optional[float]] = mapped_column(Float)
 
 
+class ManagedRiskPosition(Base):
+    __tablename__ = "managed_risk_positions"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "entry_order_id",
+            name="ux_managed_risk_positions_entry_order_id",
+        ),
+        Index("ix_managed_risk_positions_status", "status"),
+        Index(
+            "ix_managed_risk_positions_broker_symbol",
+            "broker_name",
+            "symbol",
+            "exchange",
+            "product",
+        ),
+        Index("ix_managed_risk_positions_exit_order_id", "exit_order_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    entry_order_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    broker_name: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="zerodha"
+    )
+    symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    exchange: Mapped[str] = mapped_column(String(32), nullable=False, default="NSE")
+    product: Mapped[str] = mapped_column(String(16), nullable=False)
+    # BUY|SELL (entry side)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    qty: Mapped[float] = mapped_column(Float, nullable=False)
+    execution_target: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="LIVE"
+    )
+
+    risk_spec_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    stop_distance: Mapped[float | None] = mapped_column(Float)
+    trail_distance: Mapped[float | None] = mapped_column(Float)
+    activation_distance: Mapped[float | None] = mapped_column(Float)
+
+    best_favorable_price: Mapped[float] = mapped_column(Float, nullable=False)
+    trail_price: Mapped[float | None] = mapped_column(Float)
+    is_trailing_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    last_ltp: Mapped[float | None] = mapped_column(Float)
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
+    exit_order_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("orders.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    exit_reason: Mapped[str | None] = mapped_column(String(16))
+
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class AnalyticsTrade(Base):
     __tablename__ = "analytics_trades"
 
@@ -503,5 +584,6 @@ __all__ = [
     "Order",
     "Position",
     "PositionSnapshot",
+    "ManagedRiskPosition",
     "AnalyticsTrade",
 ]

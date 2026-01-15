@@ -5,7 +5,12 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.clients import AngelOneClient
+from app.core.config import get_settings
 from app.models import Order
+from app.services.managed_risk import (
+    ensure_managed_risk_for_executed_order,
+    mark_managed_risk_exit_executed,
+)
 from app.services.portfolio_allocations import (
     apply_portfolio_allocation_for_executed_order,
 )
@@ -126,6 +131,21 @@ def sync_order_statuses_angelone(
                 filled_qty=float(filled_qty or 0.0),
                 avg_price=avg_price,
             )
+            settings = get_settings()
+            try:
+                ensure_managed_risk_for_executed_order(
+                    db,
+                    settings,
+                    order=order,
+                    filled_qty=float(filled_qty or 0.0),
+                    avg_price=avg_price,
+                )
+            except Exception:
+                pass
+            try:
+                mark_managed_risk_exit_executed(db, exit_order_id=int(order.id))
+            except Exception:
+                pass
 
         db.add(order)
         updated += 1
