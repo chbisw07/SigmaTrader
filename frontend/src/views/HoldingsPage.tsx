@@ -20,6 +20,11 @@ import Switch from '@mui/material/Switch'
 import Chip from '@mui/material/Chip'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
+import Accordion from '@mui/material/Accordion'
+import AccordionDetails from '@mui/material/AccordionDetails'
+import AccordionSummary from '@mui/material/AccordionSummary'
+import Divider from '@mui/material/Divider'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import {
   DataGrid,
   GridToolbar,
@@ -176,14 +181,15 @@ export function HoldingsPage() {
   const [portfolioAllocationMismatches, setPortfolioAllocationMismatches] = useState<
     PortfolioAllocationMismatch[]
   >([])
-  const [portfolioMismatchDialogOpen, setPortfolioMismatchDialogOpen] =
-    useState(false)
+  const [portfolioMismatchDialogOpen, setPortfolioMismatchDialogOpen] = useState(false)
 
   const [tradeOpen, setTradeOpen] = useState(false)
   const [tradeHolding, setTradeHolding] = useState<HoldingRow | null>(null)
   const [tradeSide, setTradeSide] = useState<'BUY' | 'SELL'>('BUY')
   const [tradeSymbol, setTradeSymbol] = useState<string>('')
-  const [tradePortfolioGroupId, setTradePortfolioGroupId] = useState<number | null>(null)
+  const [tradePortfolioGroupId, setTradePortfolioGroupId] = useState<number | null>(
+    null,
+  )
   const [tradePortfolioOptions, setTradePortfolioOptions] = useState<
     Array<{ group_id: number; group_name: string; reference_qty: number }>
   >([])
@@ -201,12 +207,12 @@ export function HoldingsPage() {
   >('MARKET')
   const [tradeTriggerPrice, setTradeTriggerPrice] = useState<string>('')
   const [tradeGtt, setTradeGtt] = useState<boolean>(false)
-  const [tradeExecutionMode, setTradeExecutionMode] = useState<
-    'MANUAL' | 'AUTO'
-  >('MANUAL')
-  const [tradeExecutionTarget, setTradeExecutionTarget] = useState<
-    'LIVE' | 'PAPER'
-  >('LIVE')
+  const [tradeExecutionMode, setTradeExecutionMode] = useState<'MANUAL' | 'AUTO'>(
+    'MANUAL',
+  )
+  const [tradeExecutionTarget, setTradeExecutionTarget] = useState<'LIVE' | 'PAPER'>(
+    'LIVE',
+  )
   const [tradeBracketEnabled, setTradeBracketEnabled] = useState<boolean>(false)
   const [riskSlEnabled, setRiskSlEnabled] = useState<boolean>(false)
   const [riskSlMode, setRiskSlMode] = useState<DistanceMode>('PCT')
@@ -220,13 +226,10 @@ export function HoldingsPage() {
   const [riskTrailAtrPeriod, setRiskTrailAtrPeriod] = useState<string>('14')
   const [riskTrailAtrTf, setRiskTrailAtrTf] = useState<string>('5m')
 
-  const [riskActivationEnabled, setRiskActivationEnabled] =
-    useState<boolean>(false)
-  const [riskActivationMode, setRiskActivationMode] =
-    useState<DistanceMode>('PCT')
+  const [riskActivationEnabled, setRiskActivationEnabled] = useState<boolean>(false)
+  const [riskActivationMode, setRiskActivationMode] = useState<DistanceMode>('PCT')
   const [riskActivationValue, setRiskActivationValue] = useState<string>('3')
-  const [riskActivationAtrPeriod, setRiskActivationAtrPeriod] =
-    useState<string>('14')
+  const [riskActivationAtrPeriod, setRiskActivationAtrPeriod] = useState<string>('14')
   const [riskActivationAtrTf, setRiskActivationAtrTf] = useState<string>('5m')
   const [tradeMtpPct, setTradeMtpPct] = useState<string>('')
   const [tradeSubmitting, setTradeSubmitting] = useState(false)
@@ -242,29 +245,25 @@ export function HoldingsPage() {
   const [tradeStopPrice, setTradeStopPrice] = useState<string>('')
   const [tradeMaxLoss, setTradeMaxLoss] = useState<number | null>(null)
   const [bulkTradeHoldings, setBulkTradeHoldings] = useState<HoldingRow[]>([])
-  const [rowSelectionModel, setRowSelectionModel] =
-    useState<GridRowSelectionModel>([])
-  const [bulkPriceOverrides, setBulkPriceOverrides] = useState<
-    Record<string, string>
-  >({})
+  const [rowSelectionModel, setRowSelectionModel] = useState<GridRowSelectionModel>([])
+  const [bulkPriceOverrides, setBulkPriceOverrides] = useState<Record<string, string>>(
+    {},
+  )
   const [bulkAmountOverrides, setBulkAmountOverrides] = useState<
     Record<string, string>
   >({})
-  const [bulkQtyOverrides, setBulkQtyOverrides] = useState<Record<string, string>>(
-    {},
-  )
+  const [bulkQtyOverrides, setBulkQtyOverrides] = useState<Record<string, string>>({})
   const [bulkPriceDialogOpen, setBulkPriceDialogOpen] = useState(false)
   const [bulkAmountDialogOpen, setBulkAmountDialogOpen] = useState(false)
   const [bulkQtyDialogOpen, setBulkQtyDialogOpen] = useState(false)
   const [bulkPctDialogOpen, setBulkPctDialogOpen] = useState(false)
-  const [bulkRedistributeRemainder, setBulkRedistributeRemainder] =
-    useState(true)
+  const [bulkRedistributeRemainder, setBulkRedistributeRemainder] = useState(true)
   const [bulkAmountManual, setBulkAmountManual] = useState(false)
   const [bulkAmountBudget, setBulkAmountBudget] = useState<string>('')
   const [groupCreateOpen, setGroupCreateOpen] = useState(false)
-  const [groupSelectionMode, setGroupSelectionMode] = useState<
-    'create' | 'add'
-  >('create')
+  const [groupSelectionMode, setGroupSelectionMode] = useState<'create' | 'add'>(
+    'create',
+  )
   const [groupCreateName, setGroupCreateName] = useState('')
   const [groupCreateKind, setGroupCreateKind] = useState<GroupKind>('WATCHLIST')
   const [groupTargetId, setGroupTargetId] = useState<string>('')
@@ -290,9 +289,7 @@ export function HoldingsPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
-      const rawViews = window.localStorage.getItem(
-        HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY,
-      )
+      const rawViews = window.localStorage.getItem(HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY)
       if (rawViews) {
         const parsed = JSON.parse(rawViews) as Array<{ id: string; name: string }>
         if (Array.isArray(parsed)) {
@@ -386,9 +383,7 @@ export function HoldingsPage() {
       scheduleSupported: false,
     }
   }, [activeGroup, tradeBrokerName, universeId])
-  const [benchmarkHistory, setBenchmarkHistory] = useState<CandlePoint[] | null>(
-    null,
-  )
+  const [benchmarkHistory, setBenchmarkHistory] = useState<CandlePoint[] | null>(null)
   const [benchmarkHistoryError, setBenchmarkHistoryError] = useState<string | null>(
     null,
   )
@@ -405,17 +400,14 @@ export function HoldingsPage() {
     holdingsRef.current = holdings
   }, [holdings])
 
-  const [, setCorrSummary] =
-    useState<HoldingsCorrelationResult | null>(null)
+  const [, setCorrSummary] = useState<HoldingsCorrelationResult | null>(null)
   const [, setCorrLoading] = useState(false)
   const [corrError, setCorrError] = useState<string | null>(null)
 
   const refreshGroupMemberships = async (symbols: string[]) => {
     const normalized = Array.from(
       new Set(
-        (symbols || [])
-          .map((s) => (s || '').trim().toUpperCase())
-          .filter(Boolean),
+        (symbols || []).map((s) => (s || '').trim().toUpperCase()).filter(Boolean),
       ),
     )
     if (!normalized.length) return
@@ -535,7 +527,10 @@ export function HoldingsPage() {
           throw err
         }
       }
-      const [groups, allocations] = await Promise.all([groupsPromise, allocationsPromise])
+      const [groups, allocations] = await Promise.all([
+        groupsPromise,
+        allocationsPromise,
+      ])
       if (requestId !== loadRequestId.current) return
       setAvailableGroups(groups)
 
@@ -622,9 +617,7 @@ export function HoldingsPage() {
           })
         }
       }
-      setPortfolioAllocationMismatches(
-        mismatches.sort((a, b) => b.excess - a.excess),
-      )
+      setPortfolioAllocationMismatches(mismatches.sort((a, b) => b.excess - a.excess))
 
       // Compute a simple live portfolio value estimate so that sizing
       // modes such as % of portfolio and risk-based sizing can use it.
@@ -641,10 +634,10 @@ export function HoldingsPage() {
               ? Number(h.average_price)
               : 0
         if (
-          Number.isFinite(qty)
-          && qty > 0
-          && Number.isFinite(priceCandidate)
-          && priceCandidate > 0
+          Number.isFinite(qty) &&
+          qty > 0 &&
+          Number.isFinite(priceCandidate) &&
+          priceCandidate > 0
         ) {
           total += qty * priceCandidate
         }
@@ -774,15 +767,13 @@ export function HoldingsPage() {
       // Kick off background enrichment with OHLCV history and indicators.
       void enrichHoldingsWithHistory(baseRows)
 
-      void refreshGroupMemberships(
-        baseRows.map((row) => row.symbol).filter(Boolean),
-      )
+      void refreshGroupMemberships(baseRows.map((row) => row.symbol).filter(Boolean))
     } catch (err) {
       if (requestId !== loadRequestId.current) return
       const msg = err instanceof Error ? err.message : String(err ?? '')
       if (
-        universeId === 'holdings:angelone'
-        && msg.toLowerCase().includes('reconnect angelone')
+        universeId === 'holdings:angelone' &&
+        msg.toLowerCase().includes('reconnect angelone')
       ) {
         setAngeloneConnected(false)
         setUniverseId('holdings')
@@ -841,8 +832,9 @@ export function HoldingsPage() {
 
       // Update portfolio value estimate.
       let total = 0
-      const rowsForValue =
-        universeId.startsWith('holdings') ? holdingsRows : holdingsRef.current
+      const rowsForValue = universeId.startsWith('holdings')
+        ? holdingsRows
+        : holdingsRef.current
       for (const h of rowsForValue) {
         const next = bySymbol.get(h.symbol) ?? h
         const qty =
@@ -856,10 +848,10 @@ export function HoldingsPage() {
               ? Number(next.average_price)
               : 0
         if (
-          Number.isFinite(qty)
-          && qty > 0
-          && Number.isFinite(priceCandidate)
-          && priceCandidate > 0
+          Number.isFinite(qty) &&
+          qty > 0 &&
+          Number.isFinite(priceCandidate) &&
+          priceCandidate > 0
         ) {
           total += qty * priceCandidate
         }
@@ -932,10 +924,8 @@ export function HoldingsPage() {
         const res = await fetchHoldingsCorrelation({ windowDays: 90, brokerName })
         if (!active) return
         setCorrSummary(res)
-        const bySymbol: Record<
-          string,
-          { cluster?: string; weight?: number | null }
-        > = {}
+        const bySymbol: Record<string, { cluster?: string; weight?: number | null }> =
+          {}
         res.symbol_stats.forEach((s) => {
           bySymbol[s.symbol] = {
             cluster: s.cluster ?? undefined,
@@ -1005,9 +995,7 @@ export function HoldingsPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
-      const raw = window.localStorage.getItem(
-        'st_holdings_refresh_config_v1',
-      )
+      const raw = window.localStorage.getItem('st_holdings_refresh_config_v1')
       if (!raw) return
       const parsed = JSON.parse(raw) as {
         enabled?: boolean
@@ -1068,8 +1056,7 @@ export function HoldingsPage() {
     const minutes = Number(refreshMinutes) || 0
     const seconds = Number(refreshSeconds) || 0
 
-    const totalSeconds =
-      days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60 + seconds
+    const totalSeconds = days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60 + seconds
 
     if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) {
       setRefreshError('Auto-refresh interval must be greater than zero.')
@@ -1078,9 +1065,7 @@ export function HoldingsPage() {
 
     const minSeconds = 30
     if (totalSeconds < minSeconds) {
-      setRefreshError(
-        `Minimum auto-refresh interval is ${minSeconds} seconds.`,
-      )
+      setRefreshError(`Minimum auto-refresh interval is ${minSeconds} seconds.`)
       return
     }
 
@@ -1223,7 +1208,12 @@ export function HoldingsPage() {
 
       const exponent = 252 / tradingDays
       const ratio = endValue / startValue
-      if (!Number.isFinite(exponent) || exponent <= 0 || !Number.isFinite(ratio) || ratio <= 0) {
+      if (
+        !Number.isFinite(exponent) ||
+        exponent <= 0 ||
+        !Number.isFinite(ratio) ||
+        ratio <= 0
+      ) {
         return { cagrPct: null, coveragePct }
       }
 
@@ -1301,7 +1291,8 @@ export function HoldingsPage() {
           if (close == null) continue
           portfolioValueAtDate += qty * close
         }
-        if (!Number.isFinite(portfolioValueAtDate) || portfolioValueAtDate <= 0) continue
+        if (!Number.isFinite(portfolioValueAtDate) || portfolioValueAtDate <= 0)
+          continue
         portfolioSeries.push(portfolioValueAtDate)
         benchmarkSeries.push(benchClose)
       }
@@ -1404,9 +1395,9 @@ export function HoldingsPage() {
 
   const riskFreeRateParsed = Number(riskFreeRatePct)
   const riskFreeRateIsValid =
-    Number.isFinite(riskFreeRateParsed)
-    && riskFreeRateParsed >= 0
-    && riskFreeRateParsed <= 100
+    Number.isFinite(riskFreeRateParsed) &&
+    riskFreeRateParsed >= 0 &&
+    riskFreeRateParsed <= 100
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1450,9 +1441,7 @@ export function HoldingsPage() {
         if (!active) return
         setBenchmarkHistory(null)
         setBenchmarkHistoryError(
-          err instanceof Error
-            ? err.message
-            : 'Failed to load benchmark history.',
+          err instanceof Error ? err.message : 'Failed to load benchmark history.',
         )
       }
     }
@@ -1533,8 +1522,8 @@ export function HoldingsPage() {
       return v > 0 ? v : null
     }
     if (
-      holding.average_price != null
-      && Number.isFinite(Number(holding.average_price))
+      holding.average_price != null &&
+      Number.isFinite(Number(holding.average_price))
     ) {
       const v = Number(holding.average_price)
       return v > 0 ? v : null
@@ -1719,8 +1708,7 @@ export function HoldingsPage() {
     if (isBulkTrade && holding) {
       return getPerHoldingPriceForSizing(holding)
     }
-    const fromField =
-      tradePrice.trim() !== '' ? Number(tradePrice.trim()) : null
+    const fromField = tradePrice.trim() !== '' ? Number(tradePrice.trim()) : null
     if (fromField != null && Number.isFinite(fromField) && fromField > 0) {
       return fromField
     }
@@ -1747,11 +1735,13 @@ export function HoldingsPage() {
   }
 
   const bulkSupportsPctPosition =
-    !isBulkTrade
-    || bulkTradeHoldings.every((h) => {
+    !isBulkTrade ||
+    bulkTradeHoldings.every((h) => {
       const price = getSizingPrice(h)
       const positionValue = getPositionValue(h, price)
-      return positionValue != null && Number.isFinite(positionValue) && positionValue > 0
+      return (
+        positionValue != null && Number.isFinite(positionValue) && positionValue > 0
+      )
     })
 
   useEffect(() => {
@@ -1807,7 +1797,7 @@ export function HoldingsPage() {
         return null
       }
       const rawAmountStr = isBulkTrade
-        ? bulkAmountOverrides[holding.symbol] ?? tradeAmount
+        ? (bulkAmountOverrides[holding.symbol] ?? tradeAmount)
         : tradeAmount
       const rawAmount = Number(rawAmountStr)
       if (!Number.isFinite(rawAmount) || rawAmount <= 0) return null
@@ -1819,10 +1809,10 @@ export function HoldingsPage() {
     if (tradeSizeMode === 'PCT_POSITION') {
       const rawPct = Number(tradePctEquity)
       if (
-        !Number.isFinite(rawPct)
-        || rawPct <= 0
-        || positionValue == null
-        || positionValue <= 0
+        !Number.isFinite(rawPct) ||
+        rawPct <= 0 ||
+        positionValue == null ||
+        positionValue <= 0
       ) {
         return null
       }
@@ -1835,12 +1825,7 @@ export function HoldingsPage() {
     if (tradeSizeMode === 'PCT_PORTFOLIO') {
       const rawPct = Number(tradePctEquity)
       const total = portfolioValue
-      if (
-        !Number.isFinite(rawPct)
-        || rawPct <= 0
-        || total == null
-        || total <= 0
-      ) {
+      if (!Number.isFinite(rawPct) || rawPct <= 0 || total == null || total <= 0) {
         return null
       }
       const targetNotional = (rawPct / 100) * total
@@ -1859,11 +1844,11 @@ export function HoldingsPage() {
 
     const rawQty = Math.floor(Number(qtyStr))
     if (
-      !Number.isFinite(rawQty)
-      || rawQty <= 0
-      || price == null
-      || !Number.isFinite(price)
-      || price <= 0
+      !Number.isFinite(rawQty) ||
+      rawQty <= 0 ||
+      price == null ||
+      !Number.isFinite(price) ||
+      price <= 0
     ) {
       setTradeAmount('')
       setTradePctEquity('')
@@ -1897,11 +1882,11 @@ export function HoldingsPage() {
 
     const rawAmount = Number(amountStr)
     if (
-      !Number.isFinite(rawAmount)
-      || rawAmount <= 0
-      || price == null
-      || !Number.isFinite(price)
-      || price <= 0
+      !Number.isFinite(rawAmount) ||
+      rawAmount <= 0 ||
+      price == null ||
+      !Number.isFinite(price) ||
+      price <= 0
     ) {
       setTradeQty('')
       setTradePctEquity('')
@@ -1938,23 +1923,20 @@ export function HoldingsPage() {
     }
   }
 
-  const recalcFromPctEquity = (
-    pctStr: string,
-    side: 'BUY' | 'SELL',
-  ) => {
+  const recalcFromPctEquity = (pctStr: string, side: 'BUY' | 'SELL') => {
     const holding = tradeHolding
     const price = getSizingPrice(holding)
     const positionValue = getPositionValue(holding, price)
 
     const rawPct = Number(pctStr)
     if (
-      !Number.isFinite(rawPct)
-      || rawPct <= 0
-      || price == null
-      || !Number.isFinite(price)
-      || price <= 0
-      || positionValue == null
-      || positionValue <= 0
+      !Number.isFinite(rawPct) ||
+      rawPct <= 0 ||
+      price == null ||
+      !Number.isFinite(price) ||
+      price <= 0 ||
+      positionValue == null ||
+      positionValue <= 0
     ) {
       setTradeQty('')
       setTradeAmount('')
@@ -1988,13 +1970,13 @@ export function HoldingsPage() {
 
     const rawPct = Number(pctStr)
     if (
-      !Number.isFinite(rawPct)
-      || rawPct <= 0
-      || price == null
-      || !Number.isFinite(price)
-      || price <= 0
-      || total == null
-      || total <= 0
+      !Number.isFinite(rawPct) ||
+      rawPct <= 0 ||
+      price == null ||
+      !Number.isFinite(price) ||
+      price <= 0 ||
+      total == null ||
+      total <= 0
     ) {
       setTradeQty('')
       setTradeAmount('')
@@ -2022,10 +2004,7 @@ export function HoldingsPage() {
     setTradeAmount(notional.toFixed(2))
   }
 
-  const openBulkTradeDialog = (
-    selected: HoldingRow[],
-    side: 'BUY' | 'SELL',
-  ) => {
+  const openBulkTradeDialog = (selected: HoldingRow[], side: 'BUY' | 'SELL') => {
     const hasHoldingsQty = selected.some(
       (h) => h.quantity != null && Number(h.quantity) > 0,
     )
@@ -2214,8 +2193,7 @@ export function HoldingsPage() {
       void refreshGroupMemberships(selected.map((h) => h.symbol))
       navigate(`/groups?${new URLSearchParams({ group: group.name }).toString()}`)
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to create group.'
+      const message = err instanceof Error ? err.message : 'Failed to create group.'
       setGroupCreateError(message)
     } finally {
       setGroupCreateSubmitting(false)
@@ -2257,13 +2235,15 @@ export function HoldingsPage() {
         ...(target.kind === 'MODEL_PORTFOLIO' || target.kind === 'PORTFOLIO'
           ? {
               reference_qty:
-                h.quantity != null && Number.isFinite(Number(h.quantity)) && Number(h.quantity) > 0
+                h.quantity != null &&
+                Number.isFinite(Number(h.quantity)) &&
+                Number(h.quantity) > 0
                   ? Math.floor(Number(h.quantity))
                   : 1,
               reference_price:
-                h.average_price != null
-                && Number.isFinite(Number(h.average_price))
-                && Number(h.average_price) > 0
+                h.average_price != null &&
+                Number.isFinite(Number(h.average_price)) &&
+                Number(h.average_price) > 0
                   ? Number(h.average_price)
                   : getDisplayPrice(h),
             }
@@ -2286,8 +2266,7 @@ export function HoldingsPage() {
       )
       void refreshGroupMemberships(selected.map((h) => h.symbol))
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to add to group.'
+      const message = err instanceof Error ? err.message : 'Failed to add to group.'
       setGroupCreateError(message)
     } finally {
       setGroupCreateSubmitting(false)
@@ -2307,7 +2286,9 @@ export function HoldingsPage() {
       return
     }
     const priceNumRaw =
-      tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M' || tradePrice.trim() === ''
+      tradeOrderType === 'MARKET' ||
+      tradeOrderType === 'SL-M' ||
+      tradePrice.trim() === ''
         ? null
         : Number(tradePrice)
     const priceNum =
@@ -2324,9 +2305,7 @@ export function HoldingsPage() {
     if (tradeOrderType === 'SL' || tradeOrderType === 'SL-M') {
       const raw = Number(tradeTriggerPrice)
       if (!Number.isFinite(raw) || raw <= 0) {
-        setTradeError(
-          'Trigger price must be a positive number for SL / SL-M orders.',
-        )
+        setTradeError('Trigger price must be a positive number for SL / SL-M orders.')
         return
       }
       triggerPriceNum = raw
@@ -2389,8 +2368,10 @@ export function HoldingsPage() {
             : priceNum
 
       if (
-        (tradeOrderType === 'LIMIT' || tradeOrderType === 'SL')
-        && (perHoldingPrice == null || !Number.isFinite(perHoldingPrice) || perHoldingPrice <= 0)
+        (tradeOrderType === 'LIMIT' || tradeOrderType === 'SL') &&
+        (perHoldingPrice == null ||
+          !Number.isFinite(perHoldingPrice) ||
+          perHoldingPrice <= 0)
       ) {
         if (isBulkTrade) {
           skippedHoldings.push(h.symbol)
@@ -2424,9 +2405,7 @@ export function HoldingsPage() {
           bracketPrice = base / (1 + m)
         }
         if (!Number.isFinite(bracketPrice) || bracketPrice <= 0) {
-          setTradeError(
-            `Computed bracket price is invalid for ${h.symbol}.`,
-          )
+          setTradeError(`Computed bracket price is invalid for ${h.symbol}.`)
           return
         }
         bracketPrice = Number(bracketPrice.toFixed(2))
@@ -2456,8 +2435,10 @@ export function HoldingsPage() {
           activeGroup?.kind === 'PORTFOLIO' ? activeGroup.id : tradePortfolioGroupId
 
         if (portfolioGroupId != null) {
-          const entry = tradePortfolioOptions.find((p) => p.group_id === portfolioGroupId)
-          const allocatedQty = entry?.reference_qty ?? (holding.reference_qty ?? 0)
+          const entry = tradePortfolioOptions.find(
+            (p) => p.group_id === portfolioGroupId,
+          )
+          const allocatedQty = entry?.reference_qty ?? holding.reference_qty ?? 0
           if (sellQty > allocatedQty) {
             setTradeError(
               `Sell qty ${sellQty} exceeds portfolio allocation ${allocatedQty} for ${sym}. Reduce qty or sell from a different bucket.`,
@@ -2467,7 +2448,10 @@ export function HoldingsPage() {
         } else if (tradePortfolioOptions.some((p) => (p.reference_qty ?? 0) > 0)) {
           const holdingQty = Number(holding.quantity ?? 0)
           const totalAllocated = Number(portfolioAllocationTotalsByKey[key] ?? 0)
-          const unassigned = Math.trunc((Number.isFinite(holdingQty) ? holdingQty : 0) - (Number.isFinite(totalAllocated) ? totalAllocated : 0))
+          const unassigned = Math.trunc(
+            (Number.isFinite(holdingQty) ? holdingQty : 0) -
+              (Number.isFinite(totalAllocated) ? totalAllocated : 0),
+          )
           if (sellQty > unassigned) {
             setTradeError(
               `Sell qty ${sellQty} exceeds unassigned qty ${Math.max(0, unassigned)} for ${sym}. Sell from the relevant portfolio, or reconcile allocations first.`,
@@ -2482,7 +2466,8 @@ export function HoldingsPage() {
       const tradeBroker = tradeBrokerName === 'angelone' ? 'AngelOne' : 'Zerodha'
       const isAngelOne = tradeBrokerName === 'angelone'
       const brokerActionsPerSymbol =
-        (!tradeGtt ? 1 : isAngelOne ? 0 : 1) + (tradeBracketEnabled ? (isAngelOne ? 0 : 1) : 0)
+        (!tradeGtt ? 1 : isAngelOne ? 0 : 1) +
+        (tradeBracketEnabled ? (isAngelOne ? 0 : 1) : 0)
       const localConditionalPerSymbol =
         (tradeGtt && isAngelOne ? 1 : 0) + (tradeBracketEnabled && isAngelOne ? 1 : 0)
       const totalBrokerActions = plans.length * brokerActionsPerSymbol
@@ -2506,10 +2491,12 @@ export function HoldingsPage() {
 
     const sellManagedRiskUnsupported = tradeSide === 'SELL' && tradeProduct !== 'MIS'
     if (
-      sellManagedRiskUnsupported
-      && (riskSlEnabled || riskTrailEnabled || riskActivationEnabled)
+      sellManagedRiskUnsupported &&
+      (riskSlEnabled || riskTrailEnabled || riskActivationEnabled)
     ) {
-      setTradeError('Managed SL/trailing exits for SELL are supported only for MIS shorts.')
+      setTradeError(
+        'Managed SL/trailing exits for SELL are supported only for MIS shorts.',
+      )
       return
     }
 
@@ -2539,12 +2526,17 @@ export function HoldingsPage() {
         const trailValueNum = parseFloatStrict(riskTrailValue, 'Trailing value')
         const actValueNum = parseFloatStrict(riskActivationValue, 'Activation value')
         if (slValueNum <= 0) throw new Error('Stop-loss value must be > 0.')
-        if (riskTrailEnabled && trailValueNum <= 0) throw new Error('Trailing value must be > 0.')
-        if (riskActivationEnabled && actValueNum <= 0) throw new Error('Activation value must be > 0.')
+        if (riskTrailEnabled && trailValueNum <= 0)
+          throw new Error('Trailing value must be > 0.')
+        if (riskActivationEnabled && actValueNum <= 0)
+          throw new Error('Activation value must be > 0.')
 
         const slPeriod = parseIntStrict(riskSlAtrPeriod, 'Stop-loss ATR period')
         const trailPeriod = parseIntStrict(riskTrailAtrPeriod, 'Trailing ATR period')
-        const actPeriod = parseIntStrict(riskActivationAtrPeriod, 'Activation ATR period')
+        const actPeriod = parseIntStrict(
+          riskActivationAtrPeriod,
+          'Activation ATR period',
+        )
         if (slPeriod < 2 || trailPeriod < 2 || actPeriod < 2) {
           throw new Error('ATR period must be >= 2.')
         }
@@ -2616,10 +2608,10 @@ export function HoldingsPage() {
           setTradeSubmitProgress({ done: progressDone, total: totalOrders })
           if (tradeExecutionMode === 'AUTO') {
             if (
-              primary.status === 'WAITING'
-              || primary.status === 'FAILED'
-              || primary.status === 'REJECTED'
-              || primary.status === 'REJECTED_RISK'
+              primary.status === 'WAITING' ||
+              primary.status === 'FAILED' ||
+              primary.status === 'REJECTED' ||
+              primary.status === 'REJECTED_RISK'
             ) {
               const isConditional =
                 primary.gtt && primary.synthetic_gtt && primary.status === 'WAITING'
@@ -2653,10 +2645,10 @@ export function HoldingsPage() {
             setTradeSubmitProgress({ done: progressDone, total: totalOrders })
             if (tradeExecutionMode === 'AUTO') {
               if (
-                bracket.status === 'WAITING'
-                || bracket.status === 'FAILED'
-                || bracket.status === 'REJECTED'
-                || bracket.status === 'REJECTED_RISK'
+                bracket.status === 'WAITING' ||
+                bracket.status === 'FAILED' ||
+                bracket.status === 'REJECTED' ||
+                bracket.status === 'REJECTED_RISK'
               ) {
                 const isConditional =
                   bracket.gtt && bracket.synthetic_gtt && bracket.status === 'WAITING'
@@ -2698,8 +2690,7 @@ export function HoldingsPage() {
       setTradeSubmitProgress(null)
       void load()
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to create order'
+      const message = err instanceof Error ? err.message : 'Failed to create order'
       setTradeError(message)
       setTradeSubmitting(false)
       setTradeSubmitProgress(null)
@@ -2713,19 +2704,19 @@ export function HoldingsPage() {
       : 1
   const positionNotional = getPositionValue(tradeHolding, sizingPrice)
   const pctStepPosition =
-    sizingPrice != null
-    && Number.isFinite(sizingPrice)
-    && sizingPrice > 0
-    && positionNotional != null
-    && positionNotional > 0
+    sizingPrice != null &&
+    Number.isFinite(sizingPrice) &&
+    sizingPrice > 0 &&
+    positionNotional != null &&
+    positionNotional > 0
       ? (sizingPrice / positionNotional) * 100
       : 1
   const pctStepPortfolio =
-    sizingPrice != null
-    && Number.isFinite(sizingPrice)
-    && sizingPrice > 0
-    && portfolioValue != null
-    && portfolioValue > 0
+    sizingPrice != null &&
+    Number.isFinite(sizingPrice) &&
+    sizingPrice > 0 &&
+    portfolioValue != null &&
+    portfolioValue > 0
       ? (sizingPrice / portfolioValue) * 100
       : 1
 
@@ -2743,19 +2734,17 @@ export function HoldingsPage() {
   const getEffectivePrimaryPrice = (): number | null =>
     getEffectivePrimaryPriceForHolding(tradeHolding)
 
-  const getEffectivePctOfPositionForHolding = (
-    holding: HoldingRow,
-  ): number | null => {
+  const getEffectivePctOfPositionForHolding = (holding: HoldingRow): number | null => {
     const qty = computeQtyForHolding(holding)
     if (qty == null || qty <= 0) return null
     const price = getSizingPrice(holding)
     const positionValue = getPositionValue(holding, price)
     if (
-      price == null
-      || !Number.isFinite(price)
-      || price <= 0
-      || positionValue == null
-      || positionValue <= 0
+      price == null ||
+      !Number.isFinite(price) ||
+      price <= 0 ||
+      positionValue == null ||
+      positionValue <= 0
     ) {
       return null
     }
@@ -2766,16 +2755,12 @@ export function HoldingsPage() {
 
   const getUniverseReferencePrice = (row: HoldingRow): number | null => {
     const v = row.reference_price
-    return v != null && Number.isFinite(Number(v)) && Number(v) > 0
-      ? Number(v)
-      : null
+    return v != null && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null
   }
 
   const getUniverseReferenceQty = (row: HoldingRow): number | null => {
     const v = row.reference_qty
-    return v != null && Number.isFinite(Number(v)) && Number(v) >= 0
-      ? Number(v)
-      : null
+    return v != null && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : null
   }
 
   const getSinceCreationPnl = (row: HoldingRow): number | null => {
@@ -2783,12 +2768,12 @@ export function HoldingsPage() {
     const refQty = getUniverseReferenceQty(row)
     const current = getDisplayPrice(row)
     if (
-      refPrice == null
-      || refQty == null
-      || refQty <= 0
-      || current == null
-      || !Number.isFinite(current)
-      || current <= 0
+      refPrice == null ||
+      refQty == null ||
+      refQty <= 0 ||
+      current == null ||
+      !Number.isFinite(current) ||
+      current <= 0
     ) {
       return null
     }
@@ -2814,6 +2799,57 @@ export function HoldingsPage() {
     return Number(target.toFixed(2))
   }
 
+  const formatRiskDistanceLabel = (
+    mode: DistanceMode,
+    valueRaw: string,
+    atrPeriodRaw: string,
+    atrTf: string,
+  ): string => {
+    const valueNum = Number(valueRaw)
+    const val = Number.isFinite(valueNum) ? String(valueNum) : valueRaw
+    if (mode === 'PCT') return `${val}%`
+    if (mode === 'ABS') return `₹${val}`
+    const p = Number(atrPeriodRaw)
+    const period = Number.isFinite(p) && p > 0 ? String(p) : atrPeriodRaw
+    return `${val}×ATR(${period}, ${atrTf})`
+  }
+
+  const getRiskSummaryText = (): string => {
+    if (!riskSlEnabled && !riskTrailEnabled && !riskActivationEnabled) return 'Off'
+    const parts: string[] = []
+    if (riskSlEnabled) {
+      parts.push(
+        `SL ${formatRiskDistanceLabel(
+          riskSlMode,
+          riskSlValue,
+          riskSlAtrPeriod,
+          riskSlAtrTf,
+        )}`,
+      )
+    }
+    if (riskTrailEnabled) {
+      parts.push(
+        `Trail ${formatRiskDistanceLabel(
+          riskTrailMode,
+          riskTrailValue,
+          riskTrailAtrPeriod,
+          riskTrailAtrTf,
+        )}`,
+      )
+    }
+    if (riskActivationEnabled) {
+      parts.push(
+        `Act ${formatRiskDistanceLabel(
+          riskActivationMode,
+          riskActivationValue,
+          riskActivationAtrPeriod,
+          riskActivationAtrTf,
+        )}`,
+      )
+    }
+    return parts.join(' | ')
+  }
+
   const recalcFromRisk = async () => {
     const holding = tradeHolding
     const entry =
@@ -2823,11 +2859,11 @@ export function HoldingsPage() {
     const stop = Number(tradeStopPrice)
 
     if (
-      entry == null
-      || !Number.isFinite(entry)
-      || entry <= 0
-      || !Number.isFinite(stop)
-      || stop <= 0
+      entry == null ||
+      !Number.isFinite(entry) ||
+      entry <= 0 ||
+      !Number.isFinite(stop) ||
+      stop <= 0
     ) {
       setTradeError(
         'Please provide a valid entry price (or price field) and stop price for risk sizing.',
@@ -2889,37 +2925,32 @@ export function HoldingsPage() {
     }
   }
 
-  const bulkTotalAmountLabel =
-    isBulkTrade
-      ? (() => {
-          let total = 0
-          for (const h of bulkTradeHoldings) {
-            const qty = computeQtyForHolding(h)
-            const price = getPerHoldingPriceForSizing(h)
-            if (
-              qty != null
-              && qty > 0
-              && price != null
-              && Number.isFinite(price)
-              && price > 0
-            ) {
-              total += qty * price
-            }
+  const bulkTotalAmountLabel = isBulkTrade
+    ? (() => {
+        let total = 0
+        for (const h of bulkTradeHoldings) {
+          const qty = computeQtyForHolding(h)
+          const price = getPerHoldingPriceForSizing(h)
+          if (
+            qty != null &&
+            qty > 0 &&
+            price != null &&
+            Number.isFinite(price) &&
+            price > 0
+          ) {
+            total += qty * price
           }
-          return total > 0 && Number.isFinite(total)
-            ? total.toFixed(2)
-            : ''
-        })()
-      : tradeAmount
+        }
+        return total > 0 && Number.isFinite(total) ? total.toFixed(2) : ''
+      })()
+    : tradeAmount
 
   const bulkQtySummary =
     isBulkTrade && (tradeSizeMode === 'QTY' || tradeSizeMode === 'AMOUNT')
       ? bulkTradeHoldings
           .map((h) => {
             const qty = computeQtyForHolding(h)
-            return qty != null && Number.isFinite(qty) && qty > 0
-              ? String(qty)
-              : '0'
+            return qty != null && Number.isFinite(qty) && qty > 0 ? String(qty) : '0'
           })
           .join(', ')
       : tradeQty
@@ -2973,8 +3004,7 @@ export function HoldingsPage() {
       width: 70,
       sortable: false,
       filterable: false,
-      renderCell: (params: GridRenderCellParams) =>
-        getPaginatedRowNumber(params),
+      renderCell: (params: GridRenderCellParams) => getPaginatedRowNumber(params),
     },
     {
       field: 'symbol',
@@ -3124,8 +3154,7 @@ export function HoldingsPage() {
       headerName: 'Avg Price',
       type: 'number',
       width: 130,
-      valueFormatter: (value) =>
-        value != null ? Number(value).toFixed(2) : '-',
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
       field: 'reference_price',
@@ -3140,7 +3169,9 @@ export function HoldingsPage() {
         const refPrice = Number(ref)
         const holdAvgRaw = row.average_price
         const holdAvg =
-          holdAvgRaw != null && Number.isFinite(Number(holdAvgRaw)) && Number(holdAvgRaw) > 0
+          holdAvgRaw != null &&
+          Number.isFinite(Number(holdAvgRaw)) &&
+          Number(holdAvgRaw) > 0
             ? Number(holdAvgRaw)
             : null
         if (holdAvg == null) return <span>{refPrice.toFixed(2)}</span>
@@ -3156,16 +3187,14 @@ export function HoldingsPage() {
       headerName: 'Last Price',
       type: 'number',
       width: 130,
-      valueFormatter: (value) =>
-        value != null ? Number(value).toFixed(2) : '-',
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
       field: 'gap_pct',
       headerName: 'Gap %',
       type: 'number',
       width: 110,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.gapPct ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.gapPct ?? null,
       valueFormatter: (value) =>
         value != null && Number.isFinite(Number(value))
           ? `${Number(value).toFixed(2)}%`
@@ -3178,8 +3207,7 @@ export function HoldingsPage() {
       headerName: '52W Low',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.week52Low ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.week52Low ?? null,
       valueFormatter: (value) =>
         value != null && Number.isFinite(Number(value))
           ? Number(value).toFixed(2)
@@ -3190,8 +3218,7 @@ export function HoldingsPage() {
       headerName: '52W High',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.week52High ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.week52High ?? null,
       valueFormatter: (value) =>
         value != null && Number.isFinite(Number(value))
           ? Number(value).toFixed(2)
@@ -3204,7 +3231,9 @@ export function HoldingsPage() {
       width: 150,
       valueGetter: (_value, row) => getSinceCreationPnl(row as HoldingRow),
       valueFormatter: (value) =>
-        value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—',
+        value != null && Number.isFinite(Number(value))
+          ? Number(value).toFixed(2)
+          : '—',
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3218,11 +3247,13 @@ export function HoldingsPage() {
         const refPrice = getUniverseReferencePrice(r)
         const current = getDisplayPrice(r)
         if (refPrice == null || current == null || current <= 0) return null
-        const pct = ((current / refPrice) - 1) * 100
+        const pct = (current / refPrice - 1) * 100
         return Number.isFinite(pct) ? pct : null
       },
       valueFormatter: (value) =>
-        value != null && Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}%` : '—',
+        value != null && Number.isFinite(Number(value))
+          ? `${Number(value).toFixed(2)}%`
+          : '—',
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3236,8 +3267,7 @@ export function HoldingsPage() {
         if (h.quantity == null || h.average_price == null) return null
         return Number(h.quantity) * Number(h.average_price)
       },
-      valueFormatter: (value) =>
-        value != null ? Number(value).toFixed(2) : '-',
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
       field: 'current_value',
@@ -3249,8 +3279,7 @@ export function HoldingsPage() {
         if (h.quantity == null || h.last_price == null) return null
         return Number(h.quantity) * Number(h.last_price)
       },
-      valueFormatter: (value) =>
-        value != null ? Number(value).toFixed(2) : '-',
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
       field: 'weight',
@@ -3267,7 +3296,10 @@ export function HoldingsPage() {
             ? qty * price
             : 0
         const wh =
-          portfolioValue != null && Number.isFinite(portfolioValue) && portfolioValue > 0 && hv > 0
+          portfolioValue != null &&
+          Number.isFinite(portfolioValue) &&
+          portfolioValue > 0 &&
+          hv > 0
             ? (hv / portfolioValue) * 100
             : null
 
@@ -3293,7 +3325,9 @@ export function HoldingsPage() {
               ? refQty * refPrice
               : 0
           wp =
-            portfolioBaselineTotalValue != null && portfolioBaselineTotalValue > 0 && base > 0
+            portfolioBaselineTotalValue != null &&
+            portfolioBaselineTotalValue > 0 &&
+            base > 0
               ? (base / portfolioBaselineTotalValue) * 100
               : 0
         } else {
@@ -3321,7 +3355,9 @@ export function HoldingsPage() {
             ? qty * price
             : 0
         const wh =
-          portfolioValue != null && Number.isFinite(portfolioValue) && portfolioValue > 0
+          portfolioValue != null &&
+          Number.isFinite(portfolioValue) &&
+          portfolioValue > 0
             ? (hv / portfolioValue) * 100
             : null
 
@@ -3346,7 +3382,9 @@ export function HoldingsPage() {
               ? refQty * refPrice
               : 0
           wp =
-            portfolioBaselineTotalValue != null && portfolioBaselineTotalValue > 0 && base > 0
+            portfolioBaselineTotalValue != null &&
+            portfolioBaselineTotalValue > 0 &&
+            base > 0
               ? (base / portfolioBaselineTotalValue) * 100
               : 0
         } else {
@@ -3364,20 +3402,16 @@ export function HoldingsPage() {
       headerName: 'RSI(14)',
       type: 'number',
       width: 110,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.rsi14 ?? null,
-      valueFormatter: (value) =>
-        value != null ? Number(value).toFixed(1) : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.rsi14 ?? null,
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(1) : '-'),
     },
     {
       field: 'perf_1d_pct',
       headerName: '1D PnL %',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.perf1dPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.perf1dPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3386,10 +3420,8 @@ export function HoldingsPage() {
       headerName: '5D PnL %',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.perf5dPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.perf5dPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3398,24 +3430,18 @@ export function HoldingsPage() {
       headerName: '1M PnL %',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.perf1mPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.perf1mPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'perf_3m_pct',
       headerName: '3M PnL %',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.perf3mPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.perf3mPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3424,10 +3450,8 @@ export function HoldingsPage() {
       headerName: '6M PnL %',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.perf6mPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.perf6mPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3436,14 +3460,10 @@ export function HoldingsPage() {
       headerName: '1Y PnL %',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.perf1yPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.perf1yPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'sma_20',
@@ -3508,8 +3528,7 @@ export function HoldingsPage() {
       headerName: 'MACD Sig',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.macdSignal ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.macdSignal ?? null,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(3) : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
@@ -3519,8 +3538,7 @@ export function HoldingsPage() {
       headerName: 'MACD Hist',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.macdHist ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.macdHist ?? null,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(3) : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
@@ -3530,8 +3548,7 @@ export function HoldingsPage() {
       headerName: '20D High',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.sr20High ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.sr20High ?? null,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
@@ -3539,8 +3556,7 @@ export function HoldingsPage() {
       headerName: '20D Low',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.sr20Low ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.sr20Low ?? null,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
@@ -3548,8 +3564,7 @@ export function HoldingsPage() {
       headerName: '50D High',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.sr50High ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.sr50High ?? null,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
@@ -3557,8 +3572,7 @@ export function HoldingsPage() {
       headerName: '50D Low',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.sr50Low ?? null,
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.sr50Low ?? null,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
     },
     {
@@ -3568,8 +3582,7 @@ export function HoldingsPage() {
       width: 140,
       valueGetter: (_value, row) =>
         (row as HoldingRow).indicators?.distToSr20HighPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3580,8 +3593,7 @@ export function HoldingsPage() {
       width: 140,
       valueGetter: (_value, row) =>
         (row as HoldingRow).indicators?.distToSr20LowPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3614,8 +3626,7 @@ export function HoldingsPage() {
       width: 120,
       valueGetter: (_value, row) =>
         (row as HoldingRow).indicators?.pvtSlopePct20 ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -3626,18 +3637,15 @@ export function HoldingsPage() {
       width: 130,
       valueGetter: (_value, row) =>
         (row as HoldingRow).indicators?.volatility20dPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
     },
     {
       field: 'atr_14_pct',
       headerName: 'ATR(14) %',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.atr14Pct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.atr14Pct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
     },
     {
       field: 'volume_vs_20d_avg',
@@ -3646,20 +3654,16 @@ export function HoldingsPage() {
       width: 150,
       valueGetter: (_value, row) =>
         (row as HoldingRow).indicators?.volumeVsAvg20d ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}x` : '-',
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}x` : '-'),
     },
     {
       field: 'pnl',
       headerName: 'Unrealized P&L',
       type: 'number',
       width: 150,
-      valueFormatter: (value) =>
-        value != null ? Number(value).toFixed(2) : '-',
+      valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'pnl_shares',
@@ -3678,63 +3682,48 @@ export function HoldingsPage() {
         }
         return Math.floor(pnlN / lastN)
       },
-      valueFormatter: (value) => (value != null ? String(Math.trunc(Number(value))) : '-'),
+      valueFormatter: (value) =>
+        value != null ? String(Math.trunc(Number(value))) : '-',
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'total_pnl_percent',
       headerName: 'P&L %',
       type: 'number',
       width: 110,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'maxPnlPct',
       headerName: 'Max P&L % (since entry)',
       type: 'number',
       width: 160,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.maxPnlPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.maxPnlPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'drawdownFromPeakPct',
       headerName: 'DD (6M)',
       type: 'number',
       width: 120,
-      valueGetter: (_value, row) =>
-        (row as HoldingRow).indicators?.dd6mPct ?? null,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueGetter: (_value, row) => (row as HoldingRow).indicators?.dd6mPct ?? null,
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'today_pnl_percent',
       headerName: 'Today P&L %',
       type: 'number',
       width: 130,
-      valueFormatter: (value) =>
-        value != null ? `${Number(value).toFixed(2)}%` : '-',
+      valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0
-          ? 'pnl-negative'
-          : '',
+        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
     {
       field: 'alerts',
@@ -4082,8 +4071,10 @@ export function HoldingsPage() {
                 </Button>
               }
             >
-              Portfolio allocation mismatch detected for {portfolioAllocationMismatches.length} symbol
-              {portfolioAllocationMismatches.length === 1 ? '' : 's'} (Σ portfolio ref qty exceeds broker holdings).
+              Portfolio allocation mismatch detected for{' '}
+              {portfolioAllocationMismatches.length} symbol
+              {portfolioAllocationMismatches.length === 1 ? '' : 's'} (Σ portfolio ref
+              qty exceeds broker holdings).
             </Alert>
           )}
 
@@ -4096,8 +4087,9 @@ export function HoldingsPage() {
             <DialogTitle>Portfolio allocation mismatches</DialogTitle>
             <DialogContent sx={{ pt: 2 }}>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                Σ portfolio reference qty across all PORTFOLIO groups is greater than your broker
-                holdings qty for these symbols. Click a portfolio chip to open that portfolio.
+                Σ portfolio reference qty across all PORTFOLIO groups is greater than
+                your broker holdings qty for these symbols. Click a portfolio chip to
+                open that portfolio.
               </Typography>
               <Paper sx={{ height: 520 }}>
                 <DataGrid
@@ -4313,7 +4305,8 @@ export function HoldingsPage() {
                     </Typography>
                     <Typography variant="subtitle2">
                       β{' '}
-                      {holdingsSummary.beta != null && Number.isFinite(holdingsSummary.beta)
+                      {holdingsSummary.beta != null &&
+                      Number.isFinite(holdingsSummary.beta)
                         ? holdingsSummary.beta.toFixed(2)
                         : '—'}
                     </Typography>
@@ -4341,10 +4334,10 @@ export function HoldingsPage() {
       >
         <DialogTitle>Holdings settings</DialogTitle>
         <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 3 }}>
-	          <Box>
-	            <Typography variant="subtitle2" sx={{ mb: 1 }}>
-	              Chart
-	            </Typography>
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Chart
+            </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Typography variant="caption" color="text.secondary">
                 Chart period:
@@ -4352,9 +4345,7 @@ export function HoldingsPage() {
               <Select
                 size="small"
                 value={String(chartPeriodDays)}
-                onChange={(e) =>
-                  setChartPeriodDays(Number(e.target.value) || 30)
-                }
+                onChange={(e) => setChartPeriodDays(Number(e.target.value) || 30)}
               >
                 <MenuItem value="7">1W</MenuItem>
                 <MenuItem value="30">1M</MenuItem>
@@ -4363,14 +4354,16 @@ export function HoldingsPage() {
                 <MenuItem value="365">1Y</MenuItem>
                 <MenuItem value="730">2Y</MenuItem>
               </Select>
-	            </Box>
-	          </Box>
+            </Box>
+          </Box>
 
           <Box>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
               Risk (for alpha/beta)
             </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Box
+              sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}
+            >
               <TextField
                 label="Risk-free rate (%)"
                 size="small"
@@ -4388,10 +4381,10 @@ export function HoldingsPage() {
             </Box>
           </Box>
 
-	          <Box>
-	            <Typography variant="subtitle2" sx={{ mb: 1 }}>
-	              Auto refresh
-	            </Typography>
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Auto refresh
+            </Typography>
             <Box
               sx={{
                 display: 'flex',
@@ -4484,7 +4477,8 @@ export function HoldingsPage() {
         <DialogTitle>Holdings views</DialogTitle>
         <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Typography variant="body2" color="text.secondary">
-            Views save your column selection. Use the Columns menu to pick columns, then save.
+            Views save your column selection. Use the Columns menu to pick columns, then
+            save.
           </Typography>
 
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -4696,172 +4690,172 @@ export function HoldingsPage() {
             flex: '1 1 auto',
           }}
         >
-	          <Box
-	            sx={{
-	              display: 'flex',
-	              alignItems: 'center',
-	              gap: 1,
-	              flexWrap: 'wrap',
-	              justifyContent: 'flex-start',
-	            }}
-		          >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="caption" color="text.secondary">
-                  Universe:
-                </Typography>
-                <Select
-                  size="small"
-                  value={universeId}
-                  onChange={(e) => {
-                    const next = String(e.target.value || 'holdings')
-                    setRowSelectionModel([])
-                    setUniverseId(next)
-                    if (next === 'holdings') {
-                      navigate('/holdings', { replace: true })
-                    } else {
-                      navigate(
-                        `/holdings?${new URLSearchParams({ universe: next }).toString()}`,
-                        { replace: true },
-                      )
-                    }
-                  }}
-                  sx={{ minWidth: 240 }}
-                >
-                  <MenuItem value="holdings">Holdings (Zerodha)</MenuItem>
-                  {angeloneConnected && (
-                    <MenuItem value="holdings:angelone">Holdings (AngelOne)</MenuItem>
-                  )}
-	                  {availableGroups.map((g) => {
-	                    const kindLabel =
-	                      g.kind === 'WATCHLIST'
-	                        ? 'Watchlist'
-	                        : g.kind === 'MODEL_PORTFOLIO'
-	                          ? 'Basket'
-	                          : g.kind === 'PORTFOLIO'
-	                            ? 'Portfolio'
-	                          : g.kind === 'HOLDINGS_VIEW'
-	                            ? 'Holdings view'
-	                            : g.kind
-	                    return (
-                      <MenuItem key={g.id} value={`group:${g.id}`}>
-                        {g.name} ({kindLabel})
-                      </MenuItem>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              flexWrap: 'wrap',
+              justifyContent: 'flex-start',
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                Universe:
+              </Typography>
+              <Select
+                size="small"
+                value={universeId}
+                onChange={(e) => {
+                  const next = String(e.target.value || 'holdings')
+                  setRowSelectionModel([])
+                  setUniverseId(next)
+                  if (next === 'holdings') {
+                    navigate('/holdings', { replace: true })
+                  } else {
+                    navigate(
+                      `/holdings?${new URLSearchParams({ universe: next }).toString()}`,
+                      { replace: true },
                     )
-                  })}
-                </Select>
-              </Box>
-		          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-		            <Typography variant="caption" color="text.secondary">
-		              View:
-		            </Typography>
-	            <Select
-	              size="small"
-	              value={viewId}
-	              onChange={(e) => {
-	                const next = String(e.target.value || 'default') as HoldingsViewId
-	                setViewId(next)
-	                if (typeof window !== 'undefined') {
-	                  try {
-	                    window.localStorage.setItem(
-	                      HOLDINGS_SELECTED_VIEW_STORAGE_KEY,
-	                      next,
-	                    )
-	                  } catch {
-	                    // Ignore persistence errors.
-	                  }
-	                }
-	              }}
-	              sx={{ minWidth: 160 }}
-	            >
-	              <MenuItem value="default">Default</MenuItem>
-	              <MenuItem value="performance">Performance</MenuItem>
-	              <MenuItem value="indicators">Indicators</MenuItem>
-	              <MenuItem value="support_resistance">Support/Resistance</MenuItem>
-	              <MenuItem value="risk">Risk</MenuItem>
-	              {customViews.length > 0 && <MenuItem disabled>— Custom —</MenuItem>}
-	              {customViews.map((v) => (
-	                <MenuItem key={v.id} value={v.id as HoldingsViewId}>
-	                  {v.name}
-	                </MenuItem>
-	              ))}
-	            </Select>
-	            <Button
-	              size="small"
-	              variant="outlined"
-	              onClick={() => setViewsDialogOpen(true)}
-	            >
-	              Views…
-	            </Button>
-	          </Box>
-			          <Button
-			            size="small"
-			            variant="contained"
-			            onClick={() => {
-		              const selected = holdings.filter((h) =>
-		                rowSelectionModel.includes(h.symbol),
-		              )
-			              if (!selected.length) return
-			              setBulkTradeHoldings(selected)
-			              setBulkPriceOverrides({})
-			              setBulkAmountOverrides({})
-			              setBulkQtyOverrides({})
-			              setBulkAmountManual(false)
-			              setBulkAmountBudget('')
-			              openBulkTradeDialog(selected, 'BUY')
-			            }}
-			            disabled={rowSelectionModel.length === 0}
-			          >
-			            Bulk buy
-			          </Button>
-		          <Button
-	            size="small"
-	            variant="contained"
-	            color="error"
-		            onClick={() => {
-		              const selected = holdings.filter((h) =>
-		                rowSelectionModel.includes(h.symbol),
-		              )
-			              if (!selected.length) return
-			              setBulkTradeHoldings(selected)
-			              setBulkPriceOverrides({})
-			              setBulkAmountOverrides({})
-			              setBulkQtyOverrides({})
-			              setBulkAmountManual(false)
-			              setBulkAmountBudget('')
-			              openBulkTradeDialog(selected, 'SELL')
-			            }}
-			            disabled={rowSelectionModel.length === 0}
-			          >
-			            Bulk sell
-			          </Button>
+                  }
+                }}
+                sx={{ minWidth: 240 }}
+              >
+                <MenuItem value="holdings">Holdings (Zerodha)</MenuItem>
+                {angeloneConnected && (
+                  <MenuItem value="holdings:angelone">Holdings (AngelOne)</MenuItem>
+                )}
+                {availableGroups.map((g) => {
+                  const kindLabel =
+                    g.kind === 'WATCHLIST'
+                      ? 'Watchlist'
+                      : g.kind === 'MODEL_PORTFOLIO'
+                        ? 'Basket'
+                        : g.kind === 'PORTFOLIO'
+                          ? 'Portfolio'
+                          : g.kind === 'HOLDINGS_VIEW'
+                            ? 'Holdings view'
+                            : g.kind
+                  return (
+                    <MenuItem key={g.id} value={`group:${g.id}`}>
+                      {g.name} ({kindLabel})
+                    </MenuItem>
+                  )
+                })}
+              </Select>
+            </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="caption" color="text.secondary">
+                View:
+              </Typography>
+              <Select
+                size="small"
+                value={viewId}
+                onChange={(e) => {
+                  const next = String(e.target.value || 'default') as HoldingsViewId
+                  setViewId(next)
+                  if (typeof window !== 'undefined') {
+                    try {
+                      window.localStorage.setItem(
+                        HOLDINGS_SELECTED_VIEW_STORAGE_KEY,
+                        next,
+                      )
+                    } catch {
+                      // Ignore persistence errors.
+                    }
+                  }
+                }}
+                sx={{ minWidth: 160 }}
+              >
+                <MenuItem value="default">Default</MenuItem>
+                <MenuItem value="performance">Performance</MenuItem>
+                <MenuItem value="indicators">Indicators</MenuItem>
+                <MenuItem value="support_resistance">Support/Resistance</MenuItem>
+                <MenuItem value="risk">Risk</MenuItem>
+                {customViews.length > 0 && <MenuItem disabled>— Custom —</MenuItem>}
+                {customViews.map((v) => (
+                  <MenuItem key={v.id} value={v.id as HoldingsViewId}>
+                    {v.name}
+                  </MenuItem>
+                ))}
+              </Select>
               <Button
                 size="small"
                 variant="outlined"
-                onClick={() => {
-                  setGroupCreateError(null)
-                  setGroupCreateInfo(null)
-                  setGroupSelectionMode('create')
-                  setGroupTargetId('')
-                  setGroupCreateOpen(true)
-                }}
-                disabled={rowSelectionModel.length === 0}
+                onClick={() => setViewsDialogOpen(true)}
               >
-                Group
+                Views…
               </Button>
-              {rebalanceConfig.show && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<AutorenewIcon />}
-                  onClick={() => setRebalanceOpen(true)}
-                >
-                  Rebalance
-                </Button>
-              )}
-	            <Button
-	              size="small"
-	              variant="outlined"
-	              onClick={() => setSettingsOpen(true)}
+            </Box>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={() => {
+                const selected = holdings.filter((h) =>
+                  rowSelectionModel.includes(h.symbol),
+                )
+                if (!selected.length) return
+                setBulkTradeHoldings(selected)
+                setBulkPriceOverrides({})
+                setBulkAmountOverrides({})
+                setBulkQtyOverrides({})
+                setBulkAmountManual(false)
+                setBulkAmountBudget('')
+                openBulkTradeDialog(selected, 'BUY')
+              }}
+              disabled={rowSelectionModel.length === 0}
+            >
+              Bulk buy
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              color="error"
+              onClick={() => {
+                const selected = holdings.filter((h) =>
+                  rowSelectionModel.includes(h.symbol),
+                )
+                if (!selected.length) return
+                setBulkTradeHoldings(selected)
+                setBulkPriceOverrides({})
+                setBulkAmountOverrides({})
+                setBulkQtyOverrides({})
+                setBulkAmountManual(false)
+                setBulkAmountBudget('')
+                openBulkTradeDialog(selected, 'SELL')
+              }}
+              disabled={rowSelectionModel.length === 0}
+            >
+              Bulk sell
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setGroupCreateError(null)
+                setGroupCreateInfo(null)
+                setGroupSelectionMode('create')
+                setGroupTargetId('')
+                setGroupCreateOpen(true)
+              }}
+              disabled={rowSelectionModel.length === 0}
+            >
+              Group
+            </Button>
+            {rebalanceConfig.show && (
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<AutorenewIcon />}
+                onClick={() => setRebalanceOpen(true)}
+              >
+                Rebalance
+              </Button>
+            )}
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setSettingsOpen(true)}
             >
               View settings
             </Button>
@@ -5360,10 +5354,9 @@ export function HoldingsPage() {
         <DialogActions>
           <Button onClick={() => setScreenerDslHelpOpen(false)}>Close</Button>
         </DialogActions>
-      </Dialog>
-      */}
+	      </Dialog>
 
-      {/* Old chart-period-only box removed; merged into combined toolbar above */}
+	      {/* Old chart-period-only box removed; merged into combined toolbar above */}
       {/* <Box
         sx={{
           display: 'flex',
@@ -5395,7 +5388,11 @@ export function HoldingsPage() {
         </Typography>
       )}
       {refreshing && !loading && (
-        <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ mb: 1, display: 'block' }}
+        >
           Refreshing…
         </Typography>
       )}
@@ -5447,9 +5444,10 @@ export function HoldingsPage() {
                 ? 'rgba(144, 202, 249, 0.18)'
                 : 'rgba(25, 118, 210, 0.08)',
           },
-          '& .MuiDataGrid-columnHeader.st-imported-column-header .MuiDataGrid-columnHeaderTitle': {
-            fontWeight: 600,
-          },
+          '& .MuiDataGrid-columnHeader.st-imported-column-header .MuiDataGrid-columnHeaderTitle':
+            {
+              fontWeight: 600,
+            },
           '& .st-imported-negative': {
             color: 'error.main',
           },
@@ -5474,7 +5472,7 @@ export function HoldingsPage() {
         }}
       />
 
-      <Dialog open={tradeOpen} onClose={closeTradeDialog} fullWidth maxWidth="sm">
+      <Dialog open={tradeOpen} onClose={closeTradeDialog} fullWidth maxWidth="lg">
         <DialogTitle
           sx={{
             display: 'flex',
@@ -5500,14 +5498,14 @@ export function HoldingsPage() {
             }`}
           />
         </DialogTitle>
-		        <DialogContent sx={{ pt: 2 }}>
-		          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-		            <Typography variant="subtitle1">
-		              {isBulkTrade
-	                ? `${bulkTradeHoldings.length} selected holdings`
-	                : tradeSymbol}
-	            </Typography>
-	            <Box sx={{ display: 'flex', gap: 1 }}>
+        <DialogContent sx={{ pt: 2 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+            <Typography variant="subtitle1">
+              {isBulkTrade
+                ? `${bulkTradeHoldings.length} selected holdings`
+                : tradeSymbol}
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
               <Button
                 size="small"
                 variant={tradeSide === 'BUY' ? 'contained' : 'outlined'}
@@ -5525,941 +5523,1028 @@ export function HoldingsPage() {
               </Button>
             </Box>
           </Box>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Box
-              sx={{
-                display: 'flex',
-                gap: 2,
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-	            >
-	              <TextField
-	                label="Destination broker"
-	                select
-	                size="small"
-	                value={tradeBrokerName}
-	                onChange={(e) => {
-	                  const next = e.target.value === 'angelone' ? 'angelone' : 'zerodha'
-                  setTradeBrokerName(next)
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', lg: '1fr 320px' },
+              gap: 2,
+              alignItems: 'start',
+            }}
+          >
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  gap: 2,
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
                 }}
-                sx={{ minWidth: 220 }}
-                disabled={universeId === 'holdings' || universeId === 'holdings:angelone'}
-                helperText={
-                  universeId === 'holdings' || universeId === 'holdings:angelone'
-                    ? 'Broker is fixed for holdings universes.'
-                    : 'Orders will be created for this broker.'
-                }
               >
-                <MenuItem value="zerodha">Zerodha (Kite)</MenuItem>
-                <MenuItem value="angelone" disabled={angeloneStatusLoaded && !angeloneConnected}>
-                  AngelOne (SmartAPI)
-                </MenuItem>
-              </TextField>
-              <TextField
-                label="Submit mode"
-                select
-                value={tradeExecutionMode}
-                onChange={(e) =>
-                  setTradeExecutionMode(
-                    e.target.value === 'AUTO' ? 'AUTO' : 'MANUAL',
-                  )
-                }
-                size="small"
-                sx={{ minWidth: 220 }}
-                helperText={
-                  tradeExecutionMode === 'AUTO'
-                    ? 'AUTO sends immediately; may skip the waiting queue.'
-                    : 'MANUAL adds orders to the waiting queue.'
-                }
-              >
-                <MenuItem value="MANUAL">Manual (review in queue)</MenuItem>
-                <MenuItem value="AUTO">Auto (send now)</MenuItem>
-              </TextField>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={tradeExecutionTarget === 'PAPER'}
-                    onChange={(e) =>
-                      setTradeExecutionTarget(e.target.checked ? 'PAPER' : 'LIVE')
-                    }
-                  />
-                }
-                label={`Execution target: ${tradeExecutionTarget}`}
-              />
-            </Box>
-
-            {!isBulkTrade && tradeHolding && activeGroup?.kind !== 'PORTFOLIO' && (
-              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
                 <TextField
-                  label="Allocation bucket"
+                  label="Destination broker"
                   select
                   size="small"
-                  value={tradePortfolioGroupId != null ? String(tradePortfolioGroupId) : ''}
+                  value={tradeBrokerName}
                   onChange={(e) => {
-                    const v = e.target.value
-                    setTradePortfolioGroupId(v ? Number(v) : null)
+                    const next = e.target.value === 'angelone' ? 'angelone' : 'zerodha'
+                    setTradeBrokerName(next)
                   }}
-                  sx={{ minWidth: 260 }}
+                  sx={{ minWidth: 220 }}
+                  disabled={
+                    universeId === 'holdings' || universeId === 'holdings:angelone'
+                  }
                   helperText={
-                    tradePortfolioOptions.length > 0
-                      ? 'Choose which portfolio (or Unassigned) this trade belongs to.'
-                      : tradePortfolioLoading
-                        ? 'Loading portfolio allocations…'
-                        : 'No portfolios contain this symbol; trade is Unassigned.'
+                    universeId === 'holdings' || universeId === 'holdings:angelone'
+                      ? 'Broker is fixed for holdings universes.'
+                      : 'Orders will be created for this broker.'
                   }
                 >
-                  <MenuItem value="">Unassigned</MenuItem>
-                  {tradePortfolioOptions.map((p) => (
-                    <MenuItem key={p.group_id} value={String(p.group_id)}>
-                      {p.group_name} (alloc {p.reference_qty})
-                    </MenuItem>
-                  ))}
+                  <MenuItem value="zerodha">Zerodha (Kite)</MenuItem>
+                  <MenuItem
+                    value="angelone"
+                    disabled={angeloneStatusLoaded && !angeloneConnected}
+                  >
+                    AngelOne (SmartAPI)
+                  </MenuItem>
                 </TextField>
-                {tradePortfolioOptions.length > 0 && (
-                  <Typography variant="caption" color="text.secondary">
-                    Tip: for portfolio sells, it’s safer to open that portfolio universe and sell there.
-                  </Typography>
-                )}
-              </Box>
-            )}
-
-            {!isBulkTrade && tradeHolding && activeGroup?.kind === 'PORTFOLIO' && (
-              <Alert severity="info">
-                This trade is attributed to portfolio: {activeGroup.name}
-              </Alert>
-            )}
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Position sizing
-              </Typography>
-              <RadioGroup
-                row
-                value={tradeSizeMode}
-                onChange={(e) => {
-                  if (
-                    isBulkTrade
-                    && e.target.value === 'PCT_POSITION'
-                    && !bulkSupportsPctPosition
-                  ) {
-                    return
-                  }
-                  const mode =
-                    e.target.value === 'AMOUNT'
-                      ? 'AMOUNT'
-                      : e.target.value === 'PCT_POSITION'
-                        ? 'PCT_POSITION'
-                        : e.target.value === 'PCT_PORTFOLIO'
-                          ? 'PCT_PORTFOLIO'
-                          : e.target.value === 'RISK'
-                            ? 'RISK'
-                            : 'QTY'
-                  setTradeSizeMode(mode)
-                  if (mode === 'QTY') {
-                    recalcFromQty(tradeQty)
-                  } else if (mode === 'AMOUNT') {
-                    recalcFromAmount(tradeAmount, tradeSide)
-                  } else if (mode === 'PCT_POSITION') {
-                    recalcFromPctEquity(tradePctEquity, tradeSide)
-                  } else if (mode === 'PCT_PORTFOLIO') {
-                    recalcFromPctPortfolio(tradePctEquity)
-                  }
-                }}
-              >
-                <FormControlLabel
-                  value="QTY"
-                  control={<Radio size="small" />}
-                  label="Qty"
-                />
-                <FormControlLabel
-                  value="AMOUNT"
-                  control={<Radio size="small" />}
-                  label="Amount"
-                />
-                <FormControlLabel
-                  value="PCT_POSITION"
-                  control={<Radio size="small" />}
-                  label="% of position"
-                  disabled={isBulkTrade && !bulkSupportsPctPosition}
-                />
-                {!isBulkTrade && (
-                  <FormControlLabel
-                    value="PCT_PORTFOLIO"
-                    control={<Radio size="small" />}
-                    label="% of portfolio"
-                  />
-                )}
-              </RadioGroup>
-            </Box>
-            <TextField
-              label={isBulkTrade ? 'Quantity (each)' : 'Quantity'}
-              type={
-                isBulkTrade ? 'text' : 'number'
-              }
-              value={
-                isBulkTrade ? bulkQtySummary : tradeQty
-              }
-              onChange={(e) => {
-                const value = e.target.value
-                if (isBulkTrade) return
-                setTradeSizeMode('QTY')
-                setTradeQty(value)
-                recalcFromQty(value)
-              }}
-              fullWidth
-              size="small"
-              disabled={tradeSizeMode !== 'QTY'}
-              helperText={
-                isBulkTrade && tradeSizeMode === 'QTY' ? (
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: 1,
-                    }}
-                  >
-                    <Typography variant="caption" color="text.secondary">
-                      Per-holding quantities. Use Manage to adjust.
-                    </Typography>
-                    <Button size="small" onClick={() => setBulkQtyDialogOpen(true)}>
-                      Manage
-                    </Button>
-                  </Box>
-                ) : (
-                  undefined
-                )
-              }
-              InputProps={{
-                readOnly: isBulkTrade,
-              }}
-            />
-            {isBulkTrade && tradeSizeMode === 'QTY' && (
-              <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-                Default qty for new selections is {tradeQty || '—'}; update per
-                symbol via Manage.
-              </Typography>
-            )}
-            <TextField
-              label="Amount"
-              type="number"
-              value={
-                isBulkTrade && tradeSizeMode !== 'AMOUNT'
-                  ? bulkTotalAmountLabel
-                  : tradeAmount
-              }
-              onChange={(e) => {
-                const value = e.target.value
-                setTradeSizeMode('AMOUNT')
-                setTradeAmount(value)
-                if (isBulkTrade) {
-                  setBulkAmountBudget(value)
-                  setBulkAmountOverrides({})
-                  setBulkAmountManual(false)
-                }
-              }}
-              onBlur={() => {
-                if (tradeSizeMode === 'AMOUNT') {
-                  if (isBulkTrade) {
-                    const budgetRaw = bulkAmountBudget.trim() !== ''
-                      ? Number(bulkAmountBudget)
-                      : Number(tradeAmount)
-                    if (!Number.isFinite(budgetRaw) || budgetRaw <= 0) {
-                      setBulkAmountOverrides({})
-                      return
-                    }
-                    const { overrides, usedTotal } =
-                      computeAutoBulkAmountOverrides(budgetRaw)
-                    setBulkAmountOverrides(overrides)
-                    setBulkAmountManual(false)
-                    setTradeAmount(
-                      usedTotal > 0 && Number.isFinite(usedTotal)
-                        ? usedTotal.toFixed(2)
-                        : '',
-                    )
-                  } else {
-                    recalcFromAmount(tradeAmount, tradeSide)
-                  }
-                }
-              }}
-              fullWidth
-              size="small"
-              disabled={tradeSizeMode !== 'AMOUNT'}
-              inputProps={{ step: amountStep }}
-              helperText={
-                isBulkTrade ? (
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: 1,
-                    }}
-                  >
-                    <Typography variant="caption" color="text.secondary">
-                      {tradeSizeMode === 'QTY'
-                        ? 'Total notional across selected holdings.'
-                        : 'Total notional based on per-holding amounts.'}
-                    </Typography>
-                    <Button
-                      size="small"
-                      onClick={() => {
-                        if (isBulkTrade && tradeSizeMode === 'AMOUNT') {
-                          const hasAny = bulkTradeHoldings.some((h) => {
-                            const v = bulkAmountOverrides[h.symbol]
-                            return v != null && String(v).trim() !== ''
-                          })
-                          if (!hasAny) {
-                            const budgetRaw =
-                              bulkAmountBudget.trim() !== ''
-                                ? Number(bulkAmountBudget)
-                                : Number(tradeAmount)
-                            if (
-                              Number.isFinite(budgetRaw)
-                              && budgetRaw > 0
-                              && bulkTradeHoldings.length > 0
-                            ) {
-                              const { overrides, usedTotal } =
-                                computeAutoBulkAmountOverrides(budgetRaw)
-                              setBulkAmountOverrides(overrides)
-                              setBulkAmountManual(false)
-                              setTradeAmount(
-                                usedTotal > 0 && Number.isFinite(usedTotal)
-                                  ? usedTotal.toFixed(2)
-                                  : '',
-                              )
-                            }
-                          }
-                        }
-                        setBulkAmountDialogOpen(true)
-                      }}
-                      disabled={tradeSizeMode !== 'AMOUNT'}
-                    >
-                      Manage
-                    </Button>
-                  </Box>
-                ) : undefined
-              }
-            />
-            {isBulkTrade && tradeSizeMode === 'AMOUNT' && (
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={bulkRedistributeRemainder}
-                    onChange={(e) =>
-                      setBulkRedistributeRemainder(e.target.checked)
-                    }
-                  />
-                }
-                label="Redistribute unused budget across eligible holdings"
-              />
-            )}
-	            <TextField
-	              label={
-	                tradeSizeMode === 'PCT_PORTFOLIO'
-	                  ? '% of portfolio'
-	                  : '% of position'
-	              }
-              type={
-                isBulkTrade
-                && (tradeSizeMode === 'QTY' || tradeSizeMode === 'AMOUNT')
-                  ? 'text'
-                  : 'number'
-              }
-	              value={bulkPctSummary}
-	              onChange={(e) => {
-	                const value = e.target.value
-                // If we are already in a percent-based mode, keep it;
-                // otherwise default to % of position.
-                const nextMode =
-                  tradeSizeMode === 'PCT_PORTFOLIO'
-                    ? 'PCT_PORTFOLIO'
-                    : 'PCT_POSITION'
-                setTradeSizeMode(nextMode)
-                setTradePctEquity(value)
-	              }}
-	              onBlur={() => {
-	                if (tradeSizeMode === 'PCT_POSITION') {
-	                  recalcFromPctEquity(tradePctEquity, tradeSide)
-	                } else if (tradeSizeMode === 'PCT_PORTFOLIO') {
-	                  recalcFromPctPortfolio(tradePctEquity)
-	                }
-	              }}
-              fullWidth
-              size="small"
-              disabled={
-                tradeSizeMode !== 'PCT_POSITION'
-                && tradeSizeMode !== 'PCT_PORTFOLIO'
-              }
-              inputProps={{
-                step:
-                  tradeSizeMode === 'PCT_PORTFOLIO'
-                    ? pctStepPortfolio
-                    : pctStepPosition,
-              }}
-              helperText={
-                isBulkTrade && tradeSizeMode === 'PCT_POSITION' ? (
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: 1,
-                    }}
-                  >
-                    <Typography variant="caption" color="text.secondary">
-                      Requested % of each position. Actual values may differ.
-                    </Typography>
-                    <Button
-                      size="small"
-                      onClick={() => setBulkPctDialogOpen(true)}
-                    >
-                      Manage
-                    </Button>
-                  </Box>
-                ) : undefined
-              }
-            />
-            {tradeSizeMode === 'RISK' && (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                <Typography variant="caption" color="text.secondary">
-                  Risk sizing
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  <TextField
-                    label="Risk budget"
-                    type="number"
-                    value={tradeRiskBudget}
-                    onChange={(e) => setTradeRiskBudget(e.target.value)}
-                    size="small"
-                    sx={{ flex: 1, minWidth: 140 }}
-                  />
-                  <TextField
-                    label="Mode"
-                    select
-                    size="small"
-                    value={tradeRiskBudgetMode}
-                    onChange={(e) =>
-                      setTradeRiskBudgetMode(
-                        e.target.value === 'PORTFOLIO_PCT'
-                          ? 'PORTFOLIO_PCT'
-                          : 'ABSOLUTE',
-                      )
-                    }
-                    sx={{ width: 180 }}
-                  >
-                    <MenuItem value="ABSOLUTE">₹ per trade</MenuItem>
-                    <MenuItem value="PORTFOLIO_PCT">% of portfolio</MenuItem>
-                  </TextField>
-                </Box>
                 <TextField
-                  label="Stop price"
-                  type="number"
-                  value={tradeStopPrice}
-                  onChange={(e) => setTradeStopPrice(e.target.value)}
+                  label="Submit mode"
+                  select
+                  value={tradeExecutionMode}
+                  onChange={(e) =>
+                    setTradeExecutionMode(e.target.value === 'AUTO' ? 'AUTO' : 'MANUAL')
+                  }
                   size="small"
+                  sx={{ minWidth: 220 }}
+                  helperText={
+                    tradeExecutionMode === 'AUTO'
+                      ? 'AUTO sends immediately; may skip the waiting queue.'
+                      : 'MANUAL adds orders to the waiting queue.'
+                  }
+                >
+                  <MenuItem value="MANUAL">Manual (review in queue)</MenuItem>
+                  <MenuItem value="AUTO">Auto (send now)</MenuItem>
+                </TextField>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={tradeExecutionTarget === 'PAPER'}
+                      onChange={(e) =>
+                        setTradeExecutionTarget(e.target.checked ? 'PAPER' : 'LIVE')
+                      }
+                    />
+                  }
+                  label={`Execution target: ${tradeExecutionTarget}`}
                 />
+              </Box>
+
+              {!isBulkTrade && tradeHolding && activeGroup?.kind !== 'PORTFOLIO' && (
                 <Box
                   sx={{
                     display: 'flex',
+                    gap: 2,
+                    flexWrap: 'wrap',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 1,
                   }}
                 >
-                  <Typography variant="body2" color="text.secondary">
-                    {tradeMaxLoss != null
-                      ? `Approx. max loss at stop: ₹${tradeMaxLoss.toFixed(2)}`
-                      : 'Max loss will be estimated from entry, stop, and risk.'}
-                  </Typography>
-                  <Button
+                  <TextField
+                    label="Allocation bucket"
+                    select
                     size="small"
-                    variant="outlined"
-                    onClick={() => void recalcFromRisk()}
+                    value={
+                      tradePortfolioGroupId != null ? String(tradePortfolioGroupId) : ''
+                    }
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setTradePortfolioGroupId(v ? Number(v) : null)
+                    }}
+                    sx={{ minWidth: 260 }}
+                    helperText={
+                      tradePortfolioOptions.length > 0
+                        ? 'Choose which portfolio (or Unassigned) this trade belongs to.'
+                        : tradePortfolioLoading
+                          ? 'Loading portfolio allocations…'
+                          : 'No portfolios contain this symbol; trade is Unassigned.'
+                    }
                   >
-                    Update from risk
-                  </Button>
+                    <MenuItem value="">Unassigned</MenuItem>
+                    {tradePortfolioOptions.map((p) => (
+                      <MenuItem key={p.group_id} value={String(p.group_id)}>
+                        {p.group_name} (alloc {p.reference_qty})
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  {tradePortfolioOptions.length > 0 && (
+                    <Typography variant="caption" color="text.secondary">
+                      Tip: for portfolio sells, it’s safer to open that portfolio
+                      universe and sell there.
+                    </Typography>
+                  )}
                 </Box>
-              </Box>
-            )}
-            <TextField
-              label="Order type"
-              select
-              value={tradeOrderType}
-              onChange={(e) =>
-                setTradeOrderType(
-                  e.target.value as 'MARKET' | 'LIMIT' | 'SL' | 'SL-M',
-                )
-              }
-              fullWidth
-              size="small"
-            >
-              <MenuItem value="MARKET">MARKET</MenuItem>
-              <MenuItem value="LIMIT">LIMIT</MenuItem>
-              <MenuItem value="SL">SL (Stop-loss limit)</MenuItem>
-              <MenuItem value="SL-M">SL-M (Stop-loss market)</MenuItem>
-            </TextField>
-            <TextField
-              label="Price"
-              type={isBulkTrade ? 'text' : 'number'}
-              value={isBulkTrade ? bulkPriceSummary : tradePrice}
-              onChange={
-                isBulkTrade
-                  ? undefined
-                  : (e) => setTradePrice(e.target.value)
-              }
-              fullWidth
-              size="small"
-              disabled={tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'}
-              InputProps={{
-                readOnly: isBulkTrade,
-              }}
-              helperText={
-                isBulkTrade
-                  ? (
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: 1,
-                      }}
+              )}
+
+              {!isBulkTrade && tradeHolding && activeGroup?.kind === 'PORTFOLIO' && (
+                <Alert severity="info">
+                  This trade is attributed to portfolio: {activeGroup.name}
+                </Alert>
+              )}
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+                  gap: 2,
+                  alignItems: 'start',
+                }}
+              >
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    Position sizing
+                  </Typography>
+                  <RadioGroup
+                    row
+                    value={tradeSizeMode}
+                    onChange={(e) => {
+                      if (
+                        isBulkTrade &&
+                        e.target.value === 'PCT_POSITION' &&
+                        !bulkSupportsPctPosition
+                      ) {
+                        return
+                      }
+                      const mode =
+                        e.target.value === 'AMOUNT'
+                          ? 'AMOUNT'
+                          : e.target.value === 'PCT_POSITION'
+                            ? 'PCT_POSITION'
+                            : e.target.value === 'PCT_PORTFOLIO'
+                              ? 'PCT_PORTFOLIO'
+                              : e.target.value === 'RISK'
+                                ? 'RISK'
+                                : 'QTY'
+                      setTradeSizeMode(mode)
+                      if (mode === 'QTY') {
+                        recalcFromQty(tradeQty)
+                      } else if (mode === 'AMOUNT') {
+                        recalcFromAmount(tradeAmount, tradeSide)
+                      } else if (mode === 'PCT_POSITION') {
+                        recalcFromPctEquity(tradePctEquity, tradeSide)
+                      } else if (mode === 'PCT_PORTFOLIO') {
+                        recalcFromPctPortfolio(tradePctEquity)
+                      }
+                    }}
+                  >
+                    <FormControlLabel
+                      value="QTY"
+                      control={<Radio size="small" />}
+                      label="Qty"
+                    />
+                    <FormControlLabel
+                      value="AMOUNT"
+                      control={<Radio size="small" />}
+                      label="Amount"
+                    />
+                    <FormControlLabel
+                      value="PCT_POSITION"
+                      control={<Radio size="small" />}
+                      label="% of position"
+                      disabled={isBulkTrade && !bulkSupportsPctPosition}
+                    />
+                    {!isBulkTrade && (
+                      <FormControlLabel
+                        value="PCT_PORTFOLIO"
+                        control={<Radio size="small" />}
+                        label="% of portfolio"
+                      />
+                    )}
+                  </RadioGroup>
+                  <TextField
+                    label={isBulkTrade ? 'Quantity (each)' : 'Quantity'}
+                    type={isBulkTrade ? 'text' : 'number'}
+                    value={isBulkTrade ? bulkQtySummary : tradeQty}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      if (isBulkTrade) return
+                      setTradeSizeMode('QTY')
+                      setTradeQty(value)
+                      recalcFromQty(value)
+                    }}
+                    fullWidth
+                    size="small"
+                    disabled={tradeSizeMode !== 'QTY'}
+                    helperText={
+                      isBulkTrade && tradeSizeMode === 'QTY' ? (
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 1,
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            Per-holding quantities. Use Manage to adjust.
+                          </Typography>
+                          <Button
+                            size="small"
+                            onClick={() => setBulkQtyDialogOpen(true)}
+                          >
+                            Manage
+                          </Button>
+                        </Box>
+                      ) : undefined
+                    }
+                    InputProps={{
+                      readOnly: isBulkTrade,
+                    }}
+                  />
+                  {isBulkTrade && tradeSizeMode === 'QTY' && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ mt: -1 }}
                     >
-                      <Typography variant="caption" color="text.secondary">
-                        Per-holding prices. Use Set prices to adjust.
-                      </Typography>
-                      <Button
-                        size="small"
-                        onClick={() => {
-                          if (
-                            tradeOrderType === 'MARKET'
-                            || tradeOrderType === 'SL-M'
-                          ) {
+                      Default qty for new selections is {tradeQty || '—'}; update per
+                      symbol via Manage.
+                    </Typography>
+                  )}
+                  <TextField
+                    label="Amount"
+                    type="number"
+                    value={
+                      isBulkTrade && tradeSizeMode !== 'AMOUNT'
+                        ? bulkTotalAmountLabel
+                        : tradeAmount
+                    }
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setTradeSizeMode('AMOUNT')
+                      setTradeAmount(value)
+                      if (isBulkTrade) {
+                        setBulkAmountBudget(value)
+                        setBulkAmountOverrides({})
+                        setBulkAmountManual(false)
+                      }
+                    }}
+                    onBlur={() => {
+                      if (tradeSizeMode === 'AMOUNT') {
+                        if (isBulkTrade) {
+                          const budgetRaw =
+                            bulkAmountBudget.trim() !== ''
+                              ? Number(bulkAmountBudget)
+                              : Number(tradeAmount)
+                          if (!Number.isFinite(budgetRaw) || budgetRaw <= 0) {
+                            setBulkAmountOverrides({})
                             return
                           }
-                          setBulkPriceDialogOpen(true)
-                        }}
-                        disabled={
-                          tradeOrderType === 'MARKET'
-                          || tradeOrderType === 'SL-M'
+                          const { overrides, usedTotal } =
+                            computeAutoBulkAmountOverrides(budgetRaw)
+                          setBulkAmountOverrides(overrides)
+                          setBulkAmountManual(false)
+                          setTradeAmount(
+                            usedTotal > 0 && Number.isFinite(usedTotal)
+                              ? usedTotal.toFixed(2)
+                              : '',
+                          )
+                        } else {
+                          recalcFromAmount(tradeAmount, tradeSide)
                         }
-                      >
-                        Set prices
-                      </Button>
-                    </Box>
-                  )
-                  : undefined
-              }
-            />
-            {(tradeOrderType === 'SL'
-              || tradeOrderType === 'SL-M'
-              || tradeGtt) && (
-              <TextField
-                label="Trigger price"
-                type="number"
-                value={tradeTriggerPrice}
-                onChange={(e) => setTradeTriggerPrice(e.target.value)}
-                fullWidth
-                size="small"
-                helperText={
-                  tradeOrderType === 'SL' || tradeOrderType === 'SL-M'
-                    ? 'Required for SL / SL-M orders.'
-                    : 'Optional trigger for GTT orders; defaults to limit price when left blank.'
-                }
-              />
-            )}
-            <TextField
-              label="Product"
-              select
-              value={tradeProduct}
-              onChange={(e) =>
-                setTradeProduct(e.target.value === 'MIS' ? 'MIS' : 'CNC')
-              }
-              fullWidth
-              size="small"
-              helperText="Select MIS for intraday or CNC for delivery."
-            >
-              <MenuItem value="CNC">CNC (Delivery)</MenuItem>
-              <MenuItem value="MIS">MIS (Intraday)</MenuItem>
-            </TextField>
-            <Box
-              sx={{
-                mt: 1,
-                p: 1,
-                borderRadius: 1,
-                border: '1px solid',
-                borderColor: 'divider',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-              }}
-            >
-              <Typography variant="caption" color="text.secondary">
-                Risk exits (SigmaTrader-managed)
-              </Typography>
-              {tradeSide === 'SELL' && tradeProduct !== 'MIS' && (
-                <Typography variant="caption" color="text.secondary">
-                  SELL trailing exits are supported only for MIS shorts.
-                </Typography>
-              )}
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={riskSlEnabled}
-                    disabled={tradeSide === 'SELL' && tradeProduct !== 'MIS'}
-                    onChange={(e) => {
-                      const checked = e.target.checked
-                      setRiskSlEnabled(checked)
-                      if (!checked) {
-                        setRiskTrailEnabled(false)
-                        setRiskActivationEnabled(false)
                       }
                     }}
-                  />
-                }
-                label="Stop-loss"
-              />
-              {riskSlEnabled && (
-                <>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <TextField
-                      label="SL mode"
-                      select
-                      value={riskSlMode}
-                      onChange={(e) =>
-                        setRiskSlMode(e.target.value as DistanceMode)
-                      }
-                      size="small"
-                      sx={{ flex: 1 }}
-                    >
-                      <MenuItem value="PCT">%</MenuItem>
-                      <MenuItem value="ABS">₹</MenuItem>
-                      <MenuItem value="ATR">ATR×</MenuItem>
-                    </TextField>
-                    <TextField
-                      label="SL value"
-                      type="number"
-                      value={riskSlValue}
-                      onChange={(e) => setRiskSlValue(e.target.value)}
-                      size="small"
-                      sx={{ flex: 1 }}
-                    />
-                  </Box>
-                  {riskSlMode === 'ATR' && (
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <TextField
-                        label="ATR period"
-                        type="number"
-                        value={riskSlAtrPeriod}
-                        onChange={(e) => setRiskSlAtrPeriod(e.target.value)}
-                        size="small"
-                        sx={{ flex: 1 }}
-                      />
-                      <TextField
-                        label="ATR tf"
-                        select
-                        value={riskSlAtrTf}
-                        onChange={(e) => setRiskSlAtrTf(e.target.value)}
-                        size="small"
-                        sx={{ flex: 1 }}
-                      >
-                        <MenuItem value="1m">1m</MenuItem>
-                        <MenuItem value="5m">5m</MenuItem>
-                        <MenuItem value="15m">15m</MenuItem>
-                        <MenuItem value="30m">30m</MenuItem>
-                        <MenuItem value="1h">1h</MenuItem>
-                        <MenuItem value="1d">1d</MenuItem>
-                      </TextField>
-                    </Box>
-                  )}
-                </>
-              )}
-
-              <FormControlLabel
-                control={
-                  <Checkbox
+                    fullWidth
                     size="small"
-                    checked={riskTrailEnabled}
-                    disabled={
-                      !riskSlEnabled || (tradeSide === 'SELL' && tradeProduct !== 'MIS')
+                    disabled={tradeSizeMode !== 'AMOUNT'}
+                    inputProps={{ step: amountStep }}
+                    helperText={
+                      isBulkTrade ? (
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 1,
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            {tradeSizeMode === 'QTY'
+                              ? 'Total notional across selected holdings.'
+                              : 'Total notional based on per-holding amounts.'}
+                          </Typography>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              if (isBulkTrade && tradeSizeMode === 'AMOUNT') {
+                                const hasAny = bulkTradeHoldings.some((h) => {
+                                  const v = bulkAmountOverrides[h.symbol]
+                                  return v != null && String(v).trim() !== ''
+                                })
+                                if (!hasAny) {
+                                  const budgetRaw =
+                                    bulkAmountBudget.trim() !== ''
+                                      ? Number(bulkAmountBudget)
+                                      : Number(tradeAmount)
+                                  if (
+                                    Number.isFinite(budgetRaw) &&
+                                    budgetRaw > 0 &&
+                                    bulkTradeHoldings.length > 0
+                                  ) {
+                                    const { overrides, usedTotal } =
+                                      computeAutoBulkAmountOverrides(budgetRaw)
+                                    setBulkAmountOverrides(overrides)
+                                    setBulkAmountManual(false)
+                                    setTradeAmount(
+                                      usedTotal > 0 && Number.isFinite(usedTotal)
+                                        ? usedTotal.toFixed(2)
+                                        : '',
+                                    )
+                                  }
+                                }
+                              }
+                              setBulkAmountDialogOpen(true)
+                            }}
+                            disabled={tradeSizeMode !== 'AMOUNT'}
+                          >
+                            Manage
+                          </Button>
+                        </Box>
+                      ) : undefined
                     }
-                    onChange={(e) => {
-                      const checked = e.target.checked
-                      setRiskTrailEnabled(checked)
-                      if (checked) {
-                        setRiskSlEnabled(true)
-                      } else {
-                        setRiskActivationEnabled(false)
-                      }
-                    }}
                   />
-                }
-                label="Trailing stop-loss"
-              />
-              {riskTrailEnabled && (
-                <>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <TextField
-                      label="Trail mode"
-                      select
-                      value={riskTrailMode}
-                      onChange={(e) =>
-                        setRiskTrailMode(e.target.value as DistanceMode)
+                  {isBulkTrade && tradeSizeMode === 'AMOUNT' && (
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={bulkRedistributeRemainder}
+                          onChange={(e) =>
+                            setBulkRedistributeRemainder(e.target.checked)
+                          }
+                        />
                       }
-                      size="small"
-                      sx={{ flex: 1 }}
-                    >
-                      <MenuItem value="PCT">%</MenuItem>
-                      <MenuItem value="ABS">₹</MenuItem>
-                      <MenuItem value="ATR">ATR×</MenuItem>
-                    </TextField>
-                    <TextField
-                      label="Trail value"
-                      type="number"
-                      value={riskTrailValue}
-                      onChange={(e) => setRiskTrailValue(e.target.value)}
-                      size="small"
-                      sx={{ flex: 1 }}
+                      label="Redistribute unused budget across eligible holdings"
                     />
-                  </Box>
-                  {riskTrailMode === 'ATR' && (
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <TextField
-                        label="ATR period"
-                        type="number"
-                        value={riskTrailAtrPeriod}
-                        onChange={(e) => setRiskTrailAtrPeriod(e.target.value)}
-                        size="small"
-                        sx={{ flex: 1 }}
-                      />
-                      <TextField
-                        label="ATR tf"
-                        select
-                        value={riskTrailAtrTf}
-                        onChange={(e) => setRiskTrailAtrTf(e.target.value)}
-                        size="small"
-                        sx={{ flex: 1 }}
-                      >
-                        <MenuItem value="1m">1m</MenuItem>
-                        <MenuItem value="5m">5m</MenuItem>
-                        <MenuItem value="15m">15m</MenuItem>
-                        <MenuItem value="30m">30m</MenuItem>
-                        <MenuItem value="1h">1h</MenuItem>
-                        <MenuItem value="1d">1d</MenuItem>
-                      </TextField>
-                    </Box>
                   )}
-                </>
-              )}
-
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    size="small"
-                    checked={riskActivationEnabled}
-                    disabled={
-                      !riskTrailEnabled
-                      || (tradeSide === 'SELL' && tradeProduct !== 'MIS')
+                  <TextField
+                    label={
+                      tradeSizeMode === 'PCT_PORTFOLIO'
+                        ? '% of portfolio'
+                        : '% of position'
                     }
+                    type={
+                      isBulkTrade &&
+                      (tradeSizeMode === 'QTY' || tradeSizeMode === 'AMOUNT')
+                        ? 'text'
+                        : 'number'
+                    }
+                    value={bulkPctSummary}
                     onChange={(e) => {
-                      const checked = e.target.checked
-                      setRiskActivationEnabled(checked)
-                      if (checked) {
-                        setRiskSlEnabled(true)
-                        setRiskTrailEnabled(true)
+                      const value = e.target.value
+                      // If we are already in a percent-based mode, keep it;
+                      // otherwise default to % of position.
+                      const nextMode =
+                        tradeSizeMode === 'PCT_PORTFOLIO'
+                          ? 'PCT_PORTFOLIO'
+                          : 'PCT_POSITION'
+                      setTradeSizeMode(nextMode)
+                      setTradePctEquity(value)
+                    }}
+                    onBlur={() => {
+                      if (tradeSizeMode === 'PCT_POSITION') {
+                        recalcFromPctEquity(tradePctEquity, tradeSide)
+                      } else if (tradeSizeMode === 'PCT_PORTFOLIO') {
+                        recalcFromPctPortfolio(tradePctEquity)
                       }
                     }}
-                  />
-                }
-                label="Trailing profit activation"
-              />
-              {riskActivationEnabled && (
-                <>
-                  <Box sx={{ display: 'flex', gap: 1 }}>
-                    <TextField
-                      label="Activation mode"
-                      select
-                      value={riskActivationMode}
-                      onChange={(e) =>
-                        setRiskActivationMode(e.target.value as DistanceMode)
-                      }
-                      size="small"
-                      sx={{ flex: 1 }}
-                    >
-                      <MenuItem value="PCT">%</MenuItem>
-                      <MenuItem value="ABS">₹</MenuItem>
-                      <MenuItem value="ATR">ATR×</MenuItem>
-                    </TextField>
-                    <TextField
-                      label="Activation value"
-                      type="number"
-                      value={riskActivationValue}
-                      onChange={(e) => setRiskActivationValue(e.target.value)}
-                      size="small"
-                      sx={{ flex: 1 }}
-                    />
-                  </Box>
-                  {riskActivationMode === 'ATR' && (
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <TextField
-                        label="ATR period"
-                        type="number"
-                        value={riskActivationAtrPeriod}
-                        onChange={(e) => setRiskActivationAtrPeriod(e.target.value)}
-                        size="small"
-                        sx={{ flex: 1 }}
-                      />
-                      <TextField
-                        label="ATR tf"
-                        select
-                        value={riskActivationAtrTf}
-                        onChange={(e) => setRiskActivationAtrTf(e.target.value)}
-                        size="small"
-                        sx={{ flex: 1 }}
-                      >
-                        <MenuItem value="1m">1m</MenuItem>
-                        <MenuItem value="5m">5m</MenuItem>
-                        <MenuItem value="15m">15m</MenuItem>
-                        <MenuItem value="30m">30m</MenuItem>
-                        <MenuItem value="1h">1h</MenuItem>
-                        <MenuItem value="1d">1d</MenuItem>
-                      </TextField>
-                    </Box>
-                  )}
-                </>
-              )}
-            </Box>
-            <Box
-              sx={{
-                mt: 1,
-                p: 1,
-                borderRadius: 1,
-                border: '1px solid',
-                borderColor: 'divider',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-              }}
-            >
-                <Typography variant="caption" color="text.secondary">
-                Bracket / follow-up conditional
-              </Typography>
-              <FormControlLabel
-                control={
-                  <Checkbox
+                    fullWidth
                     size="small"
-                    checked={tradeBracketEnabled}
-                    onChange={(e) => {
-                      const checked = e.target.checked
-                      setTradeBracketEnabled(checked)
-                      if (checked) {
-                        // When enabling for the first time, pre-fill MTP.
-                        if (!tradeMtpPct) {
-                          let defaultMtp = BRACKET_BASE_MTP_DEFAULT
-                          if (
-                            tradeSide === 'SELL'
-                            && tradeHolding?.today_pnl_percent != null
-                          ) {
-                            const today = Number(
-                              tradeHolding.today_pnl_percent,
+                    disabled={
+                      tradeSizeMode !== 'PCT_POSITION' &&
+                      tradeSizeMode !== 'PCT_PORTFOLIO'
+                    }
+                    inputProps={{
+                      step:
+                        tradeSizeMode === 'PCT_PORTFOLIO'
+                          ? pctStepPortfolio
+                          : pctStepPosition,
+                    }}
+                    helperText={
+                      isBulkTrade && tradeSizeMode === 'PCT_POSITION' ? (
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 1,
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            Requested % of each position. Actual values may differ.
+                          </Typography>
+                          <Button
+                            size="small"
+                            onClick={() => setBulkPctDialogOpen(true)}
+                          >
+                            Manage
+                          </Button>
+                        </Box>
+                      ) : undefined
+                    }
+                  />
+                  {tradeSizeMode === 'RISK' && (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        Risk sizing
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                        <TextField
+                          label="Risk budget"
+                          type="number"
+                          value={tradeRiskBudget}
+                          onChange={(e) => setTradeRiskBudget(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1, minWidth: 140 }}
+                        />
+                        <TextField
+                          label="Mode"
+                          select
+                          size="small"
+                          value={tradeRiskBudgetMode}
+                          onChange={(e) =>
+                            setTradeRiskBudgetMode(
+                              e.target.value === 'PORTFOLIO_PCT'
+                                ? 'PORTFOLIO_PCT'
+                                : 'ABSOLUTE',
                             )
-                            if (Number.isFinite(today) && today > 0) {
-                              // Only mirror today's appreciation when it is
-                              // meaningfully above noise; clamp to a
-                              // reasonable swing range so re-entry levels
-                              // stay realistic.
-                              if (today >= BRACKET_APPRECIATION_THRESHOLD) {
-                                const clamped = Math.max(
-                                  BRACKET_MTP_MIN,
-                                  Math.min(today, BRACKET_MTP_MAX),
-                                )
-                                defaultMtp = Number(clamped.toFixed(2))
+                          }
+                          sx={{ width: 180 }}
+                        >
+                          <MenuItem value="ABSOLUTE">₹ per trade</MenuItem>
+                          <MenuItem value="PORTFOLIO_PCT">% of portfolio</MenuItem>
+                        </TextField>
+                      </Box>
+                      <TextField
+                        label="Stop price"
+                        type="number"
+                        value={tradeStopPrice}
+                        onChange={(e) => setTradeStopPrice(e.target.value)}
+                        size="small"
+                      />
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 1,
+                        }}
+                      >
+                        <Typography variant="body2" color="text.secondary">
+                          {tradeMaxLoss != null
+                            ? `Approx. max loss at stop: ₹${tradeMaxLoss.toFixed(2)}`
+                            : 'Max loss will be estimated from entry, stop, and risk.'}
+                        </Typography>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => void recalcFromRisk()}
+                        >
+                          Update from risk
+                        </Button>
+                      </Box>
+                    </Box>
+                  )}
+                </Box>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <TextField
+                    label="Order type"
+                    select
+                    value={tradeOrderType}
+                    onChange={(e) =>
+                      setTradeOrderType(
+                        e.target.value as 'MARKET' | 'LIMIT' | 'SL' | 'SL-M',
+                      )
+                    }
+                    fullWidth
+                    size="small"
+                  >
+                    <MenuItem value="MARKET">MARKET</MenuItem>
+                    <MenuItem value="LIMIT">LIMIT</MenuItem>
+                    <MenuItem value="SL">SL (Stop-loss limit)</MenuItem>
+                    <MenuItem value="SL-M">SL-M (Stop-loss market)</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Price"
+                    type={isBulkTrade ? 'text' : 'number'}
+                    value={isBulkTrade ? bulkPriceSummary : tradePrice}
+                    onChange={
+                      isBulkTrade ? undefined : (e) => setTradePrice(e.target.value)
+                    }
+                    fullWidth
+                    size="small"
+                    disabled={tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'}
+                    InputProps={{
+                      readOnly: isBulkTrade,
+                    }}
+                    helperText={
+                      isBulkTrade ? (
+                        <Box
+                          sx={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 1,
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            Per-holding prices. Use Set prices to adjust.
+                          </Typography>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              if (
+                                tradeOrderType === 'MARKET' ||
+                                tradeOrderType === 'SL-M'
+                              ) {
+                                return
+                              }
+                              setBulkPriceDialogOpen(true)
+                            }}
+                            disabled={
+                              tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'
+                            }
+                          >
+                            Set prices
+                          </Button>
+                        </Box>
+                      ) : undefined
+                    }
+                  />
+                  {(tradeOrderType === 'SL' ||
+                    tradeOrderType === 'SL-M' ||
+                    tradeGtt) && (
+                    <TextField
+                      label="Trigger price"
+                      type="number"
+                      value={tradeTriggerPrice}
+                      onChange={(e) => setTradeTriggerPrice(e.target.value)}
+                      fullWidth
+                      size="small"
+                      helperText={
+                        tradeOrderType === 'SL' || tradeOrderType === 'SL-M'
+                          ? 'Required for SL / SL-M orders.'
+                          : 'Optional trigger for GTT orders; defaults to limit price when left blank.'
+                      }
+                    />
+                  )}
+                  <TextField
+                    label="Product"
+                    select
+                    value={tradeProduct}
+                    onChange={(e) =>
+                      setTradeProduct(e.target.value === 'MIS' ? 'MIS' : 'CNC')
+                    }
+                    fullWidth
+                    size="small"
+                    helperText="Select MIS for intraday or CNC for delivery."
+                  >
+                    <MenuItem value="CNC">CNC (Delivery)</MenuItem>
+                    <MenuItem value="MIS">MIS (Intraday)</MenuItem>
+                  </TextField>
+                </Box>
+              </Box>
+              <Accordion variant="outlined" defaultExpanded={false} sx={{ mt: 1 }}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      width: '100%',
+                      gap: 1,
+                    }}
+                  >
+                    <Typography variant="body2">
+                      Risk exits (SigmaTrader-managed)
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ marginLeft: 'auto' }}
+                    >
+                      {getRiskSummaryText()}
+                    </Typography>
+                  </Box>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {tradeSide === 'SELL' && tradeProduct !== 'MIS' && (
+                    <Typography variant="caption" color="text.secondary">
+                      SELL trailing exits are supported only for MIS shorts.
+                    </Typography>
+                  )}
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={riskSlEnabled}
+                        disabled={tradeSide === 'SELL' && tradeProduct !== 'MIS'}
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setRiskSlEnabled(checked)
+                          if (!checked) {
+                            setRiskTrailEnabled(false)
+                            setRiskActivationEnabled(false)
+                          }
+                        }}
+                      />
+                    }
+                    label="Stop-loss"
+                  />
+                  {riskSlEnabled && (
+                    <>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <TextField
+                          label="SL mode"
+                          select
+                          value={riskSlMode}
+                          onChange={(e) =>
+                            setRiskSlMode(e.target.value as DistanceMode)
+                          }
+                          size="small"
+                          sx={{ flex: 1 }}
+                        >
+                          <MenuItem value="PCT">%</MenuItem>
+                          <MenuItem value="ABS">₹</MenuItem>
+                          <MenuItem value="ATR">ATR×</MenuItem>
+                        </TextField>
+                        <TextField
+                          label="SL value"
+                          type="number"
+                          value={riskSlValue}
+                          onChange={(e) => setRiskSlValue(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        />
+                      </Box>
+                      {riskSlMode === 'ATR' && (
+                        <Box sx={{ display: 'flex', gap: 1 }}>
+                          <TextField
+                            label="ATR period"
+                            type="number"
+                            value={riskSlAtrPeriod}
+                            onChange={(e) => setRiskSlAtrPeriod(e.target.value)}
+                            size="small"
+                            sx={{ flex: 1 }}
+                          />
+                          <TextField
+                            label="ATR tf"
+                            select
+                            value={riskSlAtrTf}
+                            onChange={(e) => setRiskSlAtrTf(e.target.value)}
+                            size="small"
+                            sx={{ flex: 1 }}
+                          >
+                            <MenuItem value="1m">1m</MenuItem>
+                            <MenuItem value="5m">5m</MenuItem>
+                            <MenuItem value="15m">15m</MenuItem>
+                            <MenuItem value="30m">30m</MenuItem>
+                            <MenuItem value="1h">1h</MenuItem>
+                            <MenuItem value="1d">1d</MenuItem>
+                          </TextField>
+                        </Box>
+                      )}
+                    </>
+                  )}
+
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={riskTrailEnabled}
+                        disabled={
+                          !riskSlEnabled ||
+                          (tradeSide === 'SELL' && tradeProduct !== 'MIS')
+                        }
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setRiskTrailEnabled(checked)
+                          if (checked) {
+                            setRiskSlEnabled(true)
+                          } else {
+                            setRiskActivationEnabled(false)
+                          }
+                        }}
+                      />
+                    }
+                    label="Trailing stop-loss"
+                  />
+                  {riskTrailEnabled && (
+                    <>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <TextField
+                          label="Trail mode"
+                          select
+                          value={riskTrailMode}
+                          onChange={(e) =>
+                            setRiskTrailMode(e.target.value as DistanceMode)
+                          }
+                          size="small"
+                          sx={{ flex: 1 }}
+                        >
+                          <MenuItem value="PCT">%</MenuItem>
+                          <MenuItem value="ABS">₹</MenuItem>
+                          <MenuItem value="ATR">ATR×</MenuItem>
+                        </TextField>
+                        <TextField
+                          label="Trail value"
+                          type="number"
+                          value={riskTrailValue}
+                          onChange={(e) => setRiskTrailValue(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        />
+                      </Box>
+                      {riskTrailMode === 'ATR' && (
+                        <Box sx={{ display: 'flex', gap: 1 }}>
+                          <TextField
+                            label="ATR period"
+                            type="number"
+                            value={riskTrailAtrPeriod}
+                            onChange={(e) => setRiskTrailAtrPeriod(e.target.value)}
+                            size="small"
+                            sx={{ flex: 1 }}
+                          />
+                          <TextField
+                            label="ATR tf"
+                            select
+                            value={riskTrailAtrTf}
+                            onChange={(e) => setRiskTrailAtrTf(e.target.value)}
+                            size="small"
+                            sx={{ flex: 1 }}
+                          >
+                            <MenuItem value="1m">1m</MenuItem>
+                            <MenuItem value="5m">5m</MenuItem>
+                            <MenuItem value="15m">15m</MenuItem>
+                            <MenuItem value="30m">30m</MenuItem>
+                            <MenuItem value="1h">1h</MenuItem>
+                            <MenuItem value="1d">1d</MenuItem>
+                          </TextField>
+                        </Box>
+                      )}
+                    </>
+                  )}
+
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={riskActivationEnabled}
+                        disabled={
+                          !riskTrailEnabled ||
+                          (tradeSide === 'SELL' && tradeProduct !== 'MIS')
+                        }
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setRiskActivationEnabled(checked)
+                          if (checked) {
+                            setRiskSlEnabled(true)
+                            setRiskTrailEnabled(true)
+                          }
+                        }}
+                      />
+                    }
+                    label="Trailing profit activation"
+                  />
+                  {riskActivationEnabled && (
+                    <>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <TextField
+                          label="Activation mode"
+                          select
+                          value={riskActivationMode}
+                          onChange={(e) =>
+                            setRiskActivationMode(e.target.value as DistanceMode)
+                          }
+                          size="small"
+                          sx={{ flex: 1 }}
+                        >
+                          <MenuItem value="PCT">%</MenuItem>
+                          <MenuItem value="ABS">₹</MenuItem>
+                          <MenuItem value="ATR">ATR×</MenuItem>
+                        </TextField>
+                        <TextField
+                          label="Activation value"
+                          type="number"
+                          value={riskActivationValue}
+                          onChange={(e) => setRiskActivationValue(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        />
+                      </Box>
+                      {riskActivationMode === 'ATR' && (
+                        <Box sx={{ display: 'flex', gap: 1 }}>
+                          <TextField
+                            label="ATR period"
+                            type="number"
+                            value={riskActivationAtrPeriod}
+                            onChange={(e) => setRiskActivationAtrPeriod(e.target.value)}
+                            size="small"
+                            sx={{ flex: 1 }}
+                          />
+                          <TextField
+                            label="ATR tf"
+                            select
+                            value={riskActivationAtrTf}
+                            onChange={(e) => setRiskActivationAtrTf(e.target.value)}
+                            size="small"
+                            sx={{ flex: 1 }}
+                          >
+                            <MenuItem value="1m">1m</MenuItem>
+                            <MenuItem value="5m">5m</MenuItem>
+                            <MenuItem value="15m">15m</MenuItem>
+                            <MenuItem value="30m">30m</MenuItem>
+                            <MenuItem value="1h">1h</MenuItem>
+                            <MenuItem value="1d">1d</MenuItem>
+                          </TextField>
+                        </Box>
+                      )}
+                    </>
+                  )}
+                </AccordionDetails>
+              </Accordion>
+              <Box
+                sx={{
+                  mt: 1,
+                  p: 1,
+                  borderRadius: 1,
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  Bracket / follow-up conditional
+                </Typography>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={tradeBracketEnabled}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setTradeBracketEnabled(checked)
+                        if (checked) {
+                          // When enabling for the first time, pre-fill MTP.
+                          if (!tradeMtpPct) {
+                            let defaultMtp = BRACKET_BASE_MTP_DEFAULT
+                            if (
+                              tradeSide === 'SELL' &&
+                              tradeHolding?.today_pnl_percent != null
+                            ) {
+                              const today = Number(tradeHolding.today_pnl_percent)
+                              if (Number.isFinite(today) && today > 0) {
+                                // Only mirror today's appreciation when it is
+                                // meaningfully above noise; clamp to a
+                                // reasonable swing range so re-entry levels
+                                // stay realistic.
+                                if (today >= BRACKET_APPRECIATION_THRESHOLD) {
+                                  const clamped = Math.max(
+                                    BRACKET_MTP_MIN,
+                                    Math.min(today, BRACKET_MTP_MAX),
+                                  )
+                                  defaultMtp = Number(clamped.toFixed(2))
+                                }
                               }
                             }
+                            setTradeMtpPct(String(defaultMtp))
                           }
-                          setTradeMtpPct(String(defaultMtp))
                         }
-                      }
-                    }}
-                  />
-                }
-                label={
-                  (() => {
+                      }}
+                    />
+                  }
+                  label={(() => {
                     const isAngelOne = tradeBrokerName === 'angelone'
                     const suffix = isAngelOne ? 'conditional' : 'GTT'
                     return tradeSide === 'BUY'
                       ? `Add profit-target SELL ${suffix}`
                       : `Add re-entry BUY ${suffix}`
-                  })()
-                }
-              />
-              {tradeBracketEnabled && (
-                <>
-                  <TextField
-                    label="Min target profit (MTP) %"
-                    type="number"
-                    value={tradeMtpPct}
-                    onChange={(e) => setTradeMtpPct(e.target.value)}
-                    size="small"
-                    fullWidth
-                  />
-                  <Typography variant="caption" color="text.secondary">
-                    {(() => {
-                      const p = getBracketPreviewPrice()
-                      if (p == null) {
-                        return 'Follow-up order price will be shown here when price and MTP are valid.'
-                      }
-                      const base = getEffectivePrimaryPrice()
-                      const sideLabel =
-                        (() => {
+                  })()}
+                />
+                {tradeBracketEnabled && (
+                  <>
+                    <TextField
+                      label="Min target profit (MTP) %"
+                      type="number"
+                      value={tradeMtpPct}
+                      onChange={(e) => setTradeMtpPct(e.target.value)}
+                      size="small"
+                      fullWidth
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      {(() => {
+                        const p = getBracketPreviewPrice()
+                        if (p == null) {
+                          return 'Follow-up order price will be shown here when price and MTP are valid.'
+                        }
+                        const base = getEffectivePrimaryPrice()
+                        const sideLabel = (() => {
                           const isAngelOne = tradeBrokerName === 'angelone'
                           const suffix = isAngelOne ? 'conditional' : 'GTT'
                           return tradeSide === 'BUY'
                             ? `SELL ${suffix} target`
                             : `BUY ${suffix} re-entry`
                         })()
-                      if (base != null && base > 0) {
-                        const eff = ((p / base) - 1) * 100
-                        return `${sideLabel}: ₹${p.toFixed(2)} (≈ ${eff.toFixed(2)}% from primary price).`
-                      }
-                      return `${sideLabel}: ₹${p.toFixed(2)}.`
-                    })()}
-                  </Typography>
-                </>
+                        if (base != null && base > 0) {
+                          const eff = (p / base - 1) * 100
+                          return `${sideLabel}: ₹${p.toFixed(2)} (≈ ${eff.toFixed(2)}% from primary price).`
+                        }
+                        return `${sideLabel}: ₹${p.toFixed(2)}.`
+                      })()}
+                    </Typography>
+                  </>
+                )}
+              </Box>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={tradeGtt}
+                    onChange={(e) => {
+                      setTradeGtt(e.target.checked)
+                    }}
+                  />
+                }
+                label={
+                  tradeBrokerName === 'angelone'
+                    ? 'Conditional order (SigmaTrader-managed)'
+                    : 'GTT (good-till-triggered) order'
+                }
+              />
+              {tradeError && (
+                <Typography variant="body2" color="error">
+                  {tradeError}
+                </Typography>
               )}
             </Box>
-            <FormControlLabel
-              control={
-                <Checkbox
-                  size="small"
-                  checked={tradeGtt}
-                  onChange={(e) => {
-                    setTradeGtt(e.target.checked)
-                  }}
-                />
-              }
-              label={
-                tradeBrokerName === 'angelone'
-                  ? 'Conditional order (SigmaTrader-managed)'
-                  : 'GTT (good-till-triggered) order'
-              }
-            />
-            {tradeError && (
-              <Typography variant="body2" color="error">
-                {tradeError}
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 1.5,
+                borderRadius: 2,
+                position: { lg: 'sticky', xs: 'static' },
+                top: 8,
+                alignSelf: 'start',
+              }}
+            >
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Summary
               </Typography>
-            )}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                <Typography variant="body2">
+                  {isBulkTrade
+                    ? `${bulkTradeHoldings.length} holdings`
+                    : `Symbol: ${tradeSymbol}`}
+                </Typography>
+                <Typography variant="body2">
+                  {tradeSide} • {tradeProduct}
+                </Typography>
+                <Typography variant="body2">
+                  {tradeBrokerName === 'angelone' ? 'AngelOne' : 'Zerodha'} •{' '}
+                  {tradeExecutionMode} • {tradeExecutionTarget}
+                </Typography>
+                <Divider sx={{ my: 0.5 }} />
+                <Typography variant="body2">Order: {tradeOrderType}</Typography>
+                <Typography variant="body2">
+                  Notional: {bulkTotalAmountLabel ? `₹${bulkTotalAmountLabel}` : '-'}
+                </Typography>
+                <Typography variant="body2">
+                  Risk exits: {getRiskSummaryText()}
+                </Typography>
+                {tradeBracketEnabled && (
+                  <Typography variant="body2">
+                    {(() => {
+                      const p = getBracketPreviewPrice()
+                      const label = tradeMtpPct ? `${tradeMtpPct}%` : 'On'
+                      return p == null
+                        ? `Bracket: ${label}`
+                        : `Bracket: ${label} • ₹${p.toFixed(2)}`
+                    })()}
+                  </Typography>
+                )}
+                {tradeGtt && (
+                  <Typography variant="body2">
+                    Conditional: {tradeBrokerName === 'angelone' ? 'Sigma' : 'GTT'}
+                  </Typography>
+                )}
+              </Box>
+            </Paper>
           </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={closeTradeDialog} disabled={tradeSubmitting}>
             Cancel
-	          </Button>
-	          <Button
-	            onClick={handleSubmitTrade}
+          </Button>
+          <Button
+            onClick={handleSubmitTrade}
             disabled={tradeSubmitting}
             variant="contained"
           >
@@ -6472,134 +6557,136 @@ export function HoldingsPage() {
                 : 'Create order'}
           </Button>
         </DialogActions>
-	      </Dialog>
-        <Dialog
-          open={groupCreateOpen}
-          onClose={() => {
-            if (groupCreateSubmitting) return
-            setGroupCreateOpen(false)
-          }}
-          fullWidth
-          maxWidth="sm"
-        >
-          <DialogTitle>Group selected symbols</DialogTitle>
-          <DialogContent sx={{ pt: 2 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Create a new group from the selected holdings or add them to an existing group.
-            </Typography>
-            <Tabs
-              value={groupSelectionMode}
-              onChange={(_e, value) => {
-                if (groupCreateSubmitting) return
-                setGroupSelectionMode(value as 'create' | 'add')
-                setGroupCreateError(null)
-                setGroupCreateInfo(null)
-              }}
-              sx={{ mb: 2 }}
-            >
-              <Tab value="create" label="Create new" />
-              <Tab value="add" label="Add to existing" />
-            </Tabs>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {groupSelectionMode === 'create' ? (
-                <>
-                  <TextField
-                    label="Group name"
-                    value={groupCreateName}
-                    onChange={(e) => setGroupCreateName(e.target.value)}
-                    size="small"
-                    autoFocus
-                    fullWidth
-                  />
-                  <TextField
-                    label="Kind"
-                    select
-                    value={groupCreateKind}
-                    onChange={(e) =>
-                      setGroupCreateKind(e.target.value as GroupKind)
-                    }
-                    size="small"
-                    fullWidth
-                  >
-                    <MenuItem value="WATCHLIST">Watchlist</MenuItem>
-                    <MenuItem value="MODEL_PORTFOLIO">Basket</MenuItem>
-                    <MenuItem value="PORTFOLIO">Portfolio</MenuItem>
-                    <MenuItem value="HOLDINGS_VIEW">Holdings view</MenuItem>
-                  </TextField>
-                  {(groupCreateKind === 'MODEL_PORTFOLIO'
-                    || groupCreateKind === 'PORTFOLIO') && (
-                    <Typography variant="caption" color="text.secondary">
-                      For portfolio/basket groups, new members will be added with reference qty and reference price from current holdings.
-                    </Typography>
-                  )}
-                </>
-              ) : (
-                <>
-                  <TextField
-                    label="Target group"
-                    select
-                    value={groupTargetId}
-                    onChange={(e) => setGroupTargetId(String(e.target.value))}
-                    size="small"
-                    fullWidth
-                  >
-                    <MenuItem value="">Select a group…</MenuItem>
-                    {availableGroups
-                      .filter((g) => g.kind !== 'HOLDINGS_VIEW')
-                      .sort((a, b) => a.name.localeCompare(b.name))
-                      .map((g) => (
-                        <MenuItem key={g.id} value={String(g.id)}>
-                          {g.name} ({g.kind === 'MODEL_PORTFOLIO'
-                            ? 'Basket'
-                            : g.kind === 'PORTFOLIO'
-                              ? 'Portfolio'
-                              : 'Watchlist'})
-                        </MenuItem>
-                      ))}
-                  </TextField>
+      </Dialog>
+      <Dialog
+        open={groupCreateOpen}
+        onClose={() => {
+          if (groupCreateSubmitting) return
+          setGroupCreateOpen(false)
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Group selected symbols</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Create a new group from the selected holdings or add them to an existing
+            group.
+          </Typography>
+          <Tabs
+            value={groupSelectionMode}
+            onChange={(_e, value) => {
+              if (groupCreateSubmitting) return
+              setGroupSelectionMode(value as 'create' | 'add')
+              setGroupCreateError(null)
+              setGroupCreateInfo(null)
+            }}
+            sx={{ mb: 2 }}
+          >
+            <Tab value="create" label="Create new" />
+            <Tab value="add" label="Add to existing" />
+          </Tabs>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {groupSelectionMode === 'create' ? (
+              <>
+                <TextField
+                  label="Group name"
+                  value={groupCreateName}
+                  onChange={(e) => setGroupCreateName(e.target.value)}
+                  size="small"
+                  autoFocus
+                  fullWidth
+                />
+                <TextField
+                  label="Kind"
+                  select
+                  value={groupCreateKind}
+                  onChange={(e) => setGroupCreateKind(e.target.value as GroupKind)}
+                  size="small"
+                  fullWidth
+                >
+                  <MenuItem value="WATCHLIST">Watchlist</MenuItem>
+                  <MenuItem value="MODEL_PORTFOLIO">Basket</MenuItem>
+                  <MenuItem value="PORTFOLIO">Portfolio</MenuItem>
+                  <MenuItem value="HOLDINGS_VIEW">Holdings view</MenuItem>
+                </TextField>
+                {(groupCreateKind === 'MODEL_PORTFOLIO' ||
+                  groupCreateKind === 'PORTFOLIO') && (
                   <Typography variant="caption" color="text.secondary">
-                    Existing members are skipped automatically to avoid errors.
+                    For portfolio/basket groups, new members will be added with
+                    reference qty and reference price from current holdings.
                   </Typography>
-                </>
-              )}
-              {groupCreateError && (
-                <Typography variant="body2" color="error">
-                  {groupCreateError}
+                )}
+              </>
+            ) : (
+              <>
+                <TextField
+                  label="Target group"
+                  select
+                  value={groupTargetId}
+                  onChange={(e) => setGroupTargetId(String(e.target.value))}
+                  size="small"
+                  fullWidth
+                >
+                  <MenuItem value="">Select a group…</MenuItem>
+                  {availableGroups
+                    .filter((g) => g.kind !== 'HOLDINGS_VIEW')
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map((g) => (
+                      <MenuItem key={g.id} value={String(g.id)}>
+                        {g.name} (
+                        {g.kind === 'MODEL_PORTFOLIO'
+                          ? 'Basket'
+                          : g.kind === 'PORTFOLIO'
+                            ? 'Portfolio'
+                            : 'Watchlist'}
+                        )
+                      </MenuItem>
+                    ))}
+                </TextField>
+                <Typography variant="caption" color="text.secondary">
+                  Existing members are skipped automatically to avoid errors.
                 </Typography>
-              )}
-              {groupCreateInfo && (
-                <Typography variant="body2" color="success.main">
-                  {groupCreateInfo}
-                </Typography>
-              )}
-            </Box>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              onClick={() => setGroupCreateOpen(false)}
-              disabled={groupCreateSubmitting}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() =>
-                void (groupSelectionMode === 'create'
-                  ? createGroupFromSelection()
-                  : addSelectionToExistingGroup())
-              }
-              disabled={groupCreateSubmitting}
-              variant="contained"
-            >
-              {groupCreateSubmitting
-                ? groupSelectionMode === 'create'
-                  ? 'Creating…'
-                  : 'Adding…'
-                : groupSelectionMode === 'create'
-                  ? 'Create group'
-                  : 'Add to group'}
-            </Button>
-          </DialogActions>
-        </Dialog>
+              </>
+            )}
+            {groupCreateError && (
+              <Typography variant="body2" color="error">
+                {groupCreateError}
+              </Typography>
+            )}
+            {groupCreateInfo && (
+              <Typography variant="body2" color="success.main">
+                {groupCreateInfo}
+              </Typography>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setGroupCreateOpen(false)}
+            disabled={groupCreateSubmitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() =>
+              void (groupSelectionMode === 'create'
+                ? createGroupFromSelection()
+                : addSelectionToExistingGroup())
+            }
+            disabled={groupCreateSubmitting}
+            variant="contained"
+          >
+            {groupCreateSubmitting
+              ? groupSelectionMode === 'create'
+                ? 'Creating…'
+                : 'Adding…'
+              : groupSelectionMode === 'create'
+                ? 'Create group'
+                : 'Add to group'}
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Dialog
         open={bulkPriceDialogOpen}
         onClose={() => setBulkPriceDialogOpen(false)}
@@ -6612,9 +6699,7 @@ export function HoldingsPage() {
             {bulkTradeHoldings.map((h) => {
               const ltp = getDisplayPrice(h)
               const baseLabel =
-                ltp != null && Number.isFinite(ltp) && ltp > 0
-                  ? ltp.toFixed(2)
-                  : '-'
+                ltp != null && Number.isFinite(ltp) && ltp > 0 ? ltp.toFixed(2) : '-'
               const overrideRaw = bulkPriceOverrides[h.symbol]
               const override =
                 overrideRaw != null && overrideRaw !== ''
@@ -6701,17 +6786,15 @@ export function HoldingsPage() {
                   onClick={() => {
                     const defaultQty = Math.floor(Number(tradeQty))
                     const base =
-                      Number.isFinite(defaultQty) && defaultQty > 0
-                        ? defaultQty
-                        : 1
+                      Number.isFinite(defaultQty) && defaultQty > 0 ? defaultQty : 1
                     const next: Record<string, string> = {}
-	                    for (const h of bulkTradeHoldings) {
-	                      let qty = base
-	                      if (clampSellToHoldingsQtyEffective && h.quantity != null) {
-	                        const maxQty = Math.floor(Number(h.quantity))
-	                        if (Number.isFinite(maxQty)) {
-	                          qty = maxQty <= 0 ? 0 : Math.min(qty, maxQty)
-	                        }
+                    for (const h of bulkTradeHoldings) {
+                      let qty = base
+                      if (clampSellToHoldingsQtyEffective && h.quantity != null) {
+                        const maxQty = Math.floor(Number(h.quantity))
+                        if (Number.isFinite(maxQty)) {
+                          qty = maxQty <= 0 ? 0 : Math.min(qty, maxQty)
+                        }
                       }
                       next[h.symbol] = String(qty)
                     }
@@ -6759,13 +6842,13 @@ export function HoldingsPage() {
                         } else if (!Number.isFinite(raw)) {
                           nextQty = getDefaultBulkQtyForHolding(h)
                         } else {
-	                          nextQty = Math.floor(raw)
-	                          if (!Number.isFinite(nextQty) || nextQty < 0) nextQty = 0
-	                          if (clampSellToHoldingsQtyEffective && h.quantity != null) {
-	                            const maxQty = Math.floor(Number(h.quantity))
-	                            if (Number.isFinite(maxQty)) {
-	                              nextQty = maxQty <= 0 ? 0 : Math.min(nextQty, maxQty)
-	                            }
+                          nextQty = Math.floor(raw)
+                          if (!Number.isFinite(nextQty) || nextQty < 0) nextQty = 0
+                          if (clampSellToHoldingsQtyEffective && h.quantity != null) {
+                            const maxQty = Math.floor(Number(h.quantity))
+                            if (Number.isFinite(maxQty)) {
+                              nextQty = maxQty <= 0 ? 0 : Math.min(nextQty, maxQty)
+                            }
                           }
                         }
                         setBulkQtyOverrides((prev) => ({
@@ -6795,10 +6878,10 @@ export function HoldingsPage() {
         <DialogTitle>Manage per-holding amounts</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-	            {bulkTradeHoldings.map((h) => {
-	              const stored = bulkAmountOverrides[h.symbol]
-	              const effectiveAmount = stored == null ? '0.00' : stored
-	              return (
+            {bulkTradeHoldings.map((h) => {
+              const stored = bulkAmountOverrides[h.symbol]
+              const effectiveAmount = stored == null ? '0.00' : stored
+              return (
                 <Box
                   key={h.symbol}
                   sx={{
@@ -6809,62 +6892,56 @@ export function HoldingsPage() {
                   }}
                 >
                   <Typography sx={{ minWidth: 100 }}>{h.symbol}</Typography>
-	                  <TextField
-	                    label="Amount"
-	                    type="number"
-	                    size="small"
-	                    value={effectiveAmount}
-	                    onChange={(e) => {
-	                      const value = e.target.value
-	                      setBulkAmountManual(true)
-	                      setBulkAmountOverrides((prev) => ({
-	                        ...prev,
-	                        [h.symbol]: value,
-	                      }))
-	                    }}
-	                    onBlur={(e) => {
-	                      const raw = Number(e.target.value)
-	                      const price = getPerHoldingPriceForSizing(h)
-	                      if (
-	                        !price
-	                        || !Number.isFinite(price)
-	                        || price <= 0
-	                        || !Number.isFinite(raw)
-	                        || raw <= 0
-	                      ) {
-	                        setBulkAmountOverrides((prev) => {
-	                          const next = { ...prev, [h.symbol]: '0.00' }
-	                          const used =
-	                            computeUsedTotalFromAmountOverrides(next)
-	                          setTradeAmount(
-	                            used > 0 && Number.isFinite(used)
-	                              ? used.toFixed(2)
-	                              : '',
-	                          )
-	                          return next
-	                        })
-	                        return
-	                      }
-	                      const qty = Math.floor(raw / price)
-	                      const normalised = qty > 0 ? qty * price : 0
-	                      setBulkAmountOverrides((prev) => {
-	                        const nextValue =
-	                          normalised > 0 && Number.isFinite(normalised)
-	                            ? normalised.toFixed(2)
-	                            : '0.00'
-	                        const next = { ...prev, [h.symbol]: nextValue }
-	                        const used =
-	                          computeUsedTotalFromAmountOverrides(next)
-	                        setTradeAmount(
-	                          used > 0 && Number.isFinite(used)
-	                            ? used.toFixed(2)
-	                            : '',
-	                        )
-	                        return next
-	                      })
-	                    }}
-	                    sx={{ width: 160 }}
-	                  />
+                  <TextField
+                    label="Amount"
+                    type="number"
+                    size="small"
+                    value={effectiveAmount}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setBulkAmountManual(true)
+                      setBulkAmountOverrides((prev) => ({
+                        ...prev,
+                        [h.symbol]: value,
+                      }))
+                    }}
+                    onBlur={(e) => {
+                      const raw = Number(e.target.value)
+                      const price = getPerHoldingPriceForSizing(h)
+                      if (
+                        !price ||
+                        !Number.isFinite(price) ||
+                        price <= 0 ||
+                        !Number.isFinite(raw) ||
+                        raw <= 0
+                      ) {
+                        setBulkAmountOverrides((prev) => {
+                          const next = { ...prev, [h.symbol]: '0.00' }
+                          const used = computeUsedTotalFromAmountOverrides(next)
+                          setTradeAmount(
+                            used > 0 && Number.isFinite(used) ? used.toFixed(2) : '',
+                          )
+                          return next
+                        })
+                        return
+                      }
+                      const qty = Math.floor(raw / price)
+                      const normalised = qty > 0 ? qty * price : 0
+                      setBulkAmountOverrides((prev) => {
+                        const nextValue =
+                          normalised > 0 && Number.isFinite(normalised)
+                            ? normalised.toFixed(2)
+                            : '0.00'
+                        const next = { ...prev, [h.symbol]: nextValue }
+                        const used = computeUsedTotalFromAmountOverrides(next)
+                        setTradeAmount(
+                          used > 0 && Number.isFinite(used) ? used.toFixed(2) : '',
+                        )
+                        return next
+                      })
+                    }}
+                    sx={{ width: 160 }}
+                  />
                 </Box>
               )
             })}
@@ -6883,8 +6960,8 @@ export function HoldingsPage() {
         <DialogTitle>% of position per holding</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-            These values show the approximate % of each position that will be
-            traded based on your current sizing inputs.
+            These values show the approximate % of each position that will be traded
+            based on your current sizing inputs.
           </Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {bulkTradeHoldings.map((h) => {
@@ -6903,9 +6980,7 @@ export function HoldingsPage() {
                   <TextField
                     label="% of position"
                     size="small"
-                    value={
-                      pct != null && Number.isFinite(pct) ? pct.toFixed(2) : '-'
-                    }
+                    value={pct != null && Number.isFinite(pct) ? pct.toFixed(2) : '-'}
                     InputProps={{ readOnly: true }}
                     sx={{ width: 140 }}
                   />
@@ -7994,15 +8069,12 @@ function IndicatorAlertDialog({
 
 */
 
-	type HoldingChartCellProps = {
-	  history?: CandlePoint[]
-	  periodDays: number
-	}
+type HoldingChartCellProps = {
+  history?: CandlePoint[]
+  periodDays: number
+}
 
-	function HoldingChartCell({
-	  history,
-	  periodDays,
-	}: HoldingChartCellProps) {
+function HoldingChartCell({ history, periodDays }: HoldingChartCellProps) {
   if (!history || history.length < 2) {
     return (
       <Typography variant="caption" color="text.secondary">
@@ -8012,9 +8084,7 @@ function IndicatorAlertDialog({
   }
 
   const slice =
-    periodDays > 0 && history.length > periodDays
-      ? history.slice(-periodDays)
-      : history
+    periodDays > 0 && history.length > periodDays ? history.slice(-periodDays) : history
 
   return <MiniSparkline points={slice} />
 }
@@ -8121,7 +8191,12 @@ function computePvt(closes: number[], volumes: number[]): number | undefined {
     const prev = closes[i - 1]
     const curr = closes[i]
     const vol = volumes[i] ?? 0
-    if (!Number.isFinite(prev) || prev === 0 || !Number.isFinite(curr) || !Number.isFinite(vol))
+    if (
+      !Number.isFinite(prev) ||
+      prev === 0 ||
+      !Number.isFinite(curr) ||
+      !Number.isFinite(vol)
+    )
       continue
     pvt += ((curr - prev) / prev) * vol
   }
@@ -8142,7 +8217,12 @@ function computePvtSlopePct(
     const curr = closes[i]
     const vol = volumes[i] ?? 0
     const prevPvt = full[i - 1] ?? 0
-    if (!Number.isFinite(prev) || prev === 0 || !Number.isFinite(curr) || !Number.isFinite(vol)) {
+    if (
+      !Number.isFinite(prev) ||
+      prev === 0 ||
+      !Number.isFinite(curr) ||
+      !Number.isFinite(vol)
+    ) {
       full[i] = prevPvt
       continue
     }
@@ -8174,10 +8254,7 @@ function computeRsi(values: number[], period: number): number | undefined {
   return 100 - 100 / (1 + rs)
 }
 
-function computeVolatilityPct(
-  values: number[],
-  window: number,
-): number | undefined {
+function computeVolatilityPct(values: number[], window: number): number | undefined {
   if (window <= 1 || values.length < window + 1) return undefined
   const rets: number[] = []
   const start = values.length - window - 1
@@ -8190,8 +8267,7 @@ function computeVolatilityPct(
   if (!rets.length) return undefined
   const mean = rets.reduce((acc, r) => acc + r, 0) / rets.length
   const variance =
-    rets.reduce((acc, r) => acc + (r - mean) ** 2, 0) /
-    Math.max(rets.length - 1, 1)
+    rets.reduce((acc, r) => acc + (r - mean) ** 2, 0) / Math.max(rets.length - 1, 1)
   return Math.sqrt(variance) * 100
 }
 
@@ -8218,17 +8294,13 @@ function computeAtrPct(
   }
   if (trs.length < period) return undefined
   const slice = trs.slice(-period)
-  const atr =
-    slice.reduce((acc, v) => acc + v, 0) / Math.max(slice.length, period)
+  const atr = slice.reduce((acc, v) => acc + v, 0) / Math.max(slice.length, period)
   const lastClose = closes[closes.length - 1]
   if (lastClose === 0) return undefined
   return (atr / lastClose) * 100
 }
 
-function computePerfPct(
-  values: number[],
-  window: number,
-): number | undefined {
+function computePerfPct(values: number[], window: number): number | undefined {
   if (window <= 0 || values.length <= window) return undefined
   const past = values[values.length - window - 1]
   const curr = values[values.length - 1]
@@ -8236,10 +8308,7 @@ function computePerfPct(
   return ((curr - past) / past) * 100
 }
 
-function computeVolumeRatio(
-  volumes: number[],
-  window: number,
-): number | undefined {
+function computeVolumeRatio(volumes: number[], window: number): number | undefined {
   if (window <= 0 || volumes.length < window + 1) return undefined
   const today = volumes[volumes.length - 1]
   const slice = volumes.slice(-window - 1, -1)
@@ -8315,20 +8384,20 @@ function computeHoldingIndicators(
   if (sr50High.length) indicators.sr50High = Math.max(...sr50High)
   if (sr50Low.length) indicators.sr50Low = Math.min(...sr50Low)
   if (
-    indicators.sr20High != null
-    && indicators.sr20High > 0
-    && Number.isFinite(lastClose)
-    && lastClose > 0
+    indicators.sr20High != null &&
+    indicators.sr20High > 0 &&
+    Number.isFinite(lastClose) &&
+    lastClose > 0
   ) {
-    indicators.distToSr20HighPct = ((lastClose / indicators.sr20High) - 1) * 100
+    indicators.distToSr20HighPct = (lastClose / indicators.sr20High - 1) * 100
   }
   if (
-    indicators.sr20Low != null
-    && indicators.sr20Low > 0
-    && Number.isFinite(lastClose)
-    && lastClose > 0
+    indicators.sr20Low != null &&
+    indicators.sr20Low > 0 &&
+    Number.isFinite(lastClose) &&
+    lastClose > 0
   ) {
-    indicators.distToSr20LowPct = ((lastClose / indicators.sr20Low) - 1) * 100
+    indicators.distToSr20LowPct = (lastClose / indicators.sr20Low - 1) * 100
   }
 
   // 52-week high/low (approx. 252 trading days).
@@ -8344,8 +8413,13 @@ function computeHoldingIndicators(
   const close6m = w6m.map((p) => p.close).filter((v) => Number.isFinite(v))
   if (close6m.length) {
     const peak = Math.max(...close6m)
-    if (Number.isFinite(peak) && peak > 0 && Number.isFinite(lastClose) && lastClose > 0) {
-      indicators.dd6mPct = ((lastClose / peak) - 1) * 100
+    if (
+      Number.isFinite(peak) &&
+      peak > 0 &&
+      Number.isFinite(lastClose) &&
+      lastClose > 0
+    ) {
+      indicators.dd6mPct = (lastClose / peak - 1) * 100
     }
   }
 
@@ -8354,11 +8428,11 @@ function computeHoldingIndicators(
     const todayOpen = points[points.length - 1]?.open
     const prevClose = points[points.length - 2]?.close
     if (
-      todayOpen != null
-      && prevClose != null
-      && Number.isFinite(todayOpen)
-      && Number.isFinite(prevClose)
-      && prevClose !== 0
+      todayOpen != null &&
+      prevClose != null &&
+      Number.isFinite(todayOpen) &&
+      Number.isFinite(prevClose) &&
+      prevClose !== 0
     ) {
       indicators.gapPct = ((todayOpen - prevClose) / prevClose) * 100
     }
@@ -8366,14 +8440,9 @@ function computeHoldingIndicators(
 
   // Max P&L % and drawdown from peak based on average entry price.
   if (avgPrice != null && avgPrice > 0) {
-    const pnlSeries = closes.map(
-      (close) => ((close - avgPrice) / avgPrice) * 100,
-    )
+    const pnlSeries = closes.map((close) => ((close - avgPrice) / avgPrice) * 100)
     const currentPnl = pnlSeries[pnlSeries.length - 1]
-    const maxPnl = pnlSeries.reduce(
-      (acc, v) => (v > acc ? v : acc),
-      pnlSeries[0],
-    )
+    const maxPnl = pnlSeries.reduce((acc, v) => (v > acc ? v : acc), pnlSeries[0])
     indicators.maxPnlPct = maxPnl
     indicators.drawdownFromPeakPct = currentPnl - maxPnl
   }
