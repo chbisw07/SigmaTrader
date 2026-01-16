@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import get_current_user
 from app.config_files import load_app_config
 from app.core.config import Settings, get_settings
+from app.core.time_utils import to_utc_or_none
 from app.db.session import get_db
 from app.models import (
     AlertDefinition,
@@ -494,7 +495,7 @@ def create_alert_definition(
         trigger_mode=payload.trigger_mode,
         throttle_seconds=payload.throttle_seconds,
         only_market_hours=payload.only_market_hours,
-        expires_at=payload.expires_at,
+        expires_at=to_utc_or_none(payload.expires_at),
         enabled=payload.enabled,
     )
     db.add(alert)
@@ -579,12 +580,14 @@ def update_alert_definition(
         "trigger_mode",
         "throttle_seconds",
         "only_market_hours",
-        "expires_at",
         "enabled",
     ):
         val = getattr(payload, field)
         if val is not None:
             setattr(alert, field, val)
+
+    if "expires_at" in update_data:
+        alert.expires_at = to_utc_or_none(update_data.get("expires_at"))
 
     if payload.variables is not None:
         alert.variables_json = _variables_to_json(payload.variables)

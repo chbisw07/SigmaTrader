@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from threading import Event, Thread
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -9,7 +9,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.market_hours import IST_OFFSET, is_market_open_now
+from app.core.market_hours import is_market_open_now
+from app.core.time_utils import utc_now
 from app.db.session import SessionLocal
 from app.models import AlertDefinition, AlertEvent, Group, GroupMember, User
 from app.pydantic_compat import PYDANTIC_V2
@@ -44,10 +45,6 @@ class AlertsV3Error(RuntimeError):
 
 _scheduler_started = False
 _scheduler_stop_event = Event()
-
-
-def _now_ist_naive() -> datetime:
-    return (datetime.now(UTC) + IST_OFFSET).replace(tzinfo=None)
 
 
 _HOLDINGS_SNAPSHOT_METRICS = {
@@ -208,7 +205,7 @@ def _should_emit_event(
 
 def evaluate_alerts_v3_once() -> None:
     settings = get_settings()
-    now = _now_ist_naive()
+    now = utc_now()
 
     with SessionLocal() as db:
         alerts: List[AlertDefinition] = (
@@ -243,11 +240,7 @@ def evaluate_alerts_v3_once() -> None:
                     cadence_td = timedelta(minutes=1)
 
                 if alert.last_evaluated_at is not None:
-                    # Compare in IST-naive space.
-                    last_eval = alert.last_evaluated_at
-                    if last_eval.tzinfo is not None:
-                        last_eval = last_eval.astimezone(UTC).replace(tzinfo=None)
-                    if (now - last_eval) < cadence_td:
+                    if (now - alert.last_evaluated_at) < cadence_td:
                         continue
 
                 user = users_by_id.get(alert.user_id)
@@ -547,10 +540,10 @@ def _create_order_for_alert_match(
 
 def _alerts_v3_loop() -> None:  # pragma: no cover - background loop
     interval = timedelta(seconds=15)
-    next_run = _now_ist_naive() + timedelta(seconds=5)
+    next_run = utc_now() + timedelta(seconds=5)
 
     while not _scheduler_stop_event.is_set():
-        now = _now_ist_naive()
+        now = utc_now()
         sleep_for = (next_run - now).total_seconds()
         if sleep_for > 0:
             _scheduler_stop_event.wait(timeout=sleep_for)
@@ -562,7 +555,7 @@ def _alerts_v3_loop() -> None:  # pragma: no cover - background loop
         except Exception:
             pass
 
-        next_run = _now_ist_naive() + interval
+        next_run = utc_now() + interval
 
 
 def schedule_alerts_v3() -> None:

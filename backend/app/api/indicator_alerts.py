@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.core.config import Settings, get_settings
+from app.core.time_utils import to_utc_or_none
 from app.db.session import get_db
 from app.models import IndicatorRule, User
 from app.schemas.indicator_rules import (
@@ -232,7 +233,7 @@ def create_indicator_rule(
         trigger_mode=payload.trigger_mode,
         action_type=payload.action_type,
         action_params_json=action_params_json,
-        expires_at=payload.expires_at,
+        expires_at=to_utc_or_none(payload.expires_at),
         enabled=payload.enabled,
     )
     db.add(entity)
@@ -307,6 +308,9 @@ def update_indicator_rule(
             entity.expression_json = None
 
     for field, value in data.items():
+        if field == "expires_at":
+            setattr(entity, field, to_utc_or_none(value))
+            continue
         setattr(entity, field, value)
 
     db.add(entity)

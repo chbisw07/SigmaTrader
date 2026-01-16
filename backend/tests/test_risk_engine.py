@@ -9,7 +9,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
-from app.models import Order, RiskSettings, Strategy
+from app.models import Order, Position, RiskSettings, Strategy
 
 client = TestClient(app)
 
@@ -116,6 +116,99 @@ def test_risk_blocks_short_selling_when_disabled() -> None:
     assert result.blocked
     assert not result.clamped
     assert "short selling is disabled" in (result.reason or "").lower()
+
+
+def test_risk_allows_sell_when_closing_long_position_even_if_short_disabled() -> None:
+    strategy = _create_strategy_and_global_risk()
+    with SessionLocal() as session:
+        session.query(Position).delete()
+        session.add(
+            Position(
+                broker_name="zerodha",
+                symbol="INFY",
+                exchange="NSE",
+                product="MIS",
+                qty=10.0,
+                avg_price=100.0,
+                pnl=0.0,
+            )
+        )
+        session.commit()
+
+    order_id = _create_order(strategy_id=strategy.id, side="SELL", qty=5.0, price=100.0)
+
+    from app.services.risk import evaluate_order_risk
+
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        result = evaluate_order_risk(session, order)
+
+    assert not result.blocked
+
+
+def test_risk_blocks_sell_that_would_go_short_when_short_disabled() -> None:
+    strategy = _create_strategy_and_global_risk()
+    with SessionLocal() as session:
+        session.query(Position).delete()
+        session.add(
+            Position(
+                broker_name="zerodha",
+                symbol="INFY",
+                exchange="NSE",
+                product="MIS",
+                qty=10.0,
+                avg_price=100.0,
+                pnl=0.0,
+            )
+        )
+        session.commit()
+
+    order_id = _create_order(
+        strategy_id=strategy.id, side="SELL", qty=15.0, price=100.0
+    )
+
+    from app.services.risk import evaluate_order_risk
+
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        result = evaluate_order_risk(session, order)
+
+    assert result.blocked
+    assert "short selling is disabled" in (result.reason or "").lower()
+
+
+def test_risk_allows_cnc_sell_even_if_short_disabled() -> None:
+    strategy = _create_strategy_and_global_risk()
+    with SessionLocal() as session:
+        order = Order(
+            strategy_id=strategy.id,
+            symbol="NSE:INFY",
+            exchange="NSE",
+            side="SELL",
+            qty=10.0,
+            price=100.0,
+            order_type="LIMIT",
+            product="CNC",
+            gtt=False,
+            status="WAITING",
+            mode="MANUAL",
+            simulated=True,
+        )
+        session.add(order)
+        session.commit()
+        session.refresh(order)
+        order_id = order.id
+
+    from app.services.risk import evaluate_order_risk
+
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        result = evaluate_order_risk(session, order)
+
+    assert not result.blocked
 
 
 def test_risk_clamps_max_order_value_to_integer_quantity() -> None:

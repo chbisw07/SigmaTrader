@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import Order, RiskSettings
+from app.models import Order, Position, RiskSettings
 
 
 @dataclass
@@ -26,6 +26,60 @@ def _describe_scope(settings: RiskSettings) -> str:
     if settings.scope == "STRATEGY" and settings.strategy_id is not None:
         return f"STRATEGY({settings.strategy_id})"
     return settings.scope
+
+
+def _normalized_symbol_exchange(order: Order) -> tuple[str, str]:
+    symbol_raw = (order.symbol or "").strip()
+    exchange = (getattr(order, "exchange", None) or "NSE").strip().upper() or "NSE"
+    symbol = symbol_raw
+    if ":" in symbol_raw:
+        ex, sym = symbol_raw.split(":", 1)
+        if ex.strip():
+            exchange = ex.strip().upper()
+        symbol = sym
+    return symbol.strip().upper(), exchange
+
+
+def _position_qty_for_order(db: Session, order: Order) -> float:
+    broker = (getattr(order, "broker_name", None) or "zerodha").strip().lower()
+    product = (getattr(order, "product", None) or "MIS").strip().upper()
+    symbol, exchange = _normalized_symbol_exchange(order)
+    pos = (
+        db.query(Position)
+        .filter(
+            Position.broker_name == broker,
+            Position.symbol == symbol,
+            Position.exchange == exchange,
+            Position.product == product,
+        )
+        .one_or_none()
+    )
+    return float(pos.qty) if pos is not None else 0.0
+
+
+def _would_open_or_increase_short(db: Session, order: Order) -> bool:
+    """Return True if this order would create/increase a short position.
+
+    This is best-effort and relies on the cached `positions` table.
+    """
+
+    side = (order.side or "").strip().upper()
+    if side != "SELL":
+        return False
+
+    product = (getattr(order, "product", None) or "MIS").strip().upper()
+    # CNC short selling isn't supported by the broker, so do not block SELL
+    # here. Oversell/no-holdings will be rejected by the broker anyway.
+    if product == "CNC":
+        return False
+
+    qty = float(order.qty or 0.0)
+    if qty <= 0:
+        return False
+
+    pos_qty = _position_qty_for_order(db, order)
+    # SELL reduces long qty; if we'd go negative, that's a short sell.
+    return (pos_qty - qty) < 0.0
 
 
 def evaluate_order_risk(db: Session, order: Order) -> RiskResult:
@@ -90,8 +144,9 @@ def evaluate_order_risk(db: Session, order: Order) -> RiskResult:
     for rs in ordered_settings:
         scope_desc = _describe_scope(rs)
 
-        # allow_short_selling = False → hard block on SELL for now.
-        if rs.allow_short_selling is False and order.side.upper() == "SELL":
+        # If short selling is disabled, block only orders that would open or
+        # increase a short position (not normal SELL exits).
+        if rs.allow_short_selling is False and _would_open_or_increase_short(db, order):
             return _blocked(f"Short selling is disabled in {scope_desc} risk settings.")
 
         # max_quantity_per_order

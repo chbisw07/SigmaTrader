@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.market_hours import IST_OFFSET
+from app.core.time_utils import ist_naive_to_utc, utc_now
 from app.db.session import SessionLocal
 from app.models import Alert, IndicatorRule, Order, Position, User
 from app.models.groups import Group, GroupMember
@@ -31,12 +32,6 @@ class IndicatorAlertError(RuntimeError):
 
 _scheduler_started = False
 _scheduler_stop_event = Event()
-
-
-def _now_ist_naive() -> datetime:
-    """Return current time in IST as a naive datetime."""
-
-    return (datetime.now(UTC) + IST_OFFSET).replace(tzinfo=None)
 
 
 def _deserialize_conditions(
@@ -587,18 +582,22 @@ def _evaluate_rule_for_symbol(
     trigger_mode: TriggerMode = rule.trigger_mode or "ONCE"  # type: ignore[assignment]
     bar_time_candidates = [s.bar_time for s in samples if s.bar_time is not None]
     bar_time = max(bar_time_candidates) if bar_time_candidates else None
+    bar_time_utc = ist_naive_to_utc(bar_time) if bar_time is not None else None
 
     if trigger_mode == "ONCE" and rule.last_triggered_at is not None:
         return
     if trigger_mode == "ONCE_PER_BAR":
-        if bar_time is None:
+        if bar_time_utc is None:
             return
-        if rule.last_triggered_at is not None and rule.last_triggered_at >= bar_time:
+        if (
+            rule.last_triggered_at is not None
+            and rule.last_triggered_at >= bar_time_utc
+        ):
             return
 
     sample = samples[0]
     _create_alert_and_order(db, rule, settings, symbol, exchange, sample)
-    rule.last_triggered_at = bar_time or _now_ist_naive()
+    rule.last_triggered_at = bar_time_utc or utc_now()
 
 
 def _evaluate_rule_expression_for_symbol(
@@ -638,21 +637,25 @@ def _evaluate_rule_expression_for_symbol(
     # Derive a bar_time from the underlying indicator samples.
     bar_times = [s.bar_time for s in samples_by_key.values() if s.bar_time is not None]
     bar_time = max(bar_times) if bar_times else None
+    bar_time_utc = ist_naive_to_utc(bar_time) if bar_time is not None else None
 
     trigger_mode: TriggerMode = rule.trigger_mode or "ONCE"  # type: ignore[assignment]
 
     if trigger_mode == "ONCE" and rule.last_triggered_at is not None:
         return
     if trigger_mode == "ONCE_PER_BAR":
-        if bar_time is None:
+        if bar_time_utc is None:
             return
-        if rule.last_triggered_at is not None and rule.last_triggered_at >= bar_time:
+        if (
+            rule.last_triggered_at is not None
+            and rule.last_triggered_at >= bar_time_utc
+        ):
             return
 
     # Reuse the first indicator sample as the payload summary.
     sample = next(iter(samples_by_key.values()))
     _create_alert_and_order(db, rule, settings, symbol, exchange, sample)
-    rule.last_triggered_at = bar_time or _now_ist_naive()
+    rule.last_triggered_at = bar_time_utc or utc_now()
 
 
 def evaluate_indicator_rules_once() -> None:
@@ -663,7 +666,7 @@ def evaluate_indicator_rules_once() -> None:
     """
 
     settings = get_settings()
-    now = _now_ist_naive()
+    now = utc_now()
 
     with SessionLocal() as db:
         rules: List[IndicatorRule] = (
@@ -717,15 +720,15 @@ def evaluate_indicator_rules_once() -> None:
                 # Skip malformed rules without failing the whole batch.
                 continue
 
-        db.commit()
+                db.commit()
 
 
 def _indicator_alerts_loop() -> None:  # pragma: no cover - background loop
     interval = timedelta(minutes=5)
-    next_run = _now_ist_naive() + timedelta(minutes=1)
+    next_run = utc_now() + timedelta(minutes=1)
 
     while not _scheduler_stop_event.is_set():
-        now = _now_ist_naive()
+        now = utc_now()
         sleep_for = (next_run - now).total_seconds()
         if sleep_for > 0:
             _scheduler_stop_event.wait(timeout=sleep_for)
@@ -738,7 +741,7 @@ def _indicator_alerts_loop() -> None:  # pragma: no cover - background loop
             # Errors are logged via the global logging config; never kill the loop.
             pass
 
-        next_run = _now_ist_naive() + interval
+        next_run = utc_now() + interval
 
 
 def schedule_indicator_alerts() -> None:
