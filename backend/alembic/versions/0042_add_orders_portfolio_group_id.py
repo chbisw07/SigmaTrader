@@ -28,15 +28,21 @@ def upgrade() -> None:
         return any(c.get("name") == column for c in cols)
 
     if not has_column("orders", "portfolio_group_id"):
-        op.add_column(
-            "orders",
-            sa.Column(
-                "portfolio_group_id",
-                sa.Integer(),
-                sa.ForeignKey("groups.id", ondelete="SET NULL"),
-                nullable=True,
-            ),
-        )
+        with op.batch_alter_table("orders") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "portfolio_group_id",
+                    sa.Integer(),
+                    nullable=True,
+                )
+            )
+            batch_op.create_foreign_key(
+                "fk_orders_portfolio_group_id",
+                "groups",
+                ["portfolio_group_id"],
+                ["id"],
+                ondelete="SET NULL",
+            )
         inspector = sa.inspect(bind)
 
     op.create_index(
@@ -55,4 +61,8 @@ def downgrade() -> None:  # pragma: no cover
     cols = [c.get("name") for c in inspector.get_columns("orders")]
     if "portfolio_group_id" in cols:
         op.drop_index("ix_orders_portfolio_group_id", table_name="orders")
-        op.drop_column("orders", "portfolio_group_id")
+        with op.batch_alter_table("orders") as batch_op:
+            batch_op.drop_constraint(
+                "fk_orders_portfolio_group_id", type_="foreignkey"
+            )
+            batch_op.drop_column("portfolio_group_id")

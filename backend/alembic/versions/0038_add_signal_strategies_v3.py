@@ -114,35 +114,47 @@ def upgrade() -> None:
         if_not_exists=True,
     )
 
-    if not has_column("alert_definitions", "signal_strategy_version_id"):
-        op.add_column(
-            "alert_definitions",
-            sa.Column(
-                "signal_strategy_version_id",
-                sa.Integer(),
-                sa.ForeignKey("signal_strategy_versions.id", ondelete="SET NULL"),
-                nullable=True,
-            ),
-        )
-        inspector = sa.inspect(bind)
-
-    if not has_column("alert_definitions", "signal_strategy_output"):
-        op.add_column(
-            "alert_definitions",
-            sa.Column("signal_strategy_output", sa.String(length=64), nullable=True),
-        )
-        inspector = sa.inspect(bind)
-
-    if not has_column("alert_definitions", "signal_strategy_params_json"):
-        op.add_column(
-            "alert_definitions",
-            sa.Column(
-                "signal_strategy_params_json",
-                sa.Text(),
-                nullable=False,
-                server_default="{}",
-            ),
-        )
+    missing_alert_version = not has_column(
+        "alert_definitions", "signal_strategy_version_id"
+    )
+    missing_alert_output = not has_column("alert_definitions", "signal_strategy_output")
+    missing_alert_params = not has_column(
+        "alert_definitions", "signal_strategy_params_json"
+    )
+    if missing_alert_version or missing_alert_output or missing_alert_params:
+        with op.batch_alter_table("alert_definitions") as batch_op:
+            if missing_alert_version:
+                batch_op.add_column(
+                    sa.Column(
+                        "signal_strategy_version_id",
+                        sa.Integer(),
+                        nullable=True,
+                    )
+                )
+                batch_op.create_foreign_key(
+                    "fk_alert_definitions_signal_strategy_version_id",
+                    "signal_strategy_versions",
+                    ["signal_strategy_version_id"],
+                    ["id"],
+                    ondelete="SET NULL",
+                )
+            if missing_alert_output:
+                batch_op.add_column(
+                    sa.Column(
+                        "signal_strategy_output",
+                        sa.String(length=64),
+                        nullable=True,
+                    )
+                )
+            if missing_alert_params:
+                batch_op.add_column(
+                    sa.Column(
+                        "signal_strategy_params_json",
+                        sa.Text(),
+                        nullable=False,
+                        server_default="{}",
+                    )
+                )
         inspector = sa.inspect(bind)
 
     op.create_index(
@@ -152,35 +164,49 @@ def upgrade() -> None:
         if_not_exists=True,
     )
 
-    if not has_column("screener_runs", "signal_strategy_version_id"):
-        op.add_column(
-            "screener_runs",
-            sa.Column(
-                "signal_strategy_version_id",
-                sa.Integer(),
-                sa.ForeignKey("signal_strategy_versions.id", ondelete="SET NULL"),
-                nullable=True,
-            ),
-        )
-        inspector = sa.inspect(bind)
-
-    if not has_column("screener_runs", "signal_strategy_output"):
-        op.add_column(
-            "screener_runs",
-            sa.Column("signal_strategy_output", sa.String(length=64), nullable=True),
-        )
-        inspector = sa.inspect(bind)
-
-    if not has_column("screener_runs", "signal_strategy_params_json"):
-        op.add_column(
-            "screener_runs",
-            sa.Column(
-                "signal_strategy_params_json",
-                sa.Text(),
-                nullable=False,
-                server_default="{}",
-            ),
-        )
+    missing_screener_version = not has_column(
+        "screener_runs", "signal_strategy_version_id"
+    )
+    missing_screener_output = not has_column(
+        "screener_runs", "signal_strategy_output"
+    )
+    missing_screener_params = not has_column(
+        "screener_runs", "signal_strategy_params_json"
+    )
+    if missing_screener_version or missing_screener_output or missing_screener_params:
+        with op.batch_alter_table("screener_runs") as batch_op:
+            if missing_screener_version:
+                batch_op.add_column(
+                    sa.Column(
+                        "signal_strategy_version_id",
+                        sa.Integer(),
+                        nullable=True,
+                    )
+                )
+                batch_op.create_foreign_key(
+                    "fk_screener_runs_signal_strategy_version_id",
+                    "signal_strategy_versions",
+                    ["signal_strategy_version_id"],
+                    ["id"],
+                    ondelete="SET NULL",
+                )
+            if missing_screener_output:
+                batch_op.add_column(
+                    sa.Column(
+                        "signal_strategy_output",
+                        sa.String(length=64),
+                        nullable=True,
+                    )
+                )
+            if missing_screener_params:
+                batch_op.add_column(
+                    sa.Column(
+                        "signal_strategy_params_json",
+                        sa.Text(),
+                        nullable=False,
+                        server_default="{}",
+                    )
+                )
         inspector = sa.inspect(bind)
 
     op.create_index(
@@ -193,16 +219,24 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_screener_runs_strategy_version", table_name="screener_runs")
-    op.drop_column("screener_runs", "signal_strategy_params_json")
-    op.drop_column("screener_runs", "signal_strategy_output")
-    op.drop_column("screener_runs", "signal_strategy_version_id")
+    with op.batch_alter_table("screener_runs") as batch_op:
+        batch_op.drop_constraint(
+            "fk_screener_runs_signal_strategy_version_id", type_="foreignkey"
+        )
+        batch_op.drop_column("signal_strategy_params_json")
+        batch_op.drop_column("signal_strategy_output")
+        batch_op.drop_column("signal_strategy_version_id")
 
     op.drop_index(
         "ix_alert_definitions_strategy_version", table_name="alert_definitions"
     )
-    op.drop_column("alert_definitions", "signal_strategy_params_json")
-    op.drop_column("alert_definitions", "signal_strategy_output")
-    op.drop_column("alert_definitions", "signal_strategy_version_id")
+    with op.batch_alter_table("alert_definitions") as batch_op:
+        batch_op.drop_constraint(
+            "fk_alert_definitions_signal_strategy_version_id", type_="foreignkey"
+        )
+        batch_op.drop_column("signal_strategy_params_json")
+        batch_op.drop_column("signal_strategy_output")
+        batch_op.drop_column("signal_strategy_version_id")
 
     op.drop_index(
         "ix_signal_strategy_versions_strategy",
