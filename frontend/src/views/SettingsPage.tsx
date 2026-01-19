@@ -85,6 +85,7 @@ const DISPLAY_TZ_PRESETS = [
   'America/Los_Angeles',
 ] as const
 
+
 function HelpTip({
   title,
 }: {
@@ -474,6 +475,7 @@ export function SettingsPage() {
   const [riskPolicyDraft, setRiskPolicyDraft] = useState<RiskPolicy | null>(null)
   const [riskPolicyBusy, setRiskPolicyBusy] = useState(false)
   const [riskPolicyError, setRiskPolicyError] = useState<string | null>(null)
+  const [riskHelpOpen, setRiskHelpOpen] = useState(false)
 
   useEffect(() => {
     const isPreset = DISPLAY_TZ_PRESETS.includes(displayTimeZone as any)
@@ -1424,12 +1426,66 @@ export function SettingsPage() {
                 <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
                   Risk policy
                 </Typography>
+                <Tooltip title="Risk management help" arrow placement="top">
+                  <IconButton
+                    size="small"
+                    onClick={() => setRiskHelpOpen(true)}
+                    aria-label="risk management help"
+                  >
+                    <HelpOutlineIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
                 <Chip
                   size="small"
                   label={`Source: ${riskPolicySource}`}
                   color={riskPolicySource === 'db' ? 'success' : 'default'}
                 />
               </Box>
+              <Dialog open={riskHelpOpen} onClose={() => setRiskHelpOpen(false)} maxWidth="sm" fullWidth>
+                <DialogTitle>Risk management guide</DialogTitle>
+                <DialogContent>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    These settings protect your account by blocking or resizing orders before they
+                    reach the broker. Start simple, then tighten the guardrails as you gain
+                    confidence.
+                  </Typography>
+                  <Box component="ul" sx={{ pl: 2, my: 0, display: 'grid', gap: 0.75 }}>
+                    <li>
+                      <Typography variant="body2">
+                        Order caps: max order value (percent or absolute) and max quantity per order.
+                      </Typography>
+                    </li>
+                    <li>
+                      <Typography variant="body2">
+                        Account limits: daily loss cap, max open positions, max concurrent symbols,
+                        and exposure limit.
+                      </Typography>
+                    </li>
+                    <li>
+                      <Typography variant="body2">
+                        Per-trade risk: stop-based sizing with ATR or fixed percent rules.
+                      </Typography>
+                    </li>
+                    <li>
+                      <Typography variant="body2">
+                        Execution safety: product gates (MIS/CNC), short selling, and emergency stop.
+                      </Typography>
+                    </li>
+                    <li>
+                      <Typography variant="body2">
+                        Overrides: different caps for TradingView vs SigmaTrader and MIS vs CNC.
+                      </Typography>
+                    </li>
+                  </Box>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    Tips: set a realistic manual equity, keep positions synced for exposure checks,
+                    and use the emergency stop as your safety brake.
+                  </Typography>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setRiskHelpOpen(false)}>Close</Button>
+                </DialogActions>
+              </Dialog>
 
               {!riskPolicyLoaded || !riskPolicyDraft ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
@@ -1457,7 +1513,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Enable enforcement"
-                          help="When enabled, SigmaTrader blocks/clamps orders at dispatch/execute time (manual queue, TradingView AUTO, deployments). When disabled, the legacy v1 risk checks (if any) are used."
+                          help="When enabled, SigmaTrader blocks/clamps orders at dispatch/execute time (manual queue, TradingView AUTO, deployments)."
                         />
                       }
                     />
@@ -1850,7 +1906,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Allow scale-in"
-                          help="Not enforced yet. Intended to control whether adding to an existing position is allowed."
+                          help="Intended to control whether adding to an existing position is allowed."
                         />
                       }
                     />
@@ -1860,7 +1916,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Pyramiding"
-                          help="Not enforced yet. Intended to cap the number of scale-ins per symbol/position."
+                          help="Intended to cap the number of scale-ins per symbol/position."
                         />
                       }
                       value={riskPolicyDraft.position_sizing.pyramiding}
@@ -1875,6 +1931,9 @@ export function SettingsPage() {
                       }}
                     />
                   </Box>
+                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                    Scale-in and pyramiding are not enforced yet.
+                  </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
@@ -1993,7 +2052,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Trailing enabled"
-                          help="Not enforced yet (no trailing orders placed). Kept for future trailing-stop automation."
+                          help="Controls future trailing-stop automation."
                         />
                       }
                     />
@@ -2003,7 +2062,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Trail activation (xATR)"
-                          help="Not enforced yet. Intended to start trailing only after price moves in favor by this many ATRs."
+                          help="Intended to start trailing only after price moves in favor by this many ATRs."
                         />
                       }
                       value={riskPolicyDraft.stop_rules.trail_activation_atr}
@@ -2018,6 +2077,10 @@ export function SettingsPage() {
                       }}
                     />
                   </Box>
+                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                    Trailing stop settings are not enforced yet. SigmaTrader does not place broker-side
+                    SL/TP/trailing orders.
+                  </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
@@ -2066,7 +2129,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Min bars between trades"
-                          help="Not enforced yet. Intended to prevent rapid re-entries on the same symbol."
+                          help="Intended to prevent rapid re-entries on the same symbol."
                         />
                       }
                       value={riskPolicyDraft.trade_frequency.min_bars_between_trades}
@@ -2092,7 +2155,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Cooldown after loss (bars)"
-                          help="Not enforced yet. Intended to pause re-entries after a losing trade for N bars."
+                          help="Intended to pause re-entries after a losing trade for N bars."
                         />
                       }
                       value={riskPolicyDraft.trade_frequency.cooldown_after_loss_bars}
@@ -2113,6 +2176,9 @@ export function SettingsPage() {
                       }}
                     />
                   </Box>
+                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                    Min bars between trades and cooldown after loss are not enforced yet.
+                  </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
@@ -2125,8 +2191,8 @@ export function SettingsPage() {
                       gap: 0.75,
                     }}
                   >
-                    Loss controls (not fully enforced yet)
-                    <HelpTip title="These are critical protections, but they require per-trade PnL and streak tracking. The UI is ready; enforcement will be wired once PnL accounting is finalized." />
+                    Loss controls
+                    <HelpTip title="These protect against drawdowns and loss streaks." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
@@ -2135,7 +2201,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Max consecutive losses"
-                          help="Not enforced yet. Intended to stop trading after N consecutive losing trades."
+                          help="Intended to stop trading after N consecutive losing trades."
                         />
                       }
                       value={riskPolicyDraft.loss_controls.max_consecutive_losses}
@@ -2174,7 +2240,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Pause after streak"
-                          help="Not enforced yet. Intended to pause new executions after hitting the loss streak threshold."
+                          help="Intended to pause new executions after hitting the loss streak threshold."
                         />
                       }
                     />
@@ -2183,7 +2249,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Pause duration"
-                          help="Not enforced yet. Example values: EOD (end of day), 30m, 2h."
+                          help="Example values: EOD (end of day), 30m, 2h."
                         />
                       }
                       value={riskPolicyDraft.loss_controls.pause_duration}
@@ -2200,6 +2266,9 @@ export function SettingsPage() {
                       sx={{ minWidth: 160 }}
                     />
                   </Box>
+                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                    Loss controls are not enforced yet.
+                  </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
@@ -2212,8 +2281,8 @@ export function SettingsPage() {
                       gap: 0.75,
                     }}
                   >
-                    Correlation & symbol control (not enforced yet)
-                    <HelpTip title="These controls help avoid concentration in correlated sectors. Enforcement needs sector classification/correlation inputs." />
+                    Correlation & symbol control
+                    <HelpTip title="These controls help avoid concentration in correlated sectors." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
@@ -2222,7 +2291,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Max same-sector positions"
-                          help="Not enforced yet. Intended to cap the number of open positions from the same sector/theme."
+                          help="Intended to cap the number of open positions from the same sector/theme."
                         />
                       }
                       value={riskPolicyDraft.correlation_rules.max_same_sector_positions}
@@ -2248,7 +2317,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Sector correlation limit"
-                          help="Not enforced yet. Intended to block adding positions when correlation exceeds this threshold."
+                          help="Intended to block adding positions when correlation exceeds this threshold."
                         />
                       }
                       value={riskPolicyDraft.correlation_rules.sector_correlation_limit}
@@ -2269,6 +2338,9 @@ export function SettingsPage() {
                       }}
                     />
                   </Box>
+                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                    Correlation and sector controls are not enforced yet.
+                  </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
@@ -2282,7 +2354,7 @@ export function SettingsPage() {
                     }}
                   >
                     Execution safety (GLOBAL)
-                    <HelpTip title="Execution-layer guardrails. allow_mis/allow_cnc and max order value % are enforced. Margin checks are not wired yet." />
+                    <HelpTip title="Execution-layer guardrails. Product gates and order value caps are enforced." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <FormControlLabel
@@ -2322,6 +2394,32 @@ export function SettingsPage() {
                         <LabelWithHelp
                           label="Allow CNC (global)"
                           help="Enforced. If disabled, CNC executions are rejected unless an override allows it."
+                        />
+                      }
+                    />
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={riskPolicyDraft.execution_safety.allow_short_selling}
+                          onChange={(e) =>
+                            setRiskPolicyDraft((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    execution_safety: {
+                                      ...prev.execution_safety,
+                                      allow_short_selling: e.target.checked,
+                                    },
+                                  }
+                                : prev,
+                            )
+                          }
+                        />
+                      }
+                      label={
+                        <LabelWithHelp
+                          label="Allow short selling (MIS)"
+                          help="Enforced. Blocks SELL orders that would open or increase short positions."
                         />
                       }
                     />
@@ -2367,11 +2465,14 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Reject if margin exceeded"
-                          help="Not enforced yet. Intended to block orders when broker margin is insufficient."
+                          help="Intended to block orders when broker margin is insufficient."
                         />
                       }
                     />
                   </Box>
+                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                    Margin checks are not enforced yet.
+                  </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
@@ -2385,7 +2486,7 @@ export function SettingsPage() {
                     }}
                   >
                     Emergency controls
-                    <HelpTip title="Kill-switch style controls. panic_stop is enforced immediately. The other toggles are currently placeholders for future automation." />
+                    <HelpTip title="Kill-switch style controls. panic_stop is enforced immediately." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <FormControlLabel
@@ -2433,7 +2534,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="stop_all_trading_on_error"
-                          help="Not enforced yet. Intended to stop trading after unexpected broker/system errors."
+                          help="Intended to stop trading after unexpected broker/system errors."
                         />
                       }
                     />
@@ -2459,11 +2560,14 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="stop_on_unexpected_qty"
-                          help="Not enforced yet. Intended to stop trading if order qty changes unexpectedly after normalization/clamping."
+                          help="Intended to stop trading if order qty changes unexpectedly after normalization/clamping."
                         />
                       }
                     />
                   </Box>
+                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
+                    Error-based emergency stops are not enforced yet.
+                  </Typography>
 
                   <Divider sx={{ my: 2 }} />
 

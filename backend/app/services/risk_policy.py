@@ -40,6 +40,52 @@ def _normalize_product(product: str | None) -> ProductType:
     return "MIS" if p == "MIS" else "CNC"
 
 
+def _normalized_symbol_exchange(order: Order) -> tuple[str, str]:
+    symbol_raw = (order.symbol or "").strip()
+    exchange = (getattr(order, "exchange", None) or "NSE").strip().upper() or "NSE"
+    symbol = symbol_raw
+    if ":" in symbol_raw:
+        ex, sym = symbol_raw.split(":", 1)
+        if ex.strip():
+            exchange = ex.strip().upper()
+        symbol = sym
+    return symbol.strip().upper(), exchange
+
+
+def _position_qty_for_order(db: Session, order: Order) -> float:
+    broker = (getattr(order, "broker_name", None) or "zerodha").strip().lower()
+    product = (getattr(order, "product", None) or "MIS").strip().upper()
+    symbol, exchange = _normalized_symbol_exchange(order)
+    pos = (
+        db.query(Position)
+        .filter(
+            Position.broker_name == broker,
+            Position.symbol == symbol,
+            Position.exchange == exchange,
+            Position.product == product,
+        )
+        .one_or_none()
+    )
+    return float(pos.qty) if pos is not None else 0.0
+
+
+def _would_open_or_increase_short(db: Session, order: Order) -> bool:
+    side = (order.side or "").strip().upper()
+    if side != "SELL":
+        return False
+
+    product = (getattr(order, "product", None) or "MIS").strip().upper()
+    if product == "CNC":
+        return False
+
+    qty = float(order.qty or 0.0)
+    if qty <= 0:
+        return False
+
+    pos_qty = _position_qty_for_order(db, order)
+    return (pos_qty - qty) < 0.0
+
+
 def _as_of_date_ist(now_utc: datetime):
     try:
         from zoneinfo import ZoneInfo
@@ -330,6 +376,19 @@ def evaluate_execution_risk_policy(
             blocked=True,
             clamped=False,
             reason="Order has invalid quantity.",
+            original_qty=original_qty,
+            final_qty=original_qty,
+            effective_price=None,
+            source_bucket=source_bucket,
+        )
+
+    if not policy.execution_safety.allow_short_selling and _would_open_or_increase_short(
+        db, order
+    ):
+        return RiskPolicyDecision(
+            blocked=True,
+            clamped=False,
+            reason="Short selling is disabled by risk policy.",
             original_qty=original_qty,
             final_qty=original_qty,
             effective_price=None,

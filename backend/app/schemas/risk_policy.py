@@ -72,6 +72,7 @@ class CorrelationRulesSettings(BaseModel):
 class ExecutionSafetySettings(BaseModel):
     allow_mis: bool = False
     allow_cnc: bool = True
+    allow_short_selling: bool = True
     max_order_value_pct: float = Field(default=2.5, ge=0.0, le=100.0)
     reject_if_margin_exceeded: bool = True
 

@@ -62,6 +62,7 @@ export type RiskPolicy = {
   execution_safety: {
     allow_mis: boolean
     allow_cnc: boolean
+    allow_short_selling: boolean
     max_order_value_pct: number
     reject_if_margin_exceeded: boolean
   }
