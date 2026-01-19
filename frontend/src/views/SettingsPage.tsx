@@ -1906,7 +1906,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Allow scale-in"
-                          help="Intended to control whether adding to an existing position is allowed."
+                          help="Enforced. Controls whether adding to an existing position is allowed."
                         />
                       }
                     />
@@ -1916,7 +1916,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Pyramiding"
-                          help="Intended to cap the number of scale-ins per symbol/position."
+                          help="Enforced. Caps the number of entries per symbol while a position is open."
                         />
                       }
                       value={riskPolicyDraft.position_sizing.pyramiding}
@@ -1931,8 +1931,9 @@ export function SettingsPage() {
                       }}
                     />
                   </Box>
-                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
-                    Scale-in and pyramiding are not enforced yet.
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    Scale-in applies only when a position already exists. Keep positions synced for
+                    accurate enforcement.
                   </Typography>
 
                   <Divider sx={{ my: 2 }} />

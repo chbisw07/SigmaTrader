@@ -86,6 +86,37 @@ def _would_open_or_increase_short(db: Session, order: Order) -> bool:
     return (pos_qty - qty) < 0.0
 
 
+def _count_entries_today(
+    db: Session,
+    *,
+    broker_name: str,
+    symbol: str,
+    exchange: str,
+    product: str,
+    side: str,
+) -> int:
+    start_day, end_day = _day_bounds_ist(datetime.now(UTC))
+    try:
+        count = (
+            db.query(Order)
+            .filter(
+                Order.broker_name == broker_name,
+                Order.symbol == symbol,
+                Order.exchange == exchange,
+                Order.product == product,
+                Order.side == side,
+                Order.is_exit.is_(False),
+                Order.status.in_(["EXECUTED", "PARTIALLY_EXECUTED"]),
+                Order.created_at >= start_day,
+                Order.created_at < end_day,
+            )
+            .count()
+        )
+        return int(count or 0)
+    except Exception:
+        return 0
+
+
 def _as_of_date_ist(now_utc: datetime):
     try:
         from zoneinfo import ZoneInfo
@@ -418,6 +449,68 @@ def evaluate_execution_risk_policy(
     open_positions = [
         p for p in positions if float(getattr(p, "qty", 0.0) or 0.0) != 0.0
     ]
+
+    # Position sizing: scale-in and pyramiding controls (best-effort).
+    try:
+        broker = (getattr(order, "broker_name", None) or "zerodha").strip().lower()
+        sym, exch = _normalized_symbol_exchange(order)
+        prod = (getattr(order, "product", None) or "MIS").strip().upper()
+        side = (order.side or "").strip().upper()
+        pos = next(
+            (
+                p
+                for p in open_positions
+                if (p.broker_name or "").strip().lower() == broker
+                and (p.symbol or "").strip().upper() == sym
+                and (p.exchange or "").strip().upper() == exch
+                and (p.product or "").strip().upper() == prod
+            ),
+            None,
+        )
+        if pos is not None:
+            pos_qty = float(getattr(pos, "qty", 0.0) or 0.0)
+            is_scale_in = (side == "BUY" and pos_qty > 0) or (
+                side == "SELL" and pos_qty < 0
+            )
+            if is_scale_in:
+                if not bool(policy.position_sizing.allow_scale_in):
+                    return RiskPolicyDecision(
+                        blocked=True,
+                        clamped=False,
+                        reason="Scale-in is disabled by risk policy.",
+                        original_qty=original_qty,
+                        final_qty=original_qty,
+                        effective_price=effective_price,
+                        source_bucket=source_bucket,
+                    )
+
+                pyramiding = int(getattr(policy.position_sizing, "pyramiding", 1) or 1)
+                if pyramiding < 1:
+                    pyramiding = 1
+                entries = _count_entries_today(
+                    db,
+                    broker_name=broker,
+                    symbol=sym,
+                    exchange=exch,
+                    product=prod,
+                    side=side,
+                )
+                if entries == 0:
+                    entries = 1
+                if entries >= pyramiding:
+                    return RiskPolicyDecision(
+                        blocked=True,
+                        clamped=False,
+                        reason=(
+                            f"Pyramiding limit reached ({entries}/{pyramiding})."
+                        ),
+                        original_qty=original_qty,
+                        final_qty=original_qty,
+                        effective_price=effective_price,
+                        source_bucket=source_bucket,
+                    )
+    except Exception:
+        pass
     if policy.account_risk.max_open_positions >= 0 and len(open_positions) >= int(
         policy.account_risk.max_open_positions
     ):
