@@ -14,6 +14,7 @@ from app.services.managed_risk import (
 from app.services.portfolio_allocations import (
     apply_portfolio_allocation_for_executed_order,
 )
+from app.services.risk_policy_store import get_risk_policy
 
 
 def _map_angelone_status(status: str) -> Optional[str]:
@@ -132,6 +133,7 @@ def sync_order_statuses_angelone(
                 avg_price=avg_price,
             )
             settings = get_settings()
+            policy, _src = get_risk_policy(db, settings)
             try:
                 ensure_managed_risk_for_executed_order(
                     db,
@@ -139,6 +141,7 @@ def sync_order_statuses_angelone(
                     order=order,
                     filled_qty=float(filled_qty or 0.0),
                     avg_price=avg_price,
+                    policy=policy,
                 )
             except Exception:
                 pass

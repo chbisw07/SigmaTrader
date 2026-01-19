@@ -44,6 +44,7 @@ export type RiskPolicy = {
     max_stop_distance_pct: number
     trailing_stop_enabled: boolean
     trail_activation_atr: number
+    trail_activation_pct: number
   }
   trade_frequency: {
     max_trades_per_symbol_per_day: number

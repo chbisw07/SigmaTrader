@@ -1781,34 +1781,6 @@ export function SettingsPage() {
                         )
                       }}
                     />
-                    <TextField
-                      select
-                      size="small"
-                      label={
-                        <LabelWithHelp
-                          label="Stop reference"
-                          help="ATR: uses daily-candle ATR for sizing checks (fallback stop% if ATR unavailable). FIXED_PCT: always uses the fallback stop%."
-                        />
-                      }
-                      value={riskPolicyDraft.trade_risk.stop_reference}
-                      onChange={(e) =>
-                        setRiskPolicyDraft((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                trade_risk: {
-                                  ...prev.trade_risk,
-                                  stop_reference: e.target.value as 'ATR' | 'FIXED_PCT',
-                                },
-                              }
-                            : prev,
-                        )
-                      }
-                      sx={{ minWidth: 160 }}
-                    >
-                      <MenuItem value="ATR">ATR</MenuItem>
-                      <MenuItem value="FIXED_PCT">FIXED_PCT</MenuItem>
-                    </TextField>
                     <FormControlLabel
                       control={
                         <Switch
@@ -1947,50 +1919,36 @@ export function SettingsPage() {
                       gap: 0.75,
                     }}
                   >
-                    Stop rules (used for risk checks only)
-                    <HelpTip title="These parameters are used only to estimate stop distance for risk sizing checks. SigmaTrader does not place linked SL/trailing orders yet." />
+                    Stop rules (sizing + managed exits)
+                    <HelpTip title="Used for risk sizing checks and SigmaTrader-managed stop/trailing exits when enforcement is enabled. No broker-side SL/TP orders are placed." />
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Choose how SigmaTrader estimates stop distance for risk sizing checks.
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
+                      select
                       size="small"
-                      type="number"
                       label={
                         <LabelWithHelp
-                          label="ATR stop (xATR)"
-                          help="When Stop reference=ATR, stop distance is estimated as ATR × this multiplier (then clamped by Min/Max stop%)."
+                          label="Stop basis"
+                          help="Select how stop distance is estimated for sizing checks."
                         />
                       }
-                      value={riskPolicyDraft.stop_rules.initial_stop_atr}
+                      value={riskPolicyDraft.trade_risk.stop_reference}
                       onChange={(e) => {
-                        const v = Number(e.target.value)
-                        if (!Number.isFinite(v)) return
+                        const v = e.target.value as 'ATR' | 'FIXED_PCT'
                         setRiskPolicyDraft((prev) =>
                           prev
-                            ? { ...prev, stop_rules: { ...prev.stop_rules, initial_stop_atr: v } }
+                            ? { ...prev, trade_risk: { ...prev.trade_risk, stop_reference: v } }
                             : prev,
                         )
                       }}
-                    />
-                    <TextField
-                      size="small"
-                      type="number"
-                      label={
-                        <LabelWithHelp
-                          label="Fallback stop (%)"
-                          help="Used when ATR data is unavailable (and Stop mandatory is enabled), or when Stop reference=FIXED_PCT."
-                        />
-                      }
-                      value={riskPolicyDraft.stop_rules.fallback_stop_pct}
-                      onChange={(e) => {
-                        const v = Number(e.target.value)
-                        if (!Number.isFinite(v)) return
-                        setRiskPolicyDraft((prev) =>
-                          prev
-                            ? { ...prev, stop_rules: { ...prev.stop_rules, fallback_stop_pct: v } }
-                            : prev,
-                        )
-                      }}
-                    />
+                      sx={{ minWidth: 220 }}
+                    >
+                      <MenuItem value="ATR">ATR (volatility-based)</MenuItem>
+                      <MenuItem value="FIXED_PCT">Fixed percent</MenuItem>
+                    </TextField>
                     <TextField
                       size="small"
                       type="number"
@@ -2031,6 +1989,104 @@ export function SettingsPage() {
                         )
                       }}
                     />
+                  </Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    {riskPolicyDraft.trade_risk.stop_reference === 'ATR'
+                      ? 'ATR scales with volatility and adapts to changing market conditions.'
+                      : 'Fixed percent uses a constant percent of price, which can be easier to reason about.'}
+                  </Typography>
+                  {riskPolicyDraft.trade_risk.stop_reference === 'ATR' ? (
+                    <Box
+                      sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', mt: 1 }}
+                    >
+                      <TextField
+                        size="small"
+                        type="number"
+                        label={
+                          <LabelWithHelp
+                            label="ATR period"
+                            help="Lookback period in bars for the ATR calculation."
+                          />
+                        }
+                        value={riskPolicyDraft.stop_rules.atr_period}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          if (!Number.isFinite(v)) return
+                          setRiskPolicyDraft((prev) =>
+                            prev
+                              ? { ...prev, stop_rules: { ...prev.stop_rules, atr_period: v } }
+                              : prev,
+                          )
+                        }}
+                      />
+                      <TextField
+                        size="small"
+                        type="number"
+                        label={
+                          <LabelWithHelp
+                            label="ATR stop (xATR)"
+                            help="Stop distance is ATR times this multiplier."
+                          />
+                        }
+                        value={riskPolicyDraft.stop_rules.initial_stop_atr}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          if (!Number.isFinite(v)) return
+                          setRiskPolicyDraft((prev) =>
+                            prev
+                              ? { ...prev, stop_rules: { ...prev.stop_rules, initial_stop_atr: v } }
+                              : prev,
+                          )
+                        }}
+                      />
+                      <TextField
+                        size="small"
+                        type="number"
+                        label={
+                          <LabelWithHelp
+                            label="Fallback stop (%)"
+                            help="Used when ATR data is unavailable."
+                          />
+                        }
+                        value={riskPolicyDraft.stop_rules.fallback_stop_pct}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          if (!Number.isFinite(v)) return
+                          setRiskPolicyDraft((prev) =>
+                            prev
+                              ? { ...prev, stop_rules: { ...prev.stop_rules, fallback_stop_pct: v } }
+                              : prev,
+                          )
+                        }}
+                      />
+                    </Box>
+                  ) : (
+                    <Box
+                      sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', mt: 1 }}
+                    >
+                      <TextField
+                        size="small"
+                        type="number"
+                        label={
+                          <LabelWithHelp
+                            label="Fixed stop (%)"
+                            help="Stop distance as a fixed percent of price."
+                          />
+                        }
+                        value={riskPolicyDraft.stop_rules.fallback_stop_pct}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          if (!Number.isFinite(v)) return
+                          setRiskPolicyDraft((prev) =>
+                            prev
+                              ? { ...prev, stop_rules: { ...prev.stop_rules, fallback_stop_pct: v } }
+                              : prev,
+                          )
+                        }}
+                      />
+                    </Box>
+                  )}
+                  <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', mt: 1 }}>
                     <FormControlLabel
                       control={
                         <Switch
@@ -2062,25 +2118,45 @@ export function SettingsPage() {
                       type="number"
                       label={
                         <LabelWithHelp
-                          label="Trail activation (xATR)"
-                          help="Intended to start trailing only after price moves in favor by this many ATRs."
+                          label={
+                            riskPolicyDraft.trade_risk.stop_reference === 'ATR'
+                              ? 'Trail activation (xATR)'
+                              : 'Trail activation (%)'
+                          }
+                          help={
+                            riskPolicyDraft.trade_risk.stop_reference === 'ATR'
+                              ? 'Starts trailing only after price moves in favor by this many ATRs.'
+                              : 'Starts trailing only after price moves in favor by this percent.'
+                          }
                         />
                       }
-                      value={riskPolicyDraft.stop_rules.trail_activation_atr}
+                      value={
+                        riskPolicyDraft.trade_risk.stop_reference === 'ATR'
+                          ? riskPolicyDraft.stop_rules.trail_activation_atr
+                          : riskPolicyDraft.stop_rules.trail_activation_pct
+                      }
                       onChange={(e) => {
                         const v = Number(e.target.value)
                         if (!Number.isFinite(v)) return
                         setRiskPolicyDraft((prev) =>
                           prev
-                            ? { ...prev, stop_rules: { ...prev.stop_rules, trail_activation_atr: v } }
+                            ? {
+                                ...prev,
+                                stop_rules: {
+                                  ...prev.stop_rules,
+                                  ...(prev.trade_risk.stop_reference === 'ATR'
+                                    ? { trail_activation_atr: v }
+                                    : { trail_activation_pct: v }),
+                                },
+                              }
                             : prev,
                         )
                       }}
                     />
                   </Box>
-                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
-                    Trailing stop settings are not enforced yet. SigmaTrader does not place broker-side
-                    SL/TP/trailing orders.
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    Stops and trailing exits are enforced by SigmaTrader (app-managed). Keep SigmaTrader
+                    running.
                   </Typography>
 
                   <Divider sx={{ my: 2 }} />

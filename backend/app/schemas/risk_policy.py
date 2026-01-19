@@ -50,6 +50,12 @@ class StopRulesSettings(BaseModel):
     max_stop_distance_pct: float = Field(default=3.0, ge=0.0, le=100.0)
     trailing_stop_enabled: bool = True
     trail_activation_atr: float = Field(default=2.5, ge=0.0, le=50.0)
+    trail_activation_pct: float = Field(
+        default=3.0,
+        ge=0.0,
+        le=100.0,
+        description="Used when stop_reference=FIXED_PCT; activation in percent of entry price.",
+    )
 
 
 class TradeFrequencySettings(BaseModel):

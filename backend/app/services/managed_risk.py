@@ -15,6 +15,7 @@ from app.core.market_hours import is_market_open_now
 from app.db.session import SessionLocal
 from app.models import BrokerConnection, ManagedRiskPosition, Order, Position
 from app.schemas.managed_risk import DistanceSpec, RiskSpec
+from app.schemas.risk_policy import RiskPolicy
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
 from app.services.market_data import load_series
@@ -365,20 +366,95 @@ def ensure_managed_risk_for_executed_order(
     order: Order,
     filled_qty: float,
     avg_price: float | None,
+    policy: RiskPolicy | None = None,
 ) -> ManagedRiskPosition | None:
     if getattr(order, "is_exit", False):
         return None
-    spec = RiskSpec.from_json(getattr(order, "risk_spec_json", None))
-    if spec is None:
+    raw_order_spec = RiskSpec.from_json(getattr(order, "risk_spec_json", None))
+    policy_enabled = bool(policy is not None and getattr(policy, "enabled", False))
+
+    def _policy_spec() -> RiskSpec | None:
+        if not policy_enabled or policy is None:
+            return None
+        sr = policy.stop_rules
+        tr = policy.trade_risk
+        stop_ref = (tr.stop_reference or "ATR").strip().upper()
+        if stop_ref == "FIXED_PCT":
+            stop_pct = float(sr.fallback_stop_pct)
+            # Apply percent clamp up-front so the stored spec matches the
+            # resulting absolute distance.
+            stop_pct = max(float(sr.min_stop_distance_pct), min(stop_pct, float(sr.max_stop_distance_pct)))
+            act_pct = float(getattr(sr, "trail_activation_pct", 0.0) or 0.0)
+            return RiskSpec(
+                stop_loss=DistanceSpec(
+                    enabled=True,
+                    mode="PCT",
+                    value=float(stop_pct),
+                ),
+                trailing_stop=DistanceSpec(
+                    enabled=bool(sr.trailing_stop_enabled),
+                    mode="PCT",
+                    value=float(stop_pct),
+                ),
+                trailing_activation=DistanceSpec(
+                    enabled=bool(sr.trailing_stop_enabled) and float(act_pct) > 0,
+                    mode="PCT",
+                    value=float(act_pct),
+                ),
+                exit_order_type="MARKET",
+            )
+        # ATR basis (default).
+        act_atr = float(sr.trail_activation_atr)
+        return RiskSpec(
+            stop_loss=DistanceSpec(
+                enabled=True,
+                mode="ATR",
+                value=float(sr.initial_stop_atr),
+                atr_period=int(sr.atr_period),
+                atr_tf="1d",
+            ),
+            trailing_stop=DistanceSpec(
+                enabled=bool(sr.trailing_stop_enabled),
+                mode="ATR",
+                value=float(sr.initial_stop_atr),
+                atr_period=int(sr.atr_period),
+                atr_tf="1d",
+            ),
+            trailing_activation=DistanceSpec(
+                enabled=bool(sr.trailing_stop_enabled) and float(act_atr) > 0,
+                mode="ATR",
+                value=float(act_atr),
+                atr_period=int(sr.atr_period),
+                atr_tf="1d",
+            ),
+            exit_order_type="MARKET",
+        )
+
+    base = _policy_spec()
+    if base is None and raw_order_spec is None:
         return None
-    if not spec.stop_loss.enabled:
-        return None
+
+    # Merge order-specific exits additively (cannot disable policy stops).
+    spec = base or RiskSpec()
+    if raw_order_spec is not None:
+        if raw_order_spec.stop_loss.enabled:
+            spec.stop_loss = raw_order_spec.stop_loss
+        if raw_order_spec.trailing_stop.enabled:
+            spec.trailing_stop = raw_order_spec.trailing_stop
+        if raw_order_spec.trailing_activation.enabled:
+            spec.trailing_activation = raw_order_spec.trailing_activation
+        if raw_order_spec.exit_order_type:
+            spec.exit_order_type = raw_order_spec.exit_order_type
 
     side = (order.side or "").strip().upper()
     product = (order.product or "").strip().upper()
     if side == "SELL" and product != "MIS":
-        logger.info("Managed risk ignored for SELL non-MIS order %s", order.id)
-        return None
+        # Selling delivery holdings is not a short entry; allow this order to
+        # reduce an existing long managed-risk position but do not create a new
+        # short managed-risk position.
+        create_entry = False
+    else:
+        create_entry = True
 
     if avg_price is None or avg_price <= 0:
         # Best-effort fallback: use persisted order price when it exists.
@@ -397,7 +473,43 @@ def ensure_managed_risk_for_executed_order(
         spec=spec.stop_loss,
     )
     if stop_dist is None or stop_dist <= 0:
-        return None
+        # If ATR computation fails, fall back to fixed percent when policy is
+        # enabled.
+        if policy_enabled and policy is not None:
+            sr = policy.stop_rules
+            stop_pct = float(sr.fallback_stop_pct)
+            stop_pct = max(float(sr.min_stop_distance_pct), min(stop_pct, float(sr.max_stop_distance_pct)))
+            stop_dist = float(avg_price) * stop_pct / 100.0
+        else:
+            return None
+
+    if policy_enabled and policy is not None:
+        sr = policy.stop_rules
+        min_abs = float(avg_price) * float(sr.min_stop_distance_pct) / 100.0
+        max_abs = float(avg_price) * float(sr.max_stop_distance_pct) / 100.0
+        stop_dist = max(float(min_abs), min(float(stop_dist), float(max_abs)))
+        # Global policy is authoritative: per-order overrides may tighten but
+        # must not loosen the policy-derived stop distance.
+        if base is not None:
+            policy_stop = _distance_from_entry(
+                db,
+                settings,
+                entry_price=float(avg_price),
+                symbol=symbol,
+                exchange=exchange,
+                spec=base.stop_loss,
+            )
+            if policy_stop is None or float(policy_stop) <= 0:
+                stop_pct = float(sr.fallback_stop_pct)
+                stop_pct = max(
+                    float(sr.min_stop_distance_pct),
+                    min(stop_pct, float(sr.max_stop_distance_pct)),
+                )
+                policy_stop = float(avg_price) * stop_pct / 100.0
+            policy_stop = max(float(min_abs), min(float(policy_stop), float(max_abs)))
+            if float(stop_dist) > float(policy_stop):
+                stop_dist = float(policy_stop)
+                spec.stop_loss = base.stop_loss
 
     trail_dist = _distance_from_entry(
         db,
@@ -415,6 +527,62 @@ def ensure_managed_risk_for_executed_order(
         exchange=exchange,
         spec=spec.trailing_activation,
     )
+    if spec.trailing_stop.enabled and (trail_dist is None or float(trail_dist) <= 0):
+        trail_dist = float(stop_dist)
+
+    if policy_enabled and policy is not None and spec.trailing_stop.enabled and trail_dist is not None:
+        sr = policy.stop_rules
+        min_abs = float(avg_price) * float(sr.min_stop_distance_pct) / 100.0
+        max_abs = float(avg_price) * float(sr.max_stop_distance_pct) / 100.0
+        trail_dist = max(float(min_abs), min(float(trail_dist), float(max_abs)))
+        if base is not None and base.trailing_stop.enabled:
+            policy_trail = _distance_from_entry(
+                db,
+                settings,
+                entry_price=float(avg_price),
+                symbol=symbol,
+                exchange=exchange,
+                spec=base.trailing_stop,
+            )
+            if policy_trail is None or float(policy_trail) <= 0:
+                policy_trail = float(stop_dist)
+            policy_trail = max(float(min_abs), min(float(policy_trail), float(max_abs)))
+            if float(trail_dist) > float(policy_trail):
+                trail_dist = float(policy_trail)
+                spec.trailing_stop = base.trailing_stop
+
+    if spec.trailing_activation.enabled and (act_dist is None or float(act_dist) <= 0):
+        # Best-effort fallback when ATR activation is requested but data is
+        # missing: scale activation off the stop distance.
+        if policy_enabled and policy is not None and policy.trade_risk.stop_reference == "ATR":
+            base_atr = float(policy.stop_rules.initial_stop_atr) or 1.0
+            act_atr = float(policy.stop_rules.trail_activation_atr) or 0.0
+            if act_atr > 0 and base_atr > 0:
+                act_dist = float(stop_dist) * (act_atr / base_atr)
+    if (
+        policy_enabled
+        and policy is not None
+        and base is not None
+        and base.trailing_activation.enabled
+        and spec.trailing_activation.enabled
+        and act_dist is not None
+        and float(act_dist) > 0
+    ):
+        policy_act = _distance_from_entry(
+            db,
+            settings,
+            entry_price=float(avg_price),
+            symbol=symbol,
+            exchange=exchange,
+            spec=base.trailing_activation,
+        )
+        if policy_act is None or float(policy_act) <= 0:
+            # If ATR activation can't be computed, keep the current act_dist
+            # (already best-effort).
+            policy_act = float(act_dist)
+        if float(act_dist) > float(policy_act):
+            act_dist = float(policy_act)
+            spec.trailing_activation = base.trailing_activation
 
     # Initialize per spec.
     best = float(avg_price)
@@ -436,13 +604,77 @@ def ensure_managed_risk_for_executed_order(
         trailing_active_initial = not spec.trailing_activation.enabled
         trail_initial = init.current_stop if trailing_active_initial else None
 
-    existing = (
+    # Position-level: maintain at most one ACTIVE managed-risk row for a
+    # broker+symbol+product+side (per user).
+    existing_same = (
         db.query(ManagedRiskPosition)
-        .filter(ManagedRiskPosition.entry_order_id == int(order.id))
-        .one_or_none()
+        .filter(
+            ManagedRiskPosition.user_id == order.user_id,
+            ManagedRiskPosition.broker_name == (order.broker_name or "zerodha").strip().lower(),
+            ManagedRiskPosition.symbol == symbol,
+            ManagedRiskPosition.exchange == exchange,
+            ManagedRiskPosition.product == product,
+            ManagedRiskPosition.side == side,
+            ManagedRiskPosition.status.in_(["ACTIVE"]),
+        )
+        .order_by(ManagedRiskPosition.updated_at.desc())
+        .first()
     )
-    if existing is not None:
-        return existing
+    opposite_side = "SELL" if side == "BUY" else "BUY"
+    existing_opp = (
+        db.query(ManagedRiskPosition)
+        .filter(
+            ManagedRiskPosition.user_id == order.user_id,
+            ManagedRiskPosition.broker_name == (order.broker_name or "zerodha").strip().lower(),
+            ManagedRiskPosition.symbol == symbol,
+            ManagedRiskPosition.exchange == exchange,
+            ManagedRiskPosition.product == product,
+            ManagedRiskPosition.side == opposite_side,
+            ManagedRiskPosition.status.in_(["ACTIVE"]),
+        )
+        .order_by(ManagedRiskPosition.updated_at.desc())
+        .first()
+    )
+
+    # Reduce/close opposite-side managed risk on fills that net out exposure.
+    add_qty = float(filled_qty or 0.0)
+    if existing_opp is not None and add_qty > 0:
+        before = float(existing_opp.qty or 0.0)
+        remaining_opp = max(before - add_qty, 0.0)
+        if remaining_opp <= 0:
+            add_qty = max(add_qty - before, 0.0)
+            existing_opp.qty = 0.0
+            existing_opp.status = "EXITED"
+            existing_opp.exit_reason = existing_opp.exit_reason or "MANUAL"
+            existing_opp.updated_at = _now_utc()
+            db.add(existing_opp)
+            db.flush()
+        else:
+            existing_opp.qty = float(remaining_opp)
+            existing_opp.updated_at = _now_utc()
+            db.add(existing_opp)
+            db.flush()
+            # This fill only reduced the opposite position; do not create a new
+            # managed-risk entry for the other side.
+            add_qty = 0.0
+
+    if not create_entry or add_qty <= 0:
+        return None
+
+    if existing_same is not None:
+        prev_qty = float(existing_same.qty or 0.0)
+        next_qty = prev_qty + float(add_qty)
+        if next_qty > 0 and avg_price is not None and avg_price > 0:
+            existing_same.entry_price = (
+                (float(existing_same.entry_price) * prev_qty + float(avg_price) * float(add_qty))
+                / next_qty
+            )
+        existing_same.qty = float(next_qty)
+        existing_same.risk_spec_json = spec.to_json()
+        existing_same.updated_at = _now_utc()
+        db.add(existing_same)
+        db.flush()
+        return existing_same
 
     exec_target = (
         getattr(order, "execution_target", None) or "LIVE"
@@ -455,7 +687,7 @@ def ensure_managed_risk_for_executed_order(
         exchange=exchange,
         product=product,
         side=side,
-        qty=float(filled_qty or order.qty or 0.0),
+        qty=float(add_qty or order.qty or 0.0),
         execution_target=exec_target,
         risk_spec_json=spec.to_json(),
         entry_price=float(avg_price),
@@ -541,9 +773,15 @@ def _mark_manual_exit_if_position_closed(
         return False
     else:
         if (mrp.side or "").strip().upper() == "BUY":
-            closed = float(pos.qty or 0.0) <= 0.0
+            qty = float(pos.qty or 0.0)
+            closed = qty <= 0.0
+            if not closed:
+                mrp.qty = float(qty)
         else:
-            closed = float(pos.qty or 0.0) >= 0.0
+            qty = float(pos.qty or 0.0)
+            closed = qty >= 0.0
+            if not closed:
+                mrp.qty = float(abs(qty))
     if not closed:
         return False
     mrp.status = "EXITED"

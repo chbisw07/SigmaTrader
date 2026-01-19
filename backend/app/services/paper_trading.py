@@ -15,6 +15,7 @@ from app.services.managed_risk import (
     ensure_managed_risk_for_executed_order,
     mark_managed_risk_exit_executed,
 )
+from app.services.risk_policy_store import get_risk_policy
 from app.services.system_events import record_system_event
 
 
@@ -161,6 +162,7 @@ def poll_paper_orders(db: Session, settings: Settings) -> PaperFillResult:
         db.add(order)
         filled += 1
         try:
+            policy, _src = get_risk_policy(db, settings)
             avg_price = float(order.price or 0.0) if order.price is not None else None
             ensure_managed_risk_for_executed_order(
                 db,
@@ -168,6 +170,7 @@ def poll_paper_orders(db: Session, settings: Settings) -> PaperFillResult:
                 order=order,
                 filled_qty=float(order.qty or 0.0),
                 avg_price=avg_price,
+                policy=policy,
             )
         except Exception:
             pass
