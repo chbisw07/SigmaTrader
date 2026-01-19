@@ -14,6 +14,7 @@ from . import (
     instruments,
     market_calendar,
     market_data,
+    managed_risk,
     orders,
     paper,
     positions,
@@ -218,6 +219,13 @@ router.include_router(
     prefix="/api/risk-policy",
     dependencies=[Depends(require_admin)],
     tags=["risk-policy"],
+)
+
+router.include_router(
+    managed_risk.router,
+    prefix="/api/managed-risk",
+    dependencies=[Depends(require_admin)],
+    tags=["managed-risk"],
 )
 
 router.include_router(

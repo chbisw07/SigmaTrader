@@ -6,10 +6,12 @@ import Typography from '@mui/material/Typography'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { fetchOrdersHistory, type Order } from '../services/orders'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import { syncOrdersForBroker } from '../services/brokerRuntime'
+import { fetchManagedRiskPositions } from '../services/managedRisk'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 import {
@@ -26,6 +28,7 @@ export function OrdersPanel({
   active?: boolean
 }) {
   const { displayTimeZone } = useTimeSettings()
+  const navigate = useNavigate()
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -34,6 +37,7 @@ export function OrdersPanel({
   const [loadedOnce, setLoadedOnce] = useState(false)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
+  const [managedRiskCount, setManagedRiskCount] = useState<number>(0)
 
   const loadOrders = async () => {
     try {
@@ -45,6 +49,18 @@ export function OrdersPanel({
       setError(err instanceof Error ? err.message : 'Failed to load orders')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadManagedRiskCount = async () => {
+    try {
+      const data = await fetchManagedRiskPositions({
+        status: 'ACTIVE,EXITING,PAUSED',
+        broker_name: selectedBroker,
+      })
+      setManagedRiskCount(data.length)
+    } catch {
+      setManagedRiskCount(0)
     }
   }
 
@@ -64,11 +80,13 @@ export function OrdersPanel({
       }
     })()
     void loadOrders()
+    void loadManagedRiskCount()
   }, [active, loadedOnce, selectedBroker])
 
   useEffect(() => {
     if (!active || !loadedOnce) return
     void loadOrders()
+    void loadManagedRiskCount()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBroker])
 
@@ -85,6 +103,7 @@ export function OrdersPanel({
     } finally {
       setRefreshing(false)
       await loadOrders()
+      await loadManagedRiskCount()
     }
   }
 
@@ -252,6 +271,15 @@ export function OrdersPanel({
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          {managedRiskCount > 0 && (
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => navigate('/queue?tab=risk')}
+            >
+              Managed exits ({managedRiskCount})
+            </Button>
+          )}
           {brokers.length > 0 && (
             <TextField
               select

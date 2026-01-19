@@ -12,6 +12,7 @@ import MenuItem from '@mui/material/MenuItem'
 import Checkbox from '@mui/material/Checkbox'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   DataGrid,
   type GridColDef,
@@ -28,6 +29,7 @@ import {
   type ExecutionTarget,
 } from '../services/orders'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
+import { fetchManagedRiskPositions } from '../services/managedRisk'
 import {
   fetchBrokerCapabilities,
   fetchLtpForBroker,
@@ -46,6 +48,7 @@ export function WaitingQueuePanel({
   active?: boolean
 }) {
   const { displayTimeZone } = useTimeSettings()
+  const navigate = useNavigate()
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -81,6 +84,7 @@ export function WaitingQueuePanel({
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
   const [brokerCaps, setBrokerCaps] = useState<Record<string, BrokerCapabilities>>({})
+  const [managedRiskCount, setManagedRiskCount] = useState<number>(0)
 
   const getCaps = (brokerName?: string | null): BrokerCapabilities | null => {
     const name = (brokerName ?? selectedBroker ?? 'zerodha').toLowerCase()
@@ -108,6 +112,18 @@ export function WaitingQueuePanel({
     }
   }
 
+  const loadManagedRiskCount = async () => {
+    try {
+      const data = await fetchManagedRiskPositions({
+        status: 'ACTIVE,EXITING,PAUSED',
+        broker_name: selectedBroker,
+      })
+      setManagedRiskCount(data.length)
+    } catch {
+      setManagedRiskCount(0)
+    }
+  }
+
   useEffect(() => {
     if (!active) return
     if (loadedOnce) return
@@ -131,6 +147,7 @@ export function WaitingQueuePanel({
         // Ignore; the queue can still operate with defaults.
       } finally {
         void loadQueue()
+        void loadManagedRiskCount()
       }
     })()
   }, [active, loadedOnce, selectedBroker])
@@ -138,6 +155,7 @@ export function WaitingQueuePanel({
   useEffect(() => {
     if (!active || !loadedOnce) return
     void loadQueue()
+    void loadManagedRiskCount()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBroker])
 
@@ -145,6 +163,7 @@ export function WaitingQueuePanel({
     if (!active) return
     const id = window.setInterval(() => {
       void loadQueue({ silent: true })
+      void loadManagedRiskCount()
     }, 5000)
     return () => window.clearInterval(id)
   }, [active, selectedBroker])
@@ -684,6 +703,15 @@ export function WaitingQueuePanel({
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {managedRiskCount > 0 && (
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => navigate('/queue?tab=risk')}
+            >
+              Managed exits ({managedRiskCount})
+            </Button>
+          )}
           {brokers.length > 0 && (
             <TextField
               select

@@ -5,11 +5,12 @@ import Typography from '@mui/material/Typography'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { ManagedRiskPanel } from './ManagedRiskPage'
 import { OrdersPanel } from './OrdersPage'
 import { WaitingQueuePanel } from './QueuePage'
 import { TvAlertsPanel } from './TvAlertsPanel'
 
-type QueueTab = 'tv_alerts' | 'waiting' | 'orders'
+type QueueTab = 'tv_alerts' | 'waiting' | 'orders' | 'risk'
 
 function parseTab(value: string | null | undefined): QueueTab | null {
   const v = (value ?? '').trim().toLowerCase()
@@ -18,6 +19,7 @@ function parseTab(value: string | null | undefined): QueueTab | null {
   }
   if (v === 'waiting' || v === 'queue') return 'waiting'
   if (v === 'orders') return 'orders'
+  if (v === 'risk' || v === 'managed' || v === 'managed-risk') return 'risk'
   return null
 }
 
@@ -62,6 +64,7 @@ export function QueueManagementPage() {
         <Tab value="tv_alerts" label="TV Alerts" />
         <Tab value="waiting" label="Waiting Queue" />
         <Tab value="orders" label="Orders" />
+        <Tab value="risk" label="Managed exits" />
       </Tabs>
 
       <Box sx={{ display: tab === 'tv_alerts' ? 'block' : 'none' }}>
@@ -72,6 +75,9 @@ export function QueueManagementPage() {
       </Box>
       <Box sx={{ display: tab === 'orders' ? 'block' : 'none' }}>
         <OrdersPanel embedded active={tab === 'orders'} />
+      </Box>
+      <Box sx={{ display: tab === 'risk' ? 'block' : 'none' }}>
+        <ManagedRiskPanel embedded active={tab === 'risk'} />
       </Box>
     </Box>
   )

@@ -756,6 +756,22 @@ def execute_order_internal(
     if broker_account_id:
         order.broker_account_id = broker_account_id
 
+    def _sync_for_managed_risk() -> None:
+        if not getattr(order, "risk_spec_json", None):
+            return
+        try:
+            if broker_name == "zerodha":
+                from app.services.order_sync import sync_order_statuses
+
+                sync_order_statuses(db, client, user_id=order.user_id)  # type: ignore[arg-type]
+            elif broker_name == "angelone":
+                from app.services.order_sync_angelone import sync_order_statuses_angelone
+
+                sync_order_statuses_angelone(db, client, user_id=order.user_id)  # type: ignore[arg-type]
+            db.refresh(order)
+        except Exception:
+            return
+
     exchange_u = (exchange or "NSE").strip().upper()
     broker_tradingsymbol = tradingsymbol
     angelone_token: str | None = None
@@ -1129,6 +1145,7 @@ def execute_order_internal(
                 "qty": order.qty,
             },
         )
+        _sync_for_managed_risk()
         return order
 
     def _place(
@@ -1268,6 +1285,7 @@ def execute_order_internal(
             "qty": order.qty,
         },
     )
+    _sync_for_managed_risk()
     return order
 
 

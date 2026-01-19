@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -146,4 +147,46 @@ class RiskSpec(BaseModel):
             return None
 
 
-__all__ = ["DistanceMode", "ExitOrderType", "DistanceSpec", "RiskSpec"]
+class ManagedRiskPositionRead(BaseModel):
+    id: int
+    user_id: int | None
+    entry_order_id: int
+    exit_order_id: int | None
+    exit_order_status: str | None
+    broker_name: str
+    symbol: str
+    exchange: str
+    product: str
+    side: str
+    qty: float
+    execution_target: str
+    entry_price: float
+    stop_distance: float | None
+    trail_distance: float | None
+    activation_distance: float | None
+    current_stop: float | None
+    best_favorable_price: float
+    trail_price: float | None
+    is_trailing_active: bool
+    last_ltp: float | None
+    status: str
+    exit_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+    risk_spec: RiskSpec | None
+
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:  # pragma: no cover - Pydantic v1
+
+        class Config:
+            orm_mode = True
+
+
+__all__ = [
+    "DistanceMode",
+    "ExitOrderType",
+    "DistanceSpec",
+    "RiskSpec",
+    "ManagedRiskPositionRead",
+]
