@@ -37,7 +37,11 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { isGroupsRedesignEnabled } from '../config/features'
 import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
+import { SymbolQuickAdd } from '../components/groups/SymbolQuickAdd'
+import { WatchlistMembersGrid } from '../components/groups/WatchlistMembersGrid'
+import { useMarketQuotes } from '../hooks/useMarketQuotes'
 import { createManualOrder } from '../services/orders'
 import { fetchHoldings, fetchDailyPositions, syncPositions, type Holding } from '../services/positions'
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
@@ -46,6 +50,7 @@ import { formatInDisplayTimeZone } from '../utils/datetime'
 import {
   addGroupMember,
   bulkAddGroupMembers,
+  bulkAddWatchlistMembersSafe,
   createGroup,
   deleteGroup,
   deleteGroupMember,
@@ -60,6 +65,7 @@ import {
   type GroupDetail,
   type GroupKind,
   type GroupMember,
+  type WatchlistBulkAddSafeResponse,
 } from '../services/groups'
 
 type GroupFormState = {
@@ -219,6 +225,29 @@ export function GroupsPage() {
   const [symbolOptions, setSymbolOptions] = useState<MarketSymbol[]>([])
   const [symbolOptionsLoading, setSymbolOptionsLoading] = useState(false)
   const [symbolOptionsError, setSymbolOptionsError] = useState<string | null>(null)
+
+  const groupsRedesignEnabled = isGroupsRedesignEnabled()
+  const watchlistRedesignEnabled =
+    groupsRedesignEnabled && selectedGroup?.kind === 'WATCHLIST'
+  const [watchlistDefaultExchange, setWatchlistDefaultExchange] =
+    useState<'NSE' | 'BSE'>('NSE')
+  const [watchlistAddBusy, setWatchlistAddBusy] = useState(false)
+  const [watchlistAddResult, setWatchlistAddResult] =
+    useState<WatchlistBulkAddSafeResponse | null>(null)
+
+  const watchlistQuoteItems = useMemo(() => {
+    if (!watchlistRedesignEnabled) return []
+    return (selectedGroup?.members ?? []).map((m) => ({
+      symbol: m.symbol,
+      exchange: m.exchange ?? 'NSE',
+    }))
+  }, [selectedGroup?.members, watchlistRedesignEnabled])
+
+  const {
+    quotesByKey: watchlistQuotesByKey,
+    error: watchlistQuotesError,
+    loading: watchlistQuotesLoading,
+  } = useMarketQuotes(watchlistQuoteItems, { pollMs: 5000 })
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkState, setBulkState] = useState<BulkAddState>(DEFAULT_BULK_ADD)
@@ -890,6 +919,30 @@ export function GroupsPage() {
       await reloadGroups(nextSelected)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete group')
+    }
+  }
+
+  const handleWatchlistQuickAdd = async (
+    items: Array<{ exchange: string; symbol: string; raw: string }>,
+  ) => {
+    if (!selectedGroupId) return
+    if (!items.length) return
+    try {
+      setError(null)
+      setWatchlistAddBusy(true)
+      setWatchlistAddResult(null)
+      const res = await bulkAddWatchlistMembersSafe(selectedGroupId, {
+        default_exchange: watchlistDefaultExchange,
+        items: items.map((i) => i.raw || `${i.exchange}:${i.symbol}`),
+      })
+      setWatchlistAddResult(res)
+      const refreshed = await fetchGroup(selectedGroupId)
+      setSelectedGroup(refreshed)
+      await reloadGroups(selectedGroupId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add symbols')
+    } finally {
+      setWatchlistAddBusy(false)
     }
   }
 
@@ -1774,116 +1827,159 @@ export function GroupsPage() {
 
             <Divider sx={{ my: 2 }} />
 
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
-              <Autocomplete<MarketSymbol, false, false, true>
-                freeSolo
-                clearOnBlur={false}
-                options={symbolOptions}
-                loading={symbolOptionsLoading}
-                value={
-                  symbolOptions.find(
-                    (o) =>
-                      o.symbol.toUpperCase() === newMemberSymbol.trim().toUpperCase()
-                      && o.exchange.toUpperCase() === newMemberExchange.trim().toUpperCase(),
-                  ) ?? null
-                }
-                onChange={(_e, value) => {
-                  if (typeof value === 'string') {
-                    setNewMemberSymbol(value.toUpperCase())
-                    return
-                  }
-                  if (value?.symbol) setNewMemberSymbol(value.symbol.toUpperCase())
-                }}
-                inputValue={newMemberSymbol}
-                onInputChange={(_e, value) => setNewMemberSymbol(value)}
-                getOptionLabel={(o) => (typeof o === 'string' ? o : o.symbol)}
-                isOptionEqualToValue={(a, b) =>
-                  typeof b === 'string'
-                    ? a.symbol === b
-                    : a.symbol === b.symbol && a.exchange === b.exchange
-                }
-                renderOption={(props, option) => (
-                  <li {...props} key={`${option.exchange}:${option.symbol}`}>
-                    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-                      <Typography variant="body2">
-                        {option.symbol} <Typography component="span" variant="caption" color="text.secondary">({option.exchange})</Typography>
-                      </Typography>
-                      {option.name ? (
-                        <Typography variant="caption" color="text.secondary">
-                          {option.name}
-                        </Typography>
-                      ) : null}
-                    </Box>
-                  </li>
+            {watchlistRedesignEnabled ? (
+              <Stack spacing={1.5}>
+                <SymbolQuickAdd
+                  disabled={!selectedGroupId || watchlistAddBusy}
+                  defaultExchange={watchlistDefaultExchange}
+                  onDefaultExchangeChange={setWatchlistDefaultExchange}
+                  onAddSymbols={(items) => void handleWatchlistQuickAdd(items)}
+                />
+                {watchlistQuotesError && (
+                  <Alert severity="warning">{watchlistQuotesError}</Alert>
                 )}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Symbol"
-                    size="small"
-                    sx={{ width: { xs: '100%', md: 220 } }}
-                    helperText={symbolOptionsError ?? undefined}
-                    error={!!symbolOptionsError}
+                {watchlistAddResult?.skipped?.length ? (
+                  <Alert severity="info">
+                    Added {watchlistAddResult.added}. Skipped{' '}
+                    {watchlistAddResult.skipped.length} (duplicates/invalid).
+                  </Alert>
+                ) : null}
+                <Box sx={{ mt: 1.5, flexGrow: 1 }}>
+                  <WatchlistMembersGrid
+                    members={selectedGroup?.members ?? []}
+                    quotesByKey={watchlistQuotesByKey}
+                    onRemove={(m) => void handleDeleteMember(m)}
+                    loading={watchlistQuotesLoading}
                   />
-                )}
-              />
-              <TextField
-                label="Exchange"
-                size="small"
-                select
-                value={newMemberExchange}
-                onChange={(e) => setNewMemberExchange(e.target.value)}
-                sx={{ width: { xs: '100%', md: 120 } }}
-              >
-                <MenuItem value="NSE">NSE</MenuItem>
-                <MenuItem value="BSE">BSE</MenuItem>
-              </TextField>
-              <TextField
-                label="Notes (optional)"
-                size="small"
-                value={newMemberNotes}
-                onChange={(e) => setNewMemberNotes(e.target.value)}
-                sx={{ flexGrow: 1, width: { xs: '100%', md: 'auto' } }}
-              />
-              <Button
-                size="small"
-                variant="contained"
-                startIcon={<AddIcon />}
-                disabled={!selectedGroupId || !newMemberSymbol.trim()}
-                onClick={() => void handleAddMember()}
-              >
-                Add
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                disabled={!selectedGroupId}
-                onClick={openBulkAdd}
-              >
-                Bulk add
-              </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                disabled={!selectedGroupId || !selectedGroup?.members?.length}
-                onClick={() => void handleEqualizeWeights()}
-              >
-                Equal weights
-              </Button>
-            </Stack>
+                </Box>
+              </Stack>
+            ) : (
+              <>
+                <Stack
+                  direction={{ xs: 'column', md: 'row' }}
+                  spacing={1}
+                  alignItems="center"
+                >
+                  <Autocomplete<MarketSymbol, false, false, true>
+                    freeSolo
+                    clearOnBlur={false}
+                    options={symbolOptions}
+                    loading={symbolOptionsLoading}
+                    value={
+                      symbolOptions.find(
+                        (o) =>
+                          o.symbol.toUpperCase()
+                            === newMemberSymbol.trim().toUpperCase()
+                          && o.exchange.toUpperCase()
+                            === newMemberExchange.trim().toUpperCase(),
+                      ) ?? null
+                    }
+                    onChange={(_e, value) => {
+                      if (typeof value === 'string') {
+                        setNewMemberSymbol(value.toUpperCase())
+                        return
+                      }
+                      if (value?.symbol) setNewMemberSymbol(value.symbol.toUpperCase())
+                    }}
+                    inputValue={newMemberSymbol}
+                    onInputChange={(_e, value) => setNewMemberSymbol(value)}
+                    getOptionLabel={(o) => (typeof o === 'string' ? o : o.symbol)}
+                    isOptionEqualToValue={(a, b) =>
+                      typeof b === 'string'
+                        ? a.symbol === b
+                        : a.symbol === b.symbol && a.exchange === b.exchange
+                    }
+                    renderOption={(props, option) => (
+                      <li {...props} key={`${option.exchange}:${option.symbol}`}>
+                        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                          <Typography variant="body2">
+                            {option.symbol}{' '}
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              ({option.exchange})
+                            </Typography>
+                          </Typography>
+                          {option.name ? (
+                            <Typography variant="caption" color="text.secondary">
+                              {option.name}
+                            </Typography>
+                          ) : null}
+                        </Box>
+                      </li>
+                    )}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Symbol"
+                        size="small"
+                        sx={{ width: { xs: '100%', md: 220 } }}
+                        helperText={symbolOptionsError ?? undefined}
+                        error={!!symbolOptionsError}
+                      />
+                    )}
+                  />
+                  <TextField
+                    label="Exchange"
+                    size="small"
+                    select
+                    value={newMemberExchange}
+                    onChange={(e) => setNewMemberExchange(e.target.value)}
+                    sx={{ width: { xs: '100%', md: 120 } }}
+                  >
+                    <MenuItem value="NSE">NSE</MenuItem>
+                    <MenuItem value="BSE">BSE</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Notes (optional)"
+                    size="small"
+                    value={newMemberNotes}
+                    onChange={(e) => setNewMemberNotes(e.target.value)}
+                    sx={{ flexGrow: 1, width: { xs: '100%', md: 'auto' } }}
+                  />
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<AddIcon />}
+                    disabled={!selectedGroupId || !newMemberSymbol.trim()}
+                    onClick={() => void handleAddMember()}
+                  >
+                    Add
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={!selectedGroupId}
+                    onClick={openBulkAdd}
+                  >
+                    Bulk add
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={!selectedGroupId || !selectedGroup?.members?.length}
+                    onClick={() => void handleEqualizeWeights()}
+                  >
+                    Equal weights
+                  </Button>
+                </Stack>
 
-            <Box sx={{ mt: 1.5, flexGrow: 1 }}>
-              <DataGrid
-                rows={selectedGroup?.members ?? []}
-                columns={membersColumns}
-                getRowId={(row) => row.id}
-                disableRowSelectionOnClick
-                initialState={{
-                  pagination: { paginationModel: { pageSize: 10, page: 0 } },
-                }}
-                pageSizeOptions={[10, 25, 50]}
-              />
-            </Box>
+                <Box sx={{ mt: 1.5, flexGrow: 1 }}>
+                  <DataGrid
+                    rows={selectedGroup?.members ?? []}
+                    columns={membersColumns}
+                    getRowId={(row) => row.id}
+                    disableRowSelectionOnClick
+                    initialState={{
+                      pagination: { paginationModel: { pageSize: 10, page: 0 } },
+                    }}
+                    pageSizeOptions={[10, 25, 50]}
+                  />
+                </Box>
+              </>
+            )}
           </Paper>
         </Box>
       </Box>

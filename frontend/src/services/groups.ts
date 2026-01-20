@@ -370,6 +370,34 @@ export async function bulkAddGroupMembers(
   return (await res.json()) as GroupMember[]
 }
 
+export type WatchlistBulkAddSafeResponse = {
+  added: number
+  skipped: Array<{
+    raw: string
+    normalized_symbol?: string | null
+    normalized_exchange?: string | null
+    reason: string
+  }>
+}
+
+export async function bulkAddWatchlistMembersSafe(
+  groupId: number,
+  payload: { items: string[]; default_exchange?: string },
+): Promise<WatchlistBulkAddSafeResponse> {
+  const res = await fetch(`/api/groups/${groupId}/members/bulk-add-safe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await readApiError(res)
+    throw new Error(
+      `Failed to bulk add watchlist members (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as WatchlistBulkAddSafeResponse
+}
+
 export async function updateGroupMember(
   groupId: number,
   memberId: number,

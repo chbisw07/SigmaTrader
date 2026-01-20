@@ -464,6 +464,186 @@ def bulk_add_group_members(
     return created
 
 
+class WatchlistBulkAddSafeRequest(BaseModel):
+    items: list[str] = []
+    default_exchange: str = "NSE"
+
+
+class WatchlistBulkAddSafeSkipped(BaseModel):
+    raw: str
+    normalized_symbol: str | None = None
+    normalized_exchange: str | None = None
+    reason: str
+
+
+class WatchlistBulkAddSafeResponse(BaseModel):
+    added: int
+    skipped: list[WatchlistBulkAddSafeSkipped] = []
+
+
+def _parse_watchlist_raw(raw: str, *, default_exchange: str) -> tuple[str | None, str | None, str | None]:
+    text = (raw or "").strip().upper()
+    if not text:
+        return None, None, "empty"
+    exch = (default_exchange or "NSE").strip().upper() or "NSE"
+    sym = text
+    if ":" in text:
+        prefix, rest = text.split(":", 1)
+        if prefix in {"NSE", "BSE"} and rest.strip():
+            exch = prefix
+            sym = rest.strip()
+        else:
+            return None, None, "invalid_prefix"
+    if exch not in {"NSE", "BSE"}:
+        return None, None, "invalid_exchange"
+    if not sym:
+        return None, None, "empty_symbol"
+    return exch, sym, None
+
+
+@router.post(
+    "/{group_id}/members/bulk-add-safe",
+    response_model=WatchlistBulkAddSafeResponse,
+)
+def watchlist_bulk_add_safe(
+    group_id: int,
+    payload: WatchlistBulkAddSafeRequest,
+    db: Session = Depends(get_db),
+) -> WatchlistBulkAddSafeResponse:
+    group = _get_group_or_404(db, group_id)
+    if group.kind != "WATCHLIST":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="bulk-add-safe is supported only for WATCHLIST groups.",
+        )
+
+    default_exchange = (payload.default_exchange or "NSE").strip().upper() or "NSE"
+    raw_items = payload.items or []
+    if len(raw_items) > 500:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many symbols (max 500).",
+        )
+
+    # Parse + dedupe input.
+    parsed: list[tuple[str, str, str]] = []  # raw, exch, sym
+    skipped: list[WatchlistBulkAddSafeSkipped] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in raw_items:
+        exch, sym, reason = _parse_watchlist_raw(str(raw or ""), default_exchange=default_exchange)
+        if reason is not None or exch is None or sym is None:
+            skipped.append(
+                WatchlistBulkAddSafeSkipped(
+                    raw=str(raw or ""),
+                    normalized_symbol=None,
+                    normalized_exchange=None,
+                    reason=reason or "invalid",
+                )
+            )
+            continue
+        key = (exch, sym)
+        if key in seen:
+            skipped.append(
+                WatchlistBulkAddSafeSkipped(
+                    raw=str(raw or ""),
+                    normalized_symbol=sym,
+                    normalized_exchange=exch,
+                    reason="duplicate_in_input",
+                )
+            )
+            continue
+        seen.add(key)
+        parsed.append((str(raw or ""), exch, sym))
+
+    if not parsed:
+        return WatchlistBulkAddSafeResponse(added=0, skipped=skipped)
+
+    # Validate against active listings.
+    from app.models import Listing
+    from sqlalchemy import tuple_
+
+    pairs = sorted({(exch, sym) for _raw, exch, sym in parsed})
+    rows = (
+        db.query(Listing)
+        .filter(
+            Listing.active.is_(True),
+            tuple_(Listing.exchange, Listing.symbol).in_(pairs),
+        )
+        .all()
+    )
+    valid_set = {(r.exchange.upper(), r.symbol.upper()) for r in rows}
+
+    # Skip anything already present in this group.
+    existing_rows = (
+        db.query(GroupMember.symbol, GroupMember.exchange)
+        .filter(GroupMember.group_id == group.id)
+        .all()
+    )
+    existing: set[tuple[str, str]] = set()
+    for sym, exch in existing_rows:
+        s = (sym or "").strip().upper()
+        e = (exch or "NSE").strip().upper() or "NSE"
+        if s:
+            existing.add((e, s))
+
+    to_create: list[GroupMember] = []
+    for raw, exch, sym in parsed:
+        if (exch, sym) not in valid_set:
+            skipped.append(
+                WatchlistBulkAddSafeSkipped(
+                    raw=raw,
+                    normalized_symbol=sym,
+                    normalized_exchange=exch,
+                    reason="not_found",
+                )
+            )
+            continue
+        if (exch, sym) in existing:
+            skipped.append(
+                WatchlistBulkAddSafeSkipped(
+                    raw=raw,
+                    normalized_symbol=sym,
+                    normalized_exchange=exch,
+                    reason="already_in_group",
+                )
+            )
+            continue
+        to_create.append(
+            GroupMember(
+                group_id=group.id,
+                symbol=sym,
+                exchange=exch,
+                target_weight=None,
+                reference_qty=None,
+                reference_price=None,
+                notes=None,
+            )
+        )
+
+    if not to_create:
+        return WatchlistBulkAddSafeResponse(added=0, skipped=skipped)
+
+    db.add_all(to_create)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Best-effort: if a concurrent request raced, treat as added=0 and
+        # surface a generic skip. We avoid failing the entire paste-add UX.
+        db.rollback()
+        for m in to_create:
+            skipped.append(
+                WatchlistBulkAddSafeSkipped(
+                    raw=f"{m.exchange}:{m.symbol}",
+                    normalized_symbol=m.symbol,
+                    normalized_exchange=m.exchange,
+                    reason="conflict",
+                )
+            )
+        return WatchlistBulkAddSafeResponse(added=0, skipped=skipped)
+
+    return WatchlistBulkAddSafeResponse(added=len(to_create), skipped=skipped)
+
+
 @router.patch("/{group_id}/members/{member_id}", response_model=GroupMemberRead)
 def update_group_member(
     group_id: int,

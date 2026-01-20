@@ -74,6 +74,7 @@ export function ManagedRiskPanel({
   embedded?: boolean
   active?: boolean
 }) {
+  void embedded
   const { displayTimeZone } = useTimeSettings()
   const [positions, setPositions] = useState<ManagedRiskPosition[]>([])
   const [loading, setLoading] = useState(true)
