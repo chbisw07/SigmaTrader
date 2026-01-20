@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -25,6 +25,17 @@ from app.schemas.orders import (
 )
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
+from app.services.execution_policy_state import (
+    apply_post_trade_updates_on_execution,
+    apply_pre_trade_checks,
+    classify_position_delta,
+    get_or_create_execution_state,
+    interval_minutes_for_order,
+    log_block,
+    resolve_interval_for_order,
+    scope_key_for_order,
+    DEFAULT_INFLIGHT_TTL_SECONDS,
+)
 from app.services.instruments_sync import sync_smartapi_instrument_master
 from app.services.paper_trading import submit_paper_order
 from app.services.price_ticks import round_price_to_tick
@@ -601,6 +612,11 @@ def execute_order_internal(
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
+    now_utc = _now_utc()
+    execution_policy_key = None
+    execution_policy_interval_min: int | None = None
+    execution_policy_apply = False
+
     allowed_status = {"WAITING"}
     if order.synthetic_gtt:
         allowed_status = {"WAITING", "SENDING"}
@@ -615,6 +631,16 @@ def execute_order_internal(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Order has invalid quantity.",
         )
+
+    # Trade-frequency/loss-control execution policy:
+    # - Enforced only when risk policy enforcement is enabled.
+    # - Enforced at execute time (single choke-point).
+    # - Never blocks structural exits (exposure-reducing orders).
+    # - Skips conditional/GTT arming (no immediate broker execution).
+    is_synthetic_gtt_arm = bool(
+        order.gtt and order.synthetic_gtt and order.status == "WAITING"
+    )
+    is_broker_gtt = bool(order.gtt and not order.synthetic_gtt)
 
     # Apply risk checks before contacting the broker (covers manual executes,
     # webhook AUTO, and other internal flows). The policy is configured in
@@ -665,6 +691,190 @@ def execute_order_internal(
         db.add(order)
         db.commit()
         db.refresh(order)
+
+    execution_policy_apply = bool(getattr(policy, "enabled", False)) and not bool(
+        is_synthetic_gtt_arm or is_broker_gtt
+    )
+    if execution_policy_apply:
+        key = scope_key_for_order(order)
+        interval_hint, interval_hint_source = resolve_interval_for_order(order, None)
+        state = get_or_create_execution_state(
+            db,
+            key=key,
+            now_utc=now_utc,
+            interval_minutes=interval_hint,
+            interval_source=interval_hint_source,
+            lock=True,
+        )
+        interval_min, interval_source = resolve_interval_for_order(order, state)
+
+        # Keep interval stable per key but adopt a better signal when available.
+        if interval_min and int(state.interval_minutes or 0) != int(interval_min):
+            state.interval_minutes = int(interval_min)
+        if interval_source and str(getattr(state, "interval_source", "") or "") != str(
+            interval_source
+        ):
+            state.interval_source = str(interval_source)
+        if (
+            interval_source == "default_fallback"
+            and not bool(getattr(state, "default_interval_logged", False))
+        ):
+            state.default_interval_logged = True
+            record_system_event(
+                db,
+                level="INFO",
+                category="risk",
+                message="Execution policy interval defaulted to fallback",
+                correlation_id=correlation_id,
+                details={
+                    "strategy_ref": key.strategy_ref,
+                    "symbol": key.symbol,
+                    "product": key.product,
+                    "interval_minutes": int(interval_min),
+                    "interval_source": interval_source,
+                },
+            )
+
+        # Clear stale inflight reservations (defensive for crashes/timeouts).
+        try:
+            inflight_expires = getattr(state, "inflight_expires_at", None)
+            if inflight_expires is not None and now_utc >= inflight_expires:
+                state.inflight_order_id = None
+                state.inflight_started_at = None
+                state.inflight_expires_at = None
+        except Exception:
+            pass
+
+        _prev_abs, _new_abs, _is_entry, is_exit_reduce = classify_position_delta(
+            state, side=str(order.side), qty=float(order.qty or 0.0)
+        )
+        # Structural exit detection is authoritative; is_exit acts as a safety
+        # override when state is incomplete.
+        treat_as_exit = bool(is_exit_reduce) or bool(getattr(order, "is_exit", False))
+
+        if not treat_as_exit:
+            inflight_order_id = getattr(state, "inflight_order_id", None)
+            if inflight_order_id is not None and int(inflight_order_id) != int(order.id):
+                reason_code = "RISK_POLICY_CONCURRENT_EXECUTION"
+                message = "Another order execution is in progress for this scope key."
+                order.status = "REJECTED_RISK"
+                order.error_message = f"{reason_code}: {message}"
+                db.add(order)
+                db.add(state)
+                db.commit()
+                db.refresh(order)
+                log_block(
+                    reason_code=reason_code,
+                    message=message,
+                    key=key,
+                    policy=policy,
+                    extra={"order_id": int(order.id)},
+                )
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="risk",
+                    message="Order blocked by risk policy (concurrent execution)",
+                    correlation_id=correlation_id,
+                    details={
+                        "order_id": int(order.id),
+                        "reason_code": reason_code,
+                        "message": message,
+                        "strategy_ref": key.strategy_ref,
+                        "symbol": key.symbol,
+                        "product": key.product,
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "status": "blocked",
+                        "reason_code": reason_code,
+                        "message": message,
+                    },
+                )
+
+            allowed, reason_code, message = apply_pre_trade_checks(
+                policy,
+                state,
+                now_utc=now_utc,
+            )
+            if not allowed and reason_code and message:
+                order.status = "REJECTED_RISK"
+                order.error_message = f"{reason_code}: {message}"
+                db.add(order)
+                db.add(state)
+                db.commit()
+                db.refresh(order)
+                log_block(
+                    reason_code=reason_code,
+                    message=message,
+                    key=key,
+                    policy=policy,
+                    extra={"order_id": int(order.id)},
+                )
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="risk",
+                    message="Order blocked by risk policy (execution state)",
+                    correlation_id=correlation_id,
+                    details={
+                        "order_id": int(order.id),
+                        "reason_code": reason_code,
+                        "message": message,
+                        "strategy_ref": key.strategy_ref,
+                        "symbol": key.symbol,
+                        "product": key.product,
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "status": "blocked",
+                        "reason_code": reason_code,
+                        "message": message,
+                    },
+                )
+
+            # Reserve a short-lived inflight marker to make enforcement atomic
+            # across concurrent executions for the same scope key.
+            state.inflight_order_id = int(order.id)
+            state.inflight_started_at = now_utc
+            state.inflight_expires_at = now_utc + timedelta(
+                seconds=int(DEFAULT_INFLIGHT_TTL_SECONDS)
+            )
+
+        db.add(state)
+        db.commit()
+        execution_policy_key = key
+        execution_policy_interval_min = int(interval_min)
+
+    def _release_execution_policy_inflight() -> None:
+        if not execution_policy_apply or execution_policy_key is None:
+            return
+        try:
+            interval_min = int(execution_policy_interval_min or 5)
+            state = get_or_create_execution_state(
+                db,
+                key=execution_policy_key,
+                now_utc=now_utc,
+                interval_minutes=interval_min,
+                lock=True,
+            )
+            if getattr(state, "inflight_order_id", None) is not None and int(
+                state.inflight_order_id  # type: ignore[arg-type]
+            ) == int(order.id):
+                state.inflight_order_id = None
+                state.inflight_started_at = None
+                state.inflight_expires_at = None
+                db.add(state)
+                db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     # Enforce tick-size rounding on all persisted orders (defensive for legacy
     # rows created before rounding was introduced).
@@ -724,16 +934,48 @@ def execute_order_internal(
                     "qty": order.qty,
                 },
             )
+            _release_execution_policy_inflight()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Market is closed; paper order rejected.",
             )
-        return submit_paper_order(
+        order = submit_paper_order(
             db,
             settings,
             order,
             correlation_id=correlation_id,
         )
+        if execution_policy_apply and execution_policy_key is not None:
+            key = execution_policy_key
+            interval_min = int(execution_policy_interval_min or interval_minutes_for_order(order, None))
+            state = get_or_create_execution_state(
+                db,
+                key=key,
+                now_utc=now_utc,
+                interval_minutes=interval_min,
+                lock=True,
+            )
+            interval_eff, interval_src = resolve_interval_for_order(order, state)
+            if interval_eff and int(state.interval_minutes or 0) != int(interval_eff):
+                state.interval_minutes = int(interval_eff)
+            if interval_src and str(getattr(state, "interval_source", "") or "") != str(interval_src):
+                state.interval_source = str(interval_src)
+            price_for_pnl = risk.effective_price or (float(order.price) if order.price else None)
+            apply_post_trade_updates_on_execution(
+                policy,
+                state,
+                now_utc=now_utc,
+                side=str(order.side),
+                qty=float(order.qty or 0.0),
+                exec_price=price_for_pnl,
+            )
+            if getattr(state, "inflight_order_id", None) is not None and int(state.inflight_order_id) == int(order.id):  # type: ignore[arg-type]
+                state.inflight_order_id = None
+                state.inflight_started_at = None
+                state.inflight_expires_at = None
+            db.add(state)
+            db.commit()
+        return order
 
     symbol = order.symbol
     exchange = order.exchange or "NSE"
@@ -1119,6 +1361,7 @@ def execute_order_internal(
                     "error": message,
                 },
             )
+            _release_execution_policy_inflight()
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"AngelOne order placement failed: {message}",
@@ -1145,6 +1388,36 @@ def execute_order_internal(
                 "qty": order.qty,
             },
         )
+        if execution_policy_apply and execution_policy_key is not None:
+            key = execution_policy_key
+            interval_min = int(execution_policy_interval_min or interval_minutes_for_order(order, None))
+            state = get_or_create_execution_state(
+                db,
+                key=key,
+                now_utc=now_utc,
+                interval_minutes=interval_min,
+                lock=True,
+            )
+            interval_eff, interval_src = resolve_interval_for_order(order, state)
+            if interval_eff and int(state.interval_minutes or 0) != int(interval_eff):
+                state.interval_minutes = int(interval_eff)
+            if interval_src and str(getattr(state, "interval_source", "") or "") != str(interval_src):
+                state.interval_source = str(interval_src)
+            price_for_pnl = risk.effective_price or (float(order.price) if order.price else None)
+            apply_post_trade_updates_on_execution(
+                policy,
+                state,
+                now_utc=now_utc,
+                side=str(order.side),
+                qty=float(order.qty or 0.0),
+                exec_price=price_for_pnl,
+            )
+            if getattr(state, "inflight_order_id", None) is not None and int(state.inflight_order_id) == int(order.id):  # type: ignore[arg-type]
+                state.inflight_order_id = None
+                state.inflight_started_at = None
+                state.inflight_expires_at = None
+            db.add(state)
+            db.commit()
         _sync_for_managed_risk()
         return order
 
@@ -1226,6 +1499,7 @@ def execute_order_internal(
                         }
                     },
                 )
+                _release_execution_policy_inflight()
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Zerodha AMO order placement failed: {exc_amo}",
@@ -1246,6 +1520,7 @@ def execute_order_internal(
                     }
                 },
             )
+            _release_execution_policy_inflight()
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Zerodha order placement failed: {message}",
@@ -1257,6 +1532,7 @@ def execute_order_internal(
         db.add(order)
         db.commit()
         db.refresh(order)
+        _release_execution_policy_inflight()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Zerodha order placement failed.",
@@ -1285,6 +1561,36 @@ def execute_order_internal(
             "qty": order.qty,
         },
     )
+    if execution_policy_apply and execution_policy_key is not None:
+        key = execution_policy_key
+        interval_min = int(execution_policy_interval_min or interval_minutes_for_order(order, None))
+        state = get_or_create_execution_state(
+            db,
+            key=key,
+            now_utc=now_utc,
+            interval_minutes=interval_min,
+            lock=True,
+        )
+        interval_eff, interval_src = resolve_interval_for_order(order, state)
+        if interval_eff and int(state.interval_minutes or 0) != int(interval_eff):
+            state.interval_minutes = int(interval_eff)
+        if interval_src and str(getattr(state, "interval_source", "") or "") != str(interval_src):
+            state.interval_source = str(interval_src)
+        price_for_pnl = risk.effective_price or (float(order.price) if order.price else None)
+        apply_post_trade_updates_on_execution(
+            policy,
+            state,
+            now_utc=now_utc,
+            side=str(order.side),
+            qty=float(order.qty or 0.0),
+            exec_price=price_for_pnl,
+        )
+        if getattr(state, "inflight_order_id", None) is not None and int(state.inflight_order_id) == int(order.id):  # type: ignore[arg-type]
+            state.inflight_order_id = None
+            state.inflight_started_at = None
+            state.inflight_expires_at = None
+        db.add(state)
+        db.commit()
     _sync_for_managed_risk()
     return order
 

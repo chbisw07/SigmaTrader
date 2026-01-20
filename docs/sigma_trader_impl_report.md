@@ -2156,3 +2156,20 @@ Tasks: `S16_G04_TB001`, `S16_G04_TB002`
           - Continues to submit the order to the paper engine via `submit_paper_order`.
 
 With S16/G04, paper trading now respects Indian market hours: new PAPER orders (manual or AUTO) are rejected when the market is closed, and the paper fill engine only considers simulated orders during trading sessions. This keeps simulated behaviour closer to how Zerodha handles regular orders, while still allowing off-hours GTT creation and live-mode behaviour to rely on Zerodha’s own market-closed errors.
+
+
+## Execution-layer trade frequency and loss controls
+
+- Enforced at the single execution choke-point: `backend/app/api/orders.py::execute_order_internal`.
+- State persistence: `execution_policy_state` table (migrations `backend/alembic/versions/0054_add_execution_policy_state.py` and `backend/alembic/versions/0055_refine_execution_policy_state_semantics.py`).
+- Scope key: `(st_user_id, strategy_ref, symbol, product)` where:
+  - `strategy_ref` is one of: `deployment:<id>` | `strategy:<id>` | `alert:<id>` | `manual`
+  - `symbol` is stored as canonical `EXCHANGE:SYMBOL` (uppercased).
+- Bar derivation: bars are time-derived from `interval_minutes`, resolved per execution as:
+  - TradingView payload `interval` → `interval_source=tv_payload`
+  - Alert rule `timeframe` → `interval_source=alert_rule`
+  - Persisted state value → `interval_source=persisted`
+  - Default fallback (5m) → `interval_source=default_fallback` (logs a one-time INFO `SystemEvent` per scope key)
+- Trade counting: `trades_today` increments on entry-only executions that open or increase net exposure (`abs(new_position_qty) > abs(previous_position_qty)`).
+- Exit detection: structural (exposure-reducing orders where `abs(new_position_qty) < abs(previous_position_qty)`), with `Order.is_exit=true` as a safety override when state is incomplete. Structural exits are never blocked by trade-frequency/loss-control checks.
+- Concurrency safety: state row is locked (`SELECT ... FOR UPDATE` where supported) and a short-lived `inflight_order_id` reservation prevents concurrent executions from racing past caps (blocked with `RISK_POLICY_CONCURRENT_EXECUTION`).

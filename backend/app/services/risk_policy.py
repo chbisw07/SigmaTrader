@@ -569,31 +569,9 @@ def evaluate_execution_risk_policy(
     except Exception:
         pass
 
-    # Trade frequency: max trades per symbol per day (best-effort by orders).
-    max_trades = int(policy.trade_frequency.max_trades_per_symbol_per_day)
-    if max_trades > 0:
-        start_day, end_day = _day_bounds_ist(datetime.now(UTC))
-        try:
-            q = db.query(Order).filter(
-                Order.symbol == order.symbol,
-                Order.product == order.product,
-                Order.created_at >= start_day,
-                Order.created_at < end_day,
-                Order.status.in_(["SENT", "EXECUTED", "PARTIALLY_EXECUTED"]),
-            )
-            executed_count = int(q.count())
-            if executed_count >= max_trades:
-                return RiskPolicyDecision(
-                    blocked=True,
-                    clamped=False,
-                    reason=("max_trades_per_symbol_per_day=" f"{max_trades} reached."),
-                    original_qty=original_qty,
-                    final_qty=original_qty,
-                    effective_price=effective_price,
-                    source_bucket=source_bucket,
-                )
-        except Exception:
-            pass
+    # NOTE: Trade-frequency and loss-control enforcement is handled at the
+    # execution choke-point using persisted execution state so it remains
+    # restart-safe and scoped by (user, strategy/deployment, symbol, product).
 
     # 1) Max quantity per order.
     max_qty = ovr.max_quantity_per_order

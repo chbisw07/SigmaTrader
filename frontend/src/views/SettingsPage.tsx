@@ -2171,7 +2171,7 @@ export function SettingsPage() {
                     }}
                   >
                     Trade frequency
-                    <HelpTip title="Overtrading protection. Currently only Max trades/symbol/day is enforced (IST day) at execute time." />
+                    <HelpTip title="Overtrading protection. Enforced at execute time per (user, strategy/deployment, symbol, product) using persisted execution state (IST day)." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
@@ -2180,7 +2180,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Max trades/symbol/day"
-                          help="Enforced. Blocks further executions for the same symbol+product after this many SENT/EXECUTED orders in the current IST day."
+                          help="Enforced at execute time. Blocks further executions for the same scope key after this many executions in the current IST day."
                         />
                       }
                       value={riskPolicyDraft.trade_frequency.max_trades_per_symbol_per_day}
@@ -2206,7 +2206,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Min bars between trades"
-                          help="Intended to prevent rapid re-entries on the same symbol."
+                          help="Enforced at execute time. Uses time-derived bars based on TradingView interval (or a default interval when unknown)."
                         />
                       }
                       value={riskPolicyDraft.trade_frequency.min_bars_between_trades}
@@ -2232,7 +2232,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Cooldown after loss (bars)"
-                          help="Intended to pause re-entries after a losing trade for N bars."
+                          help="Enforced at execute time. After a losing close, blocks new executions for N bars."
                         />
                       }
                       value={riskPolicyDraft.trade_frequency.cooldown_after_loss_bars}
@@ -2253,8 +2253,8 @@ export function SettingsPage() {
                       }}
                     />
                   </Box>
-                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
-                    Min bars between trades and cooldown after loss are not enforced yet.
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    Enforced at execution layer when Risk policy enforcement is enabled.
                   </Typography>
 
                   <Divider sx={{ my: 2 }} />
@@ -2269,7 +2269,7 @@ export function SettingsPage() {
                     }}
                   >
                     Loss controls
-                    <HelpTip title="These protect against drawdowns and loss streaks." />
+                    <HelpTip title="These protect against drawdowns and loss streaks. Enforced at execute time using persisted execution state." />
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
@@ -2278,7 +2278,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Max consecutive losses"
-                          help="Intended to stop trading after N consecutive losing trades."
+                          help="Enforced. Counts consecutive losing closes per scope key."
                         />
                       }
                       value={riskPolicyDraft.loss_controls.max_consecutive_losses}
@@ -2317,7 +2317,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Pause after streak"
-                          help="Intended to pause new executions after hitting the loss streak threshold."
+                          help="Enforced. When enabled, blocks new executions after the loss streak threshold is hit."
                         />
                       }
                     />
@@ -2326,7 +2326,7 @@ export function SettingsPage() {
                       label={
                         <LabelWithHelp
                           label="Pause duration"
-                          help="Example values: EOD (end of day), 30m, 2h."
+                          help="Currently supported: EOD (end of trading day, IST)."
                         />
                       }
                       value={riskPolicyDraft.loss_controls.pause_duration}
@@ -2343,8 +2343,8 @@ export function SettingsPage() {
                       sx={{ minWidth: 160 }}
                     />
                   </Box>
-                  <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>
-                    Loss controls are not enforced yet.
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                    Enforced at execution layer when Risk policy enforcement is enabled.
                   </Typography>
 
                   <Divider sx={{ my: 2 }} />
