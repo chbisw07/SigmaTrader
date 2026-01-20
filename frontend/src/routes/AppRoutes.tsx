@@ -14,6 +14,7 @@ import { ScreenerPage } from '../views/ScreenerPage'
 import { BacktestingPage } from '../views/BacktestingPage'
 import { DeploymentsPage } from '../views/DeploymentsPage'
 import { DeploymentDetailsPage } from '../views/DeploymentDetailsPage'
+import { RiskManagementGuidePage } from '../views/RiskManagementGuidePage'
 
 export function AppRoutes() {
   return (
@@ -36,6 +37,7 @@ export function AppRoutes() {
       <Route path="/system-events" element={<SystemEventsPage />} />
       <Route path="/appearance" element={<AppearancePage />} />
       <Route path="/settings" element={<SettingsPage />} />
+      <Route path="/risk-guide" element={<RiskManagementGuidePage />} />
       {/* /auth is handled at the App.tsx level */}
     </Routes>
   )

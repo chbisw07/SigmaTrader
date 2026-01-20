@@ -12,6 +12,7 @@ import { fetchOrdersHistory, type Order } from '../services/orders'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import { syncOrdersForBroker } from '../services/brokerRuntime'
 import { fetchManagedRiskPositions } from '../services/managedRisk'
+import { RiskRejectedHelpLink } from '../components/RiskRejectedHelpLink'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 import {
@@ -176,6 +177,14 @@ export function OrdersPanel({
           order.simulated || order.execution_target === 'PAPER'
             ? `${base} (PAPER)`
             : base
+        if (base === 'REJECTED_RISK') {
+          return (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Typography variant="body2">{label}</Typography>
+              <RiskRejectedHelpLink />
+            </Box>
+          )
+        }
         return <Typography variant="body2">{label}</Typography>
       },
     },

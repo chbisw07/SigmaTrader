@@ -28,6 +28,9 @@ import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { RiskHelpDrawer } from '../components/RiskHelpDrawer'
+import { SETTINGS_HELP_BY_TAB } from '../help/risk/contexts'
+
 import {
   fetchRiskPolicy,
   resetRiskPolicy,
@@ -475,7 +478,7 @@ export function SettingsPage() {
   const [riskPolicyDraft, setRiskPolicyDraft] = useState<RiskPolicy | null>(null)
   const [riskPolicyBusy, setRiskPolicyBusy] = useState(false)
   const [riskPolicyError, setRiskPolicyError] = useState<string | null>(null)
-  const [riskHelpOpen, setRiskHelpOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   useEffect(() => {
     const isPreset = DISPLAY_TZ_PRESETS.includes(displayTimeZone as any)
@@ -760,6 +763,11 @@ export function SettingsPage() {
 
   return (
     <Box>
+      <RiskHelpDrawer
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        context={SETTINGS_HELP_BY_TAB[activeTab]}
+      />
       <Dialog
         open={angeloneOtpPromptOpen}
         onClose={() => setAngeloneOtpPromptOpen(false)}
@@ -797,9 +805,22 @@ export function SettingsPage() {
           </Button>
         </DialogActions>
       </Dialog>
-      <Typography variant="h4" gutterBottom>
-        Settings
-      </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 1,
+          flexWrap: 'wrap',
+        }}
+      >
+        <Typography variant="h4" gutterBottom>
+          Settings
+        </Typography>
+        <Button size="small" variant="outlined" onClick={() => navigate('/risk-guide')}>
+          Risk management guide
+        </Button>
+      </Box>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
         Manage TradingView webhook, risk settings, and broker connection details.
       </Typography>
@@ -821,7 +842,16 @@ export function SettingsPage() {
 
       {activeTab === 'broker' && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
-          <Typography variant="h6">Broker Settings</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="h6" sx={{ flex: 1 }}>
+              Broker Settings
+            </Typography>
+            <Tooltip title="Help" arrow placement="top">
+              <IconButton size="small" onClick={() => setHelpOpen(true)} aria-label="broker help">
+                <HelpOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
           <Typography variant="body2" color="text.secondary">
             Connect brokers and manage API keys/secrets. Brokers are active simultaneously.
           </Typography>
@@ -982,8 +1012,12 @@ export function SettingsPage() {
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Typography variant="h6">Market Configuration</Typography>
-            <Tooltip title="Upload a CSV holiday/session calendar for an exchange. The runtime uses this to decide market hours, proxy close, and buy/sell windows.">
-              <IconButton size="small" aria-label="market config help">
+            <Tooltip title="Help" arrow placement="top">
+              <IconButton
+                size="small"
+                aria-label="market configuration help"
+                onClick={() => setHelpOpen(true)}
+              >
                 <HelpOutlineIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -1259,6 +1293,15 @@ export function SettingsPage() {
                 <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
                   TradingView webhook
                 </Typography>
+                <Tooltip title="Help" arrow placement="top">
+                  <IconButton
+                    size="small"
+                    onClick={() => setHelpOpen(true)}
+                    aria-label="TradingView webhook help"
+                  >
+                    <HelpOutlineIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
                 <Chip
                   size="small"
                   label={`Secret source: ${tvWebhookSecretSource}`}
@@ -1426,10 +1469,10 @@ export function SettingsPage() {
                 <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
                   Risk policy
                 </Typography>
-                <Tooltip title="Risk management help" arrow placement="top">
+                <Tooltip title="Help" arrow placement="top">
                   <IconButton
                     size="small"
-                    onClick={() => setRiskHelpOpen(true)}
+                    onClick={() => setHelpOpen(true)}
                     aria-label="risk management help"
                   >
                     <HelpOutlineIcon fontSize="small" />
@@ -1441,52 +1484,6 @@ export function SettingsPage() {
                   color={riskPolicySource === 'db' ? 'success' : 'default'}
                 />
               </Box>
-              <Dialog open={riskHelpOpen} onClose={() => setRiskHelpOpen(false)} maxWidth="sm" fullWidth>
-                <DialogTitle>Risk management guide</DialogTitle>
-                <DialogContent>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    These settings protect your account by blocking or resizing orders before they
-                    reach the broker. Start simple, then tighten the guardrails as you gain
-                    confidence.
-                  </Typography>
-                  <Box component="ul" sx={{ pl: 2, my: 0, display: 'grid', gap: 0.75 }}>
-                    <li>
-                      <Typography variant="body2">
-                        Order caps: max order value (percent or absolute) and max quantity per order.
-                      </Typography>
-                    </li>
-                    <li>
-                      <Typography variant="body2">
-                        Account limits: daily loss cap, max open positions, max concurrent symbols,
-                        and exposure limit.
-                      </Typography>
-                    </li>
-                    <li>
-                      <Typography variant="body2">
-                        Per-trade risk: stop-based sizing with ATR or fixed percent rules.
-                      </Typography>
-                    </li>
-                    <li>
-                      <Typography variant="body2">
-                        Execution safety: product gates (MIS/CNC), short selling, and emergency stop.
-                      </Typography>
-                    </li>
-                    <li>
-                      <Typography variant="body2">
-                        Overrides: different caps for TradingView vs SigmaTrader and MIS vs CNC.
-                      </Typography>
-                    </li>
-                  </Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Tips: set a realistic manual equity, keep positions synced for exposure checks,
-                    and use the emergency stop as your safety brake.
-                  </Typography>
-                </DialogContent>
-                <DialogActions>
-                  <Button onClick={() => setRiskHelpOpen(false)}>Close</Button>
-                </DialogActions>
-              </Dialog>
-
               {!riskPolicyLoaded || !riskPolicyDraft ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
                   <CircularProgress size={20} />

@@ -2173,3 +2173,11 @@ With S16/G04, paper trading now respects Indian market hours: new PAPER orders (
 - Trade counting: `trades_today` increments on entry-only executions that open or increase net exposure (`abs(new_position_qty) > abs(previous_position_qty)`).
 - Exit detection: structural (exposure-reducing orders where `abs(new_position_qty) < abs(previous_position_qty)`), with `Order.is_exit=true` as a safety override when state is incomplete. Structural exits are never blocked by trade-frequency/loss-control checks.
 - Concurrency safety: state row is locked (`SELECT ... FOR UPDATE` where supported) and a short-lived `inflight_order_id` reservation prevents concurrent executions from racing past caps (blocked with `RISK_POLICY_CONCURRENT_EXECUTION`).
+
+## Risk management help (UI)
+
+- Settings help drawers and the consolidated guide are driven by typed help content in:
+  - `frontend/src/help/risk/contexts.ts`
+  - `frontend/src/help/risk/reasonCodes.ts`
+- A consolidated user-facing page is available at:
+  - `frontend` route `/risk-guide` (`frontend/src/views/RiskManagementGuidePage.tsx`)

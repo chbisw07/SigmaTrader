@@ -20,6 +20,7 @@ import {
   type GridRowSelectionModel,
 } from '@mui/x-data-grid'
 
+import { RiskRejectedHelpLink } from '../components/RiskRejectedHelpLink'
 import {
   cancelOrder,
   fetchQueueOrders,
@@ -594,8 +595,9 @@ export function WaitingQueuePanel({
       field: 'status',
       headerName: 'Status',
       width: 170,
-      valueFormatter: (value, row) => {
-        const order = row as Order
+      renderCell: (params: GridRenderCellParams) => {
+        const order = params.row as Order
+        const value = params.value
         let base = String(value ?? order.status ?? '')
         if (
           order.gtt &&
@@ -605,7 +607,16 @@ export function WaitingQueuePanel({
         ) {
           base = 'WAITING (ARMED)'
         }
-        return order.execution_target === 'PAPER' ? `${base} (PAPER)` : base
+        const label = order.execution_target === 'PAPER' ? `${base} (PAPER)` : base
+        if (base === 'REJECTED_RISK') {
+          return (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Typography variant="body2">{label}</Typography>
+              <RiskRejectedHelpLink />
+            </Box>
+          )
+        }
+        return <Typography variant="body2">{label}</Typography>
       },
     },
     {
