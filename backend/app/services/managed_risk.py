@@ -19,6 +19,7 @@ from app.schemas.risk_policy import RiskPolicy
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
 from app.services.market_data import load_series
+from app.services.risk_policy_enforcement import is_group_enforced
 from app.services.system_events import record_system_event
 
 logger = logging.getLogger(__name__)
@@ -371,10 +372,10 @@ def ensure_managed_risk_for_executed_order(
     if getattr(order, "is_exit", False):
         return None
     raw_order_spec = RiskSpec.from_json(getattr(order, "risk_spec_json", None))
-    policy_enabled = bool(policy is not None and getattr(policy, "enabled", False))
+    stop_rules_enforced = bool(policy is not None and is_group_enforced(policy, "stop_rules"))
 
     def _policy_spec() -> RiskSpec | None:
-        if not policy_enabled or policy is None:
+        if not stop_rules_enforced or policy is None:
             return None
         sr = policy.stop_rules
         tr = policy.trade_risk
@@ -475,7 +476,7 @@ def ensure_managed_risk_for_executed_order(
     if stop_dist is None or stop_dist <= 0:
         # If ATR computation fails, fall back to fixed percent when policy is
         # enabled.
-        if policy_enabled and policy is not None:
+        if stop_rules_enforced and policy is not None:
             sr = policy.stop_rules
             stop_pct = float(sr.fallback_stop_pct)
             stop_pct = max(float(sr.min_stop_distance_pct), min(stop_pct, float(sr.max_stop_distance_pct)))
@@ -483,7 +484,7 @@ def ensure_managed_risk_for_executed_order(
         else:
             return None
 
-    if policy_enabled and policy is not None:
+    if stop_rules_enforced and policy is not None:
         sr = policy.stop_rules
         min_abs = float(avg_price) * float(sr.min_stop_distance_pct) / 100.0
         max_abs = float(avg_price) * float(sr.max_stop_distance_pct) / 100.0
@@ -530,7 +531,7 @@ def ensure_managed_risk_for_executed_order(
     if spec.trailing_stop.enabled and (trail_dist is None or float(trail_dist) <= 0):
         trail_dist = float(stop_dist)
 
-    if policy_enabled and policy is not None and spec.trailing_stop.enabled and trail_dist is not None:
+    if stop_rules_enforced and policy is not None and spec.trailing_stop.enabled and trail_dist is not None:
         sr = policy.stop_rules
         min_abs = float(avg_price) * float(sr.min_stop_distance_pct) / 100.0
         max_abs = float(avg_price) * float(sr.max_stop_distance_pct) / 100.0
@@ -554,13 +555,13 @@ def ensure_managed_risk_for_executed_order(
     if spec.trailing_activation.enabled and (act_dist is None or float(act_dist) <= 0):
         # Best-effort fallback when ATR activation is requested but data is
         # missing: scale activation off the stop distance.
-        if policy_enabled and policy is not None and policy.trade_risk.stop_reference == "ATR":
+        if stop_rules_enforced and policy is not None and policy.trade_risk.stop_reference == "ATR":
             base_atr = float(policy.stop_rules.initial_stop_atr) or 1.0
             act_atr = float(policy.stop_rules.trail_activation_atr) or 0.0
             if act_atr > 0 and base_atr > 0:
                 act_dist = float(stop_dist) * (act_atr / base_atr)
     if (
-        policy_enabled
+        stop_rules_enforced
         and policy is not None
         and base is not None
         and base.trailing_activation.enabled

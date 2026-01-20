@@ -120,6 +120,61 @@ function LabelWithHelp({
   )
 }
 
+function RiskGroupHeader({
+  groupId,
+  title,
+  help,
+  description,
+  globalEnabled,
+  groupEnabled,
+  notEnforcedYet,
+  onToggle,
+}: {
+  groupId?: string
+  title: string
+  help?: string
+  description: string
+  globalEnabled: boolean
+  groupEnabled: boolean
+  notEnforcedYet?: boolean
+  onToggle: (checked: boolean) => void
+}) {
+  const enforced = Boolean(globalEnabled && groupEnabled)
+  return (
+    <Box
+      data-testid={groupId ? `risk-group-${groupId}` : undefined}
+      sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}
+    >
+      <Box sx={{ flex: 1, minWidth: 260 }}>
+        <Typography
+          variant="subtitle2"
+          sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}
+        >
+          {title}
+          {help ? <HelpTip title={help} /> : null}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          {description}
+        </Typography>
+      </Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        {notEnforcedYet ? (
+          <Chip size="small" color="warning" label="Not enforced yet" />
+        ) : null}
+        <Chip
+          size="small"
+          color={enforced ? 'success' : 'default'}
+          label={enforced ? 'Enforced' : 'Configured, not enforced'}
+        />
+        <FormControlLabel
+          control={<Switch checked={groupEnabled} onChange={(e) => onToggle(e.target.checked)} />}
+          label="Enforce this group"
+        />
+      </Box>
+    </Box>
+  )
+}
+
 function BrokerSecretsTable({
   brokerName,
 }: {
@@ -1605,18 +1660,21 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Account-level risk (GLOBAL)
-                    <HelpTip title="These limits apply across all sources and products. They are evaluated at execute time using cached positions/snapshots (so syncing positions improves accuracy)." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="account_level"
+                    title="Account-level risk"
+                    help="Account-wide limits evaluated at execution time using cached positions/snapshots."
+                    description="Daily loss, max open positions/symbols, and exposure caps."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.account_level}
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev
+                          ? { ...prev, enforcement: { ...prev.enforcement, account_level: checked } }
+                          : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
@@ -1725,18 +1783,21 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Per-trade risk
-                    <HelpTip title="For sizing checks, SigmaTrader estimates a stop distance and clamps qty so worst-case loss (qty × stop distance) stays within the configured % of equity. It does NOT place stop-loss orders yet." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="per_trade"
+                    title="Per-trade risk"
+                    help="Sizing checks clamp quantity so worst-case loss (qty × stop distance) stays within % of equity."
+                    description="Per-trade risk caps and stop-loss mandatory sizing rule."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.per_trade}
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev
+                          ? { ...prev, enforcement: { ...prev.enforcement, per_trade: checked } }
+                          : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
@@ -1805,18 +1866,24 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Position sizing
-                    <HelpTip title="SigmaTrader clamps incoming qty; it does not derive a new qty from scratch. These settings cap how big a single order can be." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="position_sizing"
+                    title="Position sizing"
+                    help="Caps how big a single order can be (SigmaTrader clamps qty; it does not derive a new qty from scratch)."
+                    description="Capital per trade cap, scale-in toggle, and pyramiding limit."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.position_sizing}
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              enforcement: { ...prev.enforcement, position_sizing: checked },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
@@ -1907,18 +1974,19 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Stop rules (sizing + managed exits)
-                    <HelpTip title="Used for risk sizing checks and SigmaTrader-managed stop/trailing exits when enforcement is enabled. No broker-side SL/TP orders are placed." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="stop_rules"
+                    title="Stop rules & managed exits"
+                    help="Used for sizing checks and SigmaTrader-managed stop/trailing exits. No broker-side SL/TP orders are placed."
+                    description="Stop basis, ATR/fixed stop distance rules, and trailing activation (app-managed)."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.stop_rules}
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev ? { ...prev, enforcement: { ...prev.enforcement, stop_rules: checked } } : prev,
+                      )
+                    }
+                  />
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                     Choose how SigmaTrader estimates stop distance for risk sizing checks.
                   </Typography>
@@ -2158,18 +2226,21 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Trade frequency
-                    <HelpTip title="Overtrading protection. Enforced at execute time per (user, strategy/deployment, symbol, product) using persisted execution state (IST day)." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="trade_frequency"
+                    title="Trade frequency"
+                    help="Overtrading protection at execute time per (user, strategy/deployment, symbol, product) using persisted state (IST day)."
+                    description="Max trades/day, min bars between trades, cooldown after loss (bars)."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.trade_frequency}
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev
+                          ? { ...prev, enforcement: { ...prev.enforcement, trade_frequency: checked } }
+                          : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
@@ -2251,23 +2322,24 @@ export function SettingsPage() {
                     />
                   </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                    Enforced at execution layer when Risk policy enforcement is enabled.
+                    Enforced at execution layer when global enforcement is enabled and this group is enabled.
                   </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Loss controls
-                    <HelpTip title="These protect against drawdowns and loss streaks. Enforced at execute time using persisted execution state." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="loss_controls"
+                    title="Loss controls"
+                    help="Protects against drawdowns/loss streaks. Enforced at execute time using persisted state."
+                    description="Loss streak counting and pause-after-streak (EOD) behavior."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.loss_controls}
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev ? { ...prev, enforcement: { ...prev.enforcement, loss_controls: checked } } : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
@@ -2341,23 +2413,30 @@ export function SettingsPage() {
                     />
                   </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                    Enforced at execution layer when Risk policy enforcement is enabled.
+                    Enforced at execution layer when global enforcement is enabled and this group is enabled.
                   </Typography>
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Correlation & symbol control
-                    <HelpTip title="These controls help avoid concentration in correlated sectors." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="correlation_controls"
+                    title="Correlation & symbol controls"
+                    help="Intended to help avoid concentration in correlated sectors/symbols."
+                    description="Sector/correlation-based limits (not enforced by backend yet)."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.correlation_controls}
+                    notEnforcedYet
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              enforcement: { ...prev.enforcement, correlation_controls: checked },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <TextField
                       size="small"
@@ -2418,18 +2497,25 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Execution safety (GLOBAL)
-                    <HelpTip title="Execution-layer guardrails. Product gates and order value caps are enforced." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="execution_safety"
+                    title="Execution safety"
+                    help="Execution-layer guardrails. Product gates and order caps are enforced before broker submission."
+                    description="Product allow/deny, short-selling gate, order value caps, and (planned) margin checks."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.execution_safety}
+                    notEnforcedYet
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              enforcement: { ...prev.enforcement, execution_safety: checked },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <FormControlLabel
                       control={
@@ -2550,18 +2636,22 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Emergency controls
-                    <HelpTip title="Kill-switch style controls. panic_stop is enforced immediately." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="emergency_controls"
+                    title="Emergency controls"
+                    help="Kill-switch style controls. panic_stop is enforced immediately."
+                    description="Immediate global stop plus (planned) error-based halts."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.emergency_controls}
+                    notEnforcedYet
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev
+                          ? { ...prev, enforcement: { ...prev.enforcement, emergency_controls: checked } }
+                          : prev,
+                      )
+                    }
+                  />
                   <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                     <FormControlLabel
                       control={
@@ -2645,18 +2735,19 @@ export function SettingsPage() {
 
                   <Divider sx={{ my: 2 }} />
 
-                  <Typography
-                    variant="subtitle2"
-                    sx={{
-                      mb: 1,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.75,
-                    }}
-                  >
-                    Overrides (source × product)
-                    <HelpTip title="Overrides let you apply different caps to TradingView vs SigmaTrader orders, separately for MIS and CNC. Blank means inherit from GLOBAL settings above." />
-                  </Typography>
+                  <RiskGroupHeader
+                    groupId="overrides"
+                    title="Overrides (source/product)"
+                    help="Overrides apply different values to TradingView vs SigmaTrader orders, separately for MIS and CNC."
+                    description="Overrides change values (caps/gates) but do not override whether groups are enforced."
+                    globalEnabled={riskPolicyDraft.enabled}
+                    groupEnabled={riskPolicyDraft.enforcement.overrides}
+                    onToggle={(checked) =>
+                      setRiskPolicyDraft((prev) =>
+                        prev ? { ...prev, enforcement: { ...prev.enforcement, overrides: checked } } : prev,
+                      )
+                    }
+                  />
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                     Leave a field blank to inherit from GLOBAL.
                   </Typography>

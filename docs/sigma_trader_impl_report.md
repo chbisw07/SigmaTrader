@@ -2181,3 +2181,14 @@ With S16/G04, paper trading now respects Indian market hours: new PAPER orders (
   - `frontend/src/help/risk/reasonCodes.ts`
 - A consolidated user-facing page is available at:
   - `frontend` route `/risk-guide` (`frontend/src/views/RiskManagementGuidePage.tsx`)
+
+## Risk Policy selective enforcement (per-group toggles)
+
+- Risk Policy now has per-group enforcement toggles under `policy.enforcement`, with defaults set to `true` so existing behavior is preserved when global enforcement is ON.
+- Risk Policy is stored as an encrypted blob (in `BrokerSecret` as `risk/risk_policy_v1`), so schema changes are handled via lazy backfill in `backend/app/services/risk_policy_store.py` when older policies are loaded.
+- Enforcement gating:
+  - `backend/app/services/risk_policy.py` respects `is_group_enforced(policy, <group>)` for account-level, per-trade, position sizing, stop rules, execution safety, emergency controls, and overrides.
+  - Trade frequency and loss controls continue to be enforced at the single execution choke-point using persisted execution state, and are gated by their group toggles.
+- UI:
+  - Settings → Risk settings is reorganized into 10 groups with a per-group toggle (“Enforce this group”) plus status chips.
+  - Groups that are not yet implemented remain labeled “Not enforced yet” even if toggled ON.

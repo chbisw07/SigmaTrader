@@ -39,7 +39,36 @@ def get_risk_policy(db: Session, settings: Settings) -> tuple[RiskPolicy, str]:
     if not isinstance(parsed, dict):
         parsed = {}
     try:
-        return RiskPolicy(**parsed), "db"
+        needs_backfill = False
+        raw_enf = parsed.get("enforcement")
+        if not isinstance(raw_enf, dict):
+            needs_backfill = True
+        else:
+            required = {
+                "account_level",
+                "per_trade",
+                "position_sizing",
+                "stop_rules",
+                "trade_frequency",
+                "loss_controls",
+                "correlation_controls",
+                "execution_safety",
+                "emergency_controls",
+                "overrides",
+            }
+            if not required.issubset(set(raw_enf.keys())):
+                needs_backfill = True
+
+        policy = RiskPolicy(**parsed)
+        if needs_backfill:
+            # Backfill enforcement toggles by re-persisting the normalized policy.
+            # Risk policy is stored as an encrypted blob, so schema changes are
+            # handled via this lazy backfill rather than an Alembic migration.
+            try:
+                set_risk_policy(db, settings, policy)
+            except Exception:
+                pass
+        return policy, "db"
     except Exception:
         return default_risk_policy(), "default"
 

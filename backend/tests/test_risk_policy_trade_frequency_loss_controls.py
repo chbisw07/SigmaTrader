@@ -526,3 +526,69 @@ def test_concurrent_executions_do_not_race_past_max_trades(monkeypatch: Any) -> 
     assert results.count("SENT") == 1
     assert len(results) == 2
     assert any(r != "SENT" for r in results)
+
+
+def test_trade_frequency_group_toggle_off_disables_trade_frequency_blocks(monkeypatch: Any) -> None:
+    _patch_zerodha(monkeypatch)
+    _set_policy(
+        {
+            "enabled": True,
+            "enforcement": {"trade_frequency": False},
+            "trade_frequency": {
+                "max_trades_per_symbol_per_day": 1,
+                "min_bars_between_trades": 100,
+                "cooldown_after_loss_bars": 100,
+            },
+            "loss_controls": {
+                "max_consecutive_losses": 99,
+                "pause_after_loss_streak": False,
+                "pause_duration": "EOD",
+            },
+        }
+    )
+
+    strategy_name = f"tf-off-{uuid4().hex}"
+    o1 = _create_waiting_order(side="BUY", price=100.0, strategy_name=strategy_name)
+    o2 = _create_waiting_order(side="BUY", price=101.0, strategy_name=strategy_name)
+    o3 = _create_waiting_order(side="BUY", price=102.0, strategy_name=strategy_name)
+
+    assert client.post(f"/api/orders/{o1}/execute").status_code == 200
+    assert client.post(f"/api/orders/{o2}/execute").status_code == 200
+    assert client.post(f"/api/orders/{o3}/execute").status_code == 200
+
+
+def test_loss_controls_group_toggle_off_disables_pause(monkeypatch: Any) -> None:
+    _patch_zerodha(monkeypatch)
+    _set_policy(
+        {
+            "enabled": True,
+            "enforcement": {"loss_controls": False},
+            "trade_frequency": {
+                "max_trades_per_symbol_per_day": 100,
+                "min_bars_between_trades": 0,
+                "cooldown_after_loss_bars": 0,
+            },
+            "loss_controls": {
+                "max_consecutive_losses": 1,
+                "pause_after_loss_streak": True,
+                "pause_duration": "EOD",
+            },
+        }
+    )
+
+    from app.api import orders as orders_api
+
+    t0 = datetime(2026, 1, 20, 4, 0, tzinfo=UTC)
+    monkeypatch.setattr(orders_api, "_now_utc", lambda: t0)
+
+    strategy_name = f"lc-off-{uuid4().hex}"
+    buy = _create_waiting_order(side="BUY", price=100.0, strategy_name=strategy_name)
+    sell = _create_waiting_order(side="SELL", price=90.0, strategy_name=strategy_name)
+    reentry = _create_waiting_order(side="BUY", price=101.0, strategy_name=strategy_name)
+
+    assert client.post(f"/api/orders/{buy}/execute").status_code == 200
+    assert client.post(f"/api/orders/{sell}/execute").status_code == 200
+
+    # Loss controls group is disabled, so pause-after-streak must not block.
+    r = client.post(f"/api/orders/{reentry}/execute")
+    assert r.status_code == 200

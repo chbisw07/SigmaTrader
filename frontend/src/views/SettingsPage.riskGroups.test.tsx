@@ -1,0 +1,183 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+
+import { AppThemeProvider } from '../themeContext'
+import { TimeSettingsProvider } from '../timeSettingsContext'
+import type { RiskPolicy } from '../services/riskPolicy'
+import { SettingsPage } from './SettingsPage'
+
+function makePolicy(): RiskPolicy {
+  return {
+    version: 1,
+    enabled: true,
+    enforcement: {
+      account_level: true,
+      per_trade: true,
+      position_sizing: true,
+      stop_rules: true,
+      trade_frequency: true,
+      loss_controls: true,
+      correlation_controls: true,
+      execution_safety: true,
+      emergency_controls: true,
+      overrides: true,
+    },
+    equity: { equity_mode: 'MANUAL', manual_equity_inr: 1_000_000 },
+    account_risk: {
+      max_daily_loss_pct: 1,
+      max_daily_loss_abs: null,
+      max_open_positions: 6,
+      max_concurrent_symbols: 6,
+      max_exposure_pct: 60,
+    },
+    trade_risk: {
+      max_risk_per_trade_pct: 0.5,
+      hard_max_risk_pct: 0.75,
+      stop_loss_mandatory: true,
+      stop_reference: 'ATR',
+    },
+    position_sizing: {
+      sizing_mode: 'FIXED_CAPITAL',
+      capital_per_trade: 20000,
+      allow_scale_in: false,
+      pyramiding: 1,
+    },
+    stop_rules: {
+      atr_period: 14,
+      initial_stop_atr: 2,
+      fallback_stop_pct: 1,
+      min_stop_distance_pct: 0.5,
+      max_stop_distance_pct: 3,
+      trailing_stop_enabled: true,
+      trail_activation_atr: 2.5,
+      trail_activation_pct: 3,
+    },
+    trade_frequency: { max_trades_per_symbol_per_day: 2, min_bars_between_trades: 10, cooldown_after_loss_bars: 20 },
+    loss_controls: { max_consecutive_losses: 3, pause_after_loss_streak: true, pause_duration: 'EOD' },
+    correlation_rules: { max_same_sector_positions: 2, sector_correlation_limit: 0.7 },
+    execution_safety: {
+      allow_mis: false,
+      allow_cnc: true,
+      allow_short_selling: true,
+      max_order_value_pct: 2.5,
+      reject_if_margin_exceeded: true,
+    },
+    emergency_controls: { panic_stop: false, stop_all_trading_on_error: true, stop_on_unexpected_qty: true },
+    overrides: {
+      TRADINGVIEW: { MIS: {}, CNC: {} },
+      SIGMATRADER: { MIS: {}, CNC: {} },
+    },
+  }
+}
+
+describe('SettingsPage Risk settings selective enforcement', () => {
+  beforeEach(() => {
+    let currentPolicy = makePolicy()
+
+    const fetchMock = vi.fn()
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({ policy: currentPolicy, source: 'db' }),
+        } as unknown as Response
+      }
+      if (url.includes('/api/risk-policy') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        currentPolicy = body as RiskPolicy
+        return { ok: true, json: async () => currentPolicy } as unknown as Response
+      }
+      if (url.includes('/api/risk-policy/reset') && init?.method === 'POST') {
+        currentPolicy = makePolicy()
+        return { ok: true, json: async () => currentPolicy } as unknown as Response
+      }
+      return { ok: true, json: async () => ({}) } as unknown as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders all 10 risk groups', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=risk']}>
+        <AppThemeProvider>
+          <TimeSettingsProvider>
+            <SettingsPage />
+          </TimeSettingsProvider>
+        </AppThemeProvider>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Account-level risk')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('Per-trade risk')).toBeInTheDocument()
+    expect(screen.getByText('Position sizing')).toBeInTheDocument()
+    expect(screen.getByText('Stop rules & managed exits')).toBeInTheDocument()
+    expect(screen.getByText('Trade frequency')).toBeInTheDocument()
+    expect(screen.getByText('Loss controls')).toBeInTheDocument()
+    expect(screen.getByText('Correlation & symbol controls')).toBeInTheDocument()
+    expect(screen.getByText('Execution safety')).toBeInTheDocument()
+    expect(screen.getByText('Emergency controls')).toBeInTheDocument()
+    expect(screen.getByText('Overrides (source/product)')).toBeInTheDocument()
+  })
+
+  it('persists group toggle changes via Save', async () => {
+    const fetchMock = vi.fn()
+    let currentPolicy = makePolicy()
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({ policy: currentPolicy, source: 'db' }),
+        } as unknown as Response
+      }
+      if (url.includes('/api/risk-policy') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        currentPolicy = body as RiskPolicy
+        return { ok: true, json: async () => currentPolicy } as unknown as Response
+      }
+      return { ok: true, json: async () => ({}) } as unknown as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=risk']}>
+        <AppThemeProvider>
+          <TimeSettingsProvider>
+            <SettingsPage />
+          </TimeSettingsProvider>
+        </AppThemeProvider>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Trade frequency')).toBeInTheDocument()
+    })
+
+    const tradeGroup = screen.getByTestId('risk-group-trade_frequency')
+    const toggle = within(tradeGroup).getByRole('checkbox')
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle)
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/risk-policy') && c[1]?.method === 'PUT')
+      expect(putCall).toBeTruthy()
+    })
+
+    const putCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/risk-policy') && c[1]?.method === 'PUT')
+    const body = putCall?.[1]?.body ? JSON.parse(String(putCall?.[1]?.body)) : null
+    expect(body.enforcement.trade_frequency).toBe(false)
+  })
+})

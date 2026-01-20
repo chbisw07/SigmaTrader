@@ -330,6 +330,28 @@ export const riskSettingsHelp: HelpContext = {
           ],
         },
         {
+          id: 'risk-selective-enforcement',
+          question: 'What is selective enforcement (group toggles)?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Risk Policy has a global master switch (Enable enforcement) and per-group switches. A group is enforced only when the global switch is ON and that group switch is ON.',
+            },
+            {
+              type: 'bullets',
+              items: [
+                'Example: enable Stop rules & managed exits, but disable Trade frequency to avoid cooldown/limits while still keeping app-managed exits.',
+                'Example: disable Overrides to ignore source/product overrides and use global settings only.',
+              ],
+            },
+            {
+              type: 'callout',
+              tone: 'info',
+              text: 'Defaults preserve current behavior: all groups start enabled. Turning a group OFF means SigmaTrader will not block/clamp orders due to that group.',
+            },
+          ],
+        },
+        {
           id: 'risk-blocked-behavior',
           question: 'What happens when an order is blocked?',
           answer: [
@@ -574,6 +596,24 @@ export const riskManagementGuide: HelpContext = {
             {
               type: 'p',
               text: 'In the backend at dispatch/execute time (the central execute function). This is the single enforcement choke-point used by all flows.',
+            },
+          ],
+        },
+        {
+          id: 'chokepoint-selective',
+          question: 'How do global vs per-group enforcement toggles work?',
+          answer: [
+            {
+              type: 'p',
+              text: 'SigmaTrader applies risk checks at the choke-point, but only for groups that are enabled. Global Enable enforcement is the master switch; each group also has its own enable toggle.',
+            },
+            {
+              type: 'bullets',
+              items: [
+                'Global OFF: no groups can block/clamp orders.',
+                'Global ON + group OFF: that group does not block/clamp orders.',
+                'Global ON + group ON: that group can block/clamp orders when its limits are hit.',
+              ],
             },
           ],
         },

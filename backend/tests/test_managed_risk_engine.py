@@ -9,6 +9,7 @@ from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.models import ManagedRiskPosition, Order, User
 from app.schemas.managed_risk import DistanceSpec, RiskSpec
+from app.schemas.risk_policy import RiskPolicy
 from app.services.managed_risk import (
     _update_stop_state,
     ensure_managed_risk_for_executed_order,
@@ -310,3 +311,80 @@ def test_restart_persists_best_and_trail() -> None:
         )
         assert upd2.best == 102.0
         assert upd2.current_stop == 100.0
+
+
+def test_policy_managed_risk_respects_stop_rules_group_toggle() -> None:
+    settings = get_settings()
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "risk-user").one()
+
+        order1 = Order(
+            user_id=user.id,
+            broker_name="zerodha",
+            symbol="TCS",
+            exchange="NSE",
+            side="BUY",
+            qty=1,
+            price=100.0,
+            order_type="LIMIT",
+            product="MIS",
+            gtt=False,
+            status="EXECUTED",
+            mode="AUTO",
+            execution_target="LIVE",
+            simulated=False,
+            risk_spec_json=None,
+            is_exit=False,
+        )
+        db.add(order1)
+        db.commit()
+        db.refresh(order1)
+
+        policy = RiskPolicy(enabled=True)
+        policy.enforcement.stop_rules = True
+        policy.trade_risk.stop_reference = "FIXED_PCT"
+        policy.stop_rules.fallback_stop_pct = 1.0
+        policy.stop_rules.trail_activation_pct = 3.0
+
+        mrp1 = ensure_managed_risk_for_executed_order(
+            db,
+            settings,
+            order=order1,
+            filled_qty=1,
+            avg_price=100.0,
+            policy=policy,
+        )
+        assert mrp1 is not None
+
+        order2 = Order(
+            user_id=user.id,
+            broker_name="zerodha",
+            symbol="INFY",
+            exchange="NSE",
+            side="BUY",
+            qty=1,
+            price=100.0,
+            order_type="LIMIT",
+            product="MIS",
+            gtt=False,
+            status="EXECUTED",
+            mode="AUTO",
+            execution_target="LIVE",
+            simulated=False,
+            risk_spec_json=None,
+            is_exit=False,
+        )
+        db.add(order2)
+        db.commit()
+        db.refresh(order2)
+
+        policy.enforcement.stop_rules = False
+        mrp2 = ensure_managed_risk_for_executed_order(
+            db,
+            settings,
+            order=order2,
+            filled_qty=1,
+            avg_price=100.0,
+            policy=policy,
+        )
+        assert mrp2 is None

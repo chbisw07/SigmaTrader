@@ -16,7 +16,7 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
-from app.models import BrokerConnection, Group, Order, Strategy, User
+from app.models import BrokerConnection, Group, Order, Position, Strategy, User
 from app.schemas.orders import (
     ManualOrderCreate,
     OrderRead,
@@ -42,6 +42,7 @@ from app.services.price_ticks import round_price_to_tick
 from app.services.risk import evaluate_order_risk
 from app.services.risk_policy import evaluate_execution_risk_policy
 from app.services.risk_policy_store import get_risk_policy
+from app.services.risk_policy_enforcement import is_group_enforced
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -692,8 +693,9 @@ def execute_order_internal(
         db.commit()
         db.refresh(order)
 
-    execution_policy_apply = bool(getattr(policy, "enabled", False)) and not bool(
-        is_synthetic_gtt_arm or is_broker_gtt
+    execution_policy_apply = bool(
+        (is_group_enforced(policy, "trade_frequency") or is_group_enforced(policy, "loss_controls"))
+        and not bool(is_synthetic_gtt_arm or is_broker_gtt)
     )
     if execution_policy_apply:
         key = scope_key_for_order(order)
@@ -748,6 +750,33 @@ def execute_order_internal(
         _prev_abs, _new_abs, _is_entry, is_exit_reduce = classify_position_delta(
             state, side=str(order.side), qty=float(order.qty or 0.0)
         )
+        # Extra safety: if our per-scope execution state is new or stale, use the
+        # broker-level Position snapshot (when available) to detect exposure-reducing
+        # exits and avoid blocking protective reductions.
+        try:
+            sym = str(getattr(order, "symbol", "") or "").strip()
+            exch = str(getattr(order, "exchange", "") or "NSE").strip().upper()
+            if ":" in sym:
+                ex2, ts2 = sym.split(":", 1)
+                exch = (ex2 or exch).strip().upper()
+                sym = (ts2 or sym).strip()
+            pos = (
+                db.query(Position)
+                .filter(
+                    Position.broker_name == str(getattr(order, "broker_name", "zerodha")).strip().lower(),
+                    Position.symbol == sym,
+                    Position.exchange == exch,
+                    Position.product == str(getattr(order, "product", "MIS")).strip().upper(),
+                )
+                .one_or_none()
+            )
+            if pos is not None:
+                pos_qty = float(getattr(pos, "qty", 0.0) or 0.0)
+                delta = float(order.qty or 0.0) if str(order.side).strip().upper() == "BUY" else -float(order.qty or 0.0)
+                if abs(pos_qty + delta) < abs(pos_qty):
+                    is_exit_reduce = True
+        except Exception:
+            pass
         # Structural exit detection is authoritative; is_exit acts as a safety
         # override when state is incomplete.
         treat_as_exit = bool(is_exit_reduce) or bool(getattr(order, "is_exit", False))

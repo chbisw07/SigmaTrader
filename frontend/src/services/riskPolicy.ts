@@ -13,6 +13,18 @@ export type ProductOverrides = {
 export type RiskPolicy = {
   version: number
   enabled: boolean
+  enforcement: {
+    account_level: boolean
+    per_trade: boolean
+    position_sizing: boolean
+    stop_rules: boolean
+    trade_frequency: boolean
+    loss_controls: boolean
+    correlation_controls: boolean
+    execution_safety: boolean
+    emergency_controls: boolean
+    overrides: boolean
+  }
   equity: {
     equity_mode: 'MANUAL'
     manual_equity_inr: number

@@ -90,6 +90,21 @@ class EmergencyControlsSettings(BaseModel):
     stop_on_unexpected_qty: bool = True
 
 
+class EnforcementSettings(BaseModel):
+    # Per-group enforcement toggles. All default to True so existing behavior is
+    # preserved when global `enabled` is ON, even for previously stored policies.
+    account_level: bool = True
+    per_trade: bool = True
+    position_sizing: bool = True
+    stop_rules: bool = True
+    trade_frequency: bool = True
+    loss_controls: bool = True
+    correlation_controls: bool = True
+    execution_safety: bool = True
+    emergency_controls: bool = True
+    overrides: bool = True
+
+
 class ProductOverrides(BaseModel):
     allow: bool | None = None
     max_order_value_abs: float | None = Field(default=None, ge=0.0)
@@ -102,6 +117,7 @@ class ProductOverrides(BaseModel):
 class RiskPolicy(BaseModel):
     version: int = 1
     enabled: bool = False
+    enforcement: EnforcementSettings = EnforcementSettings()
     equity: ManualEquitySettings = ManualEquitySettings()
     account_risk: AccountRiskSettings = AccountRiskSettings()
     trade_risk: TradeRiskSettings = TradeRiskSettings()
@@ -151,6 +167,7 @@ __all__ = [
     "CorrelationRulesSettings",
     "ExecutionSafetySettings",
     "EmergencyControlsSettings",
+    "EnforcementSettings",
     "ProductOverrides",
     "RiskPolicy",
 ]
