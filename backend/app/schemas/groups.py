@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.pydantic_compat import PYDANTIC_V2, ConfigDict
 
 GroupKind = Literal["WATCHLIST", "MODEL_PORTFOLIO", "HOLDINGS_VIEW", "PORTFOLIO"]
+BasketAllocationMode = Literal["WEIGHT"]
 
 
 class GroupBase(BaseModel):
@@ -24,6 +25,11 @@ class GroupUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     kind: Optional[GroupKind] = None
     description: Optional[str] = None
+
+
+class BasketConfigUpdate(BaseModel):
+    funds: Optional[float] = Field(None, ge=0.0, description="Basket funds in INR.")
+    allocation_mode: Optional[BasketAllocationMode] = None
 
 
 class GroupMemberBase(BaseModel):
@@ -56,10 +62,20 @@ class GroupMemberUpdate(BaseModel):
     target_weight: Optional[float] = Field(None, ge=0.0, le=1.0)
     reference_qty: Optional[int] = Field(None, ge=0)
     reference_price: Optional[float] = Field(None, gt=0.0)
+    weight_locked: Optional[bool] = None
     notes: Optional[str] = None
 
 
-class GroupMemberRead(GroupMemberBase):
+class GroupMemberRead(BaseModel):
+    symbol: str
+    exchange: Optional[str] = None
+    target_weight: Optional[float] = None
+    reference_qty: Optional[int] = None
+    reference_price: Optional[float] = None
+    frozen_price: Optional[float] = None
+    weight_locked: bool = False
+    notes: Optional[str] = None
+
     id: int
     group_id: int
     created_at: datetime
@@ -77,6 +93,11 @@ class GroupRead(GroupBase):
     id: int
     owner_id: Optional[int] = None
     member_count: int = 0
+    funds: Optional[float] = None
+    allocation_mode: Optional[str] = None
+    frozen_at: Optional[datetime] = None
+    origin_basket_id: Optional[int] = None
+    bought_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -99,6 +120,8 @@ class GroupMembershipsRead(BaseModel):
 
 __all__ = [
     "GroupKind",
+    "BasketAllocationMode",
+    "BasketConfigUpdate",
     "GroupCreate",
     "GroupUpdate",
     "GroupRead",

@@ -9,7 +9,7 @@ from sqlalchemy import or_, tuple_
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.market_hours import IST_OFFSET
+from app.core.market_hours import IST_OFFSET, is_market_open_now
 from app.db.session import get_db
 from app.models import Listing
 from app.schemas.market_data import CandlePoint, MarketSymbol
@@ -43,15 +43,21 @@ def market_data_status(
             "canonical_broker": canonical,
             "available": False,
             "error": "Unsupported canonical broker.",
+            "market_open": bool(is_market_open_now()),
         }
 
     try:
         kite = _get_kite_client(db, settings)
         # Ensure token is valid; profile is the simplest validation.
         _ = kite.profile()
-        return {"canonical_broker": canonical, "available": True}
+        return {"canonical_broker": canonical, "available": True, "market_open": bool(is_market_open_now())}
     except Exception as exc:
-        return {"canonical_broker": canonical, "available": False, "error": str(exc)}
+        return {
+            "canonical_broker": canonical,
+            "available": False,
+            "error": str(exc),
+            "market_open": bool(is_market_open_now()),
+        }
 
 
 @router.get("/history", response_model=List[CandlePoint])

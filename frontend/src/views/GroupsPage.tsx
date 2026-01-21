@@ -1,7 +1,6 @@
 import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
 import EditIcon from '@mui/icons-material/Edit'
-import PlayListAddIcon from '@mui/icons-material/PlaylistAdd'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import Alert from '@mui/material/Alert'
@@ -19,8 +18,6 @@ import FormControlLabel from '@mui/material/FormControlLabel'
 import InputLabel from '@mui/material/InputLabel'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
-import Radio from '@mui/material/Radio'
-import RadioGroup from '@mui/material/RadioGroup'
 import Select from '@mui/material/Select'
 import Stack from '@mui/material/Stack'
 import Step from '@mui/material/Step'
@@ -40,10 +37,11 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { isGroupsRedesignEnabled } from '../config/features'
 import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
 import { SymbolQuickAdd } from '../components/groups/SymbolQuickAdd'
+import { BasketBuilderDialog } from '../components/groups/BasketBuilderDialog'
+import { BuyPreviewDialog } from '../components/groups/BuyPreviewDialog'
 import { WatchlistMembersGrid } from '../components/groups/WatchlistMembersGrid'
 import { useMarketQuotes } from '../hooks/useMarketQuotes'
-import { createManualOrder } from '../services/orders'
-import { fetchHoldings, fetchDailyPositions, syncPositions, type Holding } from '../services/positions'
+import { fetchHoldings, fetchDailyPositions, syncPositions } from '../services/positions'
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
@@ -79,27 +77,6 @@ type BulkAddState = {
   symbolsText: string
 }
 
-type AllocationMode = 'equal' | 'weights'
-
-type AllocationDraft = {
-  side: 'BUY' | 'SELL'
-  orderType: 'MARKET' | 'LIMIT'
-  product: string
-  totalAmount: string
-  mode: AllocationMode
-}
-
-type AllocationPreviewRow = {
-  id: string
-  symbol: string
-  exchange?: string | null
-  weightFraction: number
-  amount: number
-  lastPrice?: number | null
-  qty: number
-  warning?: string
-}
-
 const GROUP_KINDS: Array<{ value: GroupKind; label: string }> = [
   { value: 'WATCHLIST', label: 'Watchlist' },
   { value: 'MODEL_PORTFOLIO', label: 'Basket' },
@@ -116,14 +93,6 @@ const DEFAULT_GROUP_FORM: GroupFormState = {
 const DEFAULT_BULK_ADD: BulkAddState = {
   exchange: 'NSE',
   symbolsText: '',
-}
-
-const DEFAULT_ALLOCATION: AllocationDraft = {
-  side: 'BUY',
-  orderType: 'MARKET',
-  product: 'CNC',
-  totalAmount: '',
-  mode: 'equal',
 }
 
 const GROUPS_LEFT_PANEL_WIDTH_STORAGE_KEY = 'st_groups_left_panel_width_v1'
@@ -227,13 +196,18 @@ export function GroupsPage() {
   const [symbolOptionsError, setSymbolOptionsError] = useState<string | null>(null)
 
   const groupsRedesignEnabled = isGroupsRedesignEnabled()
+  const notesEnabled = !groupsRedesignEnabled
   const watchlistRedesignEnabled =
     groupsRedesignEnabled && selectedGroup?.kind === 'WATCHLIST'
+  const basketRedesignEnabled =
+    groupsRedesignEnabled && selectedGroup?.kind === 'MODEL_PORTFOLIO'
   const [watchlistDefaultExchange, setWatchlistDefaultExchange] =
     useState<'NSE' | 'BSE'>('NSE')
   const [watchlistAddBusy, setWatchlistAddBusy] = useState(false)
   const [watchlistAddResult, setWatchlistAddResult] =
     useState<WatchlistBulkAddSafeResponse | null>(null)
+  const [basketBuilderOpen, setBasketBuilderOpen] = useState(false)
+  const [buyPreviewOpen, setBuyPreviewOpen] = useState(false)
 
   const watchlistQuoteItems = useMemo(() => {
     if (!watchlistRedesignEnabled) return []
@@ -247,7 +221,7 @@ export function GroupsPage() {
     quotesByKey: watchlistQuotesByKey,
     error: watchlistQuotesError,
     loading: watchlistQuotesLoading,
-  } = useMarketQuotes(watchlistQuoteItems, { pollMs: 5000 })
+  } = useMarketQuotes(watchlistQuoteItems)
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkState, setBulkState] = useState<BulkAddState>(DEFAULT_BULK_ADD)
@@ -270,15 +244,6 @@ export function GroupsPage() {
     refPrice: '',
     notes: '',
   })
-
-  const [allocateOpen, setAllocateOpen] = useState(false)
-  const [allocationDraft, setAllocationDraft] =
-    useState<AllocationDraft>(DEFAULT_ALLOCATION)
-  const [allocationPreview, setAllocationPreview] = useState<
-    AllocationPreviewRow[]
-  >([])
-  const [allocationError, setAllocationError] = useState<string | null>(null)
-  const [allocationBusy, setAllocationBusy] = useState(false)
 
   // Portfolio allocation health (PORTFOLIO groups only).
   const [compareBroker, setCompareBroker] = useState<'zerodha' | 'angelone'>('zerodha')
@@ -955,7 +920,7 @@ export function GroupsPage() {
       await addGroupMember(selectedGroupId, {
         symbol,
         exchange: newMemberExchange.trim() || null,
-        notes: newMemberNotes.trim() || null,
+        notes: notesEnabled ? newMemberNotes.trim() || null : null,
       })
       setNewMemberSymbol('')
       setNewMemberNotes('')
@@ -1087,7 +1052,7 @@ export function GroupsPage() {
         target_weight: targetWeight,
         reference_qty: referenceQty,
         reference_price: referencePrice,
-        notes: memberDraft.notes.trim() || null,
+        notes: notesEnabled ? memberDraft.notes.trim() || null : undefined,
       })
       setEditMemberOpen(false)
       const refreshed = await fetchGroup(selectedGroupId)
@@ -1137,119 +1102,6 @@ export function GroupsPage() {
       await reloadGroups(selectedGroupId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add members')
-    }
-  }
-
-  const computeAllocationPreview = async (draft: AllocationDraft) => {
-    if (!selectedGroup?.members?.length) {
-      setAllocationPreview([])
-      return
-    }
-    const totalAmount = Number(draft.totalAmount)
-    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
-      setAllocationPreview([])
-      return
-    }
-
-    const holdings = await fetchHoldings()
-    const bySymbol = new Map<string, Holding>()
-    holdings.forEach((h) => bySymbol.set(h.symbol, h))
-
-    const weights: number[] = []
-    if (draft.mode === 'weights') {
-      let sum = 0
-      for (const m of selectedGroup.members) {
-        const w = m.target_weight ?? 0
-        sum += w
-      }
-      if (sum <= 0) {
-        weights.push(...selectedGroup.members.map(() => 1 / selectedGroup.members.length))
-      } else {
-        weights.push(
-          ...selectedGroup.members.map((m) => (m.target_weight ?? 0) / sum),
-        )
-      }
-    } else {
-      weights.push(
-        ...selectedGroup.members.map(() => 1 / selectedGroup.members.length),
-      )
-    }
-
-    const rows: AllocationPreviewRow[] = selectedGroup.members.map((m, idx) => {
-      const holding = bySymbol.get(m.symbol)
-      const lastPrice =
-        holding?.last_price != null ? Number(holding.last_price) : null
-      const weightFraction = weights[idx] ?? 0
-      const amount = totalAmount * weightFraction
-      let qty = 0
-      let warning: string | undefined
-      if (!lastPrice || lastPrice <= 0) {
-        warning = 'Missing last price (not in holdings?)'
-      } else {
-        qty = Math.floor(amount / lastPrice)
-        if (qty <= 0) warning = 'Amount too small for 1 share'
-        if (draft.side === 'SELL' && holding?.quantity != null) {
-          qty = Math.min(qty, Number(holding.quantity))
-          if (qty <= 0) warning = 'No holding qty available'
-        }
-      }
-      return {
-        id: `${m.id}`,
-        symbol: m.symbol,
-        exchange: m.exchange ?? null,
-        weightFraction,
-        amount,
-        lastPrice,
-        qty,
-        warning,
-      }
-    })
-    setAllocationPreview(rows)
-  }
-
-  const openAllocation = () => {
-    if (!selectedGroup?.members?.length) return
-    setAllocationDraft(DEFAULT_ALLOCATION)
-    setAllocationPreview([])
-    setAllocationError(null)
-    setAllocateOpen(true)
-  }
-
-  const submitAllocation = async () => {
-    if (!selectedGroup || !selectedGroup.members.length) return
-    const totalAmount = Number(allocationDraft.totalAmount)
-    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
-      setAllocationError('Enter a valid total amount.')
-      return
-    }
-    try {
-      setAllocationError(null)
-      setAllocationBusy(true)
-      const preview = allocationPreview.filter((p) => p.qty > 0 && !p.warning)
-      if (!preview.length) {
-        setAllocationError('No valid orders to create (check last prices and amounts).')
-        return
-      }
-      await Promise.all(
-        preview.map((p) =>
-          createManualOrder({
-            portfolio_group_id: selectedGroup.kind === 'PORTFOLIO' ? selectedGroup.id : null,
-            symbol: p.symbol,
-            exchange: p.exchange,
-            side: allocationDraft.side,
-            qty: p.qty,
-            order_type: allocationDraft.orderType,
-            product: allocationDraft.product,
-          }),
-        ),
-      )
-      setAllocateOpen(false)
-    } catch (err) {
-      setAllocationError(
-        err instanceof Error ? err.message : 'Failed to create queued orders',
-      )
-    } finally {
-      setAllocationBusy(false)
     }
   }
 
@@ -1577,9 +1429,10 @@ export function GroupsPage() {
       })
     }
 
-    cols.push(
-      { field: 'notes', headerName: 'Notes', flex: 1, minWidth: 160 },
-      {
+    if (notesEnabled) {
+      cols.push({ field: 'notes', headerName: 'Notes', flex: 1, minWidth: 160 })
+    }
+    cols.push({
         field: 'actions',
         headerName: 'Actions',
         width: 240,
@@ -1604,38 +1457,16 @@ export function GroupsPage() {
             </Button>
           </Stack>
         ),
-      },
-    )
+      })
 
     return cols
-  }, [allocationTotalsByKey, getHoldingsSnapshot, openReconcileForMember, selectedGroup?.kind])
-
-  const canAllocateWithWeights =
-    selectedGroup?.members?.some((m) => (m.target_weight ?? 0) > 0) ?? false
-
-  const allocationPreviewColumns: GridColDef<AllocationPreviewRow>[] = [
-    { field: 'symbol', headerName: 'Symbol', width: 140 },
-    {
-      field: 'weightFraction',
-      headerName: 'Weight',
-      width: 110,
-      valueFormatter: (v) => formatPercent(v as number | null),
-    },
-    {
-      field: 'lastPrice',
-      headerName: 'Last price',
-      width: 110,
-      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
-    },
-    {
-      field: 'amount',
-      headerName: 'Amount',
-      width: 120,
-      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
-    },
-    { field: 'qty', headerName: 'Qty', type: 'number', width: 90 },
-    { field: 'warning', headerName: 'Warning', flex: 1, minWidth: 220 },
-  ]
+  }, [
+    allocationTotalsByKey,
+    getHoldingsSnapshot,
+    notesEnabled,
+    openReconcileForMember,
+    selectedGroup?.kind,
+  ])
 
   return (
     <Box sx={{ px: 3, py: 2 }}>
@@ -1765,15 +1596,6 @@ export function GroupsPage() {
                 >
                   Open in grid
                 </Button>
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<PlayListAddIcon />}
-                disabled={!selectedGroup?.members?.length}
-                onClick={openAllocation}
-              >
-                Allocate
-              </Button>
             </Stack>
 
             {selectedGroup?.kind === 'PORTFOLIO' && (
@@ -1852,6 +1674,61 @@ export function GroupsPage() {
                     loading={watchlistQuotesLoading}
                   />
                 </Box>
+              </Stack>
+            ) : basketRedesignEnabled ? (
+              <Stack spacing={1.5}>
+                <Stack
+                  direction={{ xs: 'column', md: 'row' }}
+                  spacing={1}
+                  alignItems={{ xs: 'stretch', md: 'center' }}
+                >
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<EditIcon />}
+                    onClick={() => setBasketBuilderOpen(true)}
+                  >
+                    Open basket builder
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={!selectedGroup?.members?.length}
+                    onClick={() => setBuyPreviewOpen(true)}
+                  >
+                    Buy basket → portfolio
+                  </Button>
+                  <Typography variant="body2" color="text.secondary">
+                    Weight mode only. Buy creates WAITING orders (execute via Queue/Orders).
+                  </Typography>
+                </Stack>
+
+                {selectedGroupId != null && selectedGroup != null && (
+                  <BasketBuilderDialog
+                    open={basketBuilderOpen}
+                    groupId={selectedGroupId}
+                    group={selectedGroup}
+                    onClose={() => setBasketBuilderOpen(false)}
+                    onGroupChange={(next) => {
+                      setSelectedGroup(next)
+                      void reloadGroups(next.id)
+                    }}
+                  />
+                )}
+
+                {selectedGroupId != null && selectedGroup != null && (
+                  <BuyPreviewDialog
+                    open={buyPreviewOpen}
+                    basketGroupId={selectedGroupId}
+                    basket={selectedGroup}
+                    onClose={() => setBuyPreviewOpen(false)}
+                    onBought={(res) => {
+                      setBuyPreviewOpen(false)
+                      setSelectedGroup(res.portfolio_group)
+                      void reloadGroups(res.portfolio_group.id)
+                    }}
+                  />
+                )}
               </Stack>
             ) : (
               <>
@@ -1932,13 +1809,15 @@ export function GroupsPage() {
                     <MenuItem value="NSE">NSE</MenuItem>
                     <MenuItem value="BSE">BSE</MenuItem>
                   </TextField>
-                  <TextField
-                    label="Notes (optional)"
-                    size="small"
-                    value={newMemberNotes}
-                    onChange={(e) => setNewMemberNotes(e.target.value)}
-                    sx={{ flexGrow: 1, width: { xs: '100%', md: 'auto' } }}
-                  />
+                  {notesEnabled ? (
+                    <TextField
+                      label="Notes (optional)"
+                      size="small"
+                      value={newMemberNotes}
+                      onChange={(e) => setNewMemberNotes(e.target.value)}
+                      sx={{ flexGrow: 1, width: { xs: '100%', md: 'auto' } }}
+                    />
+                  ) : null}
                   <Button
                     size="small"
                     variant="contained"
@@ -2515,14 +2394,16 @@ export function GroupsPage() {
                 </Paper>
               )
             })()}
-            <TextField
-              label="Notes"
-              value={memberDraft.notes}
-              onChange={(e) =>
-                setMemberDraft((prev) => ({ ...prev, notes: e.target.value }))
-              }
-              fullWidth
-            />
+            {notesEnabled ? (
+              <TextField
+                label="Notes"
+                value={memberDraft.notes}
+                onChange={(e) =>
+                  setMemberDraft((prev) => ({ ...prev, notes: e.target.value }))
+                }
+                fullWidth
+              />
+            ) : null}
           </Stack>
         </DialogContent>
         <DialogActions>
@@ -2644,154 +2525,6 @@ export function GroupsPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={allocateOpen} onClose={() => setAllocateOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Allocate funds to group members</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-              <TextField
-                label="Total amount (INR)"
-                value={allocationDraft.totalAmount}
-                onChange={(e) =>
-                  setAllocationDraft((prev) => ({
-                    ...prev,
-                    totalAmount: e.target.value,
-                  }))
-                }
-                sx={{ width: { xs: '100%', md: 220 } }}
-              />
-              <FormControl sx={{ width: { xs: '100%', md: 160 } }}>
-                <InputLabel id="alloc-side-label">Side</InputLabel>
-                <Select
-                  labelId="alloc-side-label"
-                  label="Side"
-                  value={allocationDraft.side}
-                  onChange={(e) =>
-                    setAllocationDraft((prev) => ({
-                      ...prev,
-                      side: e.target.value as 'BUY' | 'SELL',
-                    }))
-                  }
-                >
-                  <MenuItem value="BUY">BUY</MenuItem>
-                  <MenuItem value="SELL">SELL</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl sx={{ width: { xs: '100%', md: 160 } }}>
-                <InputLabel id="alloc-order-type-label">Order type</InputLabel>
-                <Select
-                  labelId="alloc-order-type-label"
-                  label="Order type"
-                  value={allocationDraft.orderType}
-                  onChange={(e) =>
-                    setAllocationDraft((prev) => ({
-                      ...prev,
-                      orderType: e.target.value as 'MARKET' | 'LIMIT',
-                    }))
-                  }
-                >
-                  <MenuItem value="MARKET">MARKET</MenuItem>
-                  <MenuItem value="LIMIT">LIMIT</MenuItem>
-                </Select>
-              </FormControl>
-              <FormControl sx={{ width: { xs: '100%', md: 160 } }}>
-                <InputLabel id="alloc-product-label">Product</InputLabel>
-                <Select
-                  labelId="alloc-product-label"
-                  label="Product"
-                  value={allocationDraft.product}
-                  onChange={(e) =>
-                    setAllocationDraft((prev) => ({
-                      ...prev,
-                      product: String(e.target.value),
-                    }))
-                  }
-                >
-                  <MenuItem value="CNC">CNC</MenuItem>
-                  <MenuItem value="MIS">MIS</MenuItem>
-                </Select>
-              </FormControl>
-            </Stack>
-
-            <FormControl>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Allocation mode
-              </Typography>
-              <RadioGroup
-                row
-                value={allocationDraft.mode}
-                onChange={(e) =>
-                  setAllocationDraft((prev) => ({
-                    ...prev,
-                    mode: e.target.value as AllocationMode,
-                  }))
-                }
-              >
-                <FormControlLabel
-                  value="equal"
-                  control={<Radio />}
-                  label="Equal"
-                />
-                <FormControlLabel
-                  value="weights"
-                  control={<Radio />}
-                  label="Target weights"
-                  disabled={!canAllocateWithWeights}
-                />
-              </RadioGroup>
-              {!canAllocateWithWeights && (
-                <Typography variant="caption" color="text.secondary">
-                  Add target weights to enable weighted allocations.
-                </Typography>
-              )}
-            </FormControl>
-
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Button
-                variant="outlined"
-                disabled={!selectedGroup?.members?.length}
-                onClick={() =>
-                  void computeAllocationPreview({
-                    ...allocationDraft,
-                    mode:
-                      allocationDraft.mode === 'weights' && !canAllocateWithWeights
-                        ? 'equal'
-                        : allocationDraft.mode,
-                  })
-                }
-              >
-                Preview
-              </Button>
-              {allocationError && (
-                <Typography color="error">{allocationError}</Typography>
-              )}
-            </Stack>
-
-            <Box sx={{ height: 320 }}>
-              <DataGrid
-                rows={allocationPreview}
-                columns={allocationPreviewColumns}
-                getRowId={(r) => r.id}
-                disableRowSelectionOnClick
-                pageSizeOptions={[10, 25, 50]}
-                initialState={{
-                  pagination: { paginationModel: { pageSize: 10, page: 0 } },
-                }}
-              />
-            </Box>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAllocateOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            disabled={allocationBusy || allocationPreview.length === 0}
-            onClick={() => void submitAllocation()}
-          >
-            {allocationBusy ? 'Creating…' : 'Create queued orders'}
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   )
 }

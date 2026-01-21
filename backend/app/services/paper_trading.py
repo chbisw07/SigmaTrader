@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.clients import ZerodhaClient
@@ -15,6 +16,7 @@ from app.services.managed_risk import (
     ensure_managed_risk_for_executed_order,
     mark_managed_risk_exit_executed,
 )
+from app.services.portfolio_allocations import apply_portfolio_allocation_for_executed_order
 from app.services.risk_policy_store import get_risk_policy
 from app.services.system_events import record_system_event
 
@@ -59,14 +61,69 @@ def submit_paper_order(
     *,
     correlation_id: Optional[str] = None,
 ) -> Order:
-    """Mark an order as a paper trade and put it into SENT state.
+    """Submit a paper order.
 
-    Actual fills are performed by `poll_paper_orders`.
+    For MARKET orders, we fill immediately at current LTP (best-effort) so
+    portfolio baselines update without requiring a separate poll loop.
+    For other order types, fills are performed by `poll_paper_orders`.
     """
 
     order.simulated = True
     if order.status != "WAITING":
         return order
+
+    # Best-effort immediate fill for MARKET orders.
+    if (order.order_type or "").strip().upper() == "MARKET":
+        try:
+            client = _get_price_client(db, settings)
+            symbol = order.symbol
+            exchange = order.exchange or "NSE"
+            if ":" in symbol:
+                ex, ts = symbol.split(":", 1)
+                if ex:
+                    exchange = ex
+                symbol = ts
+            ltp = client.get_ltp(exchange=exchange, tradingsymbol=symbol)
+            order.status = "EXECUTED"
+            order.price = float(ltp)
+            order.error_message = None
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+
+            try:
+                apply_portfolio_allocation_for_executed_order(
+                    db,
+                    order=order,
+                    filled_qty=float(order.qty or 0.0),
+                    avg_price=float(order.price or 0.0) if order.price is not None else None,
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+            record_system_event(
+                db,
+                level="INFO",
+                category="paper",
+                message="Paper order executed (market)",
+                correlation_id=correlation_id,
+                details={
+                    "order_id": order.id,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "qty": order.qty,
+                    "price": order.price,
+                },
+            )
+            return order
+        except Exception:
+            # Fall back to SENT and allow polling to fill later.
+            pass
+
     order.status = "SENT"
     order.error_message = None
     db.add(order)
@@ -113,11 +170,14 @@ def poll_paper_orders(db: Session, settings: Settings) -> PaperFillResult:
 
     open_orders: List[Order] = (
         db.query(Order)
-        .join(Strategy, Strategy.id == Order.strategy_id)
+        .outerjoin(Strategy, Strategy.id == Order.strategy_id)
         .filter(
             Order.simulated.is_(True),
             Order.status.in_(["SENT", "OPEN"]),
-            Strategy.execution_target == "PAPER",
+            or_(
+                Order.execution_target == "PAPER",
+                Strategy.execution_target == "PAPER",
+            ),
         )
         .order_by(Order.created_at)
         .all()
@@ -161,6 +221,15 @@ def poll_paper_orders(db: Session, settings: Settings) -> PaperFillResult:
             order.price = exec_price
         db.add(order)
         filled += 1
+        try:
+            apply_portfolio_allocation_for_executed_order(
+                db,
+                order=order,
+                filled_qty=float(order.qty or 0.0),
+                avg_price=float(order.price or 0.0) if order.price is not None else None,
+            )
+        except Exception:
+            pass
         try:
             policy, _src = get_risk_policy(db, settings)
             avg_price = float(order.price or 0.0) if order.price is not None else None

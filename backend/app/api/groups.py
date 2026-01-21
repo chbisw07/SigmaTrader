@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -19,6 +20,7 @@ from app.schemas.group_imports import (
     GroupImportWatchlistResponse,
 )
 from app.schemas.groups import (
+    BasketConfigUpdate,
     GroupCreate,
     GroupDetailRead,
     GroupMemberCreate,
@@ -28,12 +30,17 @@ from app.schemas.groups import (
     GroupRead,
     GroupUpdate,
 )
+from app.schemas.baskets import BasketBuyRequest, BasketBuyResponse
+from app.schemas.orders import OrderRead
 from app.schemas.portfolio_allocations import (
     PortfolioAllocationRead,
     PortfolioAllocationReconcileRequest,
     PortfolioAllocationReconcileResponse,
 )
 from app.services.group_imports import import_watchlist_dataset
+from app.services.market_data import MarketDataError
+from app.services.baskets import freeze_basket_prices
+from app.services.buy_basket import create_portfolio_from_basket
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -333,6 +340,199 @@ def get_group(group_id: int, db: Session = Depends(get_db)) -> GroupDetailRead:
     result.member_count = len(members)
     result.members = [_model_validate(GroupMemberRead, m) for m in members]
     return result
+
+
+@router.patch("/{group_id}/basket/config", response_model=GroupRead)
+def update_basket_config(
+    group_id: int,
+    payload: BasketConfigUpdate,
+    db: Session = Depends(get_db),
+) -> GroupRead:
+    group = _get_group_or_404(db, group_id)
+    if group.kind != "MODEL_PORTFOLIO":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Basket config is supported only for MODEL_PORTFOLIO groups.",
+        )
+
+    updated = False
+    if _field_is_set(payload, "funds"):
+        group.funds = payload.funds
+        updated = True
+    if _field_is_set(payload, "allocation_mode"):
+        group.allocation_mode = payload.allocation_mode
+        updated = True
+
+    if updated:
+        db.add(group)
+        db.commit()
+        db.refresh(group)
+
+    member_count = (
+        db.query(func.count(GroupMember.id))
+        .filter(GroupMember.group_id == group_id)
+        .scalar()
+        or 0
+    )
+    result = _model_validate(GroupRead, group)
+    result.member_count = int(member_count)
+    return result
+
+
+@router.post("/{group_id}/basket/freeze", response_model=GroupDetailRead)
+def freeze_basket(
+    group_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> GroupDetailRead:
+    group = _get_group_or_404(db, group_id)
+    if group.kind != "MODEL_PORTFOLIO":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Freeze is supported only for MODEL_PORTFOLIO groups.",
+        )
+
+    members = (
+        db.query(GroupMember)
+        .filter(GroupMember.group_id == group_id)
+        .order_by(GroupMember.created_at)
+        .all()
+    )
+    if not members:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot freeze an empty basket.",
+        )
+
+    try:
+        freeze_basket_prices(db, settings, group=group, members=members, frozen_at=datetime.now(UTC))
+    except MarketDataError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    db.commit()
+
+    # Return fresh state.
+    members2 = (
+        db.query(GroupMember)
+        .filter(GroupMember.group_id == group_id)
+        .order_by(GroupMember.created_at)
+        .all()
+    )
+    result = _model_validate(GroupDetailRead, group)
+    result.member_count = len(members2)
+    result.members = [_model_validate(GroupMemberRead, m) for m in members2]
+    return result
+
+
+@router.post("/{group_id}/buy", response_model=BasketBuyResponse)
+def buy_basket_to_portfolio(
+    group_id: int,
+    payload: BasketBuyRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+) -> BasketBuyResponse:
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required."
+        )
+
+    basket = _get_group_or_404(db, group_id)
+    if basket.kind != "MODEL_PORTFOLIO":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Buy is supported only for MODEL_PORTFOLIO groups.",
+        )
+    if basket.owner_id is not None and basket.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    members = (
+        db.query(GroupMember)
+        .filter(GroupMember.group_id == group_id)
+        .order_by(GroupMember.created_at)
+        .all()
+    )
+    if not members:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot buy an empty basket.",
+        )
+    if basket.frozen_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Freeze prices before buying this basket.",
+        )
+    if any((m.frozen_price or 0.0) <= 0 for m in members):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Basket has missing frozen prices. Re-freeze and try again.",
+        )
+
+    items = payload.items or []
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="items is required.",
+        )
+    if len(items) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many symbols (max 200).",
+        )
+
+    seen: set[tuple[str, str]] = set()
+    spec: list[tuple[str, str, int]] = []
+    for it in items:
+        exch = (it.exchange or "NSE").strip().upper() or "NSE"
+        sym = (it.symbol or "").strip().upper()
+        if not sym:
+            continue
+        key = (exch, sym)
+        if key in seen:
+            continue
+        seen.add(key)
+        spec.append((exch, sym, int(it.qty)))
+
+    if not spec:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid items provided.",
+        )
+
+    try:
+        portfolio, portfolio_members, created_orders = create_portfolio_from_basket(
+            db,
+            user=user,
+            basket=basket,
+            members=members,
+            orders_spec=spec,
+            broker_name=payload.broker_name,
+            product=payload.product,
+            order_type=payload.order_type,
+            execution_target=payload.execution_target,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    db.commit()
+    db.refresh(portfolio)
+
+    # Build response
+    detail = _model_validate(GroupDetailRead, portfolio)
+    detail.member_count = len(portfolio_members)
+    detail.members = [_model_validate(GroupMemberRead, m) for m in portfolio_members]
+    orders_out = [_model_validate(OrderRead, o) for o in created_orders]
+
+    return BasketBuyResponse(
+        portfolio_group=detail,
+        orders=orders_out,
+        created_at=portfolio.bought_at or datetime.now(UTC),
+    )
 
 
 @router.patch("/{group_id}", response_model=GroupRead)
@@ -665,6 +865,9 @@ def update_group_member(
         updated = True
     if _field_is_set(payload, "reference_price"):
         member.reference_price = payload.reference_price
+        updated = True
+    if _field_is_set(payload, "weight_locked"):
+        member.weight_locked = bool(payload.weight_locked) if payload.weight_locked is not None else False
         updated = True
     if _field_is_set(payload, "notes"):
         member.notes = payload.notes

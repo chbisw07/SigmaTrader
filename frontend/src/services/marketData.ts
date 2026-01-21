@@ -23,6 +23,7 @@ export type MarketSymbol = {
 export type MarketDataStatus = {
   canonical_broker: string
   available: boolean
+  market_open?: boolean
   error?: string | null
 }
 

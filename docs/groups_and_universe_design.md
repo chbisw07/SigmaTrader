@@ -103,13 +103,15 @@ This links *real positions* to *model portfolios* and watchlists without duplica
 
 ## 4. Using groups in trading flows
 
-### 4.1 Equal‑amount allocation into a group
+### 4.1 Equal‑amount allocation into a group (legacy; removed)
 
 Goal: “I have ₹X and I want to allocate it equally across the stocks in Group G, using my existing Buy flows and risk controls.”
 
+Note: The legacy **"Allocate funds"** dialog in Groups has been removed. For creating queued orders from a set of symbols, use a Basket + the "Buy basket → portfolio (preview)" flow.
+
 Flow:
 
-1. User selects a group G and clicks **“Allocate funds”**.
+1. User selects a group G (typically a Basket) and uses the "Buy basket → portfolio (preview)" flow.
 2. A dialog asks:
    - `Total amount` to allocate.  
    - Allocation mode:

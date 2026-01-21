@@ -1,0 +1,280 @@
+import Button from '@mui/material/Button'
+import Dialog from '@mui/material/Dialog'
+import DialogActions from '@mui/material/DialogActions'
+import DialogContent from '@mui/material/DialogContent'
+import DialogTitle from '@mui/material/DialogTitle'
+import MenuItem from '@mui/material/MenuItem'
+import Paper from '@mui/material/Paper'
+import Stack from '@mui/material/Stack'
+import TextField from '@mui/material/TextField'
+import Typography from '@mui/material/Typography'
+import Alert from '@mui/material/Alert'
+import {
+  DataGrid,
+  type GridColDef,
+} from '@mui/x-data-grid'
+import { useMemo, useState } from 'react'
+
+import { useMarketQuotes } from '../../hooks/useMarketQuotes'
+import {
+  buyBasketToPortfolio,
+  type BasketBuyResponse,
+  type GroupDetail,
+  type GroupMember,
+} from '../../services/groups'
+import { computeWeightModeAllocation } from '../../groups/allocation/engine'
+import type { AllocationRowDraft } from '../../groups/allocation/types'
+
+export type BuyPreviewDialogProps = {
+  open: boolean
+  basketGroupId: number
+  basket: GroupDetail
+  onClose: () => void
+  onBought: (res: BasketBuyResponse) => void
+}
+
+function toKey(exchange: string | null | undefined, symbol: string): string {
+  const exch = (exchange || 'NSE').trim().toUpperCase() || 'NSE'
+  const sym = (symbol || '').trim().toUpperCase()
+  return `${exch}:${sym}`
+}
+
+export function BuyPreviewDialog({
+  open,
+  basketGroupId,
+  basket,
+  onClose,
+  onBought,
+}: BuyPreviewDialogProps) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [brokerName, setBrokerName] = useState<'zerodha' | 'angelone'>('zerodha')
+  const [executionTarget, setExecutionTarget] = useState<'LIVE' | 'PAPER'>('LIVE')
+  const [product, setProduct] = useState<'CNC' | 'MIS'>('CNC')
+
+  const quoteItems = useMemo(() => {
+    return (basket.members ?? []).map((m) => ({
+      symbol: m.symbol,
+      exchange: m.exchange ?? 'NSE',
+    }))
+  }, [basket.members])
+
+  const { quotesByKey, loading: quotesLoading, error: quotesError } =
+    useMarketQuotes(quoteItems)
+
+  const allocationRows = useMemo((): AllocationRowDraft[] => {
+    return (basket.members ?? []).map((m) => ({
+      id: String(m.id),
+      symbol: m.symbol,
+      exchange: m.exchange ?? 'NSE',
+      weightPct:
+        m.target_weight != null && Number.isFinite(Number(m.target_weight))
+          ? Number(m.target_weight) * 100
+          : 0,
+      locked: false,
+    }))
+  }, [basket.members])
+
+  const pricesByRowId = useMemo(() => {
+    const map: Record<string, number | null | undefined> = {}
+    for (const m of basket.members ?? []) {
+      map[String(m.id)] = quotesByKey[toKey(m.exchange, m.symbol)]?.ltp ?? null
+    }
+    return map
+  }, [basket.members, quotesByKey])
+
+  const funds = basket.funds != null ? Number(basket.funds) : 0
+  const allocation = useMemo(() => {
+    return computeWeightModeAllocation({
+      funds,
+      rows: allocationRows,
+      pricesByRowId,
+      requireWeightsSumTo100: true,
+    })
+  }, [allocationRows, funds, pricesByRowId])
+
+  const rowsById = useMemo(() => {
+    const out = new Map<number, (typeof allocation.rows)[number]>()
+    for (const r of allocation.rows) {
+      const id = Number(r.id)
+      if (!Number.isFinite(id)) continue
+      out.set(id, r)
+    }
+    return out
+  }, [allocation.rows])
+
+  const canBuy = useMemo(() => {
+    if (!basket.members?.length) return false
+    if (!(funds > 0)) return false
+    if (!basket.frozen_at) return false
+    if (allocation.issues.some((i) => i.level === 'error')) return false
+    const planned = allocation.rows.filter((r) => r.plannedQty > 0 && !r.issues.some((i) => i.level === 'error'))
+    return planned.length > 0
+  }, [allocation.issues, allocation.rows, basket.frozen_at, basket.members?.length, funds])
+
+  const columns = useMemo((): GridColDef<GroupMember>[] => {
+    const cols: GridColDef<GroupMember>[] = [
+      { field: 'symbol', headerName: 'Symbol', width: 140 },
+      {
+        field: 'exchange',
+        headerName: 'Exchange',
+        width: 110,
+        valueGetter: (_v, row) => row.exchange ?? 'NSE',
+      },
+      {
+        field: 'ltp',
+        headerName: 'LTP',
+        width: 110,
+        valueGetter: (_v, row) => quotesByKey[toKey(row.exchange, row.symbol)]?.ltp ?? null,
+        valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
+      },
+      {
+        field: 'frozen_price',
+        headerName: 'Frozen',
+        width: 110,
+        valueGetter: (_v, row) => row.frozen_price ?? null,
+        valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
+      },
+      {
+        field: 'qty',
+        headerName: 'Planned qty',
+        width: 120,
+        valueGetter: (_v, row) => rowsById.get(row.id)?.plannedQty ?? 0,
+      },
+      {
+        field: 'cost',
+        headerName: 'Est cost',
+        width: 120,
+        valueGetter: (_v, row) => rowsById.get(row.id)?.plannedCost ?? 0,
+        valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
+      },
+    ]
+    return cols
+  }, [quotesByKey, rowsById])
+
+  const handleBuy = async () => {
+    try {
+      setBusy(true)
+      setError(null)
+      const items = allocation.rows
+        .filter((r) => r.plannedQty > 0 && !r.issues.some((i) => i.level === 'error'))
+        .map((r) => ({
+          symbol: r.symbol,
+          exchange: r.exchange ?? 'NSE',
+          qty: r.plannedQty,
+        }))
+      if (!items.length) {
+        setError('No valid planned orders to create.')
+        return
+      }
+      const res = await buyBasketToPortfolio(basketGroupId, {
+        broker_name: brokerName,
+        product,
+        order_type: 'MARKET',
+        execution_target: executionTarget,
+        items,
+      })
+      onBought(res)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to buy basket')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg">
+      <DialogTitle>Buy basket → portfolio (preview)</DialogTitle>
+      <DialogContent>
+        <Stack spacing={1.5} sx={{ mt: 1 }}>
+          {error && <Alert severity="error">{error}</Alert>}
+          {quotesError && <Alert severity="warning">{quotesError}</Alert>}
+          {!basket.frozen_at && (
+            <Alert severity="warning">
+              Freeze basket prices before buying (required for traceability).
+            </Alert>
+          )}
+
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
+            <TextField
+              label="Broker"
+              size="small"
+              select
+              value={brokerName}
+              onChange={(e) =>
+                setBrokerName(e.target.value === 'angelone' ? 'angelone' : 'zerodha')
+              }
+              sx={{ width: { xs: '100%', md: 180 } }}
+              disabled={busy}
+            >
+              <MenuItem value="zerodha">Zerodha</MenuItem>
+              <MenuItem value="angelone">AngelOne</MenuItem>
+            </TextField>
+            <TextField
+              label="Execution target"
+              size="small"
+              select
+              value={executionTarget}
+              onChange={(e) =>
+                setExecutionTarget(e.target.value === 'PAPER' ? 'PAPER' : 'LIVE')
+              }
+              sx={{ width: { xs: '100%', md: 180 } }}
+              disabled={busy}
+            >
+              <MenuItem value="LIVE">LIVE</MenuItem>
+              <MenuItem value="PAPER">PAPER</MenuItem>
+            </TextField>
+            <TextField
+              label="Product"
+              size="small"
+              select
+              value={product}
+              onChange={(e) => setProduct(e.target.value === 'MIS' ? 'MIS' : 'CNC')}
+              sx={{ width: { xs: '100%', md: 180 } }}
+              disabled={busy}
+              helperText="Passed to orders."
+            >
+              <MenuItem value="CNC">CNC</MenuItem>
+              <MenuItem value="MIS">MIS</MenuItem>
+            </TextField>
+            <div style={{ flexGrow: 1 }} />
+            <Typography variant="body2" color="text.secondary">
+              Funds: {Number.isFinite(funds) ? funds.toFixed(2) : '—'} | Est cost:{' '}
+              {allocation.totals.totalCost.toFixed(2)} | Remaining:{' '}
+              {allocation.totals.remaining.toFixed(2)}
+            </Typography>
+          </Stack>
+
+          <Paper variant="outlined" sx={{ p: 1.25 }}>
+            <Typography variant="caption" color="text.secondary">
+              Creates a new Portfolio group + WAITING orders. Executions and avg buy price come from existing order execution/sync (no risk policy changes).
+            </Typography>
+          </Paper>
+          <Typography variant="caption" color="text.secondary">
+            Quotes refresh every ~5m during market hours.
+          </Typography>
+
+          <div style={{ height: 520, width: '100%' }}>
+            <DataGrid
+              rows={basket.members ?? []}
+              columns={columns}
+              getRowId={(row) => row.id}
+              disableRowSelectionOnClick
+              loading={quotesLoading || busy}
+              pageSizeOptions={[10, 25, 50]}
+              initialState={{ pagination: { paginationModel: { pageSize: 25, page: 0 } } }}
+            />
+          </div>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={busy}>
+          Close
+        </Button>
+        <Button variant="contained" onClick={() => void handleBuy()} disabled={busy || !canBuy}>
+          Create portfolio + orders
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
+}

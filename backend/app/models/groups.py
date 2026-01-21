@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import List, Optional
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Float,
     ForeignKey,
@@ -43,6 +44,15 @@ class Group(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="WATCHLIST")
     description: Mapped[Optional[str]] = mapped_column(Text())
+
+    # Basket metadata (MODEL_PORTFOLIO groups only).
+    funds: Mapped[Optional[float]] = mapped_column(Float)
+    allocation_mode: Mapped[Optional[str]] = mapped_column(String(32))
+    frozen_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+
+    # Portfolio origin metadata (PORTFOLIO groups only).
+    origin_basket_id: Mapped[Optional[int]] = mapped_column(Integer)
+    bought_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
@@ -94,6 +104,10 @@ class GroupMember(Base):
     # at creation time (used for "since creation" P&L and amount required).
     reference_qty: Mapped[Optional[int]] = mapped_column(Integer)
     reference_price: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Basket "freeze prices" snapshot (MODEL_PORTFOLIO groups only).
+    frozen_price: Mapped[Optional[float]] = mapped_column(Float)
+    weight_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)

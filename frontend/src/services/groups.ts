@@ -11,6 +11,11 @@ export type Group = {
   kind: GroupKind
   description?: string | null
   member_count: number
+  funds?: number | null
+  allocation_mode?: string | null
+  frozen_at?: string | null
+  origin_basket_id?: number | null
+  bought_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -23,6 +28,8 @@ export type GroupMember = {
   target_weight?: number | null
   reference_qty?: number | null
   reference_price?: number | null
+  frozen_price?: number | null
+  weight_locked?: boolean
   notes?: string | null
   created_at: string
   updated_at: string
@@ -30,6 +37,20 @@ export type GroupMember = {
 
 export type GroupDetail = Group & {
   members: GroupMember[]
+}
+
+export type BasketBuyRequest = {
+  broker_name?: string | null
+  product?: string | null
+  order_type?: 'MARKET'
+  execution_target?: 'LIVE' | 'PAPER'
+  items: Array<{ symbol: string; exchange?: string | null; qty: number }>
+}
+
+export type BasketBuyResponse = {
+  portfolio_group: GroupDetail
+  orders: Array<{ id: number; portfolio_group_id?: number | null }>
+  created_at: string
 }
 
 export type GroupImportColumnType =
@@ -405,6 +426,7 @@ export async function updateGroupMember(
     target_weight?: number | null
     reference_qty?: number | null
     reference_price?: number | null
+    weight_locked?: boolean | null
     notes?: string | null
   },
 ): Promise<GroupMember> {
@@ -420,6 +442,55 @@ export async function updateGroupMember(
     )
   }
   return (await res.json()) as GroupMember
+}
+
+export async function updateBasketConfig(
+  groupId: number,
+  payload: { funds?: number | null; allocation_mode?: 'WEIGHT' | null },
+): Promise<Group> {
+  const res = await fetch(`/api/groups/${groupId}/basket/config`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await readApiError(res)
+    throw new Error(
+      `Failed to update basket config (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as Group
+}
+
+export async function freezeBasket(groupId: number): Promise<GroupDetail> {
+  const res = await fetch(`/api/groups/${groupId}/basket/freeze`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const body = await readApiError(res)
+    throw new Error(
+      `Failed to freeze basket prices (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as GroupDetail
+}
+
+export async function buyBasketToPortfolio(
+  basketGroupId: number,
+  payload: BasketBuyRequest,
+): Promise<BasketBuyResponse> {
+  const res = await fetch(`/api/groups/${basketGroupId}/buy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await readApiError(res)
+    throw new Error(
+      `Failed to buy basket (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as BasketBuyResponse
 }
 
 export async function deleteGroupMember(

@@ -12,8 +12,14 @@ Detailed gap analysis: `docs/groups_redesign_gap_analysis.md`
 - Portfolios have partial execution semantics:
   - Orders can be attributed to a portfolio via `orders.portfolio_group_id`.
   - Executed order sync updates `GroupMember.reference_qty` and weighted-average `reference_price` for that portfolio (`backend/app/services/portfolio_allocations.py`).
-  - The UI has “allocation health” and “reconcile allocations” tooling for portfolio groups.
-- Live LTP exists only via broker-specific endpoints (`/api/zerodha/ltp`, `/api/angelone/ltp`) and holdings snapshots; there is no generic/bulk market quotes endpoint for watchlists/baskets.
+  - The UI has "allocation health" and "reconcile allocations" tooling for portfolio groups.
+- A generic, poll-friendly bulk quotes endpoint exists (`POST /api/market/quotes`) with a small cache TTL, used by redesigned watchlists/baskets.
+- Legacy "Allocate" (funds-to-queued-orders) has been removed from Groups; use Basket Builder + Buy basket → portfolio flow instead.
+
+## Current S32 Progress
+- `G01` Watchlist: implemented (flagged; redesigned symbol add + LTP/day% grid).
+- `G02` Basket: implemented (flagged; Weight mode only; funds + locks + freeze snapshot; no execution).
+- `G03` Portfolio: implemented (flagged; buy basket → portfolio creates queued orders + snapshots frozen prices).
 
 ## What Must Change (PRD-Driven)
 - Watchlists: implement fast symbol add (paste + shortcuts) and remove Notes; add live LTP/day% columns.
@@ -37,10 +43,7 @@ Detailed gap analysis: `docs/groups_redesign_gap_analysis.md`
 
 ## Feature Flag (Non-Negotiable)
 - Flag name: `FEATURE_GROUPS_REDESIGN`
-- Rollout approach (to avoid big-bang refactor): the same flag is “expanded” kind-by-kind:
-  - Phase 1: when enabled, only `WATCHLIST` uses redesigned components; baskets/portfolios remain legacy.
-  - Phase 2: baskets join the redesigned path; portfolios remain legacy.
-  - Phase 3: portfolios join; legacy path remains available when the flag is off.
+- Current behavior: enabled by default. Use `?feature_groups_redesign=0` to temporarily disable for comparison/testing.
 
 ## Assumptions (Explicit)
 - Live Watchlist/Basket pricing uses a new poll-friendly bulk quotes endpoint (vs per-symbol broker LTP calls), with caching/throttling to avoid rate-limit issues.

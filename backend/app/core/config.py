@@ -106,6 +106,9 @@ def get_settings() -> Settings:
     if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
         settings.admin_username = None
         settings.admin_password = None
+        # Ensure auth/session signing works under pytest even when
+        # pydantic-settings is unavailable (env loading disabled in fallback).
+        settings.crypto_key = settings.crypto_key or "pytest-crypto-key"
         # Keep legacy indicator-alert APIs available under pytest so existing
         # tests can exercise that code path while the product migrates to v3.
         settings.enable_legacy_alerts = True

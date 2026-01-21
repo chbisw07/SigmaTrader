@@ -1,7 +1,7 @@
 # QA Checklist — Watchlist Redesign (S32 / G01)
 
 Precondition:
-- Enable `FEATURE_GROUPS_REDESIGN` for testing (e.g. `?feature_groups_redesign=1` on the Groups page URL).
+- Groups redesign is enabled by default. To temporarily disable for comparison/testing, use `?feature_groups_redesign=0` on the Groups page URL.
 
 ## Create + Basic Use
 - Create a new `WATCHLIST` group from `frontend/src/views/GroupsPage.tsx`.
@@ -26,4 +26,3 @@ Precondition:
 - With the flag disabled, Groups page behaves exactly as before for watchlists.
 - For non-watchlist group kinds, the legacy UI remains unchanged (no new basket/portfolio behavior introduced in this phase).
 - Import flows are unchanged (no changes to watchlist import dialog or endpoints).
-

@@ -48,12 +48,12 @@ Scope note (Step 1): Analysis + recommended implementation sequence only (no cod
 ### Frontend (Current)
 - `frontend/src/routes/AppRoutes.tsx` — route `"/groups"` → `GroupsPage`.
 - `frontend/src/layouts/MainLayout.tsx` — left nav includes “Groups” linking to `"/groups"`.
-- `frontend/src/views/GroupsPage.tsx` — **single, monolithic** implementation for:
+- `frontend/src/views/GroupsPage.tsx` - **single, monolithic** implementation for:
   - Left groups list: MUI `DataGrid` with `Import` + `New` buttons; columns include name/kind/members/updated + edit/delete.
-  - Right details: `Open in grid` navigates to `"/holdings?universe=group:<id>"`; `Allocate` opens a funds allocation dialog.
-  - Member add UX: MUI `Autocomplete` backed by `searchMarketSymbols()`; separate Exchange select; includes a **Notes** input; supports “Bulk add” (multiline symbols + one exchange applied to all).
-  - Member grid: always shows `Target weight` and **Notes**; for `MODEL_PORTFOLIO`/`PORTFOLIO` also shows `reference_qty` + `reference_price`; for `PORTFOLIO` adds allocation health chip and a “Reconcile portfolio allocations” dialog.
-  - “Allocate funds to group members” dialog: supports only `equal` vs `weights` modes; computes `qty = floor(amount / lastPrice)` using **holdings last_price** as “price”; creates queued orders via `createManualOrder()` (orders are attributed to a portfolio only when the selected group `kind === 'PORTFOLIO'`).
+  - Right details: `Open in grid` navigates to `"/holdings?universe=group:<id>"`.
+  - Member add UX: MUI `Autocomplete` backed by `searchMarketSymbols()`; separate Exchange select; includes a **Notes** input; supports "Bulk add" (multiline symbols + one exchange applied to all).
+  - Member grid: always shows `Target weight` and **Notes**; for `MODEL_PORTFOLIO`/`PORTFOLIO` also shows `reference_qty` + `reference_price`; for `PORTFOLIO` adds allocation health chip and a "Reconcile portfolio allocations" dialog.
+  - Legacy "Allocate funds to group members" dialog existed previously but has been removed.
 - `frontend/src/services/groups.ts` — Types + API calls for Groups:
   - `GroupKind` includes `WATCHLIST`, `MODEL_PORTFOLIO`, `PORTFOLIO`, plus extra `HOLDINGS_VIEW` (not in PRD).
   - Calls `/api/groups/*` for CRUD, members, datasets, portfolio allocations + reconcile.
@@ -161,11 +161,11 @@ Two viable approaches:
 | 3 types: Watchlist/Basket/Portfolio | **Partial** (has `WATCHLIST`, `MODEL_PORTFOLIO`, `PORTFOLIO` + extra `HOLDINGS_VIEW`) | FE: align labels + filters to PRD; BE: decide whether `HOLDINGS_VIEW` stays hidden/legacy or becomes a separate feature outside redesign | Risk: other features (rebalance/backtests) may depend on `PORTFOLIO`/`HOLDINGS_VIEW` semantics |
 | Lifecycle: Watchlist → Basket → Buy → Portfolio | **Missing** | FE: add explicit “Create basket from watchlist” and “Buy basket” flows; BE: add portfolio creation endpoint linking to basket | Needs product decision for naming/duplicate handling; impacts order attribution |
 | GroupListPanel (tabs/filter/search/sort/actions) | **Partial** (DataGrid list; edit/delete only; no tabs/search/duplicate/export) | FE: introduce `GroupListPanel` and consolidate list behaviors; add export/duplicate; add kind tabs | Low/medium; mostly UI refactor but touches navigation/state |
-| Context-aware right panel actions per type | **Partial** (`Open in grid` + `Allocate` generic; portfolio-only reconcile tooling) | FE: type-specific actions and dialogs; align actions with PRD (watchlist: Open/Export; basket: Edit/Buy/Open; portfolio: Open/Rebalance/Add funds) | Medium; requires new dialogs + backend contracts |
+| Context-aware right panel actions per type | **Partial** (`Open in grid` generic; portfolio-only reconcile tooling) | FE: type-specific actions and dialogs; align actions with PRD (watchlist: Open/Export; basket: Edit/Buy/Open; portfolio: Open/Rebalance/Add funds) | Medium; requires new dialogs + backend contracts |
 | Watchlist SymbolQuickAdd (paste, shortcuts, NSE/BSE parsing) | **Missing** | FE: implement `SymbolQuickAdd` with paste parsing + keyboard shortcuts; keep `/api/market/symbols` for autocomplete | Medium; needs careful UX + dedupe/feedback behavior |
 | Watchlist columns (Symbol/Exchange/LTP/Day%/Actions; remove Notes) | **Missing** | FE: remove Notes column for watchlists; add LTP + day% columns | Depends on solving LTP/day% source |
 | Live LTP source for watchlist/basket | **Missing** (only holdings last_price; broker LTP exists but not bulk) | BE: add **bulk quote/LTP** endpoint (likely under `/api/market/*`) backed by canonical broker + caching; FE: polling hook for visible rows | Medium/high; careful with rate limits, auth, caching, fallbacks |
-| BasketBuilderDialog (funds + mode + locks + totals + validation) | **Missing** (current “Allocate funds” is ad-hoc and not persistent) | FE: build dialog + `MembersGrid` mode-aware; BE: persist basket config + frozen prices + lock/user inputs | Medium/high; depends on allocation engine + schema |
+| BasketBuilderDialog (funds + mode + locks + totals + validation) | **Missing** (legacy "Allocate funds" was ad-hoc and not persistent) | FE: build dialog + `MembersGrid` mode-aware; BE: persist basket config + frozen prices + lock/user inputs | Medium/high; depends on allocation engine + schema |
 | Allocation modes (Weight/Amount/Qty) + lock semantics | **Missing** | FE: allocation engine supports all modes; BE: persist per-member user inputs + lock flags | High; requires clear data model for mode/user inputs |
 | Allocation engine as a pure function | **Missing** (logic embedded in `GroupsPage.tsx`) | FE: new `allocateBasket()` module + tests; use in basket builder and buy preview | Medium; correctness/rounding/edge cases are the main risk |
 | Freeze prices: persist `frozen_at` + per-symbol `frozen_price` | **Missing** | BE: add fields/tables for frozen snapshot; FE: freeze action calls backend, shows deltas | Medium; design decision: revisioning vs overwrite |

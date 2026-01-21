@@ -13,11 +13,7 @@ export function isGroupsRedesignEnabled(): boolean {
     // ignore
   }
 
-  try {
-    return window.localStorage.getItem(LS_KEY) === '1'
-  } catch {
-    return false
-  }
+  return true
 }
 
 export function setGroupsRedesignEnabled(enabled: boolean): void {
@@ -28,4 +24,3 @@ export function setGroupsRedesignEnabled(enabled: boolean): void {
     // ignore
   }
 }
-
