@@ -109,6 +109,10 @@ class GroupMember(Base):
     frozen_price: Mapped[Optional[float]] = mapped_column(Float)
     weight_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Basket allocation mode inputs (MODEL_PORTFOLIO groups only).
+    allocation_amount: Mapped[Optional[float]] = mapped_column(Float)
+    allocation_qty: Mapped[Optional[int]] = mapped_column(Integer)
+
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )

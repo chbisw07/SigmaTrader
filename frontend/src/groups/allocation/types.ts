@@ -2,8 +2,10 @@ export type AllocationRowDraft = {
   id: string
   symbol: string
   exchange?: string | null
-  weightPct: number
   locked: boolean
+  weightPct?: number | null
+  amountInr?: number | null
+  qty?: number | null
 }
 
 export type AllocationIssueLevel = 'error' | 'warning'
@@ -15,10 +17,15 @@ export type AllocationIssue = {
   rowId?: string
 }
 
-export type AllocationRowResult = AllocationRowDraft & {
+export type AllocationRowResult = {
+  id: string
+  symbol: string
+  exchange?: string | null
+  locked: boolean
+  weightPct: number
+  amountInr: number
+  qty: number
   price?: number | null
-  targetAmount: number
-  plannedQty: number
   plannedCost: number
   issues: AllocationIssue[]
   actualPct?: number | null

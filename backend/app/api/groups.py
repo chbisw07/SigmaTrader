@@ -869,6 +869,12 @@ def update_group_member(
     if _field_is_set(payload, "weight_locked"):
         member.weight_locked = bool(payload.weight_locked) if payload.weight_locked is not None else False
         updated = True
+    if _field_is_set(payload, "allocation_amount"):
+        member.allocation_amount = payload.allocation_amount
+        updated = True
+    if _field_is_set(payload, "allocation_qty"):
+        member.allocation_qty = payload.allocation_qty
+        updated = True
     if _field_is_set(payload, "notes"):
         member.notes = payload.notes
         updated = True

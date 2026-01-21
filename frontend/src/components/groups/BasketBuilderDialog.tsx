@@ -43,6 +43,8 @@ import { SymbolQuickAdd } from './SymbolQuickAdd'
 import type { ParsedSymbol } from './symbolParsing'
 import {
   clearUnlocked,
+  computeAmountModeAllocation,
+  computeQtyModeAllocation,
   computeWeightModeAllocation,
   equalizeUnlocked,
   normalizeUnlocked,
@@ -80,14 +82,17 @@ export function BasketBuilderDialog({
 }: BasketBuilderDialogProps) {
   const [defaultExchange, setDefaultExchange] = useState<'NSE' | 'BSE'>('NSE')
   const [fundsText, setFundsText] = useState('')
-  const [allocationMode, setAllocationMode] = useState<'WEIGHT'>('WEIGHT')
+  const [allocationMode, setAllocationMode] = useState<'WEIGHT' | 'AMOUNT' | 'QTY'>('WEIGHT')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
   const [draftWeights, setDraftWeights] = useState<Record<number, number>>({})
+  const [draftAmounts, setDraftAmounts] = useState<Record<number, number>>({})
+  const [draftQtys, setDraftQtys] = useState<Record<number, number>>({})
   const [draftLocks, setDraftLocks] = useState<Record<number, boolean>>({})
   const [weightsTouched, setWeightsTouched] = useState(false)
+  const [amountsTouched, setAmountsTouched] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -96,21 +101,33 @@ export function BasketBuilderDialog({
         ? String(group.funds)
         : '',
     )
-    setAllocationMode(
-      (group.allocation_mode || 'WEIGHT').toUpperCase() === 'WEIGHT' ? 'WEIGHT' : 'WEIGHT',
-    )
+    const m = String(group.allocation_mode || 'WEIGHT').toUpperCase()
+    setAllocationMode(m === 'AMOUNT' ? 'AMOUNT' : m === 'QTY' ? 'QTY' : 'WEIGHT')
     const w: Record<number, number> = {}
+    const a: Record<number, number> = {}
+    const q: Record<number, number> = {}
     const l: Record<number, boolean> = {}
     for (const m of group.members ?? []) {
       w[m.id] =
         m.target_weight != null && Number.isFinite(Number(m.target_weight))
           ? Math.round(Number(m.target_weight) * 10000) / 100
           : 0
+      a[m.id] =
+        m.allocation_amount != null && Number.isFinite(Number(m.allocation_amount))
+          ? Number(m.allocation_amount)
+          : 0
+      q[m.id] =
+        m.allocation_qty != null && Number.isFinite(Number(m.allocation_qty))
+          ? Math.max(0, Math.trunc(Number(m.allocation_qty)))
+          : 0
       l[m.id] = Boolean(m.weight_locked)
     }
     setDraftWeights(w)
+    setDraftAmounts(a)
+    setDraftQtys(q)
     setDraftLocks(l)
     setWeightsTouched(false)
+    setAmountsTouched(false)
     setError(null)
     setInfo(null)
   }, [group.allocation_mode, group.funds, group.members, open])
@@ -125,27 +142,35 @@ export function BasketBuilderDialog({
   const { quotesByKey, loading: quotesLoading, error: quotesError } =
     useMarketQuotes(quoteItems)
 
+  const lockEnabled = allocationMode !== 'QTY'
+
   const allocationRows = useMemo((): AllocationRowDraft[] => {
     return (group.members ?? []).map((m) => ({
       id: String(m.id),
       symbol: m.symbol,
       exchange: m.exchange ?? 'NSE',
       weightPct: draftWeights[m.id] ?? 0,
-      locked: draftLocks[m.id] ?? false,
+      amountInr: draftAmounts[m.id] ?? 0,
+      qty: draftQtys[m.id] ?? 0,
+      locked: lockEnabled ? (draftLocks[m.id] ?? false) : false,
     }))
-  }, [draftLocks, draftWeights, group.members])
+  }, [draftAmounts, draftLocks, draftQtys, draftWeights, group.members, lockEnabled])
 
   // Default behavior: if the basket has no weights yet, treat it as equal-weight
   // and keep it equalized as new symbols are added (until the user edits).
   useEffect(() => {
     if (!open) return
+    if (allocationMode !== 'WEIGHT') return
     if (weightsTouched) return
     if (!(group.members?.length ?? 0)) return
 
     const anyExplicit = (group.members ?? []).some(
       (m) => (m.target_weight ?? 0) > 0,
     )
-    const draftSum = allocationRows.reduce((s, r) => s + (Number.isFinite(r.weightPct) ? r.weightPct : 0), 0)
+    const draftSum = allocationRows.reduce(
+      (s, r) => s + (Number.isFinite(Number(r.weightPct)) ? Number(r.weightPct) : 0),
+      0,
+    )
     if (anyExplicit && draftSum > 0.01) return
 
     const next = equalizeUnlocked(allocationRows)
@@ -160,10 +185,45 @@ export function BasketBuilderDialog({
     for (const r of next) {
       const id = Number(r.id)
       if (!Number.isFinite(id)) continue
-      nextWeights[id] = r.weightPct
+      nextWeights[id] = r.weightPct ?? 0
     }
     setDraftWeights(nextWeights)
-  }, [allocationRows, group.members, open, weightsTouched])
+  }, [allocationMode, allocationRows, group.members, open, weightsTouched])
+
+  // Default behavior for Amount mode: if no amounts exist yet, equalize amounts across members
+  // using current Funds (until the user edits).
+  useEffect(() => {
+    if (!open) return
+    if (allocationMode !== 'AMOUNT') return
+    if (amountsTouched) return
+    if (!(group.members?.length ?? 0)) return
+
+    const f = parseFunds(fundsText) ?? 0
+    if (!(f > 0)) return
+
+    const anyExplicit = (group.members ?? []).some((m) => (m.allocation_amount ?? 0) > 0)
+    const draftSum = allocationRows.reduce(
+      (s, r) => s + (Number.isFinite(r.amountInr) ? Number(r.amountInr) : 0),
+      0,
+    )
+    if (anyExplicit && draftSum > 0.01) return
+
+    const next = equalizeUnlocked(allocationRows, { field: 'amountInr', targetTotal: f, decimals: 2 })
+    const nextById = new Map(next.map((r) => [r.id, r.amountInr ?? 0] as const))
+    const same = allocationRows.every((r) => {
+      const n = nextById.get(r.id) ?? 0
+      return Math.abs((r.amountInr ?? 0) - n) < 1e-6
+    })
+    if (same) return
+
+    const nextAmounts: Record<number, number> = {}
+    for (const r of next) {
+      const id = Number(r.id)
+      if (!Number.isFinite(id)) continue
+      nextAmounts[id] = r.amountInr ?? 0
+    }
+    setDraftAmounts(nextAmounts)
+  }, [allocationMode, allocationRows, amountsTouched, fundsText, group.members, open])
 
   const pricesByRowId = useMemo(() => {
     const map: Record<string, number | null | undefined> = {}
@@ -177,14 +237,19 @@ export function BasketBuilderDialog({
   const funds = parseFunds(fundsText)
 
   const allocation = useMemo(() => {
-    return computeWeightModeAllocation({
+    const base = {
       funds: funds ?? 0,
       rows: allocationRows,
       pricesByRowId,
+    }
+    if (allocationMode === 'AMOUNT') return computeAmountModeAllocation(base)
+    if (allocationMode === 'QTY') return computeQtyModeAllocation(base)
+    return computeWeightModeAllocation({
+      ...base,
       requireWeightsSumTo100: true,
       minQtyPerRow: 1,
     })
-  }, [allocationRows, funds, pricesByRowId])
+  }, [allocationMode, allocationRows, funds, pricesByRowId])
 
   const allocationByMemberId = useMemo(() => {
     const out = new Map<number, (typeof allocation.rows)[number]>()
@@ -202,9 +267,21 @@ export function BasketBuilderDialog({
   const minFundsRequired = allocation.totals.minFundsRequired ?? null
 
   const blockingIssues = useMemo(() => {
-    const block = new Set(['funds_invalid', 'locked_over_100', 'weights_not_100', 'weight_invalid'])
+    const block = new Set<string>()
+    if (allocationMode === 'WEIGHT') {
+      block.add('funds_invalid')
+      block.add('locked_over_100')
+      block.add('weights_not_100')
+      block.add('weight_invalid')
+    } else if (allocationMode === 'AMOUNT') {
+      block.add('funds_invalid')
+      block.add('amount_invalid')
+    } else {
+      block.add('funds_invalid')
+      block.add('qty_invalid')
+    }
     return allocation.issues.filter((i) => block.has(i.code))
-  }, [allocation.issues])
+  }, [allocation.issues, allocationMode])
 
   const handleExportCsv = () => {
     const now = new Date()
@@ -225,6 +302,7 @@ export function BasketBuilderDialog({
       return {
         group: group.name,
         kind: 'BASKET',
+        allocation_mode: allocationMode,
         funds_available: totals.funds,
         funds_required_min: totals.minFundsRequired ?? '',
         shortfall: totals.additionalFundsRequired ?? '',
@@ -235,11 +313,12 @@ export function BasketBuilderDialog({
         symbol: m.symbol,
         exchange: m.exchange ?? 'NSE',
         weight_pct: allocRow?.weightPct ?? '',
+        amount_inr: allocRow?.amountInr ?? '',
         locked: draftLocks[m.id] ?? false,
         live_price: live != null ? Number(live) : '',
         frozen_price: frozen != null ? Number(frozen) : '',
         delta_pct: deltaPct != null && Number.isFinite(deltaPct) ? deltaPct : '',
-        planned_qty: allocRow?.plannedQty ?? '',
+        planned_qty: allocRow?.qty ?? '',
         planned_cost_row: allocRow?.plannedCost ?? '',
         actual_pct: allocRow?.actualPct ?? '',
         drift_pct: allocRow?.driftPct ?? '',
@@ -249,15 +328,28 @@ export function BasketBuilderDialog({
     downloadCsv(`${safeName}_${stamp}.csv`, rows)
   }
 
-  const setDraftFromRows = (rows: AllocationRowDraft[]) => {
+  const setDraftFromRows = (rows: AllocationRowDraft[], field: 'weightPct' | 'amountInr' | 'qty') => {
     const next: Record<number, number> = {}
     for (const r of rows) {
       const id = Number(r.id)
       if (!Number.isFinite(id)) continue
-      next[id] = r.weightPct
+      if (field === 'qty') {
+        next[id] = Math.max(0, Math.trunc(Number(r.qty ?? 0)))
+      } else if (field === 'amountInr') {
+        next[id] = Number.isFinite(Number(r.amountInr)) ? Number(r.amountInr) : 0
+      } else {
+        next[id] = Number.isFinite(Number(r.weightPct)) ? Number(r.weightPct) : 0
+      }
     }
-    setDraftWeights(next)
-    setWeightsTouched(true)
+    if (field === 'amountInr') {
+      setDraftAmounts(next)
+      setAmountsTouched(true)
+    } else if (field === 'qty') {
+      setDraftQtys(next)
+    } else {
+      setDraftWeights(next)
+      setWeightsTouched(true)
+    }
   }
 
   const refreshGroup = async () => {
@@ -333,23 +425,39 @@ export function BasketBuilderDialog({
 
       await updateBasketConfig(groupId, { funds: n, allocation_mode: allocationMode })
 
-      // Persist member weights + locks (best-effort minimal updates).
+      // Persist member inputs + locks (best-effort minimal updates).
       const updates: Array<Promise<unknown>> = []
       for (const m of group.members ?? []) {
-        const nextPct = draftWeights[m.id] ?? 0
-        const nextTarget = nextPct / 100
-        const prevTarget = m.target_weight ?? 0
         const nextLock = draftLocks[m.id] ?? false
         const prevLock = Boolean(m.weight_locked)
+        const needLock = allocationMode !== 'QTY' && nextLock !== prevLock
 
-        const needWeight = Math.abs(Number(prevTarget) * 100 - nextPct) > 0.01
-        const needLock = nextLock !== prevLock
-        if (!needWeight && !needLock) continue
+        const payload: Record<string, unknown> = {}
+        if (needLock) payload.weight_locked = nextLock
+
+        if (allocationMode === 'WEIGHT') {
+          const nextPct = draftWeights[m.id] ?? 0
+          const nextTarget = nextPct / 100
+          const prevTarget = m.target_weight ?? 0
+          const needWeight = Math.abs(Number(prevTarget) * 100 - nextPct) > 0.01
+          if (needWeight) payload.target_weight = nextTarget
+        } else if (allocationMode === 'AMOUNT') {
+          const nextAmt = draftAmounts[m.id] ?? 0
+          const prevAmt = m.allocation_amount ?? 0
+          const needAmt = Math.abs(Number(prevAmt) - nextAmt) > 0.01
+          if (needAmt) payload.allocation_amount = nextAmt
+        } else {
+          const nextQty = Math.max(0, Math.trunc(draftQtys[m.id] ?? 0))
+          const prevQty = Math.max(0, Math.trunc(Number(m.allocation_qty ?? 0)))
+          const needQty = nextQty !== prevQty
+          if (needQty) payload.allocation_qty = nextQty
+        }
+
+        if (!Object.keys(payload).length) continue
 
         updates.push(
           updateGroupMember(groupId, m.id, {
-            target_weight: nextTarget,
-            weight_locked: nextLock,
+            ...(payload as any),
           }),
         )
       }
@@ -395,24 +503,61 @@ export function BasketBuilderDialog({
         sortable: false,
         renderCell: (params: GridRenderCellParams<GroupMember>) => {
           const memberId = params.row.id
-          const value = draftWeights[memberId] ?? 0
-          return (
-            <TextField
-              size="small"
-              value={String(value)}
-              onChange={(e) => {
-                const raw = e.target.value
-                const n = Number(raw)
-                setWeightsTouched(true)
-                setDraftWeights((prev) => ({
-                  ...prev,
-                  [memberId]: Number.isFinite(n) ? n : 0,
-                }))
-              }}
-              inputProps={{ inputMode: 'decimal' }}
-              sx={{ width: 100 }}
-            />
-          )
+          if (allocationMode === 'WEIGHT') {
+            const value = draftWeights[memberId] ?? 0
+            return (
+              <TextField
+                size="small"
+                value={String(value)}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  const n = Number(raw)
+                  setWeightsTouched(true)
+                  setDraftWeights((prev) => ({
+                    ...prev,
+                    [memberId]: Number.isFinite(n) ? n : 0,
+                  }))
+                }}
+                inputProps={{ inputMode: 'decimal' }}
+                sx={{ width: 100 }}
+                disabled={busy}
+              />
+            )
+          }
+          const v = allocationByMemberId.get(memberId)?.weightPct ?? 0
+          return <Typography variant="body2">{Number(v).toFixed(2)}</Typography>
+        },
+      },
+      {
+        field: 'amountInr',
+        headerName: 'Amount',
+        width: 140,
+        sortable: false,
+        renderCell: (params: GridRenderCellParams<GroupMember>) => {
+          const memberId = params.row.id
+          if (allocationMode === 'AMOUNT') {
+            const value = draftAmounts[memberId] ?? 0
+            return (
+              <TextField
+                size="small"
+                value={String(value)}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  const n = Number(raw)
+                  setAmountsTouched(true)
+                  setDraftAmounts((prev) => ({
+                    ...prev,
+                    [memberId]: Number.isFinite(n) ? n : 0,
+                  }))
+                }}
+                inputProps={{ inputMode: 'decimal' }}
+                sx={{ width: 120 }}
+                disabled={busy}
+              />
+            )
+          }
+          const v = allocationByMemberId.get(memberId)?.amountInr ?? 0
+          return <Typography variant="body2">{Number(v).toFixed(2)}</Typography>
         },
       },
       {
@@ -422,6 +567,7 @@ export function BasketBuilderDialog({
         sortable: false,
         renderCell: (params: GridRenderCellParams<GroupMember>) => {
           const memberId = params.row.id
+          if (!lockEnabled) return <Typography variant="body2">-</Typography>
           const locked = draftLocks[memberId] ?? false
           return (
             <Checkbox
@@ -431,6 +577,7 @@ export function BasketBuilderDialog({
               onChange={(e) =>
                 setDraftLocks((prev) => ({ ...prev, [memberId]: e.target.checked }))
               }
+              disabled={busy}
             />
           )
         },
@@ -466,11 +613,33 @@ export function BasketBuilderDialog({
           v != null && Number.isFinite(Number(v)) ? `${Number(v).toFixed(2)}%` : '—',
       },
       {
-        field: 'plannedQty',
+        field: 'qty',
         headerName: 'Qty',
         width: 90,
-        valueGetter: (_v, row) => {
-          return allocationByMemberId.get(row.id)?.plannedQty ?? 0
+        sortable: false,
+        renderCell: (params: GridRenderCellParams<GroupMember>) => {
+          const memberId = params.row.id
+          if (allocationMode === 'QTY') {
+            const value = draftQtys[memberId] ?? 0
+            return (
+              <TextField
+                size="small"
+                value={String(value)}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  const n = Number(raw)
+                  setDraftQtys((prev) => ({
+                    ...prev,
+                    [memberId]: Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0,
+                  }))
+                }}
+                inputProps={{ inputMode: 'numeric' }}
+                sx={{ width: 80 }}
+                disabled={busy}
+              />
+            )
+          }
+          return <Typography variant="body2">{allocationByMemberId.get(memberId)?.qty ?? 0}</Typography>
         },
       },
       {
@@ -503,11 +672,23 @@ export function BasketBuilderDialog({
       },
     ]
     return cols
-  }, [allocationByMemberId, busy, draftLocks, draftWeights, group.members, quotesByKey])
+  }, [
+    allocationByMemberId,
+    allocationMode,
+    busy,
+    draftAmounts,
+    draftLocks,
+    draftQtys,
+    draftWeights,
+    lockEnabled,
+    quotesByKey,
+  ])
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg">
-      <DialogTitle>Basket builder (Weight mode)</DialogTitle>
+      <DialogTitle>
+        Basket builder ({allocationMode === 'AMOUNT' ? 'Amount' : allocationMode === 'QTY' ? 'Qty' : 'Weight'} mode)
+      </DialogTitle>
       <DialogContent>
         <Stack spacing={1.5} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
@@ -533,13 +714,27 @@ export function BasketBuilderDialog({
                 size="small"
                 select
                 value={allocationMode}
-                onChange={() => setAllocationMode('WEIGHT')}
+                onChange={(e) =>
+                  setAllocationMode(
+                    e.target.value === 'AMOUNT' ? 'AMOUNT' : e.target.value === 'QTY' ? 'QTY' : 'WEIGHT',
+                  )
+                }
                 sx={{ width: { xs: '100%', md: 220 } }}
-                disabled
+                disabled={busy}
               >
                 <MenuItem value="WEIGHT">Weight</MenuItem>
+                <MenuItem value="AMOUNT">Amount</MenuItem>
+                <MenuItem value="QTY">Qty</MenuItem>
               </TextField>
-              <Tooltip title="Weight mode is currently supported. Amount/Qty modes will be added later.">
+              <Tooltip
+                title={
+                  allocationMode === 'AMOUNT'
+                    ? 'Editable: Amount per symbol. Computed: Weight% and Qty=floor(Amount/LTP). Locks keep amount fixed; actions distribute remaining funds among unlocked rows.'
+                    : allocationMode === 'QTY'
+                      ? 'Editable: Qty per symbol. Computed: Amount=Qty×LTP and Weight%.'
+                      : 'Editable: Weight%. Computed: Amount=Funds×Weight% and Qty=floor(Amount/LTP). Locks keep weight fixed; actions auto-adjust unlocked rows.'
+                }
+              >
                 <span>
                   <IconButton size="small" disabled={busy}>
                     <HelpOutlineIcon fontSize="small" />
@@ -569,16 +764,52 @@ export function BasketBuilderDialog({
             <Button
               size="small"
               variant="outlined"
-              disabled={busy || !(group.members?.length ?? 0)}
-              onClick={() => setDraftFromRows(equalizeUnlocked(allocationRows))}
+              disabled={
+                busy ||
+                !(group.members?.length ?? 0) ||
+                (allocationMode === 'QTY') ||
+                (allocationMode === 'AMOUNT' && !(Number(funds ?? 0) > 0))
+              }
+              onClick={() => {
+                if (allocationMode === 'AMOUNT') {
+                  setDraftFromRows(
+                    equalizeUnlocked(allocationRows, {
+                      field: 'amountInr',
+                      targetTotal: funds ?? 0,
+                      decimals: 2,
+                    }),
+                    'amountInr',
+                  )
+                  return
+                }
+                setDraftFromRows(equalizeUnlocked(allocationRows), 'weightPct')
+              }}
             >
               Equalize
             </Button>
             <Button
               size="small"
               variant="outlined"
-              disabled={busy || !(group.members?.length ?? 0)}
-              onClick={() => setDraftFromRows(normalizeUnlocked(allocationRows))}
+              disabled={
+                busy ||
+                !(group.members?.length ?? 0) ||
+                allocationMode === 'QTY' ||
+                (allocationMode === 'AMOUNT' && !(Number(funds ?? 0) > 0))
+              }
+              onClick={() => {
+                if (allocationMode === 'AMOUNT') {
+                  setDraftFromRows(
+                    normalizeUnlocked(allocationRows, {
+                      field: 'amountInr',
+                      targetTotal: funds ?? 0,
+                      decimals: 2,
+                    }),
+                    'amountInr',
+                  )
+                  return
+                }
+                setDraftFromRows(normalizeUnlocked(allocationRows), 'weightPct')
+              }}
             >
               Normalize unlocked
             </Button>
@@ -586,7 +817,17 @@ export function BasketBuilderDialog({
               size="small"
               variant="outlined"
               disabled={busy || !(group.members?.length ?? 0)}
-              onClick={() => setDraftFromRows(clearUnlocked(allocationRows))}
+              onClick={() => {
+                if (allocationMode === 'AMOUNT') {
+                  setDraftFromRows(clearUnlocked(allocationRows, { field: 'amountInr' }), 'amountInr')
+                  return
+                }
+                if (allocationMode === 'QTY') {
+                  setDraftFromRows(clearUnlocked(allocationRows, { field: 'qty' }), 'qty')
+                  return
+                }
+                setDraftFromRows(clearUnlocked(allocationRows), 'weightPct')
+              }}
             >
               Clear unlocked
             </Button>
@@ -646,6 +887,7 @@ export function BasketBuilderDialog({
                   <span>
                     Funds required: {minFundsRequired != null ? minFundsRequired.toFixed(2) : '-'}{' '}
                     (available: {allocation.totals.funds.toFixed(2)}). Shortfall: {additionalFundsRequired.toFixed(2)}.
+                    {' '}Total: {(allocation.totals.funds + additionalFundsRequired).toFixed(2)}.
                   </span>
                   <Tooltip title="Add shortfall to Funds (INR)">
                     <span>
@@ -665,7 +907,8 @@ export function BasketBuilderDialog({
                 </Stack>
               </Alert>
             ) : null}
-            {additionalFundsRequired <= 0.01 &&
+            {allocationMode === 'WEIGHT' &&
+            additionalFundsRequired <= 0.01 &&
             Math.abs(allocation.totals.weightSumPct - 100) <= 0.05 &&
             allocation.issues.some((i) => i.code === 'allocation_outliers') ? (
               <Alert severity="warning" sx={{ mt: 1 }}>

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   clearUnlocked,
+  computeAmountModeAllocation,
+  computeQtyModeAllocation,
   computeWeightModeAllocation,
   equalizeUnlocked,
   normalizeUnlocked,
@@ -24,7 +26,7 @@ describe('allocation engine (weight mode)', () => {
   it('equalizeUnlocked splits remaining across unlocked and sums to 100', () => {
     const next = equalizeUnlocked(rows([{ id: 'A', w: 0 }, { id: 'B', w: 0 }, { id: 'C', w: 0 }]))
     expect(sumWeightPct(next)).toBeCloseTo(100, 6)
-    expect(next.map((r) => r.weightPct).reduce((a, b) => a + b, 0)).toBeCloseTo(100, 6)
+    expect(next.map((r) => r.weightPct ?? 0).reduce((a, b) => a + b, 0)).toBeCloseTo(100, 6)
   })
 
   it('equalizeUnlocked respects locked weights', () => {
@@ -64,7 +66,7 @@ describe('allocation engine (weight mode)', () => {
       ]),
     )
     expect(sumWeightPct(next)).toBeCloseTo(100, 6)
-    expect(next.filter((r) => !r.locked).map((r) => r.weightPct).reduce((a, b) => a + b, 0)).toBeCloseTo(
+    expect(next.filter((r) => !r.locked).map((r) => r.weightPct ?? 0).reduce((a, b) => a + b, 0)).toBeCloseTo(
       75,
       6,
     )
@@ -94,8 +96,8 @@ describe('allocation engine (weight mode)', () => {
       requireWeightsSumTo100: true,
     })
     expect(res.issues.find((i) => i.level === 'error')).toBeFalsy()
-    expect(res.rows.find((r) => r.id === 'A')?.plannedQty).toBe(5)
-    expect(res.rows.find((r) => r.id === 'B')?.plannedQty).toBe(2)
+    expect(res.rows.find((r) => r.id === 'A')?.qty).toBe(5)
+    expect(res.rows.find((r) => r.id === 'B')?.qty).toBe(2)
     expect(res.totals.totalCost).toBeCloseTo(900, 6)
     expect(res.totals.remaining).toBeCloseTo(100, 6)
   })
@@ -155,8 +157,8 @@ describe('allocation engine (weight mode)', () => {
       pricesByRowId: { A: 90, B: 110 },
       requireWeightsSumTo100: true,
     })
-    expect(res.rows.find((r) => r.id === 'A')?.plannedQty).toBe(5)
-    expect(res.rows.find((r) => r.id === 'B')?.plannedQty).toBe(5)
+    expect(res.rows.find((r) => r.id === 'A')?.qty).toBe(5)
+    expect(res.rows.find((r) => r.id === 'B')?.qty).toBe(5)
     expect(res.totals.totalCost).toBeCloseTo(1000, 6)
     expect(res.totals.remaining).toBeCloseTo(0, 6)
   })
@@ -194,5 +196,69 @@ describe('allocation engine (weight mode)', () => {
     })
     expect(res.issues.some((i) => i.code === 'allocation_outliers')).toBe(true)
     expect(res.rows.some((r) => r.issues.some((i) => i.code === 'allocation_outlier'))).toBe(true)
+  })
+})
+
+describe('allocation engine (amount mode)', () => {
+  it('computes qty from amount and validates total amount within funds', () => {
+    const res = computeAmountModeAllocation({
+      funds: 1000,
+      rows: [
+        { id: 'A', symbol: 'A', exchange: 'NSE', locked: false, amountInr: 400 },
+        { id: 'B', symbol: 'B', exchange: 'NSE', locked: false, amountInr: 600 },
+      ],
+      pricesByRowId: { A: 100, B: 200 },
+    })
+    expect(res.issues.find((i) => i.level === 'error')).toBeFalsy()
+    expect(res.rows.find((r) => r.id === 'A')?.qty).toBe(4)
+    expect(res.rows.find((r) => r.id === 'B')?.qty).toBe(3)
+    expect(res.rows.find((r) => r.id === 'A')?.weightPct).toBeCloseTo(40, 6)
+    expect(res.rows.find((r) => r.id === 'B')?.weightPct).toBeCloseTo(60, 6)
+    expect(res.totals.additionalFundsRequired).toBeCloseTo(0, 6)
+  })
+
+  it('reports error when total amount exceeds funds', () => {
+    const res = computeAmountModeAllocation({
+      funds: 1000,
+      rows: [
+        { id: 'A', symbol: 'A', exchange: 'NSE', locked: false, amountInr: 700 },
+        { id: 'B', symbol: 'B', exchange: 'NSE', locked: false, amountInr: 600 },
+      ],
+      pricesByRowId: { A: 100, B: 100 },
+    })
+    expect(res.issues.some((i) => i.code === 'amount_over_funds')).toBe(true)
+    expect(res.totals.minFundsRequired).toBeCloseTo(1300, 6)
+    expect(res.totals.additionalFundsRequired).toBeCloseTo(300, 6)
+  })
+})
+
+describe('allocation engine (qty mode)', () => {
+  it('computes amount and validates total cost within funds', () => {
+    const res = computeQtyModeAllocation({
+      funds: 1000,
+      rows: [
+        { id: 'A', symbol: 'A', exchange: 'NSE', locked: false, qty: 3 },
+        { id: 'B', symbol: 'B', exchange: 'NSE', locked: false, qty: 2 },
+      ],
+      pricesByRowId: { A: 100, B: 200 },
+    })
+    expect(res.issues.find((i) => i.level === 'error')).toBeFalsy()
+    expect(res.rows.find((r) => r.id === 'A')?.amountInr).toBeCloseTo(300, 6)
+    expect(res.rows.find((r) => r.id === 'B')?.amountInr).toBeCloseTo(400, 6)
+    expect(res.totals.totalCost).toBeCloseTo(700, 6)
+    expect(res.totals.remaining).toBeCloseTo(300, 6)
+  })
+
+  it('reports error when total cost exceeds funds', () => {
+    const res = computeQtyModeAllocation({
+      funds: 1000,
+      rows: [
+        { id: 'A', symbol: 'A', exchange: 'NSE', locked: false, qty: 10 },
+        { id: 'B', symbol: 'B', exchange: 'NSE', locked: false, qty: 10 },
+      ],
+      pricesByRowId: { A: 100, B: 100 },
+    })
+    expect(res.issues.some((i) => i.code === 'cost_over_funds')).toBe(true)
+    expect(res.totals.additionalFundsRequired).toBeCloseTo(1000, 6)
   })
 })

@@ -30,6 +30,8 @@ export type GroupMember = {
   reference_price?: number | null
   frozen_price?: number | null
   weight_locked?: boolean
+  allocation_amount?: number | null
+  allocation_qty?: number | null
   notes?: string | null
   created_at: string
   updated_at: string
@@ -427,6 +429,8 @@ export async function updateGroupMember(
     reference_qty?: number | null
     reference_price?: number | null
     weight_locked?: boolean | null
+    allocation_amount?: number | null
+    allocation_qty?: number | null
     notes?: string | null
   },
 ): Promise<GroupMember> {
@@ -446,7 +450,7 @@ export async function updateGroupMember(
 
 export async function updateBasketConfig(
   groupId: number,
-  payload: { funds?: number | null; allocation_mode?: 'WEIGHT' | null },
+  payload: { funds?: number | null; allocation_mode?: 'WEIGHT' | 'AMOUNT' | 'QTY' | null },
 ): Promise<Group> {
   const res = await fetch(`/api/groups/${groupId}/basket/config`, {
     method: 'PATCH',

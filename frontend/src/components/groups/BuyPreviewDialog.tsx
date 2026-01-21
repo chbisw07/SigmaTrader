@@ -27,7 +27,11 @@ import {
   type GroupDetail,
   type GroupMember,
 } from '../../services/groups'
-import { computeWeightModeAllocation } from '../../groups/allocation/engine'
+import {
+  computeAmountModeAllocation,
+  computeQtyModeAllocation,
+  computeWeightModeAllocation,
+} from '../../groups/allocation/engine'
 import type { AllocationRowDraft } from '../../groups/allocation/types'
 
 export type BuyPreviewDialogProps = {
@@ -67,18 +71,37 @@ export function BuyPreviewDialog({
   const { quotesByKey, loading: quotesLoading, error: quotesError } =
     useMarketQuotes(quoteItems)
 
+  const allocationMode = useMemo(() => {
+    const m = String(basket.allocation_mode || 'WEIGHT').toUpperCase()
+    return m === 'AMOUNT' ? 'AMOUNT' : m === 'QTY' ? 'QTY' : 'WEIGHT'
+  }, [basket.allocation_mode])
+
   const allocationRows = useMemo((): AllocationRowDraft[] => {
     return (basket.members ?? []).map((m) => ({
       id: String(m.id),
       symbol: m.symbol,
       exchange: m.exchange ?? 'NSE',
       weightPct:
-        m.target_weight != null && Number.isFinite(Number(m.target_weight))
+        allocationMode === 'WEIGHT' &&
+        m.target_weight != null &&
+        Number.isFinite(Number(m.target_weight))
           ? Number(m.target_weight) * 100
-          : 0,
+          : undefined,
+      amountInr:
+        allocationMode === 'AMOUNT' &&
+        m.allocation_amount != null &&
+        Number.isFinite(Number(m.allocation_amount))
+          ? Number(m.allocation_amount)
+          : undefined,
+      qty:
+        allocationMode === 'QTY' &&
+        m.allocation_qty != null &&
+        Number.isFinite(Number(m.allocation_qty))
+          ? Math.max(0, Math.trunc(Number(m.allocation_qty)))
+          : undefined,
       locked: false,
     }))
-  }, [basket.members])
+  }, [allocationMode, basket.members])
 
   const pricesByRowId = useMemo(() => {
     const map: Record<string, number | null | undefined> = {}
@@ -90,14 +113,15 @@ export function BuyPreviewDialog({
 
   const funds = basket.funds != null ? Number(basket.funds) : 0
   const allocation = useMemo(() => {
+    const base = { funds, rows: allocationRows, pricesByRowId }
+    if (allocationMode === 'AMOUNT') return computeAmountModeAllocation(base)
+    if (allocationMode === 'QTY') return computeQtyModeAllocation(base)
     return computeWeightModeAllocation({
-      funds,
-      rows: allocationRows,
-      pricesByRowId,
+      ...base,
       requireWeightsSumTo100: true,
       minQtyPerRow: 1,
     })
-  }, [allocationRows, funds, pricesByRowId])
+  }, [allocationMode, allocationRows, funds, pricesByRowId])
 
   const rowsById = useMemo(() => {
     const out = new Map<number, (typeof allocation.rows)[number]>()
@@ -114,7 +138,7 @@ export function BuyPreviewDialog({
     if (!(funds > 0)) return false
     if (!basket.frozen_at) return false
     if (allocation.issues.some((i) => i.level === 'error')) return false
-    const planned = allocation.rows.filter((r) => r.plannedQty > 0 && !r.issues.some((i) => i.level === 'error'))
+    const planned = allocation.rows.filter((r) => r.qty > 0 && !r.issues.some((i) => i.level === 'error'))
     return planned.length > 0
   }, [allocation.issues, allocation.rows, basket.frozen_at, basket.members?.length, funds])
 
@@ -136,6 +160,7 @@ export function BuyPreviewDialog({
       const live = quotesByKey[toKey(m.exchange, m.symbol)]?.ltp ?? null
       return {
         basket: basket.name,
+        allocation_mode: allocationMode,
         funds_available: totals.funds,
         funds_required_min: totals.minFundsRequired ?? '',
         shortfall: totals.additionalFundsRequired ?? '',
@@ -148,7 +173,8 @@ export function BuyPreviewDialog({
         weight_pct: allocRow?.weightPct ?? '',
         ltp: live != null ? Number(live) : '',
         frozen_price: m.frozen_price ?? '',
-        planned_qty: allocRow?.plannedQty ?? '',
+        amount_inr: allocRow?.amountInr ?? '',
+        planned_qty: allocRow?.qty ?? '',
         est_cost_row: allocRow?.plannedCost ?? '',
         actual_pct: allocRow?.actualPct ?? '',
         drift_pct: allocRow?.driftPct ?? '',
@@ -182,10 +208,24 @@ export function BuyPreviewDialog({
         valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '—'),
       },
       {
+        field: 'weightPct',
+        headerName: 'Weight %',
+        width: 110,
+        valueGetter: (_v, row) => rowsById.get(row.id)?.weightPct ?? 0,
+        valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '0.00'),
+      },
+      {
+        field: 'amountInr',
+        headerName: 'Amount',
+        width: 130,
+        valueGetter: (_v, row) => rowsById.get(row.id)?.amountInr ?? 0,
+        valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '0.00'),
+      },
+      {
         field: 'qty',
-        headerName: 'Planned qty',
+        headerName: 'Qty',
         width: 120,
-        valueGetter: (_v, row) => rowsById.get(row.id)?.plannedQty ?? 0,
+        valueGetter: (_v, row) => rowsById.get(row.id)?.qty ?? 0,
       },
       {
         field: 'cost',
@@ -203,11 +243,11 @@ export function BuyPreviewDialog({
       setBusy(true)
       setError(null)
       const items = allocation.rows
-        .filter((r) => r.plannedQty > 0 && !r.issues.some((i) => i.level === 'error'))
+        .filter((r) => r.qty > 0 && !r.issues.some((i) => i.level === 'error'))
         .map((r) => ({
           symbol: r.symbol,
           exchange: r.exchange ?? 'NSE',
-          qty: r.plannedQty,
+          qty: r.qty,
         }))
       if (!items.length) {
         setError('No valid planned orders to create.')

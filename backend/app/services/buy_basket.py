@@ -80,16 +80,41 @@ def create_portfolio_from_basket(
     for m in members:
         exch = (m.exchange or "NSE").strip().upper() or "NSE"
         sym = (m.symbol or "").strip().upper()
+        target_weight = m.target_weight
+        if basket.funds and basket.funds > 0:
+            mode = (basket.allocation_mode or "").strip().upper()
+            if mode == "AMOUNT" and m.allocation_amount is not None:
+                try:
+                    amt = float(m.allocation_amount)
+                except Exception:
+                    amt = 0.0
+                if amt > 0:
+                    target_weight = amt / float(basket.funds)
+            elif (
+                mode == "QTY"
+                and m.allocation_qty is not None
+                and m.frozen_price is not None
+            ):
+                try:
+                    qty = float(m.allocation_qty)
+                    px = float(m.frozen_price)
+                except Exception:
+                    qty = 0.0
+                    px = 0.0
+                if qty > 0 and px > 0:
+                    target_weight = (qty * px) / float(basket.funds)
         gm = GroupMember(
             group_id=portfolio.id,
             symbol=sym,
             exchange=exch,
-            target_weight=m.target_weight,
+            target_weight=target_weight,
             notes=None,
             reference_qty=0,
             reference_price=None,
             frozen_price=m.frozen_price,
             weight_locked=False,
+            allocation_amount=m.allocation_amount,
+            allocation_qty=m.allocation_qty,
         )
         db.add(gm)
         copied_members.append(gm)
@@ -131,4 +156,3 @@ def create_portfolio_from_basket(
 
 
 __all__ = ["create_portfolio_from_basket"]
-

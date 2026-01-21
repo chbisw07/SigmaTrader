@@ -6,6 +6,7 @@ import type {
 } from './types'
 
 const PCT_EPS = 1e-6
+type DraftField = 'weightPct' | 'amountInr' | 'qty'
 
 function roundTo(value: number, decimals: number): number {
   if (!Number.isFinite(value)) return 0
@@ -32,46 +33,71 @@ function quantile(sorted: number[], q: number): number | null {
 }
 
 export function sumWeightPct(rows: AllocationRowDraft[]): number {
-  return rows.reduce((s, r) => s + (Number.isFinite(r.weightPct) ? r.weightPct : 0), 0)
+  return rows.reduce((s, r) => s + (safeNumber(r.weightPct) ?? 0), 0)
 }
 
 export function sumLockedWeightPct(rows: AllocationRowDraft[]): number {
-  return rows.reduce((s, r) => s + (r.locked ? (Number.isFinite(r.weightPct) ? r.weightPct : 0) : 0), 0)
+  return rows.reduce((s, r) => s + (r.locked ? (safeNumber(r.weightPct) ?? 0) : 0), 0)
 }
 
-export function clearUnlocked(rows: AllocationRowDraft[]): AllocationRowDraft[] {
-  return rows.map((r) => (r.locked ? r : { ...r, weightPct: 0 }))
+function getDraftValue(row: AllocationRowDraft, field: DraftField): number {
+  const raw = row[field]
+  const n = safeNumber(raw)
+  if (n == null) return 0
+  if (field === 'qty') return Math.max(0, Math.trunc(n))
+  return n
+}
+
+function setDraftValue(
+  row: AllocationRowDraft,
+  field: DraftField,
+  value: number,
+  opts?: { decimals?: number },
+): AllocationRowDraft {
+  if (field === 'qty') return { ...row, qty: Math.max(0, Math.trunc(value)) }
+  const decimals = opts?.decimals ?? 2
+  const v = roundTo(value, decimals)
+  if (field === 'amountInr') return { ...row, amountInr: v }
+  return { ...row, weightPct: v }
+}
+
+export function clearUnlocked(
+  rows: AllocationRowDraft[],
+  opts?: { field?: DraftField },
+): AllocationRowDraft[] {
+  const field: DraftField = opts?.field ?? 'weightPct'
+  return rows.map((r) => (r.locked ? r : setDraftValue(r, field, 0, { decimals: 2 })))
 }
 
 export function equalizeUnlocked(
   rows: AllocationRowDraft[],
-  opts?: { decimals?: number },
+  opts?: { decimals?: number; field?: DraftField; targetTotal?: number },
 ): AllocationRowDraft[] {
+  const field: DraftField = opts?.field ?? 'weightPct'
   const decimals = opts?.decimals ?? 2
-  const lockedSum = sumLockedWeightPct(rows)
+  const targetTotal = safeNumber(opts?.targetTotal) ?? (field === 'weightPct' ? 100 : 0)
+  const lockedSum = rows.reduce((s, r) => s + (r.locked ? getDraftValue(r, field) : 0), 0)
   const unlocked = rows.filter((r) => !r.locked)
   if (!unlocked.length) return rows
 
-  const remaining = Math.max(0, 100 - lockedSum)
+  const remaining = Math.max(0, targetTotal - lockedSum)
   const base = remaining / unlocked.length
   const roundedBase = roundTo(base, decimals)
 
-  let acc = 0
   const out = rows.map((r) => {
     if (r.locked) return r
-    acc += roundedBase
-    return { ...r, weightPct: roundedBase }
+    return setDraftValue(r, field, roundedBase, { decimals })
   })
 
   // Fix rounding drift on the last unlocked row so weights sum exactly to locked+remaining.
   const unlockedIds = out.filter((r) => !r.locked).map((r) => r.id)
   const lastId = unlockedIds[unlockedIds.length - 1]
-  const currentSum = sumWeightPct(out)
+  const currentSum = out.reduce((s, r) => s + getDraftValue(r, field), 0)
   const targetSum = lockedSum + remaining
   const drift = roundTo(targetSum - currentSum, decimals)
   if (lastId != null && Math.abs(drift) > PCT_EPS) {
     return out.map((r) =>
-      r.id === lastId ? { ...r, weightPct: roundTo(r.weightPct + drift, decimals) } : r,
+      r.id === lastId ? setDraftValue(r, field, getDraftValue(r, field) + drift, { decimals }) : r,
     )
   }
   return out
@@ -79,33 +105,35 @@ export function equalizeUnlocked(
 
 export function normalizeUnlocked(
   rows: AllocationRowDraft[],
-  opts?: { decimals?: number },
+  opts?: { decimals?: number; field?: DraftField; targetTotal?: number },
 ): AllocationRowDraft[] {
+  const field: DraftField = opts?.field ?? 'weightPct'
   const decimals = opts?.decimals ?? 2
-  const lockedSum = sumLockedWeightPct(rows)
-  const remaining = Math.max(0, 100 - lockedSum)
+  const targetTotal = safeNumber(opts?.targetTotal) ?? (field === 'weightPct' ? 100 : 0)
+  const lockedSum = rows.reduce((s, r) => s + (r.locked ? getDraftValue(r, field) : 0), 0)
+  const remaining = Math.max(0, targetTotal - lockedSum)
   const unlocked = rows.filter((r) => !r.locked)
   if (!unlocked.length) return rows
 
-  const unlockedSum = unlocked.reduce((s, r) => s + (Number.isFinite(r.weightPct) ? r.weightPct : 0), 0)
+  const unlockedSum = unlocked.reduce((s, r) => s + getDraftValue(r, field), 0)
   if (unlockedSum <= PCT_EPS) {
-    return equalizeUnlocked(rows, { decimals })
+    return equalizeUnlocked(rows, { decimals, field, targetTotal })
   }
 
   const scale = remaining / unlockedSum
   const scaled = rows.map((r) =>
-    r.locked ? r : { ...r, weightPct: roundTo(r.weightPct * scale, decimals) },
+    r.locked ? r : setDraftValue(r, field, getDraftValue(r, field) * scale, { decimals }),
   )
 
   // Fix rounding drift on the last unlocked row.
   const unlockedIds = scaled.filter((r) => !r.locked).map((r) => r.id)
   const lastId = unlockedIds[unlockedIds.length - 1]
-  const currentSum = sumWeightPct(scaled)
+  const currentSum = scaled.reduce((s, r) => s + getDraftValue(r, field), 0)
   const targetSum = lockedSum + remaining
   const drift = roundTo(targetSum - currentSum, decimals)
   if (lastId != null && Math.abs(drift) > PCT_EPS) {
     return scaled.map((r) =>
-      r.id === lastId ? { ...r, weightPct: roundTo(r.weightPct + drift, decimals) } : r,
+      r.id === lastId ? setDraftValue(r, field, getDraftValue(r, field) + drift, { decimals }) : r,
     )
   }
   return scaled
@@ -166,8 +194,8 @@ export function computeWeightModeAllocation(args: {
 
     const priceRaw = pricesByRowId[r.id]
     const price = safeNumber(priceRaw)
-    const targetAmount = funds > 0 && w > 0 ? (funds * w) / 100 : 0
-    let plannedQty = 0
+    const amountInr = funds > 0 && w > 0 ? (funds * w) / 100 : 0
+    let qty = 0
     let plannedCost = 0
     if (w > 0) {
       if (price == null || !(price > 0)) {
@@ -178,9 +206,9 @@ export function computeWeightModeAllocation(args: {
           rowId: r.id,
         })
       } else {
-        plannedQty = Math.floor(targetAmount / price)
-        plannedCost = plannedQty * price
-        if (plannedQty <= 0) {
+        qty = Math.floor(amountInr / price)
+        plannedCost = qty * price
+        if (qty <= 0) {
           rowIssues.push({
             level: 'warning',
             code: 'qty_zero',
@@ -192,10 +220,14 @@ export function computeWeightModeAllocation(args: {
     }
 
     return {
-      ...r,
+      id: r.id,
+      symbol: r.symbol,
+      exchange: r.exchange,
+      locked: r.locked,
+      weightPct: w,
+      amountInr,
+      qty,
       price,
-      targetAmount,
-      plannedQty,
       plannedCost,
       issues: rowIssues,
     }
@@ -259,7 +291,7 @@ export function computeWeightModeAllocation(args: {
       .map((r) => {
         const w = safeNumber(r.weightPct) ?? 0
         const price = safeNumber(r.price)
-        return { id: r.id, w, price, target: r.targetAmount }
+        return { id: r.id, w, price, target: r.amountInr }
       })
       .filter((c) => c.w > 0 && c.price != null && c.price > 0) as Array<{
       id: string
@@ -270,7 +302,7 @@ export function computeWeightModeAllocation(args: {
 
     const minPrice = candidates.reduce((m, c) => Math.min(m, c.price), Number.POSITIVE_INFINITY)
     if (candidates.length && Number.isFinite(minPrice)) {
-      const qtyById = new Map(outRows.map((r) => [r.id, Math.max(0, Math.trunc(r.plannedQty ?? 0))] as const))
+      const qtyById = new Map(outRows.map((r) => [r.id, Math.max(0, Math.trunc(r.qty ?? 0))] as const))
       const costById = new Map(outRows.map((r) => [r.id, Math.max(0, Number(r.plannedCost ?? 0))] as const))
       let totalCost = outRows.reduce((s, r) => s + (Number.isFinite(r.plannedCost) ? r.plannedCost : 0), 0)
       let remaining = funds - totalCost
@@ -303,7 +335,7 @@ export function computeWeightModeAllocation(args: {
       outRows = outRows.map((r) => {
         const qty = qtyById.get(r.id) ?? 0
         const cost = costById.get(r.id) ?? 0
-        return { ...r, plannedQty: qty, plannedCost: cost }
+        return { ...r, qty, plannedCost: cost }
       })
     }
   }
@@ -418,6 +450,203 @@ export function computeWeightModeAllocation(args: {
   }
 
   // Bubble up row errors.
+  for (const r of outRows) {
+    for (const i of r.issues) {
+      if (i.level === 'error') issues.push(i)
+    }
+  }
+
+  return { rows: outRows, totals, issues }
+}
+
+export function computeAmountModeAllocation(args: {
+  funds: number
+  rows: AllocationRowDraft[]
+  pricesByRowId: Record<string, number | null | undefined>
+}): AllocationResult {
+  const funds = safeNumber(args.funds) ?? 0
+  const rows = args.rows ?? []
+  const pricesByRowId = args.pricesByRowId ?? {}
+
+  const issues: AllocationIssue[] = []
+  if (!(funds > 0)) {
+    issues.push({
+      level: 'error',
+      code: 'funds_invalid',
+      message: 'Funds must be a positive number.',
+    })
+  }
+
+  let totalRequested = 0
+  const outRows: AllocationRowResult[] = rows.map((r) => {
+    const rowIssues: AllocationIssue[] = []
+    const amountInr = safeNumber(r.amountInr) ?? 0
+    if (!(amountInr >= 0)) {
+      rowIssues.push({
+        level: 'error',
+        code: 'amount_invalid',
+        message: 'Amount must be 0 or more.',
+        rowId: r.id,
+      })
+    }
+
+    const priceRaw = pricesByRowId[r.id]
+    const price = safeNumber(priceRaw)
+    let qty = 0
+    let plannedCost = 0
+    if (amountInr > 0) {
+      if (price == null || !(price > 0)) {
+        rowIssues.push({
+          level: 'error',
+          code: 'price_missing',
+          message: 'Missing price for allocation.',
+          rowId: r.id,
+        })
+      } else {
+        qty = Math.floor(amountInr / price)
+        plannedCost = qty * price
+        if (qty <= 0) {
+          rowIssues.push({
+            level: 'warning',
+            code: 'qty_zero',
+            message: 'Amount is too small for 1 share.',
+            rowId: r.id,
+          })
+        }
+      }
+    }
+
+    totalRequested += Math.max(0, amountInr)
+    const weightPct = funds > 0 ? (Math.max(0, amountInr) / funds) * 100 : 0
+
+    return {
+      id: r.id,
+      symbol: r.symbol,
+      exchange: r.exchange,
+      locked: r.locked,
+      weightPct: Number.isFinite(weightPct) ? weightPct : 0,
+      amountInr: Math.max(0, amountInr),
+      qty,
+      price,
+      plannedCost,
+      issues: rowIssues,
+    }
+  })
+
+  const lockedAmountSum = outRows.reduce((s, r) => s + (r.locked ? r.amountInr : 0), 0)
+  const totalCost = outRows.reduce((s, r) => s + (Number.isFinite(r.plannedCost) ? r.plannedCost : 0), 0)
+  const remaining = funds - totalCost
+
+  if (totalRequested > funds + 0.01) {
+    const shortfall = totalRequested - funds
+    issues.push({
+      level: 'error',
+      code: 'amount_over_funds',
+      message: `Total amount exceeds funds by ${shortfall.toFixed(2)}.`,
+    })
+  }
+
+  const totals = {
+    funds,
+    weightSumPct: funds > 0 ? (totalRequested / funds) * 100 : 0,
+    lockedWeightSumPct: funds > 0 ? (lockedAmountSum / funds) * 100 : 0,
+    totalCost,
+    remaining,
+    minFundsRequired: totalRequested,
+    additionalFundsRequired: Math.max(0, totalRequested - funds),
+  }
+
+  for (const r of outRows) {
+    for (const i of r.issues) {
+      if (i.level === 'error') issues.push(i)
+    }
+  }
+
+  return { rows: outRows, totals, issues }
+}
+
+export function computeQtyModeAllocation(args: {
+  funds: number
+  rows: AllocationRowDraft[]
+  pricesByRowId: Record<string, number | null | undefined>
+}): AllocationResult {
+  const funds = safeNumber(args.funds) ?? 0
+  const rows = args.rows ?? []
+  const pricesByRowId = args.pricesByRowId ?? {}
+
+  const issues: AllocationIssue[] = []
+  if (!(funds > 0)) {
+    issues.push({
+      level: 'error',
+      code: 'funds_invalid',
+      message: 'Funds must be a positive number.',
+    })
+  }
+
+  const outRows: AllocationRowResult[] = rows.map((r) => {
+    const rowIssues: AllocationIssue[] = []
+    const qtyRaw = safeNumber(r.qty)
+    const qty = qtyRaw == null ? 0 : Math.max(0, Math.trunc(qtyRaw))
+    if (!(qty >= 0)) {
+      rowIssues.push({
+        level: 'error',
+        code: 'qty_invalid',
+        message: 'Qty must be 0 or more.',
+        rowId: r.id,
+      })
+    }
+
+    const priceRaw = pricesByRowId[r.id]
+    const price = safeNumber(priceRaw)
+    if (qty > 0 && (price == null || !(price > 0))) {
+      rowIssues.push({
+        level: 'error',
+        code: 'price_missing',
+        message: 'Missing price for allocation.',
+        rowId: r.id,
+      })
+    }
+
+    const plannedCost = qty > 0 && price != null ? qty * price : 0
+    const amountInr = plannedCost
+    const weightPct = funds > 0 ? (amountInr / funds) * 100 : 0
+
+    return {
+      id: r.id,
+      symbol: r.symbol,
+      exchange: r.exchange,
+      locked: r.locked,
+      weightPct: Number.isFinite(weightPct) ? weightPct : 0,
+      amountInr,
+      qty,
+      price,
+      plannedCost,
+      issues: rowIssues,
+    }
+  })
+
+  const totalCost = outRows.reduce((s, r) => s + (Number.isFinite(r.plannedCost) ? r.plannedCost : 0), 0)
+  const remaining = funds - totalCost
+
+  if (totalCost > funds + 0.01) {
+    const shortfall = totalCost - funds
+    issues.push({
+      level: 'error',
+      code: 'cost_over_funds',
+      message: `Total cost exceeds funds by ${shortfall.toFixed(2)}.`,
+    })
+  }
+
+  const totals = {
+    funds,
+    weightSumPct: funds > 0 ? (totalCost / funds) * 100 : 0,
+    lockedWeightSumPct: 0,
+    totalCost,
+    remaining,
+    minFundsRequired: totalCost,
+    additionalFundsRequired: Math.max(0, totalCost - funds),
+  }
+
   for (const r of outRows) {
     for (const i of r.issues) {
       if (i.level === 'error') issues.push(i)

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from app.pydantic_compat import PYDANTIC_V2, ConfigDict
 
 GroupKind = Literal["WATCHLIST", "MODEL_PORTFOLIO", "HOLDINGS_VIEW", "PORTFOLIO"]
-BasketAllocationMode = Literal["WEIGHT"]
+BasketAllocationMode = Literal["WEIGHT", "AMOUNT", "QTY"]
 
 
 class GroupBase(BaseModel):
@@ -52,6 +52,16 @@ class GroupMemberBase(BaseModel):
         description="Reference price captured at creation time (optional).",
     )
     notes: Optional[str] = None
+    allocation_amount: Optional[float] = Field(
+        None,
+        ge=0.0,
+        description="Amount input (INR) for Amount mode (optional).",
+    )
+    allocation_qty: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Qty input for Qty mode (optional).",
+    )
 
 
 class GroupMemberCreate(GroupMemberBase):
@@ -64,6 +74,8 @@ class GroupMemberUpdate(BaseModel):
     reference_price: Optional[float] = Field(None, gt=0.0)
     weight_locked: Optional[bool] = None
     notes: Optional[str] = None
+    allocation_amount: Optional[float] = Field(None, ge=0.0)
+    allocation_qty: Optional[int] = Field(None, ge=0)
 
 
 class GroupMemberRead(BaseModel):
@@ -75,6 +87,8 @@ class GroupMemberRead(BaseModel):
     frozen_price: Optional[float] = None
     weight_locked: bool = False
     notes: Optional[str] = None
+    allocation_amount: Optional[float] = None
+    allocation_qty: Optional[int] = None
 
     id: int
     group_id: int
