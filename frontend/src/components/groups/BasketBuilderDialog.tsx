@@ -1,6 +1,9 @@
 import DeleteIcon from '@mui/icons-material/Delete'
+import FileDownloadIcon from '@mui/icons-material/FileDownload'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import LockIcon from '@mui/icons-material/Lock'
 import LockOpenIcon from '@mui/icons-material/LockOpen'
+import IconButton from '@mui/material/IconButton'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import Dialog from '@mui/material/Dialog'
@@ -13,6 +16,7 @@ import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import Tooltip from '@mui/material/Tooltip'
 import Alert from '@mui/material/Alert'
 import Checkbox from '@mui/material/Checkbox'
 import {
@@ -23,6 +27,7 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 
 import { useMarketQuotes } from '../../hooks/useMarketQuotes'
+import { downloadCsv } from '../../utils/csv'
 import {
   bulkAddGroupMembers,
   deleteGroupMember,
@@ -176,6 +181,7 @@ export function BasketBuilderDialog({
       rows: allocationRows,
       pricesByRowId,
       requireWeightsSumTo100: true,
+      minQtyPerRow: 1,
     })
   }, [allocationRows, funds, pricesByRowId])
 
@@ -189,10 +195,58 @@ export function BasketBuilderDialog({
     return out
   }, [allocation.rows])
 
+  const additionalFundsRequired = allocation.totals.additionalFundsRequired ?? 0
+  const displayRemaining =
+    additionalFundsRequired > 0.01 ? -additionalFundsRequired : allocation.totals.remaining
+  const minFundsRequired = allocation.totals.minFundsRequired ?? null
+
   const blockingIssues = useMemo(() => {
     const block = new Set(['funds_invalid', 'locked_over_100', 'weights_not_100', 'weight_invalid'])
     return allocation.issues.filter((i) => block.has(i.code))
   }, [allocation.issues])
+
+  const handleExportCsv = () => {
+    const now = new Date()
+    const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    const safeName = (group.name || `basket_${groupId}`).replace(/[^a-z0-9_-]+/gi, '_')
+
+    const outlierMsg = allocation.issues.find((i) => i.code === 'allocation_outliers')?.message ?? ''
+    const totals = allocation.totals
+
+    const rows = (group.members ?? []).map((m) => {
+      const allocRow = allocationByMemberId.get(m.id)
+      const live = quotesByKey[toKey(m.exchange, m.symbol)]?.ltp ?? null
+      const frozen = m.frozen_price ?? null
+      const deltaPct =
+        live != null && frozen != null && Number(frozen) > 0
+          ? ((Number(live) - Number(frozen)) / Number(frozen)) * 100
+          : null
+      return {
+        group: group.name,
+        kind: 'BASKET',
+        funds_available: totals.funds,
+        funds_required_min: totals.minFundsRequired ?? '',
+        shortfall: totals.additionalFundsRequired ?? '',
+        planned_cost: totals.totalCost,
+        remaining: displayRemaining,
+        weights_sum_pct: totals.weightSumPct,
+        outliers: outlierMsg,
+        symbol: m.symbol,
+        exchange: m.exchange ?? 'NSE',
+        weight_pct: allocRow?.weightPct ?? '',
+        locked: draftLocks[m.id] ?? false,
+        live_price: live != null ? Number(live) : '',
+        frozen_price: frozen != null ? Number(frozen) : '',
+        delta_pct: deltaPct != null && Number.isFinite(deltaPct) ? deltaPct : '',
+        planned_qty: allocRow?.plannedQty ?? '',
+        planned_cost_row: allocRow?.plannedCost ?? '',
+        actual_pct: allocRow?.actualPct ?? '',
+        drift_pct: allocRow?.driftPct ?? '',
+      }
+    })
+
+    downloadCsv(`${safeName}_${stamp}.csv`, rows)
+  }
 
   const setDraftFromRows = (rows: AllocationRowDraft[]) => {
     const next: Record<number, number> = {}
@@ -459,7 +513,11 @@ export function BasketBuilderDialog({
           {info && <Alert severity="info">{info}</Alert>}
           {quotesError && <Alert severity="warning">{quotesError}</Alert>}
 
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems="center">
+          <Stack
+            direction={{ xs: 'column', md: 'row' }}
+            spacing={1}
+            alignItems={{ xs: 'stretch', md: 'flex-start' }}
+          >
             <TextField
               label="Funds (INR)"
               size="small"
@@ -468,24 +526,26 @@ export function BasketBuilderDialog({
               sx={{ width: { xs: '100%', md: 220 } }}
               disabled={busy}
             />
-            <TextField
-              label="Mode"
-              size="small"
-              select
-              value={allocationMode}
-              onChange={() => setAllocationMode('WEIGHT')}
-              sx={{ width: { xs: '100%', md: 220 } }}
-              disabled={busy}
-              helperText="Weight mode only for now (Phase 2)."
-            >
-              <MenuItem value="WEIGHT">Weight</MenuItem>
-              <MenuItem value="AMOUNT" disabled>
-                Amount (coming soon)
-              </MenuItem>
-              <MenuItem value="QTY" disabled>
-                Qty (coming soon)
-              </MenuItem>
-            </TextField>
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              <TextField
+                label="Mode"
+                size="small"
+                select
+                value={allocationMode}
+                onChange={() => setAllocationMode('WEIGHT')}
+                sx={{ width: { xs: '100%', md: 220 } }}
+                disabled
+              >
+                <MenuItem value="WEIGHT">Weight</MenuItem>
+              </TextField>
+              <Tooltip title="Weight mode is currently supported. Amount/Qty modes will be added later.">
+                <span>
+                  <IconButton size="small" disabled={busy}>
+                    <HelpOutlineIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Stack>
             <Chip
               label={
                 group.frozen_at
@@ -493,6 +553,7 @@ export function BasketBuilderDialog({
                   : 'Not frozen'
               }
               variant="outlined"
+              sx={{ mt: { xs: 0, md: 0.5 } }}
             />
           </Stack>
 
@@ -537,6 +598,15 @@ export function BasketBuilderDialog({
             >
               Freeze prices
             </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<FileDownloadIcon />}
+              disabled={busy || !(group.members?.length ?? 0)}
+              onClick={handleExportCsv}
+            >
+              Export CSV
+            </Button>
             <Typography variant="caption" color="text.secondary">
               Quotes refresh every ~5m during market hours.
             </Typography>
@@ -545,13 +615,22 @@ export function BasketBuilderDialog({
           <Paper variant="outlined" sx={{ p: 1.25 }}>
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="center">
               <Typography variant="body2">
+                Funds available: {allocation.totals.funds.toFixed(2)}
+              </Typography>
+              <Typography variant="body2">
+                Funds required (min): {minFundsRequired != null ? minFundsRequired.toFixed(2) : '-'}
+              </Typography>
+              <Typography variant="body2">
                 Weights sum: {allocation.totals.weightSumPct.toFixed(2)}%
               </Typography>
               <Typography variant="body2">
                 Planned cost (live): {allocation.totals.totalCost.toFixed(2)}
               </Typography>
-              <Typography variant="body2">
-                Remaining: {allocation.totals.remaining.toFixed(2)}
+              <Typography
+                variant="body2"
+                sx={{ color: displayRemaining < -0.01 ? 'error.main' : 'text.primary' }}
+              >
+                Remaining: {displayRemaining.toFixed(2)}
               </Typography>
               <div style={{ flexGrow: 1 }} />
               {blockingIssues.length ? (
@@ -560,6 +639,18 @@ export function BasketBuilderDialog({
                 </Alert>
               ) : null}
             </Stack>
+            {additionalFundsRequired > 0.01 ? (
+              <Alert severity="error" sx={{ mt: 1 }}>
+                Funds required: {minFundsRequired != null ? minFundsRequired.toFixed(2) : '-'} (available: {allocation.totals.funds.toFixed(2)}). Shortfall: {additionalFundsRequired.toFixed(2)}.
+              </Alert>
+            ) : null}
+            {additionalFundsRequired <= 0.01 &&
+            Math.abs(allocation.totals.weightSumPct - 100) <= 0.05 &&
+            allocation.issues.some((i) => i.code === 'allocation_outliers') ? (
+              <Alert severity="warning" sx={{ mt: 1 }}>
+                {allocation.issues.find((i) => i.code === 'allocation_outliers')?.message}
+              </Alert>
+            ) : null}
           </Paper>
 
           <div style={{ height: 520, width: '100%' }}>

@@ -18,6 +18,19 @@ function safeNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+function quantile(sorted: number[], q: number): number | null {
+  if (!sorted.length) return null
+  if (sorted.length === 1) return sorted[0] ?? null
+  const qq = Math.min(1, Math.max(0, q))
+  const pos = (sorted.length - 1) * qq
+  const base = Math.floor(pos)
+  const rest = pos - base
+  const v0 = sorted[base]
+  const v1 = sorted[Math.min(sorted.length - 1, base + 1)]
+  if (v0 == null || v1 == null) return null
+  return v0 + rest * (v1 - v0)
+}
+
 export function sumWeightPct(rows: AllocationRowDraft[]): number {
   return rows.reduce((s, r) => s + (Number.isFinite(r.weightPct) ? r.weightPct : 0), 0)
 }
@@ -103,11 +116,15 @@ export function computeWeightModeAllocation(args: {
   rows: AllocationRowDraft[]
   pricesByRowId: Record<string, number | null | undefined>
   requireWeightsSumTo100?: boolean
+  minQtyPerRow?: number
+  optimizeWithRemainingFunds?: boolean
 }): AllocationResult {
   const funds = safeNumber(args.funds) ?? 0
   const rows = args.rows ?? []
   const pricesByRowId = args.pricesByRowId ?? {}
   const requireWeightsSumTo100 = args.requireWeightsSumTo100 ?? false
+  const minQtyPerRow = Math.max(0, Math.trunc(safeNumber(args.minQtyPerRow) ?? 0))
+  const optimizeWithRemainingFunds = args.optimizeWithRemainingFunds ?? true
 
   const issues: AllocationIssue[] = []
   if (!(funds > 0)) {
@@ -135,7 +152,7 @@ export function computeWeightModeAllocation(args: {
     })
   }
 
-  const outRows: AllocationRowResult[] = rows.map((r) => {
+  const baseRows: AllocationRowResult[] = rows.map((r) => {
     const rowIssues: AllocationIssue[] = []
     const w = safeNumber(r.weightPct) ?? 0
     if (!(w >= 0) || w > 100 + PCT_EPS) {
@@ -184,14 +201,220 @@ export function computeWeightModeAllocation(args: {
     }
   })
 
+  let outRows = baseRows
+
+  // If minQtyPerRow is requested, compute minimum funds needed so that each row with a non-zero
+  // weight can buy at least minQtyPerRow shares at the current weights.
+  let minFundsRequired: number | undefined
+  if (minQtyPerRow > 0) {
+    let maxRequired = 0
+    for (const r of outRows) {
+      const w = safeNumber(r.weightPct) ?? 0
+      const price = safeNumber(r.price)
+      if (!(w > 0) || price == null || !(price > 0)) continue
+      const required = (price * minQtyPerRow * 100) / w
+      if (Number.isFinite(required) && required > maxRequired) maxRequired = required
+    }
+    if (maxRequired > 0 && Number.isFinite(maxRequired)) {
+      minFundsRequired = maxRequired
+      const additional = Math.max(0, maxRequired - funds)
+      if (additional > 0.01) {
+        issues.push({
+          level: 'error',
+          code: 'min_qty_funds_insufficient',
+          message: `Add ${additional.toFixed(2)} funds to buy at least ${minQtyPerRow} share(s) for every included symbol at current weights.`,
+        })
+
+        outRows = outRows.map((r) => {
+          const w = safeNumber(r.weightPct) ?? 0
+          const price = safeNumber(r.price)
+          if (!(w > 0) || price == null || !(price > 0)) return r
+          const rowTarget = (funds * w) / 100
+          if (rowTarget + 1e-9 >= price * minQtyPerRow) return r
+          const rowRequired = (price * minQtyPerRow * 100) / w
+          return {
+            ...r,
+            issues: [
+              ...r.issues,
+              {
+                level: 'error',
+                code: 'min_qty_unmet',
+                message: `Needs at least ${minQtyPerRow} share(s). Minimum funds at current weight: ${rowRequired.toFixed(2)}.`,
+                rowId: r.id,
+              },
+            ],
+          }
+        })
+      }
+    }
+  }
+
+  // Greedy improvement: spend remaining funds by buying 1 share at a time for the most underweight
+  // row (by targetAmount - currentCost), without exceeding available funds.
+  if (
+    optimizeWithRemainingFunds &&
+    !issues.some((i) => i.level === 'error' && i.code === 'min_qty_funds_insufficient')
+  ) {
+    const candidates = outRows
+      .map((r) => {
+        const w = safeNumber(r.weightPct) ?? 0
+        const price = safeNumber(r.price)
+        return { id: r.id, w, price, target: r.targetAmount }
+      })
+      .filter((c) => c.w > 0 && c.price != null && c.price > 0) as Array<{
+      id: string
+      w: number
+      price: number
+      target: number
+    }>
+
+    const minPrice = candidates.reduce((m, c) => Math.min(m, c.price), Number.POSITIVE_INFINITY)
+    if (candidates.length && Number.isFinite(minPrice)) {
+      const qtyById = new Map(outRows.map((r) => [r.id, Math.max(0, Math.trunc(r.plannedQty ?? 0))] as const))
+      const costById = new Map(outRows.map((r) => [r.id, Math.max(0, Number(r.plannedCost ?? 0))] as const))
+      let totalCost = outRows.reduce((s, r) => s + (Number.isFinite(r.plannedCost) ? r.plannedCost : 0), 0)
+      let remaining = funds - totalCost
+
+      // Safety cap: avoid pathological loops when there are penny-priced instruments.
+      const maxSteps = 50_000
+      let steps = 0
+      while (remaining + 1e-9 >= minPrice && steps < maxSteps) {
+        steps += 1
+        let bestId: string | null = null
+        let bestDeficit = 0
+        for (const c of candidates) {
+          if (c.price > remaining + 1e-9) continue
+          const currentCost = costById.get(c.id) ?? 0
+          const deficit = c.target - currentCost
+          if (deficit > bestDeficit + 1e-9) {
+            bestDeficit = deficit
+            bestId = c.id
+          }
+        }
+        if (bestId == null) break
+        const c = candidates.find((x) => x.id === bestId)
+        if (!c) break
+        qtyById.set(bestId, (qtyById.get(bestId) ?? 0) + 1)
+        costById.set(bestId, (costById.get(bestId) ?? 0) + c.price)
+        totalCost += c.price
+        remaining -= c.price
+      }
+
+      outRows = outRows.map((r) => {
+        const qty = qtyById.get(r.id) ?? 0
+        const cost = costById.get(r.id) ?? 0
+        return { ...r, plannedQty: qty, plannedCost: cost }
+      })
+    }
+  }
+
   const totalCost = outRows.reduce((s, r) => s + (Number.isFinite(r.plannedCost) ? r.plannedCost : 0), 0)
   const remaining = funds - totalCost
+
+  // Allocation quality: compare invested weights to target weights and detect outliers.
+  let maxAbsDeviationPct: number | undefined
+  if (totalCost > 0) {
+    let maxDev = 0
+    const rowDevs: Array<{ id: string; dev: number; symbol: string }> = []
+    for (const r of outRows) {
+      const w = safeNumber(r.weightPct) ?? 0
+      if (!(w > 0)) continue
+      const cost = safeNumber(r.plannedCost) ?? 0
+      const actual = (cost / totalCost) * 100
+      const dev = Math.abs(actual - w)
+      if (Number.isFinite(dev)) {
+        if (dev > maxDev) maxDev = dev
+        rowDevs.push({ id: r.id, dev, symbol: r.symbol })
+      }
+    }
+    if (Number.isFinite(maxDev)) {
+      maxAbsDeviationPct = maxDev
+      const devVals = rowDevs
+        .map((x) => x.dev)
+        .filter((x) => Number.isFinite(x))
+        .sort((a, b) => a - b)
+      const q1 = quantile(devVals, 0.25)
+      const q3 = quantile(devVals, 0.75)
+      const median = quantile(devVals, 0.5)
+      if (q1 != null && q3 != null && median != null) {
+        const iqr = q3 - q1
+        if (iqr > 1e-9) {
+          const upper = median + 2.5 * iqr
+          const offenders = rowDevs
+            .filter((x) => x.dev > upper + 1e-9)
+            .sort((a, b) => b.dev - a.dev)
+          if (offenders.length) {
+            const top = offenders.slice(0, 3)
+            issues.push({
+              level: 'warning',
+              code: 'allocation_outliers',
+              message: `Rounding outliers (weights may skew): ${top
+                .map((o) => `${o.symbol} (${o.dev.toFixed(2)}%)`)
+                .join(', ')}.`,
+            })
+            const offenderIds = new Set(offenders.map((o) => o.id))
+            outRows = outRows.map((r) => {
+              const w = safeNumber(r.weightPct) ?? 0
+              const cost = safeNumber(r.plannedCost) ?? 0
+              const actual = totalCost > 0 ? (cost / totalCost) * 100 : 0
+              const drift = Math.abs(actual - w)
+              return {
+                ...r,
+                actualPct: Number.isFinite(actual) ? actual : null,
+                driftPct: Number.isFinite(drift) ? drift : null,
+                issues: offenderIds.has(r.id)
+                  ? [
+                      ...r.issues,
+                      {
+                        level: 'warning',
+                        code: 'allocation_outlier',
+                        message:
+                          'This symbol is a rounding outlier; consider removing it or increasing funds for a closer match to target weights.',
+                        rowId: r.id,
+                      },
+                    ]
+                  : r.issues,
+              }
+            })
+          } else {
+            outRows = outRows.map((r) => {
+              const w = safeNumber(r.weightPct) ?? 0
+              const cost = safeNumber(r.plannedCost) ?? 0
+              const actual = totalCost > 0 ? (cost / totalCost) * 100 : 0
+              const drift = Math.abs(actual - w)
+              return {
+                ...r,
+                actualPct: Number.isFinite(actual) ? actual : null,
+                driftPct: Number.isFinite(drift) ? drift : null,
+              }
+            })
+          }
+        } else {
+          outRows = outRows.map((r) => {
+            const w = safeNumber(r.weightPct) ?? 0
+            const cost = safeNumber(r.plannedCost) ?? 0
+            const actual = totalCost > 0 ? (cost / totalCost) * 100 : 0
+            const drift = Math.abs(actual - w)
+            return {
+              ...r,
+              actualPct: Number.isFinite(actual) ? actual : null,
+              driftPct: Number.isFinite(drift) ? drift : null,
+            }
+          })
+        }
+      }
+    }
+  }
+
   const totals = {
     funds,
     weightSumPct,
     lockedWeightSumPct,
     totalCost,
     remaining,
+    minFundsRequired,
+    additionalFundsRequired: minFundsRequired != null ? Math.max(0, minFundsRequired - funds) : 0,
+    maxAbsDeviationPct,
   }
 
   // Bubble up row errors.
@@ -203,4 +426,3 @@ export function computeWeightModeAllocation(args: {
 
   return { rows: outRows, totals, issues }
 }
-

@@ -1,6 +1,7 @@
 import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
 import EditIcon from '@mui/icons-material/Edit'
+import FileDownloadIcon from '@mui/icons-material/FileDownload'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import Alert from '@mui/material/Alert'
@@ -45,6 +46,7 @@ import { fetchHoldings, fetchDailyPositions, syncPositions } from '../services/p
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
+import { downloadCsv } from '../utils/csv'
 import {
   addGroupMember,
   bulkAddGroupMembers,
@@ -222,6 +224,44 @@ export function GroupsPage() {
     error: watchlistQuotesError,
     loading: watchlistQuotesLoading,
   } = useMarketQuotes(watchlistQuoteItems)
+
+  const exportSelectedGroupCsv = useCallback(() => {
+    if (!selectedGroup) return
+    const now = new Date()
+    const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    const safeName = (selectedGroup.name || `group_${selectedGroup.id}`)
+      .replace(/[^a-z0-9_-]+/gi, '_')
+      .slice(0, 80)
+
+    const rows = (selectedGroup.members ?? []).map((m) => {
+      const exch = (m.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+      const sym = (m.symbol || '').trim().toUpperCase()
+      const q = watchlistQuotesByKey[`${exch}:${sym}`]
+      return {
+        group_id: selectedGroup.id,
+        group_name: selectedGroup.name,
+        group_kind: selectedGroup.kind,
+        funds: selectedGroup.funds ?? '',
+        frozen_at: selectedGroup.frozen_at ?? '',
+        origin_basket_id: selectedGroup.origin_basket_id ?? '',
+        bought_at: selectedGroup.bought_at ?? '',
+        symbol: sym,
+        exchange: exch,
+        target_weight_pct:
+          m.target_weight != null && Number.isFinite(Number(m.target_weight))
+            ? Number(m.target_weight) * 100
+            : '',
+        weight_locked: m.weight_locked ?? '',
+        frozen_price: m.frozen_price ?? '',
+        reference_qty: m.reference_qty ?? '',
+        reference_price: m.reference_price ?? '',
+        ltp: q?.ltp ?? '',
+        day_pct: q?.day_pct ?? '',
+      }
+    })
+
+    downloadCsv(`${safeName}_${selectedGroup.kind}_${stamp}.csv`, rows)
+  }, [selectedGroup, watchlistQuotesByKey])
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkState, setBulkState] = useState<BulkAddState>(DEFAULT_BULK_ADD)
@@ -1595,6 +1635,15 @@ export function GroupsPage() {
                   }}
                 >
                   Open in grid
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<FileDownloadIcon />}
+                  disabled={!selectedGroup?.members?.length}
+                  onClick={exportSelectedGroupCsv}
+                >
+                  Export CSV
                 </Button>
             </Stack>
 

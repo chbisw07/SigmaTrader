@@ -125,5 +125,74 @@ describe('allocation engine (weight mode)', () => {
     })
     expect(res.issues.some((i) => i.code === 'weights_not_100')).toBe(true)
   })
-})
 
+  it('computeWeightModeAllocation can compute additional funds for min 1 share per symbol', () => {
+    const res = computeWeightModeAllocation({
+      funds: 1000,
+      rows: rows([
+        { id: 'A', w: 50 },
+        { id: 'B', w: 50 },
+      ]),
+      pricesByRowId: { A: 1000, B: 100 },
+      requireWeightsSumTo100: true,
+      minQtyPerRow: 1,
+    })
+    expect(res.issues.some((i) => i.code === 'min_qty_funds_insufficient')).toBe(true)
+    expect(res.totals.minFundsRequired).toBeCloseTo(2000, 6)
+    expect(res.totals.additionalFundsRequired).toBeCloseTo(1000, 6)
+    expect(
+      res.rows.find((r) => r.id === 'A')?.issues.some((i) => i.code === 'min_qty_unmet' && i.level === 'error'),
+    ).toBe(true)
+  })
+
+  it('computeWeightModeAllocation spends remaining funds to reduce underweight drift', () => {
+    const res = computeWeightModeAllocation({
+      funds: 1000,
+      rows: rows([
+        { id: 'A', w: 50 },
+        { id: 'B', w: 50 },
+      ]),
+      pricesByRowId: { A: 90, B: 110 },
+      requireWeightsSumTo100: true,
+    })
+    expect(res.rows.find((r) => r.id === 'A')?.plannedQty).toBe(5)
+    expect(res.rows.find((r) => r.id === 'B')?.plannedQty).toBe(5)
+    expect(res.totals.totalCost).toBeCloseTo(1000, 6)
+    expect(res.totals.remaining).toBeCloseTo(0, 6)
+  })
+
+  it('computeWeightModeAllocation flags rounding outliers using IQR', () => {
+    const res = computeWeightModeAllocation({
+      funds: 10000,
+      rows: rows([
+        { id: 'A', w: 10 },
+        { id: 'B', w: 10 },
+        { id: 'C', w: 10 },
+        { id: 'D', w: 10 },
+        { id: 'E', w: 10 },
+        { id: 'F', w: 10 },
+        { id: 'G', w: 10 },
+        { id: 'H', w: 10 },
+        { id: 'I', w: 10 },
+        { id: 'J', w: 10 },
+      ]),
+      pricesByRowId: {
+        A: 333, // 3 shares => 999
+        B: 9999, // outlier => 0 shares
+        C: 250, // 4 shares => 1000
+        D: 200, // 5 shares => 1000
+        E: 180, // 5 shares => 900
+        F: 167, // 5 shares => 835
+        G: 150, // 6 shares => 900
+        H: 125, // 8 shares => 1000
+        I: 111, // 9 shares => 999
+        J: 95, // 10 shares => 950
+      },
+      requireWeightsSumTo100: true,
+      minQtyPerRow: 0,
+      optimizeWithRemainingFunds: false,
+    })
+    expect(res.issues.some((i) => i.code === 'allocation_outliers')).toBe(true)
+    expect(res.rows.some((r) => r.issues.some((i) => i.code === 'allocation_outlier'))).toBe(true)
+  })
+})

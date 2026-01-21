@@ -21,6 +21,8 @@ export type AllocationRowResult = AllocationRowDraft & {
   plannedQty: number
   plannedCost: number
   issues: AllocationIssue[]
+  actualPct?: number | null
+  driftPct?: number | null
 }
 
 export type AllocationTotals = {
@@ -29,6 +31,9 @@ export type AllocationTotals = {
   lockedWeightSumPct: number
   totalCost: number
   remaining: number
+  minFundsRequired?: number
+  additionalFundsRequired?: number
+  maxAbsDeviationPct?: number
 }
 
 export type AllocationResult = {
@@ -36,4 +41,3 @@ export type AllocationResult = {
   totals: AllocationTotals
   issues: AllocationIssue[]
 }
-
