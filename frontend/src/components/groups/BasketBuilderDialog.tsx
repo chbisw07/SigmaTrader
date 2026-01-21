@@ -1,6 +1,7 @@
 import DeleteIcon from '@mui/icons-material/Delete'
 import FileDownloadIcon from '@mui/icons-material/FileDownload'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import AddIcon from '@mui/icons-material/Add'
 import LockIcon from '@mui/icons-material/Lock'
 import LockOpenIcon from '@mui/icons-material/LockOpen'
 import IconButton from '@mui/material/IconButton'
@@ -641,7 +642,27 @@ export function BasketBuilderDialog({
             </Stack>
             {additionalFundsRequired > 0.01 ? (
               <Alert severity="error" sx={{ mt: 1 }}>
-                Funds required: {minFundsRequired != null ? minFundsRequired.toFixed(2) : '-'} (available: {allocation.totals.funds.toFixed(2)}). Shortfall: {additionalFundsRequired.toFixed(2)}.
+                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                  <span>
+                    Funds required: {minFundsRequired != null ? minFundsRequired.toFixed(2) : '-'}{' '}
+                    (available: {allocation.totals.funds.toFixed(2)}). Shortfall: {additionalFundsRequired.toFixed(2)}.
+                  </span>
+                  <Tooltip title="Add shortfall to Funds (INR)">
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={busy}
+                        onClick={() => {
+                          const current = parseFunds(fundsText) ?? 0
+                          const next = current + additionalFundsRequired
+                          setFundsText(next.toFixed(2))
+                        }}
+                      >
+                        <AddIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Stack>
               </Alert>
             ) : null}
             {additionalFundsRequired <= 0.01 &&
