@@ -36,7 +36,7 @@ def test_basket_config_and_freeze_roundtrip(monkeypatch) -> None:
         json={"symbol": "XYZ", "exchange": "NSE", "target_weight": 0.4},
     )
     assert res.status_code == 200
-    member_b = res.json()
+    _ = res.json()
 
     # Set lock flag on one member.
     res = client.patch(
@@ -111,4 +111,3 @@ def test_basket_config_and_freeze_roundtrip(monkeypatch) -> None:
     by_symbol3 = {m["symbol"]: m for m in detail["members"]}
     assert by_symbol3["ABC"]["frozen_price"] == 111.0
     assert by_symbol3["ABC"]["weight_locked"] is True
-

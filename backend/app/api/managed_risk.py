@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -136,11 +136,11 @@ def _create_and_execute_exit(
 
 @router.get("/positions", response_model=List[ManagedRiskPositionRead])
 def list_managed_risk_positions(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
     status: Optional[str] = Query(None),
     broker_name: Optional[str] = Query(None),
     include_exited: bool = Query(False),
-    db: Session = Depends(get_db),
-    user: User | None = Depends(get_current_user_optional),
 ) -> List[ManagedRiskPositionRead]:
     query = db.query(ManagedRiskPosition)
     if user is not None:
@@ -169,8 +169,8 @@ def list_managed_risk_positions(
 @router.post("/positions/{position_id}/exit", response_model=ManagedRiskPositionRead)
 def exit_managed_risk_position(
     position_id: int,
-    db: Session = Depends(get_db),
-    user: User | None = Depends(get_current_user_optional),
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> ManagedRiskPositionRead:
     mrp = db.get(ManagedRiskPosition, int(position_id))
     if mrp is None:
@@ -192,8 +192,8 @@ def exit_managed_risk_position(
 @router.post("/positions/{position_id}/pause", response_model=ManagedRiskPositionRead)
 def pause_managed_risk_position(
     position_id: int,
-    db: Session = Depends(get_db),
-    user: User | None = Depends(get_current_user_optional),
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> ManagedRiskPositionRead:
     mrp = db.get(ManagedRiskPosition, int(position_id))
     if mrp is None:
@@ -214,8 +214,8 @@ def pause_managed_risk_position(
 @router.post("/positions/{position_id}/resume", response_model=ManagedRiskPositionRead)
 def resume_managed_risk_position(
     position_id: int,
-    db: Session = Depends(get_db),
-    user: User | None = Depends(get_current_user_optional),
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> ManagedRiskPositionRead:
     mrp = db.get(ManagedRiskPosition, int(position_id))
     if mrp is None:
@@ -238,8 +238,8 @@ def resume_managed_risk_position(
 def update_managed_risk_spec(
     position_id: int,
     payload: RiskSpec,
-    db: Session = Depends(get_db),
-    user: User | None = Depends(get_current_user_optional),
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User | None, Depends(get_current_user_optional)],
 ) -> ManagedRiskPositionRead:
     mrp = db.get(ManagedRiskPosition, int(position_id))
     if mrp is None:

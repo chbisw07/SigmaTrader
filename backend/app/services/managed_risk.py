@@ -372,7 +372,9 @@ def ensure_managed_risk_for_executed_order(
     if getattr(order, "is_exit", False):
         return None
     raw_order_spec = RiskSpec.from_json(getattr(order, "risk_spec_json", None))
-    stop_rules_enforced = bool(policy is not None and is_group_enforced(policy, "stop_rules"))
+    stop_rules_enforced = bool(
+        policy is not None and is_group_enforced(policy, "stop_rules")
+    )
 
     def _policy_spec() -> RiskSpec | None:
         if not stop_rules_enforced or policy is None:
@@ -384,7 +386,10 @@ def ensure_managed_risk_for_executed_order(
             stop_pct = float(sr.fallback_stop_pct)
             # Apply percent clamp up-front so the stored spec matches the
             # resulting absolute distance.
-            stop_pct = max(float(sr.min_stop_distance_pct), min(stop_pct, float(sr.max_stop_distance_pct)))
+            stop_pct = max(
+                float(sr.min_stop_distance_pct),
+                min(stop_pct, float(sr.max_stop_distance_pct)),
+            )
             act_pct = float(getattr(sr, "trail_activation_pct", 0.0) or 0.0)
             return RiskSpec(
                 stop_loss=DistanceSpec(
@@ -479,7 +484,10 @@ def ensure_managed_risk_for_executed_order(
         if stop_rules_enforced and policy is not None:
             sr = policy.stop_rules
             stop_pct = float(sr.fallback_stop_pct)
-            stop_pct = max(float(sr.min_stop_distance_pct), min(stop_pct, float(sr.max_stop_distance_pct)))
+            stop_pct = max(
+                float(sr.min_stop_distance_pct),
+                min(stop_pct, float(sr.max_stop_distance_pct)),
+            )
             stop_dist = float(avg_price) * stop_pct / 100.0
         else:
             return None
@@ -531,7 +539,12 @@ def ensure_managed_risk_for_executed_order(
     if spec.trailing_stop.enabled and (trail_dist is None or float(trail_dist) <= 0):
         trail_dist = float(stop_dist)
 
-    if stop_rules_enforced and policy is not None and spec.trailing_stop.enabled and trail_dist is not None:
+    if (
+        stop_rules_enforced
+        and policy is not None
+        and spec.trailing_stop.enabled
+        and trail_dist is not None
+    ):
         sr = policy.stop_rules
         min_abs = float(avg_price) * float(sr.min_stop_distance_pct) / 100.0
         max_abs = float(avg_price) * float(sr.max_stop_distance_pct) / 100.0
@@ -555,7 +568,11 @@ def ensure_managed_risk_for_executed_order(
     if spec.trailing_activation.enabled and (act_dist is None or float(act_dist) <= 0):
         # Best-effort fallback when ATR activation is requested but data is
         # missing: scale activation off the stop distance.
-        if stop_rules_enforced and policy is not None and policy.trade_risk.stop_reference == "ATR":
+        if (
+            stop_rules_enforced
+            and policy is not None
+            and policy.trade_risk.stop_reference == "ATR"
+        ):
             base_atr = float(policy.stop_rules.initial_stop_atr) or 1.0
             act_atr = float(policy.stop_rules.trail_activation_atr) or 0.0
             if act_atr > 0 and base_atr > 0:
@@ -611,7 +628,8 @@ def ensure_managed_risk_for_executed_order(
         db.query(ManagedRiskPosition)
         .filter(
             ManagedRiskPosition.user_id == order.user_id,
-            ManagedRiskPosition.broker_name == (order.broker_name or "zerodha").strip().lower(),
+            ManagedRiskPosition.broker_name
+            == (order.broker_name or "zerodha").strip().lower(),
             ManagedRiskPosition.symbol == symbol,
             ManagedRiskPosition.exchange == exchange,
             ManagedRiskPosition.product == product,
@@ -626,7 +644,8 @@ def ensure_managed_risk_for_executed_order(
         db.query(ManagedRiskPosition)
         .filter(
             ManagedRiskPosition.user_id == order.user_id,
-            ManagedRiskPosition.broker_name == (order.broker_name or "zerodha").strip().lower(),
+            ManagedRiskPosition.broker_name
+            == (order.broker_name or "zerodha").strip().lower(),
             ManagedRiskPosition.symbol == symbol,
             ManagedRiskPosition.exchange == exchange,
             ManagedRiskPosition.product == product,
@@ -667,7 +686,10 @@ def ensure_managed_risk_for_executed_order(
         next_qty = prev_qty + float(add_qty)
         if next_qty > 0 and avg_price is not None and avg_price > 0:
             existing_same.entry_price = (
-                (float(existing_same.entry_price) * prev_qty + float(avg_price) * float(add_qty))
+                (
+                    float(existing_same.entry_price) * prev_qty
+                    + float(avg_price) * float(add_qty)
+                )
                 / next_qty
             )
         existing_same.qty = float(next_qty)

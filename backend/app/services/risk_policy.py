@@ -494,8 +494,10 @@ def evaluate_execution_risk_policy(
             source_bucket=source_bucket,
         )
 
-    if exec_on and (not policy.execution_safety.allow_short_selling) and _would_open_or_increase_short(
-        db, order
+    if (
+        exec_on
+        and (not policy.execution_safety.allow_short_selling)
+        and _would_open_or_increase_short(db, order)
     ):
         return RiskPolicyDecision(
             blocked=True,
@@ -512,12 +514,24 @@ def evaluate_execution_risk_policy(
         price_needed_by.append("account_level")
     if exec_on and (
         float(policy.execution_safety.max_order_value_pct or 0.0) > 0
-        or (ovr_on and (ovr.max_order_value_abs is not None and float(ovr.max_order_value_abs) > 0))
+        or (
+            ovr_on
+            and (
+                ovr.max_order_value_abs is not None
+                and float(ovr.max_order_value_abs) > 0
+            )
+        )
     ):
         price_needed_by.append("execution_safety")
     if pos_on and (
         float(policy.position_sizing.capital_per_trade or 0.0) > 0
-        or (ovr_on and (ovr.capital_per_trade is not None and float(ovr.capital_per_trade) > 0))
+        or (
+            ovr_on
+            and (
+                ovr.capital_per_trade is not None
+                and float(ovr.capital_per_trade) > 0
+            )
+        )
     ):
         price_needed_by.append("position_sizing")
     if per_on and stop_on and (
@@ -535,7 +549,10 @@ def evaluate_execution_risk_policy(
             clamped=False,
             reason=_group_reason(
                 groups,
-                "Price is required for enabled risk checks (set a limit price or hydrate candles).",
+                (
+                    "Price is required for enabled risk checks (set a limit price "
+                    "or hydrate candles)."
+                ),
             ),
             original_qty=original_qty,
             final_qty=original_qty,
@@ -545,7 +562,8 @@ def evaluate_execution_risk_policy(
 
     open_positions: list[Position] = []
     if acct_on or pos_on:
-        # Account-level: max open positions / concurrent symbols / exposure (best-effort).
+        # Account-level: max open positions / concurrent symbols / exposure
+        # (best-effort).
         try:
             positions = db.query(Position).filter(Position.qty != 0).all()
         except Exception:
@@ -634,7 +652,10 @@ def evaluate_execution_risk_policy(
                 clamped=False,
                 reason=_group_reason(
                     "account_level",
-                    f"max_open_positions={policy.account_risk.max_open_positions} reached.",
+                    (
+                        "max_open_positions="
+                        f"{policy.account_risk.max_open_positions} reached."
+                    ),
                 ),
                 original_qty=original_qty,
                 final_qty=original_qty,
@@ -724,11 +745,17 @@ def evaluate_execution_risk_policy(
     if (exec_on or pos_on) and (effective_price or 0) > 0:
         caps: list[tuple[float, str]] = []
 
-        if exec_on and ovr.max_order_value_abs is not None and float(ovr.max_order_value_abs) > 0:
+        if (
+            exec_on
+            and ovr.max_order_value_abs is not None
+            and float(ovr.max_order_value_abs) > 0
+        ):
             caps.append((float(ovr.max_order_value_abs), "execution_safety"))
 
         if exec_on and equity > 0:
-            max_value_pct = equity * float(policy.execution_safety.max_order_value_pct) / 100.0
+            max_value_pct = (
+                equity * float(policy.execution_safety.max_order_value_pct) / 100.0
+            )
             if max_value_pct > 0:
                 caps.append((float(max_value_pct), "execution_safety"))
 
@@ -823,7 +850,10 @@ def evaluate_execution_risk_policy(
                 reasons.append(
                     _group_reason(
                         "per_trade",
-                        f"qty clamped by hard_max_risk_pct={hard_risk_pct}% (stop={stop_src}).",
+                        (
+                            "qty clamped by hard_max_risk_pct="
+                            f"{hard_risk_pct}% (stop={stop_src})."
+                        ),
                     )
                 )
                 current_qty = float(allowed)
@@ -846,7 +876,10 @@ def evaluate_execution_risk_policy(
                 reasons.append(
                     _group_reason(
                         "per_trade",
-                        f"qty clamped by max_risk_per_trade_pct={max_risk_pct}% (stop={stop_src}).",
+                        (
+                            "qty clamped by max_risk_per_trade_pct="
+                            f"{max_risk_pct}% (stop={stop_src})."
+                        ),
                     )
                 )
                 current_qty = float(allowed)

@@ -128,13 +128,17 @@ def _create_waiting_order(*, side: str = "BUY", product: str = "MIS") -> int:
         return int(order.id)
 
 
-def test_panic_stop_does_not_block_when_emergency_group_disabled(monkeypatch: Any) -> None:
+def test_panic_stop_does_not_block_when_emergency_group_disabled(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
     _set_policy(
         {
             "enabled": True,
             "emergency_controls": {"panic_stop": True},
-            "enforcement": _enforcement(execution_safety=True, emergency_controls=False),
+            "enforcement": _enforcement(
+                execution_safety=True, emergency_controls=False
+            ),
         }
     )
 
@@ -163,14 +167,21 @@ def test_overrides_ignored_when_overrides_group_disabled(monkeypatch: Any) -> No
     assert res.json()["status"] == "SENT"
 
 
-def test_execution_safety_group_toggle_controls_short_selling_gate(monkeypatch: Any) -> None:
+def test_execution_safety_group_toggle_controls_short_selling_gate(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
 
     _set_policy(
         {
             "enabled": True,
             "enforcement": _enforcement(execution_safety=True),
-            "execution_safety": {"allow_mis": True, "allow_cnc": True, "allow_short_selling": False, "max_order_value_pct": 0},
+            "execution_safety": {
+                "allow_mis": True,
+                "allow_cnc": True,
+                "allow_short_selling": False,
+                "max_order_value_pct": 0,
+            },
         }
     )
 
@@ -187,7 +198,12 @@ def test_execution_safety_group_toggle_controls_short_selling_gate(monkeypatch: 
         {
             "enabled": True,
             "enforcement": _enforcement(execution_safety=False),
-            "execution_safety": {"allow_mis": True, "allow_cnc": True, "allow_short_selling": False, "max_order_value_pct": 0},
+            "execution_safety": {
+                "allow_mis": True,
+                "allow_cnc": True,
+                "allow_short_selling": False,
+                "max_order_value_pct": 0,
+            },
         }
     )
 
@@ -196,7 +212,9 @@ def test_execution_safety_group_toggle_controls_short_selling_gate(monkeypatch: 
     assert allowed.status_code == 200
 
 
-def test_account_level_group_toggle_controls_max_open_positions(monkeypatch: Any) -> None:
+def test_account_level_group_toggle_controls_max_open_positions(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
 
     with SessionLocal() as session:
@@ -250,7 +268,9 @@ def test_account_level_group_toggle_controls_max_open_positions(monkeypatch: Any
     assert allowed.status_code == 200
 
 
-def test_position_sizing_group_toggle_controls_capital_per_trade(monkeypatch: Any) -> None:
+def test_position_sizing_group_toggle_controls_capital_per_trade(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
     _set_policy(
         {
@@ -285,12 +305,18 @@ def test_position_sizing_group_toggle_controls_capital_per_trade(monkeypatch: An
     assert allowed.status_code == 200
 
 
-def test_per_trade_group_toggle_controls_per_trade_risk_blocks(monkeypatch: Any) -> None:
+def test_per_trade_group_toggle_controls_per_trade_risk_blocks(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
     _set_policy(
         {
             "enabled": True,
-            "enforcement": _enforcement(per_trade=True, stop_rules=True, execution_safety=False),
+            "enforcement": _enforcement(
+                per_trade=True,
+                stop_rules=True,
+                execution_safety=False,
+            ),
             "equity": {"equity_mode": "MANUAL", "manual_equity_inr": 1000},
             "trade_risk": {
                 "max_risk_per_trade_pct": 0.5,
@@ -317,7 +343,11 @@ def test_per_trade_group_toggle_controls_per_trade_risk_blocks(monkeypatch: Any)
     _set_policy(
         {
             "enabled": True,
-            "enforcement": _enforcement(per_trade=False, stop_rules=True, execution_safety=False),
+            "enforcement": _enforcement(
+                per_trade=False,
+                stop_rules=True,
+                execution_safety=False,
+            ),
             "equity": {"equity_mode": "MANUAL", "manual_equity_inr": 1000},
             "trade_risk": {
                 "max_risk_per_trade_pct": 0.5,

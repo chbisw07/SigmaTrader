@@ -41,7 +41,9 @@ def freeze_basket_prices(
 
     if missing:
         raise MarketDataError(
-            "Missing quotes for: " + ", ".join(missing[:25]) + ("…" if len(missing) > 25 else "")
+            "Missing quotes for: "
+            + ", ".join(missing[:25])
+            + ("…" if len(missing) > 25 else "")
         )
 
     group.frozen_at = frozen_at
@@ -59,4 +61,3 @@ def freeze_basket_prices(
 
 
 __all__ = ["freeze_basket_prices"]
-

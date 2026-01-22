@@ -148,7 +148,9 @@ def resolve_interval_for_order(
 ) -> tuple[int, str]:
     try:
         if order.alert is not None:
-            v = _parse_interval_minutes_from_alert_raw(getattr(order.alert, "raw_payload", None))
+            v = _parse_interval_minutes_from_alert_raw(
+                getattr(order.alert, "raw_payload", None)
+            )
             if v:
                 return int(v), "tv_payload"
             rule = getattr(order.alert, "rule", None)
@@ -202,7 +204,9 @@ def classify_position_delta(
     return prev_abs, new_abs, bool(new_abs > prev_abs), bool(new_abs < prev_abs)
 
 
-def _bar_index(now_utc: datetime, *, start_day_utc: datetime, interval_minutes: int) -> int:
+def _bar_index(
+    now_utc: datetime, *, start_day_utc: datetime, interval_minutes: int
+) -> int:
     interval_sec = max(int(interval_minutes) * 60, 60)
     dt = (now_utc - start_day_utc).total_seconds()
     if dt < 0:
@@ -278,7 +282,9 @@ def get_or_create_execution_state(
         return row2
 
 
-def reset_daily_counters_if_new_day(state: ExecutionPolicyState, *, now_utc: datetime) -> None:
+def reset_daily_counters_if_new_day(
+    state: ExecutionPolicyState, *, now_utc: datetime
+) -> None:
     today = _as_of_date_ist(now_utc)
     if state.trade_date != today:
         state.trade_date = today
@@ -327,7 +333,9 @@ def apply_pre_trade_checks(
     lc = policy.loss_controls
     interval_min = int(state.interval_minutes or DEFAULT_INTERVAL_MINUTES)
     start_day, _end_day = _day_bounds_ist(now_utc)
-    now_bar = _bar_index(now_utc, start_day_utc=start_day, interval_minutes=interval_min)
+    now_bar = _bar_index(
+        now_utc, start_day_utc=start_day, interval_minutes=interval_min
+    )
 
     if tf_on:
         max_trades = int(tf.max_trades_per_symbol_per_day)
@@ -344,7 +352,10 @@ def apply_pre_trade_checks(
                 return (
                     False,
                     "RISK_POLICY_TRADE_FREQ_MIN_BARS",
-                    f"trade_frequency: min_bars_between_trades={min_bars} not satisfied.",
+                    (
+                        "trade_frequency: min_bars_between_trades="
+                        f"{min_bars} not satisfied."
+                    ),
                 )
 
         cooldown = int(tf.cooldown_after_loss_bars)
@@ -398,7 +409,9 @@ def apply_post_trade_updates_on_execution(
 
     interval_min = int(state.interval_minutes or DEFAULT_INTERVAL_MINUTES)
     start_day, end_day = _day_bounds_ist(now_utc)
-    now_bar = _bar_index(now_utc, start_day_utc=start_day, interval_minutes=interval_min)
+    now_bar = _bar_index(
+        now_utc, start_day_utc=start_day, interval_minutes=interval_min
+    )
 
     qty_f = float(qty or 0.0)
     if qty_f <= 0:
@@ -428,7 +441,9 @@ def apply_post_trade_updates_on_execution(
 
     # Always update the lightweight position qty/side so future executions can
     # classify entry/exit structurally, even when price is unavailable.
-    def _set_position(*, signed_qty: float, avg_price: float | None, realized_pnl: float) -> None:
+    def _set_position(
+        *, signed_qty: float, avg_price: float | None, realized_pnl: float
+    ) -> None:
         if abs(signed_qty) <= 0:
             state.open_side = None
             state.open_qty = 0.0
@@ -447,8 +462,15 @@ def apply_post_trade_updates_on_execution(
         else:
             # Keep avg/realized only when staying on the same side; otherwise
             # drop it to avoid misleading PnL computations.
-            if prev_side and ((prev_side == "BUY" and new_signed > 0) or (prev_side == "SELL" and new_signed < 0)):
-                _set_position(signed_qty=new_signed, avg_price=state.open_avg_price, realized_pnl=state.open_realized_pnl or 0.0)
+            if prev_side and (
+                (prev_side == "BUY" and new_signed > 0)
+                or (prev_side == "SELL" and new_signed < 0)
+            ):
+                _set_position(
+                    signed_qty=new_signed,
+                    avg_price=state.open_avg_price,
+                    realized_pnl=state.open_realized_pnl or 0.0,
+                )
             else:
                 _set_position(signed_qty=new_signed, avg_price=None, realized_pnl=0.0)
         return
@@ -474,12 +496,20 @@ def apply_post_trade_updates_on_execution(
             new_avg = (prev_avg * prev_qty + price_f * qty_f) / new_qty
         else:
             new_avg = prev_avg
-        _set_position(signed_qty=new_signed, avg_price=float(new_avg), realized_pnl=prev_realized)
+        _set_position(
+            signed_qty=new_signed,
+            avg_price=float(new_avg),
+            realized_pnl=prev_realized,
+        )
         return
 
     # Opposite side: reduce/close/reverse.
     close_qty = min(prev_qty, qty_f)
-    pnl = (price_f - prev_avg) * close_qty if prev_side == "BUY" else (prev_avg - price_f) * close_qty
+    pnl = (
+        (price_f - prev_avg) * close_qty
+        if prev_side == "BUY"
+        else (prev_avg - price_f) * close_qty
+    )
     realized = prev_realized + float(pnl)
     remaining_open = prev_qty - close_qty
 

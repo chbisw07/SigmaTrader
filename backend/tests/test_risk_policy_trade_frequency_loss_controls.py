@@ -173,7 +173,9 @@ def test_min_bars_between_trades_blocks_within_window(monkeypatch: Any) -> None:
 
     r2 = client.post(f"/api/orders/{o2}/execute")
     assert r2.status_code == 400
-    assert (r2.json().get("detail") or {}).get("reason_code") == "RISK_POLICY_TRADE_FREQ_MIN_BARS"
+    assert (r2.json().get("detail") or {}).get("reason_code") == (
+        "RISK_POLICY_TRADE_FREQ_MIN_BARS"
+    )
 
     r3 = client.post(f"/api/orders/{o3}/execute")
     assert r3.status_code == 200
@@ -226,13 +228,17 @@ def test_cooldown_after_loss_blocks_reentry(monkeypatch: Any) -> None:
 
     r_block = client.post(f"/api/orders/{re1}/execute")
     assert r_block.status_code == 400
-    assert (r_block.json().get("detail") or {}).get("reason_code") == "RISK_POLICY_TRADE_FREQ_COOLDOWN_LOSS"
+    assert (r_block.json().get("detail") or {}).get("reason_code") == (
+        "RISK_POLICY_TRADE_FREQ_COOLDOWN_LOSS"
+    )
 
     r_ok = client.post(f"/api/orders/{re2}/execute")
     assert r_ok.status_code == 200
 
 
-def test_pause_after_loss_streak_eod_blocks_then_unblocks_next_day(monkeypatch: Any) -> None:
+def test_pause_after_loss_streak_eod_blocks_then_unblocks_next_day(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
     _set_policy(
         {
@@ -271,8 +277,12 @@ def test_pause_after_loss_streak_eod_blocks_then_unblocks_next_day(monkeypatch: 
     strategy_name = f"tf-pause-{uuid4().hex}"
     buy = _create_waiting_order(side="BUY", price=100.0, strategy_name=strategy_name)
     sell = _create_waiting_order(side="SELL", price=90.0, strategy_name=strategy_name)
-    blocked = _create_waiting_order(side="BUY", price=95.0, strategy_name=strategy_name)
-    next_day = _create_waiting_order(side="BUY", price=96.0, strategy_name=strategy_name)
+    blocked = _create_waiting_order(
+        side="BUY", price=95.0, strategy_name=strategy_name
+    )
+    next_day = _create_waiting_order(
+        side="BUY", price=96.0, strategy_name=strategy_name
+    )
 
     assert client.post(f"/api/orders/{buy}/execute").status_code == 200
     assert client.post(f"/api/orders/{sell}/execute").status_code == 200
@@ -320,7 +330,9 @@ def test_block_reason_is_persisted_on_order_row(monkeypatch: Any) -> None:
         assert "RISK_POLICY_TRADE_FREQ_MAX_TRADES" in (order2.error_message or "")
 
 
-def test_entry_only_counting_and_structural_exit_never_blocked(monkeypatch: Any) -> None:
+def test_entry_only_counting_and_structural_exit_never_blocked(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
     _set_policy(
         {
@@ -349,12 +361,15 @@ def test_entry_only_counting_and_structural_exit_never_blocked(monkeypatch: Any)
 
     strategy_name = f"tf-exit-{uuid4().hex}"
     buy = _create_waiting_order(side="BUY", price=100.0, strategy_name=strategy_name)
-    sell_exit = _create_waiting_order(side="SELL", price=90.0, strategy_name=strategy_name)
+    sell_exit = _create_waiting_order(
+        side="SELL", price=90.0, strategy_name=strategy_name
+    )
     buy2 = _create_waiting_order(side="BUY", price=101.0, strategy_name=strategy_name)
 
     assert client.post(f"/api/orders/{buy}/execute").status_code == 200
 
-    # Force a pause on the scope key and ensure the exposure-reducing SELL is still allowed.
+    # Force a pause on the scope key and ensure the exposure-reducing SELL is
+    # still allowed.
     with SessionLocal() as session:
         order_buy = session.get(Order, buy)
         assert order_buy is not None
@@ -386,10 +401,13 @@ def test_entry_only_counting_and_structural_exit_never_blocked(monkeypatch: Any)
         session.add(state)
         session.commit()
 
-    # Second entry should be blocked by max-trades-per-day, proving exits don't consume trades_today.
+    # Second entry should be blocked by max-trades-per-day, proving exits don't
+    # consume trades_today.
     r2 = client.post(f"/api/orders/{buy2}/execute")
     assert r2.status_code == 400
-    assert (r2.json().get("detail") or {}).get("reason_code") == "RISK_POLICY_TRADE_FREQ_MAX_TRADES"
+    assert (r2.json().get("detail") or {}).get("reason_code") == (
+        "RISK_POLICY_TRADE_FREQ_MAX_TRADES"
+    )
 
     with SessionLocal() as session:
         # trades_today must still be 1 (entry-only counting).
@@ -508,7 +526,9 @@ def test_concurrent_executions_do_not_race_past_max_trades(monkeypatch: Any) -> 
         with SessionLocal() as session:
             barrier.wait()
             try:
-                out = orders_api.execute_order_internal(order_id, db=session, settings=get_settings())
+                out = orders_api.execute_order_internal(
+                    order_id, db=session, settings=get_settings()
+                )
                 results.append(str(getattr(out, "status", "")))
             except HTTPException as exc:
                 if isinstance(exc.detail, dict):
@@ -528,7 +548,9 @@ def test_concurrent_executions_do_not_race_past_max_trades(monkeypatch: Any) -> 
     assert any(r != "SENT" for r in results)
 
 
-def test_trade_frequency_group_toggle_off_disables_trade_frequency_blocks(monkeypatch: Any) -> None:
+def test_trade_frequency_group_toggle_off_disables_trade_frequency_blocks(
+    monkeypatch: Any,
+) -> None:
     _patch_zerodha(monkeypatch)
     _set_policy(
         {
@@ -584,7 +606,9 @@ def test_loss_controls_group_toggle_off_disables_pause(monkeypatch: Any) -> None
     strategy_name = f"lc-off-{uuid4().hex}"
     buy = _create_waiting_order(side="BUY", price=100.0, strategy_name=strategy_name)
     sell = _create_waiting_order(side="SELL", price=90.0, strategy_name=strategy_name)
-    reentry = _create_waiting_order(side="BUY", price=101.0, strategy_name=strategy_name)
+    reentry = _create_waiting_order(
+        side="BUY", price=101.0, strategy_name=strategy_name
+    )
 
     assert client.post(f"/api/orders/{buy}/execute").status_code == 200
     assert client.post(f"/api/orders/{sell}/execute").status_code == 200

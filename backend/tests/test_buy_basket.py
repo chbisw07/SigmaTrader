@@ -26,7 +26,9 @@ def test_buy_basket_creates_portfolio_and_orders(monkeypatch) -> None:
         json={"username": "buyer", "password": "pass1234", "display_name": "Buyer"},
     )
     assert res.status_code in (200, 201)
-    res = client.post("/api/auth/login", json={"username": "buyer", "password": "pass1234"})
+    res = client.post(
+        "/api/auth/login", json={"username": "buyer", "password": "pass1234"}
+    )
     assert res.status_code == 200
     client.cookies.clear()
     client.cookies.update(res.cookies)

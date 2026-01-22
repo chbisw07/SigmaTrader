@@ -19,7 +19,9 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("groups") as batch_op:
         batch_op.add_column(sa.Column("funds", sa.Float(), nullable=True))
-        batch_op.add_column(sa.Column("allocation_mode", sa.String(length=32), nullable=True))
+        batch_op.add_column(
+            sa.Column("allocation_mode", sa.String(length=32), nullable=True)
+        )
         batch_op.add_column(sa.Column("frozen_at", sa.DateTime(), nullable=True))
 
     with op.batch_alter_table("group_members") as batch_op:
@@ -43,4 +45,3 @@ def downgrade() -> None:
         batch_op.drop_column("frozen_at")
         batch_op.drop_column("allocation_mode")
         batch_op.drop_column("funds")
-

@@ -50,7 +50,11 @@ def market_data_status(
         kite = _get_kite_client(db, settings)
         # Ensure token is valid; profile is the simplest validation.
         _ = kite.profile()
-        return {"canonical_broker": canonical, "available": True, "market_open": bool(is_market_open_now())}
+        return {
+            "canonical_broker": canonical,
+            "available": True,
+            "market_open": bool(is_market_open_now()),
+        }
     except Exception as exc:
         return {
             "canonical_broker": canonical,

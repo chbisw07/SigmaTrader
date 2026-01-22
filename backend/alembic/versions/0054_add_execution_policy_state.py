@@ -23,13 +23,23 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("strategy_ref", sa.String(length=128), nullable=False),
         sa.Column("symbol", sa.String(length=128), nullable=False),
-        sa.Column("product", sa.String(length=16), nullable=False, server_default="MIS"),
+        sa.Column(
+            "product",
+            sa.String(length=16),
+            nullable=False,
+            server_default="MIS",
+        ),
         sa.Column("interval_minutes", sa.Integer(), nullable=False, server_default="5"),
         sa.Column("trade_date", sa.Date(), nullable=False),
         sa.Column("trades_today", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_trade_time", sa.DateTime(), nullable=True),
         sa.Column("last_trade_bar_index", sa.Integer(), nullable=True),
-        sa.Column("consecutive_losses", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column(
+            "consecutive_losses",
+            sa.Integer(),
+            nullable=False,
+            server_default="0",
+        ),
         sa.Column("last_loss_time", sa.DateTime(), nullable=True),
         sa.Column("last_loss_bar_index", sa.Integer(), nullable=True),
         sa.Column("paused_until", sa.DateTime(), nullable=True),
@@ -73,7 +83,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_execution_policy_state_updated_at", table_name="execution_policy_state")
-    op.drop_index("ix_execution_policy_state_user_strategy", table_name="execution_policy_state")
+    op.drop_index(
+        "ix_execution_policy_state_updated_at",
+        table_name="execution_policy_state",
+    )
+    op.drop_index(
+        "ix_execution_policy_state_user_strategy",
+        table_name="execution_policy_state",
+    )
     op.drop_table("execution_policy_state")
-

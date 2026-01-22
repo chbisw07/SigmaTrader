@@ -16,7 +16,9 @@ from app.services.managed_risk import (
     ensure_managed_risk_for_executed_order,
     mark_managed_risk_exit_executed,
 )
-from app.services.portfolio_allocations import apply_portfolio_allocation_for_executed_order
+from app.services.portfolio_allocations import (
+    apply_portfolio_allocation_for_executed_order,
+)
 from app.services.risk_policy_store import get_risk_policy
 from app.services.system_events import record_system_event
 
@@ -96,7 +98,9 @@ def submit_paper_order(
                     db,
                     order=order,
                     filled_qty=float(order.qty or 0.0),
-                    avg_price=float(order.price or 0.0) if order.price is not None else None,
+                    avg_price=float(order.price or 0.0)
+                    if order.price is not None
+                    else None,
                 )
                 db.commit()
             except Exception:
@@ -226,13 +230,17 @@ def poll_paper_orders(db: Session, settings: Settings) -> PaperFillResult:
                 db,
                 order=order,
                 filled_qty=float(order.qty or 0.0),
-                avg_price=float(order.price or 0.0) if order.price is not None else None,
+                avg_price=float(order.price or 0.0)
+                if order.price is not None
+                else None,
             )
         except Exception:
             pass
         try:
             policy, _src = get_risk_policy(db, settings)
-            avg_price = float(order.price or 0.0) if order.price is not None else None
+            avg_price = (
+                float(order.price or 0.0) if order.price is not None else None
+            )
             ensure_managed_risk_for_executed_order(
                 db,
                 settings,

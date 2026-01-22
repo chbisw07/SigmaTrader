@@ -54,7 +54,9 @@ class StopRulesSettings(BaseModel):
         default=3.0,
         ge=0.0,
         le=100.0,
-        description="Used when stop_reference=FIXED_PCT; activation in percent of entry price.",
+        description=(
+            "Used when stop_reference=FIXED_PCT; activation in percent of entry price."
+        ),
     )
 
 

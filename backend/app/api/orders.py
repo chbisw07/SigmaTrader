@@ -694,7 +694,10 @@ def execute_order_internal(
         db.refresh(order)
 
     execution_policy_apply = bool(
-        (is_group_enforced(policy, "trade_frequency") or is_group_enforced(policy, "loss_controls"))
+        (
+            is_group_enforced(policy, "trade_frequency")
+            or is_group_enforced(policy, "loss_controls")
+        )
         and not bool(is_synthetic_gtt_arm or is_broker_gtt)
     )
     if execution_policy_apply:
@@ -763,16 +766,22 @@ def execute_order_internal(
             pos = (
                 db.query(Position)
                 .filter(
-                    Position.broker_name == str(getattr(order, "broker_name", "zerodha")).strip().lower(),
+                    Position.broker_name
+                    == str(getattr(order, "broker_name", "zerodha")).strip().lower(),
                     Position.symbol == sym,
                     Position.exchange == exch,
-                    Position.product == str(getattr(order, "product", "MIS")).strip().upper(),
+                    Position.product
+                    == str(getattr(order, "product", "MIS")).strip().upper(),
                 )
                 .one_or_none()
             )
             if pos is not None:
                 pos_qty = float(getattr(pos, "qty", 0.0) or 0.0)
-                delta = float(order.qty or 0.0) if str(order.side).strip().upper() == "BUY" else -float(order.qty or 0.0)
+                delta = (
+                    float(order.qty or 0.0)
+                    if str(order.side).strip().upper() == "BUY"
+                    else -float(order.qty or 0.0)
+                )
                 if abs(pos_qty + delta) < abs(pos_qty):
                     is_exit_reduce = True
         except Exception:
@@ -783,7 +792,9 @@ def execute_order_internal(
 
         if not treat_as_exit:
             inflight_order_id = getattr(state, "inflight_order_id", None)
-            if inflight_order_id is not None and int(inflight_order_id) != int(order.id):
+            if inflight_order_id is not None and int(inflight_order_id) != int(
+                order.id
+            ):
                 reason_code = "RISK_POLICY_CONCURRENT_EXECUTION"
                 message = "Another order execution is in progress for this scope key."
                 order.status = "REJECTED_RISK"
@@ -976,7 +987,10 @@ def execute_order_internal(
         )
         if execution_policy_apply and execution_policy_key is not None:
             key = execution_policy_key
-            interval_min = int(execution_policy_interval_min or interval_minutes_for_order(order, None))
+            interval_min = int(
+                execution_policy_interval_min
+                or interval_minutes_for_order(order, None)
+            )
             state = get_or_create_execution_state(
                 db,
                 key=key,
@@ -987,9 +1001,13 @@ def execute_order_internal(
             interval_eff, interval_src = resolve_interval_for_order(order, state)
             if interval_eff and int(state.interval_minutes or 0) != int(interval_eff):
                 state.interval_minutes = int(interval_eff)
-            if interval_src and str(getattr(state, "interval_source", "") or "") != str(interval_src):
+            if interval_src and str(getattr(state, "interval_source", "") or "") != str(
+                interval_src
+            ):
                 state.interval_source = str(interval_src)
-            price_for_pnl = risk.effective_price or (float(order.price) if order.price else None)
+            price_for_pnl = risk.effective_price or (
+                float(order.price) if order.price else None
+            )
             apply_post_trade_updates_on_execution(
                 policy,
                 state,
@@ -998,7 +1016,10 @@ def execute_order_internal(
                 qty=float(order.qty or 0.0),
                 exec_price=price_for_pnl,
             )
-            if getattr(state, "inflight_order_id", None) is not None and int(state.inflight_order_id) == int(order.id):  # type: ignore[arg-type]
+            if (
+                getattr(state, "inflight_order_id", None) is not None
+                and int(state.inflight_order_id) == int(order.id)
+            ):  # type: ignore[arg-type]
                 state.inflight_order_id = None
                 state.inflight_started_at = None
                 state.inflight_expires_at = None
@@ -1036,7 +1057,9 @@ def execute_order_internal(
 
                 sync_order_statuses(db, client, user_id=order.user_id)  # type: ignore[arg-type]
             elif broker_name == "angelone":
-                from app.services.order_sync_angelone import sync_order_statuses_angelone
+                from app.services.order_sync_angelone import (
+                    sync_order_statuses_angelone,
+                )
 
                 sync_order_statuses_angelone(db, client, user_id=order.user_id)  # type: ignore[arg-type]
             db.refresh(order)
@@ -1419,7 +1442,10 @@ def execute_order_internal(
         )
         if execution_policy_apply and execution_policy_key is not None:
             key = execution_policy_key
-            interval_min = int(execution_policy_interval_min or interval_minutes_for_order(order, None))
+            interval_min = int(
+                execution_policy_interval_min
+                or interval_minutes_for_order(order, None)
+            )
             state = get_or_create_execution_state(
                 db,
                 key=key,
@@ -1430,9 +1456,13 @@ def execute_order_internal(
             interval_eff, interval_src = resolve_interval_for_order(order, state)
             if interval_eff and int(state.interval_minutes or 0) != int(interval_eff):
                 state.interval_minutes = int(interval_eff)
-            if interval_src and str(getattr(state, "interval_source", "") or "") != str(interval_src):
+            if interval_src and str(getattr(state, "interval_source", "") or "") != str(
+                interval_src
+            ):
                 state.interval_source = str(interval_src)
-            price_for_pnl = risk.effective_price or (float(order.price) if order.price else None)
+            price_for_pnl = risk.effective_price or (
+                float(order.price) if order.price else None
+            )
             apply_post_trade_updates_on_execution(
                 policy,
                 state,
@@ -1441,7 +1471,10 @@ def execute_order_internal(
                 qty=float(order.qty or 0.0),
                 exec_price=price_for_pnl,
             )
-            if getattr(state, "inflight_order_id", None) is not None and int(state.inflight_order_id) == int(order.id):  # type: ignore[arg-type]
+            if (
+                getattr(state, "inflight_order_id", None) is not None
+                and int(state.inflight_order_id) == int(order.id)
+            ):  # type: ignore[arg-type]
                 state.inflight_order_id = None
                 state.inflight_started_at = None
                 state.inflight_expires_at = None
@@ -1592,7 +1625,10 @@ def execute_order_internal(
     )
     if execution_policy_apply and execution_policy_key is not None:
         key = execution_policy_key
-        interval_min = int(execution_policy_interval_min or interval_minutes_for_order(order, None))
+        interval_min = int(
+            execution_policy_interval_min
+            or interval_minutes_for_order(order, None)
+        )
         state = get_or_create_execution_state(
             db,
             key=key,
@@ -1603,9 +1639,13 @@ def execute_order_internal(
         interval_eff, interval_src = resolve_interval_for_order(order, state)
         if interval_eff and int(state.interval_minutes or 0) != int(interval_eff):
             state.interval_minutes = int(interval_eff)
-        if interval_src and str(getattr(state, "interval_source", "") or "") != str(interval_src):
+        if interval_src and str(getattr(state, "interval_source", "") or "") != str(
+            interval_src
+        ):
             state.interval_source = str(interval_src)
-        price_for_pnl = risk.effective_price or (float(order.price) if order.price else None)
+        price_for_pnl = risk.effective_price or (
+            float(order.price) if order.price else None
+        )
         apply_post_trade_updates_on_execution(
             policy,
             state,
@@ -1614,7 +1654,10 @@ def execute_order_internal(
             qty=float(order.qty or 0.0),
             exec_price=price_for_pnl,
         )
-        if getattr(state, "inflight_order_id", None) is not None and int(state.inflight_order_id) == int(order.id):  # type: ignore[arg-type]
+        if (
+            getattr(state, "inflight_order_id", None) is not None
+            and int(state.inflight_order_id) == int(order.id)
+        ):  # type: ignore[arg-type]
             state.inflight_order_id = None
             state.inflight_started_at = None
             state.inflight_expires_at = None

@@ -27,7 +27,9 @@ def test_poll_paper_orders_updates_portfolio_allocations(monkeypatch) -> None:
             _ = exchange, tradingsymbol
             return 123.0
 
-    monkeypatch.setattr(paper_trading, "_get_price_client", lambda _db, _settings: DummyClient())
+    monkeypatch.setattr(
+        paper_trading, "_get_price_client", lambda _db, _settings: DummyClient()
+    )
 
     settings = get_settings()
     with SessionLocal() as db:
@@ -86,4 +88,3 @@ def test_poll_paper_orders_updates_portfolio_allocations(monkeypatch) -> None:
         assert member is not None
         assert int(member.reference_qty or 0) == 10
         assert float(member.reference_price or 0.0) == 123.0
-

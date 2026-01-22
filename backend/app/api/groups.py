@@ -405,7 +405,13 @@ def freeze_basket(
         )
 
     try:
-        freeze_basket_prices(db, settings, group=group, members=members, frozen_at=datetime.now(UTC))
+        freeze_basket_prices(
+            db,
+            settings,
+            group=group,
+            members=members,
+            frozen_at=datetime.now(UTC),
+        )
     except MarketDataError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -681,7 +687,9 @@ class WatchlistBulkAddSafeResponse(BaseModel):
     skipped: list[WatchlistBulkAddSafeSkipped] = []
 
 
-def _parse_watchlist_raw(raw: str, *, default_exchange: str) -> tuple[str | None, str | None, str | None]:
+def _parse_watchlist_raw(
+    raw: str, *, default_exchange: str
+) -> tuple[str | None, str | None, str | None]:
     text = (raw or "").strip().upper()
     if not text:
         return None, None, "empty"
@@ -730,7 +738,9 @@ def watchlist_bulk_add_safe(
     skipped: list[WatchlistBulkAddSafeSkipped] = []
     seen: set[tuple[str, str]] = set()
     for raw in raw_items:
-        exch, sym, reason = _parse_watchlist_raw(str(raw or ""), default_exchange=default_exchange)
+        exch, sym, reason = _parse_watchlist_raw(
+            str(raw or ""), default_exchange=default_exchange
+        )
         if reason is not None or exch is None or sym is None:
             skipped.append(
                 WatchlistBulkAddSafeSkipped(
@@ -867,7 +877,9 @@ def update_group_member(
         member.reference_price = payload.reference_price
         updated = True
     if _field_is_set(payload, "weight_locked"):
-        member.weight_locked = bool(payload.weight_locked) if payload.weight_locked is not None else False
+        member.weight_locked = (
+            bool(payload.weight_locked) if payload.weight_locked is not None else False
+        )
         updated = True
     if _field_is_set(payload, "allocation_amount"):
         member.allocation_amount = payload.allocation_amount
