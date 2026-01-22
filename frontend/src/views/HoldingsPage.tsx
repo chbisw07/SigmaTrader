@@ -72,6 +72,13 @@ import {
   type GroupDetail,
   type GroupKind,
 } from '../services/groups'
+import {
+  fetchHoldingGoals,
+  upsertHoldingGoal,
+  type GoalLabel,
+  type GoalTargetType,
+  type HoldingGoal,
+} from '../services/holdingsGoals'
 
 type HoldingIndicators = {
   rsi14?: number
@@ -128,11 +135,14 @@ type HoldingRow = Holding & {
 
 type HoldingsViewId =
   | 'default'
+  | 'goal'
   | 'performance'
   | 'indicators'
   | 'support_resistance'
   | 'risk'
   | `custom:${string}`
+
+type GoalFilter = 'all' | 'overdue' | 'due_soon' | 'near_target' | 'missing'
 
 type PortfolioAllocationMismatch = {
   symbol: string
@@ -151,6 +161,29 @@ const DEFAULT_RISK_FREE_RATE_PCT = 6.5
 const DEFAULT_ALPHA_BETA_BENCHMARK = { symbol: 'NIFTYBEES', exchange: 'NSE' as const }
 const HOLDINGS_CUSTOM_VIEWS_STORAGE_KEY = 'st_holdings_custom_views_v1'
 const HOLDINGS_SELECTED_VIEW_STORAGE_KEY = 'st_holdings_view_v2'
+const GOAL_LABELS: GoalLabel[] = [
+  'CORE',
+  'TRADE',
+  'THEME',
+  'HEDGE',
+  'INCOME',
+  'PARKING',
+]
+const GOAL_TARGET_TYPES: Array<{ value: GoalTargetType; label: string }> = [
+  { value: 'PCT_FROM_AVG_BUY', label: '% from Avg Buy' },
+  { value: 'PCT_FROM_LTP', label: '% from LTP' },
+  { value: 'ABSOLUTE_PRICE', label: 'Absolute Price' },
+]
+const GOAL_DEFAULT_REVIEW_DAYS: Record<GoalLabel, number> = {
+  CORE: 180,
+  TRADE: 30,
+  THEME: 90,
+  HEDGE: 120,
+  INCOME: 180,
+  PARKING: 60,
+}
+const GOAL_DUE_SOON_DAYS = 7
+const GOAL_NEAR_TARGET_PCT = 5
 
 export function HoldingsPage() {
   const navigate = useNavigate()
@@ -279,6 +312,19 @@ export function HoldingsPage() {
   )
   const [viewsDialogOpen, setViewsDialogOpen] = useState(false)
   const [newViewName, setNewViewName] = useState('')
+  const [holdingGoals, setHoldingGoals] = useState<HoldingGoal[]>([])
+  const [goalFilter, setGoalFilter] = useState<GoalFilter>('all')
+  const [goalEditOpen, setGoalEditOpen] = useState(false)
+  const [goalEditRow, setGoalEditRow] = useState<HoldingRow | null>(null)
+  const [goalLabel, setGoalLabel] = useState<GoalLabel>('CORE')
+  const [goalReviewDate, setGoalReviewDate] = useState<string>('')
+  const [goalReviewTouched, setGoalReviewTouched] = useState(false)
+  const [goalTargetType, setGoalTargetType] = useState<GoalTargetType | ''>('')
+  const [goalTargetValue, setGoalTargetValue] = useState<string>('')
+  const [goalNote, setGoalNote] = useState('')
+  const [goalSaving, setGoalSaving] = useState(false)
+  const [goalSaveError, setGoalSaveError] = useState<string | null>(null)
+  const [goalLoadError, setGoalLoadError] = useState<string | null>(null)
   const columnsFieldRef = useRef<string[]>([])
   const [columnVisibilityModel, setColumnVisibilityModel] =
     useState<GridColumnVisibilityModel>({
@@ -490,6 +536,44 @@ export function HoldingsPage() {
     }
   }, [angeloneConnected, angeloneStatusLoaded, tradeBrokerName])
 
+  const defaultReviewDateForLabel = useCallback((label: GoalLabel): string => {
+    const days = GOAL_DEFAULT_REVIEW_DAYS[label] ?? 90
+    const base = new Date()
+    base.setHours(0, 0, 0, 0)
+    base.setDate(base.getDate() + days)
+    return base.toISOString().slice(0, 10)
+  }, [])
+
+  const refreshHoldingGoals = useCallback(
+    async (brokerName: string) => {
+      if (!brokerName) return
+      try {
+        const goals = await fetchHoldingGoals({ broker_name: brokerName })
+        setHoldingGoals(goals)
+        setGoalLoadError(null)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to load goals.'
+        setGoalLoadError(msg)
+      }
+    },
+    [setHoldingGoals],
+  )
+
+  const goalViewSupported =
+    universeId === 'holdings' || universeId === 'holdings:angelone'
+
+  useEffect(() => {
+    if (!goalViewSupported && viewId === 'goal') {
+      setViewId('default')
+    }
+  }, [goalViewSupported, viewId])
+
+  useEffect(() => {
+    if (viewId !== 'goal' && goalFilter !== 'all') {
+      setGoalFilter('all')
+    }
+  }, [goalFilter, viewId])
+
   const load = async () => {
     const requestId = ++loadRequestId.current
     try {
@@ -503,6 +587,9 @@ export function HoldingsPage() {
       const holdingsBroker = universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
       const groupsPromise = listGroups().catch(() => [] as Group[])
       const allocationsPromise = fetchPortfolioAllocations().catch(() => [])
+      const goalsPromise = fetchHoldingGoals({ broker_name: holdingsBroker }).catch(
+        () => [],
+      )
       let rawHoldings: Holding[] = []
       try {
         rawHoldings = await fetchHoldings(holdingsBroker)
@@ -527,12 +614,15 @@ export function HoldingsPage() {
           throw err
         }
       }
-      const [groups, allocations] = await Promise.all([
+      const [groups, allocations, goals] = await Promise.all([
         groupsPromise,
         allocationsPromise,
+        goalsPromise,
       ])
       if (requestId !== loadRequestId.current) return
       setAvailableGroups(groups)
+      setHoldingGoals(goals)
+      setGoalLoadError(null)
 
       const allocationTotals: Record<string, number> = {}
       const allocationTotalsBySymbol: Record<string, number> = {}
@@ -829,6 +919,9 @@ export function HoldingsPage() {
       const bySymbol = new Map<string, HoldingRow>(
         holdingsRows.map((h) => [h.symbol, h]),
       )
+      if (universeId.startsWith('holdings')) {
+        void refreshHoldingGoals(holdingsBroker)
+      }
 
       // Update portfolio value estimate.
       let total = 0
@@ -1092,10 +1185,8 @@ export function HoldingsPage() {
     angeloneStatusLoaded,
   ])
 
-  const filteredRows: HoldingRow[] = holdings
-
   const holdingsSummary = useMemo(() => {
-    const activeRows = filteredRows.filter((row) => {
+    const activeRows = holdings.filter((row) => {
       const symbol = (row.symbol || '').trim()
       if (!symbol) return false
       const qty = row.quantity != null ? Number(row.quantity) : 0
@@ -1373,7 +1464,8 @@ export function HoldingsPage() {
       alphaAnnualPct: alphaBeta.alphaAnnualPct,
       beta: alphaBeta.beta,
     }
-  }, [benchmarkHistory, filteredRows, riskFreeRatePct])
+  }, [benchmarkHistory, holdings, riskFreeRatePct])
+
 
   const formatInrCompact = useCallback((value: number | null) => {
     if (value == null || !Number.isFinite(value)) return '—'
@@ -1530,6 +1622,192 @@ export function HoldingsPage() {
     }
     return null
   }
+
+  const normalizeSymbolExchange = (
+    symbol: string,
+    exchange?: string | null,
+  ): { symbol: string; exchange: string } => {
+    const rawSymbol = (symbol || '').trim().toUpperCase()
+    let rawExchange = (exchange || '').trim().toUpperCase()
+    if (rawSymbol.includes(':')) {
+      const [prefix, rest] = rawSymbol.split(':', 2)
+      if (prefix && rest && (prefix === 'NSE' || prefix === 'BSE')) {
+        rawExchange = prefix
+        return { symbol: rest.trim().toUpperCase(), exchange: rawExchange || 'NSE' }
+      }
+    }
+    return { symbol: rawSymbol, exchange: rawExchange || 'NSE' }
+  }
+
+  const goalsByKey = useMemo(() => {
+    const map = new Map<string, HoldingGoal>()
+    for (const goal of holdingGoals) {
+      const sym = (goal.symbol || '').toUpperCase()
+      const exch = (goal.exchange || 'NSE').toUpperCase()
+      const broker = (goal.broker_name || 'zerodha').toLowerCase()
+      if (!sym) continue
+      map.set(`${broker}:${exch}:${sym}`, goal)
+    }
+    return map
+  }, [holdingGoals])
+
+  const getGoalForRow = useCallback(
+    (row: HoldingRow, brokerName: string): HoldingGoal | null => {
+      const { symbol, exchange } = normalizeSymbolExchange(row.symbol, row.exchange)
+      if (!symbol) return null
+      return goalsByKey.get(`${brokerName}:${exchange}:${symbol}`) ?? null
+    },
+    [goalsByKey],
+  )
+
+  const getGoalDaysRemaining = (goal: HoldingGoal | null): number | null => {
+    if (!goal?.review_date) return null
+    const review = new Date(goal.review_date)
+    if (Number.isNaN(review.getTime())) return null
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    review.setHours(0, 0, 0, 0)
+    const diffMs = review.getTime() - today.getTime()
+    return Math.round(diffMs / (1000 * 60 * 60 * 24))
+  }
+
+  const getGoalTarget = (
+    row: HoldingRow,
+    goal: HoldingGoal | null,
+  ): { targetPrice: number | null; awayPct: number | null; label: string } => {
+    if (!goal?.target_type || goal.target_value == null) {
+      return { targetPrice: null, awayPct: null, label: '—' }
+    }
+    const ltp = getDisplayPrice(row)
+    const avg = row.average_price != null ? Number(row.average_price) : null
+    const targetValue = Number(goal.target_value)
+    let targetPrice: number | null = null
+    let label = '—'
+    if (goal.target_type === 'ABSOLUTE_PRICE') {
+      targetPrice = Number.isFinite(targetValue) ? targetValue : null
+      label = targetPrice != null ? `₹${targetPrice.toFixed(2)}` : '—'
+    } else if (goal.target_type === 'PCT_FROM_AVG_BUY') {
+      if (avg != null && Number.isFinite(avg) && avg > 0) {
+        targetPrice = avg * (1 + targetValue / 100)
+      }
+      const pctLabel = Number.isFinite(targetValue) ? `${targetValue.toFixed(2)}%` : '—'
+      label =
+        targetPrice != null ? `${pctLabel} (₹${targetPrice.toFixed(2)})` : pctLabel
+    } else if (goal.target_type === 'PCT_FROM_LTP') {
+      if (ltp != null && Number.isFinite(ltp) && ltp > 0) {
+        targetPrice = ltp * (1 + targetValue / 100)
+      }
+      const pctLabel = Number.isFinite(targetValue) ? `${targetValue.toFixed(2)}%` : '—'
+      label =
+        targetPrice != null ? `${pctLabel} (₹${targetPrice.toFixed(2)})` : pctLabel
+    }
+
+    let awayPct: number | null = null
+    if (ltp != null && targetPrice != null && targetPrice > 0) {
+      awayPct = ((ltp - targetPrice) / targetPrice) * 100
+    }
+    return { targetPrice, awayPct, label }
+  }
+
+  const getGoalStatus = (
+    goal: HoldingGoal | null,
+    daysRemaining: number | null,
+  ): { label: string; color: 'default' | 'success' | 'warning' | 'error' } => {
+    if (!goal || daysRemaining == null) {
+      return { label: 'No review date', color: 'default' }
+    }
+    if (daysRemaining < 0) {
+      return { label: 'Review overdue', color: 'error' }
+    }
+    if (daysRemaining <= GOAL_DUE_SOON_DAYS) {
+      return { label: 'Review due', color: 'warning' }
+    }
+    return { label: 'On track', color: 'success' }
+  }
+
+  const goalTargetPreview = useMemo(() => {
+    if (!goalEditRow || goalTargetType === '' || goalTargetValue.trim() === '') {
+      return null
+    }
+    const value = Number(goalTargetValue)
+    if (!Number.isFinite(value)) return null
+    const previewGoal: HoldingGoal = {
+      id: -1,
+      user_id: -1,
+      broker_name: 'preview',
+      symbol: goalEditRow.symbol,
+      exchange: goalEditRow.exchange ?? 'NSE',
+      label: goalLabel,
+      review_date: goalReviewDate || defaultReviewDateForLabel(goalLabel),
+      target_type: goalTargetType,
+      target_value: value,
+      note: goalNote,
+      created_at: '',
+      updated_at: '',
+    }
+    return getGoalTarget(goalEditRow, previewGoal)
+  }, [
+    defaultReviewDateForLabel,
+    getGoalTarget,
+    goalEditRow,
+    goalLabel,
+    goalNote,
+    goalReviewDate,
+    goalTargetType,
+    goalTargetValue,
+  ])
+
+  const goalBrokerName =
+    universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+
+  const filteredRows: HoldingRow[] = useMemo(() => {
+    if (viewId !== 'goal' || !goalViewSupported) {
+      return holdings
+    }
+    return holdings.filter((row) => {
+      const goal = getGoalForRow(row, goalBrokerName)
+      const days = getGoalDaysRemaining(goal)
+      const { awayPct } = getGoalTarget(row, goal)
+      switch (goalFilter) {
+        case 'missing':
+          return !goal
+        case 'overdue':
+          return goal != null && days != null && days < 0
+        case 'due_soon':
+          return (
+            goal != null &&
+            days != null &&
+            days >= 0 &&
+            days <= GOAL_DUE_SOON_DAYS
+          )
+        case 'near_target':
+          return (
+            goal != null &&
+            awayPct != null &&
+            Math.abs(awayPct) <= GOAL_NEAR_TARGET_PCT
+          )
+        default:
+          return true
+      }
+    })
+  }, [
+    getGoalForRow,
+    getGoalTarget,
+    goalBrokerName,
+    goalFilter,
+    goalViewSupported,
+    holdings,
+    viewId,
+  ])
+
+  const missingGoalRows = useMemo(() => {
+    if (!goalViewSupported) return []
+    return holdings.filter(
+      (row) => getGoalForRow(row, goalBrokerName) == null,
+    )
+  }, [getGoalForRow, goalBrokerName, goalViewSupported, holdings])
+
+  const missingGoalCount = missingGoalRows.length
 
   const getPerHoldingPriceForSizing = (holding: HoldingRow): number | null => {
     const override = bulkPriceOverrides[holding.symbol]
@@ -1703,6 +1981,129 @@ export function HoldingsPage() {
     })
     navigate(`/alerts?${params.toString()}`)
   }
+
+  const openGoalEditor = useCallback(
+    (holding: HoldingRow) => {
+      const brokerName =
+        universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+      const goal = getGoalForRow(holding, brokerName)
+      const nextLabel = goal?.label ?? 'CORE'
+      setGoalEditRow(holding)
+      setGoalLabel(nextLabel)
+      setGoalReviewTouched(Boolean(goal?.review_date))
+      setGoalReviewDate(
+        goal?.review_date ?? defaultReviewDateForLabel(nextLabel),
+      )
+      setGoalTargetType(goal?.target_type ?? '')
+      setGoalTargetValue(
+        goal?.target_value != null ? String(goal.target_value) : '',
+      )
+      setGoalNote(goal?.note ?? '')
+      setGoalSaveError(null)
+      setGoalEditOpen(true)
+    },
+    [defaultReviewDateForLabel, getGoalForRow, universeId],
+  )
+
+  const extendGoalReviewDate = useCallback(
+    async (holding: HoldingRow, days = 30) => {
+      const brokerName =
+        universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+      const goal = getGoalForRow(holding, brokerName)
+      if (!goal?.review_date) {
+        openGoalEditor(holding)
+        return
+      }
+      const base = new Date(goal.review_date)
+      if (Number.isNaN(base.getTime())) {
+        openGoalEditor(holding)
+        return
+      }
+      base.setDate(base.getDate() + days)
+      const payload = {
+        symbol: holding.symbol,
+        exchange: holding.exchange ?? 'NSE',
+        broker_name: brokerName,
+        label: goal.label,
+        review_date: base.toISOString().slice(0, 10),
+        target_type: goal.target_type ?? null,
+        target_value: goal.target_value ?? null,
+        note: goal.note ?? null,
+      }
+      try {
+        const updated = await upsertHoldingGoal(payload)
+        setHoldingGoals((prev) => {
+          const next = prev.filter((g) => g.id !== updated.id)
+          return [...next, updated]
+        })
+      } catch (err) {
+        setGoalSaveError(
+          err instanceof Error ? err.message : 'Failed to extend review date.',
+        )
+      }
+    },
+    [getGoalForRow, openGoalEditor, universeId],
+  )
+
+  const saveGoal = useCallback(async () => {
+    if (!goalEditRow) return
+    const brokerName =
+      universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+    const reviewDate =
+      goalReviewDate.trim() !== ''
+        ? goalReviewDate.trim()
+        : defaultReviewDateForLabel(goalLabel)
+    const targetType =
+      goalTargetType && goalTargetType !== '' ? goalTargetType : null
+    const targetValueRaw = goalTargetValue.trim()
+    const targetValue =
+      targetType && targetValueRaw !== '' ? Number(targetValueRaw) : null
+
+    if (targetType && (targetValue == null || !Number.isFinite(targetValue))) {
+      setGoalSaveError('Target value is required for the selected target type.')
+      return
+    }
+    if (!targetType && targetValueRaw !== '') {
+      setGoalSaveError('Select a target type to use a target value.')
+      return
+    }
+
+    setGoalSaving(true)
+    setGoalSaveError(null)
+    try {
+      const payload = {
+        symbol: goalEditRow.symbol,
+        exchange: goalEditRow.exchange ?? 'NSE',
+        broker_name: brokerName,
+        label: goalLabel,
+        review_date: reviewDate,
+        target_type: targetType,
+        target_value: targetValue,
+        note: goalNote.trim() || null,
+      }
+      const updated = await upsertHoldingGoal(payload)
+      setHoldingGoals((prev) => {
+        const next = prev.filter((g) => g.id !== updated.id)
+        return [...next, updated]
+      })
+      setGoalEditOpen(false)
+    } catch (err) {
+      setGoalSaveError(
+        err instanceof Error ? err.message : 'Failed to save goal.',
+      )
+    } finally {
+      setGoalSaving(false)
+    }
+  }, [
+    defaultReviewDateForLabel,
+    goalEditRow,
+    goalLabel,
+    goalNote,
+    goalReviewDate,
+    goalTargetType,
+    goalTargetValue,
+    universeId,
+  ])
 
   function getSizingPrice(holding: HoldingRow | null): number | null {
     if (isBulkTrade && holding) {
@@ -3043,6 +3444,133 @@ export function HoldingsPage() {
       },
     },
     {
+      field: 'goal_label',
+      headerName: 'Label',
+      width: 120,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const goal = getGoalForRow(row, goalBrokerName)
+        if (!goal) {
+          return <Chip size="small" variant="outlined" label="No goal" />
+        }
+        return <Chip size="small" variant="outlined" color="primary" label={goal.label} />
+      },
+    },
+    {
+      field: 'goal_review_date',
+      headerName: 'Review Date',
+      width: 130,
+      valueGetter: (_value, row) => {
+        const goal = getGoalForRow(row as HoldingRow, goalBrokerName)
+        return goal?.review_date ?? null
+      },
+      renderCell: (params) => <span>{params.value ?? '—'}</span>,
+    },
+    {
+      field: 'goal_days',
+      headerName: 'Days',
+      type: 'number',
+      width: 90,
+      valueGetter: (_value, row) => {
+        const goal = getGoalForRow(row as HoldingRow, goalBrokerName)
+        return getGoalDaysRemaining(goal)
+      },
+      valueFormatter: (value) => (value != null ? String(value) : '—'),
+      cellClassName: (params: GridCellParams) => {
+        if (params.value == null) return ''
+        const n = Number(params.value)
+        if (!Number.isFinite(n)) return ''
+        if (n < 0) return 'goal-overdue'
+        if (n <= GOAL_DUE_SOON_DAYS) return 'goal-due-soon'
+        return ''
+      },
+    },
+    {
+      field: 'goal_status',
+      headerName: 'Status',
+      width: 140,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const goal = getGoalForRow(row, goalBrokerName)
+        const days = getGoalDaysRemaining(goal)
+        const status = getGoalStatus(goal, days)
+        return (
+          <Chip size="small" variant="outlined" color={status.color} label={status.label} />
+        )
+      },
+    },
+    {
+      field: 'goal_target',
+      headerName: 'Target',
+      width: 150,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const goal = getGoalForRow(row, goalBrokerName)
+        const target = getGoalTarget(row, goal)
+        return <span>{target.label}</span>
+      },
+    },
+    {
+      field: 'goal_away_pct',
+      headerName: 'Away %',
+      type: 'number',
+      width: 110,
+      valueGetter: (_value, row) => {
+        const r = row as HoldingRow
+        const goal = getGoalForRow(r, goalBrokerName)
+        const target = getGoalTarget(r, goal)
+        return target.awayPct
+      },
+      valueFormatter: (value) =>
+        value != null && Number.isFinite(Number(value))
+          ? `${Number(value).toFixed(2)}%`
+          : '—',
+      cellClassName: (params: GridCellParams) => {
+        const n = Number(params.value)
+        return Number.isFinite(n) && Math.abs(n) <= GOAL_NEAR_TARGET_PCT
+          ? 'goal-near-target'
+          : ''
+      },
+    },
+    {
+      field: 'goal_note',
+      headerName: 'Note',
+      flex: 1,
+      minWidth: 160,
+      valueGetter: (_value, row) => {
+        const goal = getGoalForRow(row as HoldingRow, goalBrokerName)
+        return goal?.note ?? null
+      },
+      renderCell: (params) => <span>{params.value ?? '—'}</span>,
+    },
+    {
+      field: 'goal_actions',
+      headerName: 'Actions',
+      sortable: false,
+      filterable: false,
+      width: 160,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const goal = getGoalForRow(row, goalBrokerName)
+        return (
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button size="small" variant="outlined" onClick={() => openGoalEditor(row)}>
+              Edit
+            </Button>
+            {goal?.review_date && (
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => extendGoalReviewDate(row, 30)}
+              >
+                +30d
+              </Button>
+            )}
+          </Box>
+        )
+      },
+    },
+    {
       field: 'groupsLabel',
       headerName: 'Groups',
       flex: 1,
@@ -3890,6 +4418,18 @@ export function HoldingsPage() {
     )
 
     const presetShowFields: Record<string, string[]> = {
+      goal: [
+        'index',
+        'symbol',
+        'goal_label',
+        'goal_review_date',
+        'goal_days',
+        'goal_status',
+        'goal_target',
+        'goal_away_pct',
+        'goal_note',
+        'goal_actions',
+      ],
       performance: [
         'index',
         'symbol',
@@ -4052,6 +4592,15 @@ export function HoldingsPage() {
               {corrError}
             </Typography>
           )}
+          {goalLoadError && viewId === 'goal' && (
+            <Typography
+              variant="caption"
+              color="error"
+              sx={{ mb: 1, display: 'block' }}
+            >
+              {goalLoadError}
+            </Typography>
+          )}
           {portfolioAllocationMismatches.length > 0 && (
             <Alert
               severity="warning"
@@ -4163,6 +4712,111 @@ export function HoldingsPage() {
               <Button onClick={() => navigate('/groups')}>Open groups</Button>
               <Button onClick={() => setPortfolioMismatchDialogOpen(false)}>
                 Close
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          <Dialog
+            open={goalEditOpen}
+            onClose={() => setGoalEditOpen(false)}
+            fullWidth
+            maxWidth="sm"
+          >
+            <DialogTitle>
+              Edit Goal{goalEditRow?.symbol ? ` — ${goalEditRow.symbol}` : ''}
+            </DialogTitle>
+            <DialogContent sx={{ pt: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Label (required)
+                </Typography>
+                <RadioGroup
+                  row
+                  value={goalLabel}
+                  onChange={(e) => {
+                    const next = e.target.value as GoalLabel
+                    setGoalLabel(next)
+                    if (!goalReviewTouched) {
+                      setGoalReviewDate(defaultReviewDateForLabel(next))
+                    }
+                  }}
+                >
+                  {GOAL_LABELS.map((label) => (
+                    <FormControlLabel
+                      key={label}
+                      value={label}
+                      control={<Radio size="small" />}
+                      label={label}
+                    />
+                  ))}
+                </RadioGroup>
+              </Box>
+              <TextField
+                label="Review date (required)"
+                type="date"
+                value={goalReviewDate}
+                onChange={(e) => {
+                  setGoalReviewDate(e.target.value)
+                  setGoalReviewTouched(true)
+                }}
+                helperText="This holding must be reviewed on or after this date."
+                InputLabelProps={{ shrink: true }}
+              />
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                <TextField
+                  select
+                  label="Target type (optional)"
+                  value={goalTargetType}
+                  onChange={(e) => {
+                    const next = e.target.value as GoalTargetType | ''
+                    setGoalTargetType(next)
+                    if (next === '') setGoalTargetValue('')
+                  }}
+                  sx={{ minWidth: 220 }}
+                >
+                  <MenuItem value="">No target</MenuItem>
+                  {GOAL_TARGET_TYPES.map((opt) => (
+                    <MenuItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Target value"
+                  value={goalTargetValue}
+                  onChange={(e) => setGoalTargetValue(e.target.value)}
+                  disabled={goalTargetType === ''}
+                  placeholder={goalTargetType === 'ABSOLUTE_PRICE' ? 'Price' : '%'}
+                  sx={{ minWidth: 160 }}
+                />
+              </Box>
+              <TextField
+                label="Computed target (preview)"
+                value={goalTargetPreview?.label ?? '—'}
+                InputProps={{ readOnly: true }}
+              />
+              <TextField
+                label="Thesis note (optional)"
+                value={goalNote}
+                onChange={(e) => setGoalNote(e.target.value)}
+                placeholder="One-line reason or context"
+              />
+              {goalSaveError && (
+                <Typography variant="caption" color="error">
+                  {goalSaveError}
+                </Typography>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setGoalEditOpen(false)} disabled={goalSaving}>
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                onClick={saveGoal}
+                disabled={goalSaving || !goalEditRow}
+              >
+                Save Goal
               </Button>
             </DialogActions>
           </Dialog>
@@ -4763,6 +5417,7 @@ export function HoldingsPage() {
                 sx={{ minWidth: 160 }}
               >
                 <MenuItem value="default">Default</MenuItem>
+                {goalViewSupported && <MenuItem value="goal">Goal View</MenuItem>}
                 <MenuItem value="performance">Performance</MenuItem>
                 <MenuItem value="indicators">Indicators</MenuItem>
                 <MenuItem value="support_resistance">Support/Resistance</MenuItem>
@@ -4782,6 +5437,59 @@ export function HoldingsPage() {
                 Views…
               </Button>
             </Box>
+            {viewId === 'goal' && goalViewSupported && (
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  Filters:
+                </Typography>
+                <Chip
+                  size="small"
+                  label="All"
+                  color={goalFilter === 'all' ? 'primary' : 'default'}
+                  onClick={() => setGoalFilter('all')}
+                />
+                <Chip
+                  size="small"
+                  label="Overdue"
+                  color={goalFilter === 'overdue' ? 'primary' : 'default'}
+                  onClick={() => setGoalFilter('overdue')}
+                />
+                <Chip
+                  size="small"
+                  label={`Due Soon (≤${GOAL_DUE_SOON_DAYS}d)`}
+                  color={goalFilter === 'due_soon' ? 'primary' : 'default'}
+                  onClick={() => setGoalFilter('due_soon')}
+                />
+                <Chip
+                  size="small"
+                  label={`Near Target (±${GOAL_NEAR_TARGET_PCT}%)`}
+                  color={goalFilter === 'near_target' ? 'primary' : 'default'}
+                  onClick={() => setGoalFilter('near_target')}
+                />
+                <Chip
+                  size="small"
+                  label="Missing"
+                  color={goalFilter === 'missing' ? 'primary' : 'default'}
+                  onClick={() => setGoalFilter('missing')}
+                />
+                {missingGoalCount > 0 && (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    onClick={() => openGoalEditor(missingGoalRows[0])}
+                  >
+                    Set missing goals ({missingGoalCount})
+                  </Button>
+                )}
+              </Box>
+            )}
             <Button
               size="small"
               variant="contained"
@@ -5433,6 +6141,18 @@ export function HoldingsPage() {
         sx={{
           '& .pnl-negative': {
             color: 'error.main',
+          },
+          '& .goal-overdue': {
+            color: 'error.main',
+            fontWeight: 600,
+          },
+          '& .goal-due-soon': {
+            color: 'warning.main',
+            fontWeight: 600,
+          },
+          '& .goal-near-target': {
+            color: 'success.main',
+            fontWeight: 600,
           },
           '& .MuiDataGrid-columnHeader.st-imported-column-header': {
             backgroundColor: (theme) =>

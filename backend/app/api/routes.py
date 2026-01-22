@@ -11,6 +11,7 @@ from . import (
     brokers,
     deployments,
     groups,
+    holdings_goals,
     instruments,
     market_calendar,
     market_data,
@@ -171,6 +172,13 @@ router.include_router(
     prefix="/api/groups",
     dependencies=[Depends(require_admin)],
     tags=["groups"],
+)
+
+router.include_router(
+    holdings_goals.router,
+    prefix="/api/holdings-goals",
+    dependencies=[Depends(require_admin)],
+    tags=["holdings-goals"],
 )
 
 router.include_router(
