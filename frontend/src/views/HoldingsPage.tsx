@@ -3843,8 +3843,9 @@ export function HoldingsPage() {
 
     const universeKey = encodeURIComponent(universeId)
     const viewKey = encodeURIComponent(viewId)
-    const perUniverseKeyV2 = `st_holdings_column_visibility_${viewKey}_${universeKey}_v2`
-    const globalKeyV2 = `st_holdings_column_visibility_${viewKey}_v2`
+    const visibilityKeyVersion = viewId === 'default' ? 'v3' : 'v2'
+    const perUniverseKeyV2 = `st_holdings_column_visibility_${viewKey}_${universeKey}_${visibilityKeyVersion}`
+    const globalKeyV2 = `st_holdings_column_visibility_${viewKey}_${visibilityKeyVersion}`
 
     const readModel = (key: string): GridColumnVisibilityModel | null => {
       try {
@@ -3857,42 +3858,36 @@ export function HoldingsPage() {
       }
     }
 
-    const buildShowOnlyModel = (showFields: string[]): GridColumnVisibilityModel => {
+    const buildShowOnlyModel = (
+      showFields: string[],
+      options?: { keepImportColumns?: boolean },
+    ): GridColumnVisibilityModel => {
       const show = new Set(showFields)
       const model: GridColumnVisibilityModel = {}
+      const keepImportColumns = options?.keepImportColumns ?? true
       for (const field of columnsFieldRef.current) {
-        if (field.startsWith('import_')) continue
+        if (field.startsWith('import_') && keepImportColumns) continue
         model[field] = show.has(field)
       }
       return model
     }
 
-    const defaultModel: GridColumnVisibilityModel = {
-      maxPnlPct: false,
-      drawdownFromPeakPct: false,
-      perf_1d_pct: false,
-      perf_5d_pct: false,
-      perf_3m_pct: false,
-      perf_6m_pct: false,
-      sma_20: false,
-      sma_50: false,
-      sma_200: false,
-      ema_20: false,
-      ema_50: false,
-      ema_200: false,
-      macd: false,
-      macd_signal: false,
-      macd_hist: false,
-      sr_20_high: false,
-      sr_20_low: false,
-      sr_50_high: false,
-      sr_50_low: false,
-      dist_20_high_pct: false,
-      dist_20_low_pct: false,
-      obv: false,
-      pvt: false,
-      pvt_slope_pct_20: false,
-    }
+    const defaultModel: GridColumnVisibilityModel = buildShowOnlyModel(
+      [
+        'symbol',
+        'chart',
+        'average_price',
+        'last_price',
+        'invested',
+        'current_value',
+        'weight',
+        'total_pnl_percent',
+        'today_pnl_percent',
+        'alerts',
+        'actions',
+      ],
+      { keepImportColumns: false },
+    )
 
     const presetShowFields: Record<string, string[]> = {
       performance: [
@@ -5413,8 +5408,9 @@ export function HoldingsPage() {
           try {
             const universeKey = encodeURIComponent(universeId)
             const viewKey = encodeURIComponent(viewId)
-            const perUniverseKey = `st_holdings_column_visibility_${viewKey}_${universeKey}_v2`
-            const globalKey = `st_holdings_column_visibility_${viewKey}_v2`
+            const visibilityKeyVersion = viewId === 'default' ? 'v3' : 'v2'
+            const perUniverseKey = `st_holdings_column_visibility_${viewKey}_${universeKey}_${visibilityKeyVersion}`
+            const globalKey = `st_holdings_column_visibility_${viewKey}_${visibilityKeyVersion}`
             window.localStorage.setItem(perUniverseKey, JSON.stringify(model))
             window.localStorage.setItem(globalKey, JSON.stringify(model))
 
