@@ -2,14 +2,33 @@ from __future__ import annotations
 
 from typing import Annotated, List
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.db.session import get_db
 from app.models import User
-from app.schemas.holdings import HoldingGoalRead, HoldingGoalUpsert
-from app.services.holdings_goals import delete_goal, list_goals, upsert_goal
+from app.pydantic_compat import PYDANTIC_V2
+from app.schemas.holdings import (
+    HoldingGoalImportMapping,
+    HoldingGoalImportPresetCreate,
+    HoldingGoalImportPresetRead,
+    HoldingGoalImportRequest,
+    HoldingGoalImportResult,
+    HoldingGoalRead,
+    HoldingGoalUpsert,
+)
+from app.services.holdings_goals import (
+    create_preset,
+    delete_goal,
+    delete_preset,
+    import_goals,
+    list_goals,
+    list_presets,
+    upsert_goal,
+)
 
 router = APIRouter()
 
@@ -65,5 +84,76 @@ def delete_holding_goal(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Holding goal not found.",
+        )
+    return {"deleted": True}
+
+
+@router.post("/import", response_model=HoldingGoalImportResult)
+def import_holding_goals(
+    payload: HoldingGoalImportRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> HoldingGoalImportResult:
+    return import_goals(db, user_id=user.id, payload=payload)
+
+
+@router.get("/presets", response_model=List[HoldingGoalImportPresetRead])
+def list_goal_import_presets(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> List[HoldingGoalImportPresetRead]:
+    presets = list_presets(db, user_id=user.id)
+    out: list[HoldingGoalImportPresetRead] = []
+    for preset in presets:
+        raw_mapping = json.loads(preset.mapping_json or "{}")
+        if PYDANTIC_V2:
+            mapping = HoldingGoalImportMapping.model_validate(raw_mapping)
+        else:  # pragma: no cover - Pydantic v1
+            mapping = HoldingGoalImportMapping.parse_obj(raw_mapping)
+        out.append(
+            HoldingGoalImportPresetRead(
+                id=preset.id,
+                name=preset.name,
+                mapping=mapping,
+                created_at=preset.created_at,
+                updated_at=preset.updated_at,
+            )
+        )
+    return out
+
+
+@router.post("/presets", response_model=HoldingGoalImportPresetRead)
+def create_goal_import_preset(
+    payload: HoldingGoalImportPresetCreate,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> HoldingGoalImportPresetRead:
+    try:
+        preset = create_preset(db, user_id=user.id, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return HoldingGoalImportPresetRead(
+        id=preset.id,
+        name=preset.name,
+        mapping=payload.mapping,
+        created_at=preset.created_at,
+        updated_at=preset.updated_at,
+    )
+
+
+@router.delete("/presets/{preset_id}", response_model=dict)
+def delete_goal_import_preset(
+    preset_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict:
+    removed = delete_preset(db, user_id=user.id, preset_id=preset_id)
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Preset not found.",
         )
     return {"deleted": True}

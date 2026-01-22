@@ -46,4 +46,28 @@ class HoldingGoal(Base):
     )
 
 
-__all__ = ["HoldingGoal"]
+class HoldingGoalImportPreset(Base):
+    __tablename__ = "holding_goal_import_presets"
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="ux_holding_goal_import_presets"),
+        Index("ix_holding_goal_import_presets_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    mapping_json: Mapped[str] = mapped_column(String(2000), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+__all__ = ["HoldingGoal", "HoldingGoalImportPreset"]

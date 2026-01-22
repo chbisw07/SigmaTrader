@@ -37,14 +37,48 @@ export type HoldingGoalUpsert = {
   note?: string | null
 }
 
+export type HoldingGoalImportMapping = {
+  symbol_column: string
+  exchange_column?: string | null
+  label_column?: string | null
+  label_default?: GoalLabel | null
+  review_date_column?: string | null
+  review_date_default_days?: number | null
+  target_value_column?: string | null
+  target_type?: GoalTargetType | null
+  note_column?: string | null
+}
+
+export type HoldingGoalImportError = {
+  row_index: number
+  symbol?: string | null
+  reason: string
+}
+
+export type HoldingGoalImportResult = {
+  matched: number
+  updated: number
+  created: number
+  skipped: number
+  errors: HoldingGoalImportError[]
+}
+
+export type HoldingGoalImportPreset = {
+  id: number
+  name: string
+  mapping: HoldingGoalImportMapping
+  created_at: string
+  updated_at: string
+}
+
 export async function fetchHoldingGoals(params?: {
   broker_name?: string
 }): Promise<HoldingGoal[]> {
-  const url = new URL('/api/holdings-goals', window.location.origin)
+  const url = new URL('/api/holdings-goals/', window.location.origin)
   if (params?.broker_name) {
     url.searchParams.set('broker_name', params.broker_name)
   }
-  const res = await fetch(url.toString())
+  const res = await fetch(url.toString(), { credentials: 'include' })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(
@@ -54,12 +88,84 @@ export async function fetchHoldingGoals(params?: {
   return (await res.json()) as HoldingGoal[]
 }
 
+export async function importHoldingGoals(payload: {
+  broker_name?: string | null
+  mapping: HoldingGoalImportMapping
+  rows: Array<Record<string, string>>
+  holdings_symbols?: string[]
+}): Promise<HoldingGoalImportResult> {
+  const res = await fetch('/api/holdings-goals/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to import holding goals (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as HoldingGoalImportResult
+}
+
+export async function fetchGoalImportPresets(): Promise<
+  HoldingGoalImportPreset[]
+> {
+  const res = await fetch('/api/holdings-goals/presets', {
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to load goal presets (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as HoldingGoalImportPreset[]
+}
+
+export async function createGoalImportPreset(payload: {
+  name: string
+  mapping: HoldingGoalImportMapping
+}): Promise<HoldingGoalImportPreset> {
+  const res = await fetch('/api/holdings-goals/presets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to save preset (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as HoldingGoalImportPreset
+}
+
+export async function deleteGoalImportPreset(
+  presetId: number,
+): Promise<{ deleted: boolean }> {
+  const res = await fetch(`/api/holdings-goals/presets/${presetId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to delete preset (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as { deleted: boolean }
+}
+
 export async function upsertHoldingGoal(
   payload: HoldingGoalUpsert,
 ): Promise<HoldingGoal> {
-  const res = await fetch('/api/holdings-goals', {
+  const res = await fetch('/api/holdings-goals/', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify(payload),
   })
   if (!res.ok) {
@@ -76,13 +182,16 @@ export async function deleteHoldingGoal(params: {
   exchange?: string | null
   broker_name?: string | null
 }): Promise<{ deleted: boolean }> {
-  const url = new URL('/api/holdings-goals', window.location.origin)
+  const url = new URL('/api/holdings-goals/', window.location.origin)
   url.searchParams.set('symbol', params.symbol)
   if (params.exchange) url.searchParams.set('exchange', params.exchange)
   if (params.broker_name) {
     url.searchParams.set('broker_name', params.broker_name)
   }
-  const res = await fetch(url.toString(), { method: 'DELETE' })
+  const res = await fetch(url.toString(), {
+    method: 'DELETE',
+    credentials: 'include',
+  })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(

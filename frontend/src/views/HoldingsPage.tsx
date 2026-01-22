@@ -46,6 +46,7 @@ import {
 } from '../components/Trade/tradeConstraints'
 import { resolvePrimaryPriceForHolding } from '../components/Trade/tradePricing'
 import { RebalanceDialog } from '../components/RebalanceDialog'
+import { GoalImportDialog } from '../components/GoalImportDialog'
 
 import { createManualOrder, type DistanceMode, type RiskSpec } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
@@ -325,6 +326,7 @@ export function HoldingsPage() {
   const [goalSaving, setGoalSaving] = useState(false)
   const [goalSaveError, setGoalSaveError] = useState<string | null>(null)
   const [goalLoadError, setGoalLoadError] = useState<string | null>(null)
+  const [goalImportOpen, setGoalImportOpen] = useState(false)
   const columnsFieldRef = useRef<string[]>([])
   const [columnVisibilityModel, setColumnVisibilityModel] =
     useState<GridColumnVisibilityModel>({
@@ -1636,28 +1638,52 @@ export function HoldingsPage() {
         return { symbol: rest.trim().toUpperCase(), exchange: rawExchange || 'NSE' }
       }
     }
+    if (rawExchange.startsWith('NSE')) {
+      rawExchange = 'NSE'
+    } else if (rawExchange.startsWith('BSE')) {
+      rawExchange = 'BSE'
+    }
     return { symbol: rawSymbol, exchange: rawExchange || 'NSE' }
   }
 
-  const goalsByKey = useMemo(() => {
+  const goalMaps = useMemo(() => {
     const map = new Map<string, HoldingGoal>()
+    const symbolCounts = new Map<string, number>()
+    const symbolMap = new Map<string, HoldingGoal>()
     for (const goal of holdingGoals) {
-      const sym = (goal.symbol || '').toUpperCase()
-      const exch = (goal.exchange || 'NSE').toUpperCase()
+      const { symbol: sym, exchange: exch } = normalizeSymbolExchange(
+        goal.symbol,
+        goal.exchange,
+      )
       const broker = (goal.broker_name || 'zerodha').toLowerCase()
       if (!sym) continue
       map.set(`${broker}:${exch}:${sym}`, goal)
+      const symbolKey = `${broker}:${sym}`
+      symbolCounts.set(symbolKey, (symbolCounts.get(symbolKey) ?? 0) + 1)
+      if (!symbolMap.has(symbolKey)) {
+        symbolMap.set(symbolKey, goal)
+      }
     }
-    return map
-  }, [holdingGoals])
+    for (const [symbolKey, count] of symbolCounts.entries()) {
+      if (count > 1) {
+        symbolMap.delete(symbolKey)
+      }
+    }
+    return { byKey: map, bySymbol: symbolMap }
+  }, [holdingGoals, normalizeSymbolExchange])
 
   const getGoalForRow = useCallback(
     (row: HoldingRow, brokerName: string): HoldingGoal | null => {
       const { symbol, exchange } = normalizeSymbolExchange(row.symbol, row.exchange)
       if (!symbol) return null
-      return goalsByKey.get(`${brokerName}:${exchange}:${symbol}`) ?? null
+      const broker = brokerName.toLowerCase()
+      return (
+        goalMaps.byKey.get(`${broker}:${exchange}:${symbol}`) ??
+        goalMaps.bySymbol.get(`${broker}:${symbol}`) ??
+        null
+      )
     },
-    [goalsByKey],
+    [goalMaps, normalizeSymbolExchange],
   )
 
   const getGoalDaysRemaining = (goal: HoldingGoal | null): number | null => {
@@ -1808,6 +1834,19 @@ export function HoldingsPage() {
   }, [getGoalForRow, goalBrokerName, goalViewSupported, holdings])
 
   const missingGoalCount = missingGoalRows.length
+
+  const holdingsSymbolsForImport = useMemo(() => {
+    return holdings
+      .map((row) => {
+        const { symbol, exchange } = normalizeSymbolExchange(
+          row.symbol,
+          row.exchange,
+        )
+        if (!symbol) return null
+        return `${exchange}:${symbol}`
+      })
+      .filter((item): item is string => Boolean(item))
+  }, [holdings, normalizeSymbolExchange])
 
   const getPerHoldingPriceForSizing = (holding: HoldingRow): number | null => {
     const override = bulkPriceOverrides[holding.symbol]
@@ -4820,6 +4859,14 @@ export function HoldingsPage() {
               </Button>
             </DialogActions>
           </Dialog>
+
+          <GoalImportDialog
+            open={goalImportOpen}
+            brokerName={goalBrokerName}
+            holdingsSymbols={holdingsSymbolsForImport}
+            onClose={() => setGoalImportOpen(false)}
+            onImported={() => refreshHoldingGoals(goalBrokerName)}
+          />
         </Box>
 
         <Paper
@@ -5488,6 +5535,13 @@ export function HoldingsPage() {
                     Set missing goals ({missingGoalCount})
                   </Button>
                 )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => setGoalImportOpen(true)}
+                >
+                  Import CSV
+                </Button>
               </Box>
             )}
             <Button
