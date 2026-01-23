@@ -9,6 +9,7 @@ from app.pydantic_compat import PYDANTIC_V2, ConfigDict
 
 GoalLabel = Literal["CORE", "TRADE", "THEME", "HEDGE", "INCOME", "PARKING"]
 TargetType = Literal["PCT_FROM_AVG_BUY", "PCT_FROM_LTP", "ABSOLUTE_PRICE"]
+GoalReviewAction = Literal["EXTEND", "SNOOZE", "REVIEWED"]
 
 
 class HoldingGoalBase(BaseModel):
@@ -100,6 +101,41 @@ class HoldingGoalImportPresetRead(BaseModel):
             orm_mode = True
 
 
+class HoldingGoalReviewActionRequest(BaseModel):
+    symbol: str
+    exchange: str | None = None
+    broker_name: str | None = None
+    action: GoalReviewAction
+    days: int | None = Field(default=None, ge=1, le=3650)
+    note: str | None = None
+
+
+class HoldingGoalReviewRead(BaseModel):
+    id: int
+    goal_id: int
+    user_id: int
+    broker_name: str
+    symbol: str
+    exchange: str
+    action: GoalReviewAction
+    previous_review_date: date
+    new_review_date: date
+    note: str | None = None
+    created_at: datetime
+
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:  # pragma: no cover - Pydantic v1
+
+        class Config:
+            orm_mode = True
+
+
+class HoldingGoalReviewActionResponse(BaseModel):
+    goal: HoldingGoalRead
+    review: HoldingGoalReviewRead
+
+
 __all__ = [
     "GoalLabel",
     "TargetType",
@@ -111,4 +147,8 @@ __all__ = [
     "HoldingGoalImportError",
     "HoldingGoalImportPresetCreate",
     "HoldingGoalImportPresetRead",
+    "GoalReviewAction",
+    "HoldingGoalReviewActionRequest",
+    "HoldingGoalReviewRead",
+    "HoldingGoalReviewActionResponse",
 ]

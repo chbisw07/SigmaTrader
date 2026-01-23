@@ -4,15 +4,16 @@ from datetime import UTC, date, datetime, timedelta
 import json
 from sqlalchemy.orm import Session
 
-from app.models import HoldingGoal, HoldingGoalImportPreset
+from app.models import HoldingGoal, HoldingGoalImportPreset, HoldingGoalReview
 from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.holdings import (
     GoalLabel,
-    HoldingGoalImportMapping,
+    GoalReviewAction,
     HoldingGoalImportRequest,
     HoldingGoalImportResult,
     HoldingGoalImportError,
     HoldingGoalImportPresetCreate,
+    HoldingGoalReviewActionRequest,
     HoldingGoalUpsert,
 )
 
@@ -45,6 +46,33 @@ def _default_review_date(label: GoalLabel) -> date:
     days = LABEL_DEFAULT_REVIEW_DAYS.get(label, 90)
     today = datetime.now(UTC).date()
     return today + timedelta(days=days)
+
+
+def _get_goal(
+    db: Session,
+    *,
+    user_id: int,
+    broker_name: str | None,
+    symbol: str,
+    exchange: str | None,
+) -> HoldingGoal:
+    broker = (broker_name or "zerodha").strip().lower()
+    sym, exch = normalize_symbol_exchange(symbol, exchange)
+    if not sym:
+        raise ValueError("Symbol is required.")
+    goal = (
+        db.query(HoldingGoal)
+        .filter(
+            HoldingGoal.user_id == user_id,
+            HoldingGoal.broker_name == broker,
+            HoldingGoal.symbol == sym,
+            HoldingGoal.exchange == exch,
+        )
+        .one_or_none()
+    )
+    if goal is None:
+        raise ValueError("Holding goal not found.")
+    return goal
 
 
 def list_goals(
@@ -144,6 +172,84 @@ def delete_goal(
     db.delete(goal)
     db.commit()
     return True
+
+
+def apply_review_action(
+    db: Session,
+    *,
+    user_id: int,
+    payload: HoldingGoalReviewActionRequest,
+) -> tuple[HoldingGoal, HoldingGoalReview]:
+    goal = _get_goal(
+        db,
+        user_id=user_id,
+        broker_name=payload.broker_name,
+        symbol=payload.symbol,
+        exchange=payload.exchange,
+    )
+    previous_date = goal.review_date
+    action: GoalReviewAction = payload.action
+    today = datetime.now(UTC).date()
+
+    if action in {"EXTEND", "SNOOZE"}:
+        if payload.days is None:
+            raise ValueError("Days is required for this action.")
+        base = previous_date
+        if action == "SNOOZE":
+            base = max(previous_date, today)
+        new_date = base + timedelta(days=payload.days)
+    elif action == "REVIEWED":
+        new_date = _default_review_date(goal.label)
+    else:
+        raise ValueError("Unsupported review action.")
+
+    goal.review_date = new_date
+    db.add(goal)
+
+    review = HoldingGoalReview(
+        goal_id=goal.id,
+        user_id=user_id,
+        broker_name=goal.broker_name,
+        symbol=goal.symbol,
+        exchange=goal.exchange,
+        action=action,
+        previous_review_date=previous_date,
+        new_review_date=new_date,
+        note=payload.note,
+    )
+    db.add(review)
+    db.commit()
+    db.refresh(goal)
+    db.refresh(review)
+    return goal, review
+
+
+def list_reviews(
+    db: Session,
+    *,
+    user_id: int,
+    broker_name: str | None,
+    symbol: str,
+    exchange: str | None,
+    limit: int = 50,
+) -> list[HoldingGoalReview]:
+    goal = _get_goal(
+        db,
+        user_id=user_id,
+        broker_name=broker_name,
+        symbol=symbol,
+        exchange=exchange,
+    )
+    return (
+        db.query(HoldingGoalReview)
+        .filter(
+            HoldingGoalReview.user_id == user_id,
+            HoldingGoalReview.goal_id == goal.id,
+        )
+        .order_by(HoldingGoalReview.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 def list_presets(db: Session, *, user_id: int) -> list[HoldingGoalImportPreset]:
@@ -386,6 +492,8 @@ __all__ = [
     "upsert_goal",
     "delete_goal",
     "normalize_symbol_exchange",
+    "apply_review_action",
+    "list_reviews",
     "list_presets",
     "create_preset",
     "delete_preset",

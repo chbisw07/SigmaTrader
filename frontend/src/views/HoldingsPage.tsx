@@ -7,6 +7,7 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import Menu from '@mui/material/Menu'
 import MenuItem from '@mui/material/MenuItem'
 import Tooltip from '@mui/material/Tooltip'
 import Select from '@mui/material/Select'
@@ -35,7 +36,14 @@ import {
   GridLogicOperator,
   type GridRowSelectionModel,
 } from '@mui/x-data-grid'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
@@ -76,9 +84,13 @@ import {
 import {
   fetchHoldingGoals,
   upsertHoldingGoal,
+  applyHoldingGoalReviewAction,
+  listHoldingGoalReviews,
+  type GoalReviewAction,
   type GoalLabel,
   type GoalTargetType,
   type HoldingGoal,
+  type HoldingGoalReview,
 } from '../services/holdingsGoals'
 
 type HoldingIndicators = {
@@ -325,6 +337,21 @@ export function HoldingsPage() {
   const [goalNote, setGoalNote] = useState('')
   const [goalSaving, setGoalSaving] = useState(false)
   const [goalSaveError, setGoalSaveError] = useState<string | null>(null)
+  const [goalReviewActionError, setGoalReviewActionError] = useState<string | null>(
+    null,
+  )
+  const [goalActionAnchorEl, setGoalActionAnchorEl] = useState<HTMLElement | null>(
+    null,
+  )
+  const [goalActionRow, setGoalActionRow] = useState<HoldingRow | null>(null)
+  const [goalReviewHistoryOpen, setGoalReviewHistoryOpen] = useState(false)
+  const [goalReviewHistoryRow, setGoalReviewHistoryRow] = useState<HoldingRow | null>(
+    null,
+  )
+  const [goalReviewHistory, setGoalReviewHistory] = useState<HoldingGoalReview[]>([])
+  const [goalReviewHistoryError, setGoalReviewHistoryError] = useState<string | null>(
+    null,
+  )
   const [goalLoadError, setGoalLoadError] = useState<string | null>(null)
   const [goalImportOpen, setGoalImportOpen] = useState(false)
   const columnsFieldRef = useRef<string[]>([])
@@ -1786,6 +1813,8 @@ export function HoldingsPage() {
   const goalBrokerName =
     universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
 
+  const goalActionMenuOpen = Boolean(goalActionAnchorEl)
+
   const filteredRows: HoldingRow[] = useMemo(() => {
     if (viewId !== 'goal' || !goalViewSupported) {
       return holdings
@@ -1810,6 +1839,8 @@ export function HoldingsPage() {
           return (
             goal != null &&
             awayPct != null &&
+            days != null &&
+            days >= 0 &&
             Math.abs(awayPct) <= GOAL_NEAR_TARGET_PCT
           )
         default:
@@ -1834,6 +1865,46 @@ export function HoldingsPage() {
   }, [getGoalForRow, goalBrokerName, goalViewSupported, holdings])
 
   const missingGoalCount = missingGoalRows.length
+
+  const goalReminderSummary = useMemo(() => {
+    if (!goalViewSupported) {
+      return { overdue: 0, dueSoon: 0, nearTarget: 0, missing: 0 }
+    }
+    let overdue = 0
+    let dueSoon = 0
+    let nearTarget = 0
+    for (const row of holdings) {
+      const goal = getGoalForRow(row, goalBrokerName)
+      if (!goal) continue
+      const days = getGoalDaysRemaining(goal)
+      if (days == null) continue
+      if (days < 0) {
+        overdue += 1
+        continue
+      }
+      if (days <= GOAL_DUE_SOON_DAYS) {
+        dueSoon += 1
+      }
+      const { awayPct } = getGoalTarget(row, goal)
+      if (awayPct != null && Math.abs(awayPct) <= GOAL_NEAR_TARGET_PCT) {
+        nearTarget += 1
+      }
+    }
+    return {
+      overdue,
+      dueSoon,
+      nearTarget,
+      missing: missingGoalCount,
+    }
+  }, [
+    getGoalDaysRemaining,
+    getGoalForRow,
+    getGoalTarget,
+    goalBrokerName,
+    goalViewSupported,
+    holdings,
+    missingGoalCount,
+  ])
 
   const holdingsSymbolsForImport = useMemo(() => {
     return holdings
@@ -2044,8 +2115,8 @@ export function HoldingsPage() {
     [defaultReviewDateForLabel, getGoalForRow, universeId],
   )
 
-  const extendGoalReviewDate = useCallback(
-    async (holding: HoldingRow, days = 30) => {
+  const applyGoalReviewAction = useCallback(
+    async (holding: HoldingRow, action: GoalReviewAction, days?: number) => {
       const brokerName =
         universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
       const goal = getGoalForRow(holding, brokerName)
@@ -2053,36 +2124,79 @@ export function HoldingsPage() {
         openGoalEditor(holding)
         return
       }
-      const base = new Date(goal.review_date)
-      if (Number.isNaN(base.getTime())) {
-        openGoalEditor(holding)
-        return
-      }
-      base.setDate(base.getDate() + days)
-      const payload = {
-        symbol: holding.symbol,
-        exchange: holding.exchange ?? 'NSE',
-        broker_name: brokerName,
-        label: goal.label,
-        review_date: base.toISOString().slice(0, 10),
-        target_type: goal.target_type ?? null,
-        target_value: goal.target_value ?? null,
-        note: goal.note ?? null,
-      }
       try {
-        const updated = await upsertHoldingGoal(payload)
+        const { goal: updated } = await applyHoldingGoalReviewAction({
+          symbol: holding.symbol,
+          exchange: holding.exchange ?? 'NSE',
+          broker_name: brokerName,
+          action,
+          days: days ?? null,
+        })
         setHoldingGoals((prev) => {
           const next = prev.filter((g) => g.id !== updated.id)
           return [...next, updated]
         })
+        setGoalReviewActionError(null)
       } catch (err) {
-        setGoalSaveError(
-          err instanceof Error ? err.message : 'Failed to extend review date.',
+        setGoalReviewActionError(
+          err instanceof Error ? err.message : 'Failed to update review status.',
         )
       }
     },
     [getGoalForRow, openGoalEditor, universeId],
   )
+
+  const openGoalActionMenu = useCallback(
+    (event: MouseEvent<HTMLElement>, holding: HoldingRow) => {
+      setGoalActionAnchorEl(event.currentTarget)
+      setGoalActionRow(holding)
+    },
+    [],
+  )
+
+  const closeGoalActionMenu = useCallback(() => {
+    setGoalActionAnchorEl(null)
+    setGoalActionRow(null)
+  }, [])
+
+  const openGoalReviewHistory = useCallback(
+    async (holding: HoldingRow) => {
+      const brokerName =
+        universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+      setGoalReviewHistoryError(null)
+      setGoalReviewHistory([])
+      setGoalReviewHistoryRow(holding)
+      setGoalReviewHistoryOpen(true)
+      try {
+        const history = await listHoldingGoalReviews({
+          symbol: holding.symbol,
+          exchange: holding.exchange ?? 'NSE',
+          broker_name: brokerName,
+        })
+        setGoalReviewHistory(history)
+      } catch (err) {
+        setGoalReviewHistoryError(
+          err instanceof Error ? err.message : 'Failed to load review history.',
+        )
+      }
+    },
+    [universeId],
+  )
+
+  const handleGoalMenuAction = useCallback(
+    (action: GoalReviewAction, days?: number) => {
+      if (!goalActionRow) return
+      void applyGoalReviewAction(goalActionRow, action, days)
+      closeGoalActionMenu()
+    },
+    [applyGoalReviewAction, closeGoalActionMenu, goalActionRow],
+  )
+
+  const handleGoalMenuHistory = useCallback(() => {
+    if (!goalActionRow) return
+    void openGoalReviewHistory(goalActionRow)
+    closeGoalActionMenu()
+  }, [closeGoalActionMenu, goalActionRow, openGoalReviewHistory])
 
   const saveGoal = useCallback(async () => {
     if (!goalEditRow) return
@@ -3565,8 +3679,14 @@ export function HoldingsPage() {
           ? `${Number(value).toFixed(2)}%`
           : '—',
       cellClassName: (params: GridCellParams) => {
+        const row = params.row as HoldingRow
+        const goal = getGoalForRow(row, goalBrokerName)
+        const days = getGoalDaysRemaining(goal)
         const n = Number(params.value)
-        return Number.isFinite(n) && Math.abs(n) <= GOAL_NEAR_TARGET_PCT
+        return Number.isFinite(n) &&
+          Math.abs(n) <= GOAL_NEAR_TARGET_PCT &&
+          days != null &&
+          days >= 0
           ? 'goal-near-target'
           : ''
       },
@@ -3587,7 +3707,7 @@ export function HoldingsPage() {
       headerName: 'Actions',
       sortable: false,
       filterable: false,
-      width: 160,
+      width: 170,
       renderCell: (params) => {
         const row = params.row as HoldingRow
         const goal = getGoalForRow(row, goalBrokerName)
@@ -3596,15 +3716,21 @@ export function HoldingsPage() {
             <Button size="small" variant="outlined" onClick={() => openGoalEditor(row)}>
               Edit
             </Button>
-            {goal?.review_date && (
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => extendGoalReviewDate(row, 30)}
-              >
-                +30d
-              </Button>
-            )}
+            <Tooltip title={goal?.review_date ? 'Review actions' : 'Set a review date'}>
+              <span>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={!goal?.review_date}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    openGoalActionMenu(event, row)
+                  }}
+                >
+                  Review
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
         )
       },
@@ -4640,6 +4766,71 @@ export function HoldingsPage() {
               {goalLoadError}
             </Typography>
           )}
+          {viewId === 'goal' && goalViewSupported && goalReviewActionError && (
+            <Alert severity="error" sx={{ mb: 1 }}>
+              {goalReviewActionError}
+            </Alert>
+          )}
+          {viewId === 'goal' && goalViewSupported && goalReminderSummary.overdue > 0 && (
+            <Alert
+              severity="error"
+              sx={{ mb: 1 }}
+              action={
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => setGoalFilter('overdue')}
+                >
+                  View overdue
+                </Button>
+              }
+            >
+              {goalReminderSummary.overdue} holding
+              {goalReminderSummary.overdue === 1 ? '' : 's'} overdue for review.
+            </Alert>
+          )}
+          {viewId === 'goal' &&
+            goalViewSupported &&
+            goalReminderSummary.dueSoon > 0 && (
+              <Alert
+                severity="warning"
+                sx={{ mb: 1 }}
+                action={
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={() => setGoalFilter('due_soon')}
+                  >
+                    View due soon
+                  </Button>
+                }
+              >
+                {goalReminderSummary.dueSoon} holding
+                {goalReminderSummary.dueSoon === 1 ? '' : 's'} due within{' '}
+                {GOAL_DUE_SOON_DAYS} days.
+              </Alert>
+            )}
+          {viewId === 'goal' &&
+            goalViewSupported &&
+            goalReminderSummary.nearTarget > 0 && (
+              <Alert
+                severity="info"
+                sx={{ mb: 1 }}
+                action={
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={() => setGoalFilter('near_target')}
+                  >
+                    View near target
+                  </Button>
+                }
+              >
+                {goalReminderSummary.nearTarget} holding
+                {goalReminderSummary.nearTarget === 1 ? '' : 's'} within{' '}
+                {GOAL_NEAR_TARGET_PCT}% of target.
+              </Alert>
+            )}
           {portfolioAllocationMismatches.length > 0 && (
             <Alert
               severity="warning"
@@ -4867,6 +5058,70 @@ export function HoldingsPage() {
             onClose={() => setGoalImportOpen(false)}
             onImported={() => refreshHoldingGoals(goalBrokerName)}
           />
+
+          <Menu
+            anchorEl={goalActionAnchorEl}
+            open={goalActionMenuOpen}
+            onClose={closeGoalActionMenu}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          >
+            <MenuItem onClick={() => handleGoalMenuAction('REVIEWED')}>
+              Mark reviewed
+            </MenuItem>
+            <MenuItem onClick={() => handleGoalMenuAction('SNOOZE', 7)}>
+              Snooze 7d
+            </MenuItem>
+            <MenuItem onClick={() => handleGoalMenuAction('EXTEND', 30)}>
+              Extend 30d
+            </MenuItem>
+            <MenuItem onClick={() => handleGoalMenuAction('EXTEND', 90)}>
+              Extend 90d
+            </MenuItem>
+            <Divider />
+            <MenuItem onClick={handleGoalMenuHistory}>View history</MenuItem>
+          </Menu>
+
+          <Dialog
+            open={goalReviewHistoryOpen}
+            onClose={() => setGoalReviewHistoryOpen(false)}
+            fullWidth
+            maxWidth="sm"
+          >
+            <DialogTitle>
+              Review history{goalReviewHistoryRow ? ` — ${goalReviewHistoryRow.symbol}` : ''}
+            </DialogTitle>
+            <DialogContent sx={{ pt: 2 }}>
+              {goalReviewHistoryError && (
+                <Alert severity="error" sx={{ mb: 1 }}>
+                  {goalReviewHistoryError}
+                </Alert>
+              )}
+              {!goalReviewHistoryError && goalReviewHistory.length === 0 && (
+                <Typography variant="body2" color="text.secondary">
+                  No review actions recorded yet.
+                </Typography>
+              )}
+              {goalReviewHistory.map((entry) => (
+                <Box key={entry.id} sx={{ mb: 1.5 }}>
+                  <Typography variant="subtitle2">
+                    {entry.action.replace('_', ' ')} — {entry.created_at.slice(0, 10)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {entry.previous_review_date} → {entry.new_review_date}
+                  </Typography>
+                  {entry.note && (
+                    <Typography variant="body2" color="text.secondary">
+                      {entry.note}
+                    </Typography>
+                  )}
+                </Box>
+              ))}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setGoalReviewHistoryOpen(false)}>Close</Button>
+            </DialogActions>
+          </Dialog>
         </Box>
 
         <Paper

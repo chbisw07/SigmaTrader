@@ -12,7 +12,7 @@ from .deployments import StrategyDeployment, StrategyDeploymentState
 from .execution_policy import ExecutionPolicyState
 from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
-from .holdings import HoldingGoal, HoldingGoalImportPreset
+from .holdings import HoldingGoal, HoldingGoalImportPreset, HoldingGoalReview
 from .instruments import BrokerInstrument, Listing, Security
 from .market_calendar import MarketCalendar
 from .market_data import Candle, MarketInstrument
@@ -76,6 +76,7 @@ __all__ = [
     "GroupMember",
     "HoldingGoal",
     "HoldingGoalImportPreset",
+    "HoldingGoalReview",
     "RebalancePolicy",
     "RebalanceSchedule",
     "RebalanceRun",

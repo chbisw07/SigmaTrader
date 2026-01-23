@@ -18,14 +18,19 @@ from app.schemas.holdings import (
     HoldingGoalImportRequest,
     HoldingGoalImportResult,
     HoldingGoalRead,
+    HoldingGoalReviewActionRequest,
+    HoldingGoalReviewActionResponse,
+    HoldingGoalReviewRead,
     HoldingGoalUpsert,
 )
 from app.services.holdings_goals import (
+    apply_review_action,
     create_preset,
     delete_goal,
     delete_preset,
     import_goals,
     list_goals,
+    list_reviews,
     list_presets,
     upsert_goal,
 )
@@ -95,6 +100,47 @@ def import_holding_goals(
     user: Annotated[User, Depends(get_current_user)],
 ) -> HoldingGoalImportResult:
     return import_goals(db, user_id=user.id, payload=payload)
+
+
+@router.post("/review-actions", response_model=HoldingGoalReviewActionResponse)
+def apply_holding_goal_review_action(
+    payload: HoldingGoalReviewActionRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> HoldingGoalReviewActionResponse:
+    try:
+        goal, review = apply_review_action(db, user_id=user.id, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return HoldingGoalReviewActionResponse(goal=goal, review=review)
+
+
+@router.get("/reviews", response_model=List[HoldingGoalReviewRead])
+def list_holding_goal_reviews(
+    db: Annotated[Session, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    symbol: str = Query(..., min_length=1),
+    exchange: str | None = Query(None),
+    broker_name: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+) -> List[HoldingGoalReviewRead]:
+    try:
+        return list_reviews(
+            db,
+            user_id=user.id,
+            broker_name=broker_name,
+            symbol=symbol,
+            exchange=exchange,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/presets", response_model=List[HoldingGoalImportPresetRead])

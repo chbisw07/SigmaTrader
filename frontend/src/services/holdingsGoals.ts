@@ -11,6 +11,8 @@ export type GoalTargetType =
   | 'PCT_FROM_LTP'
   | 'ABSOLUTE_PRICE'
 
+export type GoalReviewAction = 'EXTEND' | 'SNOOZE' | 'REVIEWED'
+
 export type HoldingGoal = {
   id: number
   user_id: number
@@ -24,6 +26,25 @@ export type HoldingGoal = {
   note?: string | null
   created_at: string
   updated_at: string
+}
+
+export type HoldingGoalReview = {
+  id: number
+  goal_id: number
+  user_id: number
+  broker_name: string
+  symbol: string
+  exchange: string
+  action: GoalReviewAction
+  previous_review_date: string
+  new_review_date: string
+  note?: string | null
+  created_at: string
+}
+
+export type HoldingGoalReviewActionResponse = {
+  goal: HoldingGoal
+  review: HoldingGoalReview
 }
 
 export type HoldingGoalUpsert = {
@@ -199,4 +220,48 @@ export async function deleteHoldingGoal(params: {
     )
   }
   return (await res.json()) as { deleted: boolean }
+}
+
+export async function applyHoldingGoalReviewAction(payload: {
+  symbol: string
+  exchange?: string | null
+  broker_name?: string | null
+  action: GoalReviewAction
+  days?: number | null
+  note?: string | null
+}): Promise<HoldingGoalReviewActionResponse> {
+  const res = await fetch('/api/holdings-goals/review-actions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to apply review action (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as HoldingGoalReviewActionResponse
+}
+
+export async function listHoldingGoalReviews(params: {
+  symbol: string
+  exchange?: string | null
+  broker_name?: string | null
+  limit?: number
+}): Promise<HoldingGoalReview[]> {
+  const url = new URL('/api/holdings-goals/reviews', window.location.origin)
+  url.searchParams.set('symbol', params.symbol)
+  if (params.exchange) url.searchParams.set('exchange', params.exchange)
+  if (params.broker_name) url.searchParams.set('broker_name', params.broker_name)
+  if (params.limit) url.searchParams.set('limit', String(params.limit))
+  const res = await fetch(url.toString(), { credentials: 'include' })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to load review history (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as HoldingGoalReview[]
 }

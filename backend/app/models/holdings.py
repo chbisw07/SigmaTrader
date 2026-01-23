@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from sqlalchemy import Date, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Date, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -70,4 +70,29 @@ class HoldingGoalImportPreset(Base):
     )
 
 
-__all__ = ["HoldingGoal", "HoldingGoalImportPreset"]
+class HoldingGoalReview(Base):
+    __tablename__ = "holding_goal_reviews"
+
+    __table_args__ = (
+        Index("ix_holding_goal_reviews_user", "user_id"),
+        Index("ix_holding_goal_reviews_goal", "goal_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    goal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("holding_goals.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    broker_name: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    exchange: Mapped[str] = mapped_column(String(16), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    previous_review_date: Mapped[date] = mapped_column(Date, nullable=False)
+    new_review_date: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+__all__ = ["HoldingGoal", "HoldingGoalImportPreset", "HoldingGoalReview"]
