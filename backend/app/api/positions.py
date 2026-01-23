@@ -368,19 +368,28 @@ def list_daily_positions(
 
         avg_price = float(r.avg_price or 0.0)
         close_price = float(r.close_price) if r.close_price is not None else None
+        pnl_qty = net_qty
+        pnl_price_base = avg_price
+
+        if product in {"CNC", "DELIVERY"} and r.holding_qty is not None:
+            holding_qty = float(r.holding_qty or 0.0)
+            if holding_qty != 0.0:
+                pnl_qty = holding_qty
+                if avg_buy is not None and avg_buy != 0:
+                    pnl_price_base = float(avg_buy)
 
         # Canonical P&L: use broker net qty + average_price + last_price.
         # This matches the broker UI (Kite/SmartAPI) semantics: realised +
         # unrealised P&L is reflected in `average_price` and is therefore
         # captured by `qty * (last - avg)`.
-        if net_qty and item.ltp is not None and avg_price:
-            pnl_value = net_qty * (item.ltp - avg_price)
-            pnl_pct = (pnl_value / (abs(net_qty) * avg_price)) * 100.0
+        if pnl_qty and item.ltp is not None and pnl_price_base:
+            pnl_value = pnl_qty * (item.ltp - pnl_price_base)
+            pnl_pct = (pnl_value / (abs(pnl_qty) * pnl_price_base)) * 100.0
 
         # "Today" P&L: mark-to-market vs previous close (if available).
-        if net_qty and item.ltp is not None and close_price:
-            today_pnl = net_qty * (item.ltp - close_price)
-            today_pnl_pct = (today_pnl / (abs(net_qty) * close_price)) * 100.0
+        if pnl_qty and item.ltp is not None and close_price:
+            today_pnl = pnl_qty * (item.ltp - close_price)
+            today_pnl_pct = (today_pnl / (abs(pnl_qty) * close_price)) * 100.0
 
         item.pnl_value = pnl_value
         item.pnl_pct = pnl_pct
@@ -417,8 +426,8 @@ def list_daily_positions(
                 return None
             return (pnl / notional) * 100.0
 
-        qty_base = abs(net_qty) if net_qty else None
-        price_base = avg_price if avg_price else (avg_buy or avg_sell)
+        qty_base = abs(pnl_qty) if pnl_qty else None
+        price_base = pnl_price_base if pnl_price_base else (avg_buy or avg_sell)
 
         if item.pnl_pct is None:
             item.pnl_pct = _pct_from_notional(

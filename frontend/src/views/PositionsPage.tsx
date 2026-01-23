@@ -489,7 +489,13 @@ export function PositionsPage() {
       headerName: 'P&L',
       width: 110,
       type: 'number',
-      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
+      valueGetter: (_value, row) => {
+        const r = row as PositionSnapshot
+        const orderType = (r.order_type || '').toUpperCase()
+        if (orderType === 'BUY' || orderType === 'HOLD') return null
+        return r.pnl_value ?? null
+      },
+      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -498,7 +504,13 @@ export function PositionsPage() {
       headerName: 'P&L %',
       width: 110,
       type: 'number',
-      valueFormatter: (v) => (v != null ? `${Number(v).toFixed(2)}%` : ''),
+      valueGetter: (_value, row) => {
+        const r = row as PositionSnapshot
+        const orderType = (r.order_type || '').toUpperCase()
+        if (orderType === 'BUY' || orderType === 'HOLD') return null
+        return r.pnl_pct ?? null
+      },
+      valueFormatter: (v) => (v != null ? `${Number(v).toFixed(2)}%` : '-'),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
