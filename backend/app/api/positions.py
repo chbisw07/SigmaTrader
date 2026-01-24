@@ -650,18 +650,22 @@ def positions_analysis(
         # position snapshots. This works even when `analytics_trades` is empty
         # (common after restarts or when market order prices aren't stored).
         for s in snaps:
+            product = (s.product or "").upper()
             net_qty = float(s.qty or 0.0)
+            if product in {"CNC", "DELIVERY"} and net_qty < 0:
+                net_qty = 0.0
             if net_qty != 0:
                 continue
             buy_qty = _as_float(s.day_buy_qty) or _as_float(s.buy_qty)
             sell_qty = _as_float(s.day_sell_qty) or _as_float(s.sell_qty)
-            if buy_qty <= 0 and sell_qty <= 0:
-                continue
             pnl_val = (
                 float(s.realised)
                 if getattr(s, "realised", None) is not None
                 else float(s.pnl or 0.0)
             )
+            if buy_qty <= 0 and sell_qty <= 0:
+                if pnl_val == 0.0:
+                    continue
             if pnl_val == 0.0:
                 continue
             opened_at, closed_at = _day_window_ist(s.as_of_date)
@@ -764,10 +768,7 @@ def positions_analysis(
         q_open = db.query(PositionSnapshot).filter(
             PositionSnapshot.broker_name == broker,
             PositionSnapshot.as_of_date == latest_snap_date,
-            or_(
-                PositionSnapshot.qty != 0,
-                PositionSnapshot.holding_qty.is_not(None),
-            ),
+            PositionSnapshot.qty != 0,
         )
         if symbol:
             like = f"%{symbol.strip().upper()}%"
@@ -781,11 +782,11 @@ def positions_analysis(
             last_updated = s.captured_at
             if last_updated.tzinfo is None:
                 last_updated = last_updated.replace(tzinfo=UTC)
+            product = (s.product or "").upper()
             net_qty = float(s.qty or 0.0)
-            holding_qty = (
-                float(s.holding_qty or 0.0) if s.holding_qty is not None else 0.0
-            )
-            qty = net_qty if net_qty != 0 else holding_qty
+            if product in {"CNC", "DELIVERY"} and net_qty < 0:
+                net_qty = 0.0
+            qty = net_qty
             if qty == 0:
                 continue
             avg_price = float(s.avg_price or 0.0)
