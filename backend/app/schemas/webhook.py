@@ -82,6 +82,8 @@ class TradingViewWebhookPayload(BaseModel):
     platform: str = "TRADINGVIEW"
     payload_format: Optional[str] = None
     strategy_id: Optional[str] = None
+    product_hint: Optional[str] = None
+    order_id: Optional[str] = None
     strategy_name: str
     st_user_id: Optional[str] = None
     symbol: str
@@ -144,8 +146,18 @@ class TradingViewWebhookPayload(BaseModel):
                     "quantity": None,
                 }
 
+            if "order_id" not in values and signal.get("order_id") is not None:
+                values["order_id"] = signal.get("order_id")
+
             if "hints" not in values and hints:
                 values["hints"] = hints
+
+            if "product_hint" not in values:
+                ph = signal.get("product_hint")
+                if ph is None and isinstance(hints, dict):
+                    ph = hints.get("product_hint")
+                if ph is not None:
+                    values["product_hint"] = ph
 
         platform = values.get("platform")
         # Accept either a string or a list like ["fyers"]
@@ -162,6 +174,7 @@ class TradingViewWebhookPayload(BaseModel):
             flat_keys = {
                 "order_action",
                 "orderAction",
+                "order_id",
                 "quantity",
                 "order_contracts",
                 "price",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 from typing import Any, Dict
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.market_hours import is_market_open_now
 from app.db.session import get_db
-from app.models import Alert, Strategy, User
+from app.models import Alert, Order, Strategy, User
 from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
@@ -528,6 +529,45 @@ def tradingview_webhook(
         user=user,
     )
 
+    client_order_id: str | None = None
+    try:
+        raw_order_id = str(getattr(payload, "order_id", "") or "").strip()
+        if raw_order_id and "{{" not in raw_order_id:
+            client_order_id = f"TV:{raw_order_id}"
+        else:
+            # Fallback idempotency key: hash of normalized payload + bar time (if any).
+            raw_basis = normalized.raw_payload
+            bt = getattr(payload, "bar_time", None)
+            if bt is not None:
+                raw_basis = f"{raw_basis}|{bt.isoformat()}"
+            digest = hashlib.sha1(raw_basis.encode("utf-8")).hexdigest()[:20]
+            client_order_id = f"TVA:{digest}"
+        if client_order_id and len(client_order_id) > 128:
+            client_order_id = client_order_id[:128]
+    except Exception:
+        client_order_id = None
+
+    if client_order_id:
+        existing = db.query(Order).filter(Order.client_order_id == client_order_id).one_or_none()
+        if existing is not None:
+            record_system_event(
+                db,
+                level="INFO",
+                category="alert",
+                message="TradingView webhook deduped (client_order_id already exists)",
+                correlation_id=correlation_id,
+                details={
+                    "client_order_id": client_order_id,
+                    "existing_order_id": existing.id,
+                    "existing_alert_id": existing.alert_id,
+                },
+            )
+            return {
+                "status": "deduped",
+                "order_id": existing.id,
+                "alert_id": existing.alert_id,
+            }
+
     alert = Alert(
         user_id=normalized.user_id,
         # Keep legacy strategy linkage only when operating in legacy
@@ -562,6 +602,7 @@ def tradingview_webhook(
         broker_name=broker_name,
         execution_target=exec_target,
         user_id=alert.user_id,
+        client_order_id=client_order_id,
     )
 
     # For AUTO webhooks we immediately execute the order via the same execution

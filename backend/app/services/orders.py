@@ -16,6 +16,7 @@ def create_order_from_alert(
     broker_name: str | None = None,
     execution_target: str | None = None,
     user_id: int | None = None,
+    client_order_id: str | None = None,
 ) -> Order:
     """Create and persist an Order in WAITING state derived from an Alert.
 
@@ -31,6 +32,7 @@ def create_order_from_alert(
         alert_id=alert.id,
         strategy_id=alert.strategy_id,
         user_id=user_id,
+        client_order_id=(str(client_order_id).strip() if client_order_id else None),
         symbol=alert.symbol,
         exchange=alert.exchange,
         side=alert.action,
