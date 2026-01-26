@@ -44,6 +44,11 @@ import { WatchlistMembersGrid } from '../components/groups/WatchlistMembersGrid'
 import { useMarketQuotes } from '../hooks/useMarketQuotes'
 import { fetchHoldings, fetchDailyPositions, syncPositions } from '../services/positions'
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
+import {
+  fetchSymbolCategories,
+  upsertSymbolCategory,
+  type RiskCategory,
+} from '../services/riskEngine'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 import { downloadCsv } from '../utils/csv'
@@ -295,6 +300,13 @@ export function GroupsPage() {
     Record<string, { qty: number; avgPrice: number | null }>
   >({})
   const [allocationTotalsByKey, setAllocationTotalsByKey] = useState<Record<string, number>>({})
+  const [symbolCategoriesByKey, setSymbolCategoriesByKey] = useState<
+    Record<string, RiskCategory>
+  >({})
+  const [symbolCategoryBusyByKey, setSymbolCategoryBusyByKey] = useState<
+    Record<string, boolean>
+  >({})
+  const [symbolCategoryError, setSymbolCategoryError] = useState<string | null>(null)
 
   const [reconcileOpen, setReconcileOpen] = useState(false)
   const [reconcileBusy, setReconcileBusy] = useState(false)
@@ -609,6 +621,35 @@ export function GroupsPage() {
     }
   }, [compareBroker, holdingsReloadNonce, selectedGroup])
 
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        setSymbolCategoryError(null)
+        const rows = await fetchSymbolCategories(compareBroker)
+        if (!active) return
+        const next: Record<string, RiskCategory> = {}
+        for (const r of rows) {
+          const sym = (r.symbol || '').trim().toUpperCase()
+          const exch = (r.exchange || 'NSE').trim().toUpperCase()
+          if (!sym) continue
+          next[`${exch}:${sym}`] = r.risk_category
+        }
+        setSymbolCategoriesByKey(next)
+      } catch (err) {
+        if (!active) return
+        setSymbolCategoryError(
+          err instanceof Error ? err.message : 'Failed to load symbol risk categories',
+        )
+        setSymbolCategoriesByKey({})
+      }
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [compareBroker])
+
   const holdingsBySymbol = useMemo(() => {
     const agg: Record<string, { qty: number; costQty: number; cost: number }> = {}
     for (const [key, h] of Object.entries(holdingsByKey)) {
@@ -675,6 +716,37 @@ export function GroupsPage() {
       setHoldingsReloadNonce((n) => n + 1)
     }
   }, [compareBroker])
+
+  const handleSetSymbolCategory = useCallback(
+    async (exchangeRaw: string | null | undefined, symbolRaw: string | null | undefined, category: RiskCategory) => {
+      const sym = (symbolRaw || '').trim().toUpperCase()
+      const exch = (exchangeRaw || 'NSE').trim().toUpperCase()
+      if (!sym) return
+      const key = `${exch}:${sym}`
+      setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: true }))
+      try {
+        const saved = await upsertSymbolCategory({
+          broker_name: compareBroker,
+          symbol: sym,
+          exchange: exch,
+          risk_category: category,
+        })
+        setSymbolCategoriesByKey((prev) => ({
+          ...prev,
+          [`${(saved.exchange || 'NSE').trim().toUpperCase()}:${(saved.symbol || '').trim().toUpperCase()}`]:
+            saved.risk_category,
+        }))
+        setSymbolCategoryError(null)
+      } catch (err) {
+        setSymbolCategoryError(
+          err instanceof Error ? err.message : 'Failed to save symbol category',
+        )
+      } finally {
+        setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: false }))
+      }
+    },
+    [compareBroker],
+  )
 
   const groupsById = useMemo(() => {
     const m = new Map<number, Group>()
@@ -1358,6 +1430,41 @@ export function GroupsPage() {
       { field: 'symbol', headerName: 'Symbol', width: 160 },
       { field: 'exchange', headerName: 'Exchange', width: 120 },
       {
+        field: 'risk_category',
+        headerName: 'Category',
+        width: 140,
+        sortable: false,
+        filterable: false,
+        renderCell: (params: GridRenderCellParams<GroupMember>) => {
+          const row = params.row
+          const sym = (row.symbol || '').trim().toUpperCase()
+          const exch = (row.exchange || 'NSE').trim().toUpperCase()
+          const key = `${exch}:${sym}`
+          const value = sym ? symbolCategoriesByKey[key] ?? '' : ''
+          const busy = Boolean(sym && symbolCategoryBusyByKey[key])
+          return (
+            <TextField
+              select
+              size="small"
+              value={value}
+              disabled={!sym || busy}
+              onChange={(e) =>
+                void handleSetSymbolCategory(exch, sym, e.target.value as RiskCategory)
+              }
+              sx={{ minWidth: 120 }}
+            >
+              <MenuItem value="" disabled>
+                —
+              </MenuItem>
+              <MenuItem value="LC">LC</MenuItem>
+              <MenuItem value="MC">MC</MenuItem>
+              <MenuItem value="SC">SC</MenuItem>
+              <MenuItem value="ETF">ETF</MenuItem>
+            </TextField>
+          )
+        },
+      },
+      {
         field: 'target_weight',
         headerName: 'Target weight',
         width: 150,
@@ -1503,9 +1610,12 @@ export function GroupsPage() {
   }, [
     allocationTotalsByKey,
     getHoldingsSnapshot,
+    handleSetSymbolCategory,
     notesEnabled,
     openReconcileForMember,
     selectedGroup?.kind,
+    symbolCategoriesByKey,
+    symbolCategoryBusyByKey,
   ])
 
   return (
@@ -1685,6 +1795,11 @@ export function GroupsPage() {
                 {holdingsSnapshotError && (
                   <Typography variant="caption" color="error">
                     {holdingsSnapshotError}
+                  </Typography>
+                )}
+                {symbolCategoryError && (
+                  <Typography variant="caption" color="error">
+                    {symbolCategoryError}
                   </Typography>
                 )}
               </Stack>

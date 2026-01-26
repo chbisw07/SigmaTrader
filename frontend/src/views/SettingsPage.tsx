@@ -76,6 +76,7 @@ import {
   updateTradingViewWebhookConfig,
 } from '../services/webhookSettings'
 import { TradingViewAlertPayloadBuilder } from '../components/TradingViewAlertPayloadBuilder'
+import { RiskEngineV2Settings } from '../components/RiskEngineV2Settings'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
 import { formatInTimeZone } from '../utils/datetime'
@@ -1522,6 +1523,7 @@ export function SettingsPage() {
           </Box>
       ) : activeTab === 'risk' ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
+            <RiskEngineV2Settings />
             <Paper sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
