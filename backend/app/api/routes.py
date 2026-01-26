@@ -21,6 +21,7 @@ from . import (
     positions,
     rebalance,
     risk_policy,
+    risk_engine,
     risk_settings,
     screener_v3,
     signal_strategies,
@@ -227,6 +228,13 @@ router.include_router(
     prefix="/api/risk-policy",
     dependencies=[Depends(require_admin)],
     tags=["risk-policy"],
+)
+
+router.include_router(
+    risk_engine.router,
+    prefix="/api/risk-engine",
+    dependencies=[Depends(require_admin)],
+    tags=["risk-engine"],
 )
 
 router.include_router(
