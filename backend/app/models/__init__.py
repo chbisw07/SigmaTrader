@@ -26,6 +26,7 @@ from .risk_covariance_cache import RiskCovarianceCache
 from .screener_v3 import ScreenerRun
 from .signal_strategies import SignalStrategy, SignalStrategyVersion
 from .system_event import SystemEvent
+from .tradingview_payload_templates import TradingViewAlertPayloadTemplate
 from .trading import (
     Alert,
     AnalyticsTrade,
@@ -86,4 +87,5 @@ __all__ = [
     "ScreenerRun",
     "SignalStrategy",
     "SignalStrategyVersion",
+    "TradingViewAlertPayloadTemplate",
 ]

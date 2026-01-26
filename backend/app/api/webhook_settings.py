@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -8,6 +10,12 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.db.session import get_db
 from app.models import BrokerSecret
+from app.models import TradingViewAlertPayloadTemplate
+from app.schemas.tradingview_payload_templates import (
+    TradingViewAlertPayloadTemplateRead,
+    TradingViewAlertPayloadTemplateSummary,
+    TradingViewAlertPayloadTemplateUpsert,
+)
 from app.services.tradingview_webhook_config import (
     TradingViewWebhookConfig,
     get_tradingview_webhook_config,
@@ -141,6 +149,118 @@ def update_tradingview_webhook_config(
         pass
     set_tradingview_webhook_config(db, settings, merged, user_id=None)
     return TradingViewWebhookConfigRead(**merged.to_dict())
+
+
+@router.get(
+    "/tradingview-alert-payload-templates",
+    response_model=list[TradingViewAlertPayloadTemplateSummary],
+)
+def list_tradingview_alert_payload_templates(
+    db: Session = Depends(get_db),
+) -> list[TradingViewAlertPayloadTemplateSummary]:
+    rows = (
+        db.query(TradingViewAlertPayloadTemplate)
+        .order_by(TradingViewAlertPayloadTemplate.updated_at.desc())
+        .all()
+    )
+    return [
+        TradingViewAlertPayloadTemplateSummary(
+            id=row.id, name=row.name, updated_at=row.updated_at
+        )
+        for row in rows
+    ]
+
+
+@router.get(
+    "/tradingview-alert-payload-templates/{template_id}",
+    response_model=TradingViewAlertPayloadTemplateRead,
+)
+def read_tradingview_alert_payload_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+) -> TradingViewAlertPayloadTemplateRead:
+    row = db.get(TradingViewAlertPayloadTemplate, template_id)
+    if row is None:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Template not found.",
+        )
+    try:
+        parsed = json.loads(row.config_json or "{}")
+    except json.JSONDecodeError:
+        parsed = {}
+    return TradingViewAlertPayloadTemplateRead(
+        id=row.id,
+        name=row.name,
+        config=parsed,
+        updated_at=row.updated_at,
+    )
+
+
+@router.post(
+    "/tradingview-alert-payload-templates",
+    response_model=TradingViewAlertPayloadTemplateRead,
+)
+def upsert_tradingview_alert_payload_template(
+    payload: TradingViewAlertPayloadTemplateUpsert,
+    db: Session = Depends(get_db),
+) -> TradingViewAlertPayloadTemplateRead:
+    name = payload.name.strip()
+    if not name:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Template name is required.",
+        )
+    row = (
+        db.query(TradingViewAlertPayloadTemplate)
+        .filter(TradingViewAlertPayloadTemplate.name == name)
+        .one_or_none()
+    )
+    config_dump = (
+        payload.config.model_dump()  # type: ignore[attr-defined]
+        if hasattr(payload.config, "model_dump")
+        else payload.config.dict()  # type: ignore[attr-defined]
+    )
+    dumped = json.dumps(config_dump, ensure_ascii=False, default=str)
+    if row is None:
+        row = TradingViewAlertPayloadTemplate(name=name, config_json=dumped)
+        db.add(row)
+    else:
+        row.config_json = dumped
+    db.commit()
+    db.refresh(row)
+    parsed = payload.config
+    return TradingViewAlertPayloadTemplateRead(
+        id=row.id,
+        name=row.name,
+        config=parsed,
+        updated_at=row.updated_at,
+    )
+
+
+@router.delete(
+    "/tradingview-alert-payload-templates/{template_id}",
+    response_model=dict[str, str],
+)
+def delete_tradingview_alert_payload_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    row = db.get(TradingViewAlertPayloadTemplate, template_id)
+    if row is None:
+        from fastapi import HTTPException, status
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Template not found.",
+        )
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted"}
 
 
 __all__ = ["router"]

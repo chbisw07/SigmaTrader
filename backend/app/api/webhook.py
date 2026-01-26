@@ -73,6 +73,31 @@ def _redact_webhook_body_for_logging(raw: str) -> str:
     return redacted
 
 
+def _pick_default_webhook_user(
+    db: Session,
+    settings: Settings,
+) -> User | None:
+    # Prefer an explicitly configured admin username when it exists as a user.
+    if settings.admin_username:
+        user = (
+            db.query(User).filter(User.username == settings.admin_username).one_or_none()
+        )
+        if user is not None:
+            return user
+
+    # Common single-user deployments use "admin".
+    user = db.query(User).filter(User.username == "admin").one_or_none()
+    if user is not None:
+        return user
+
+    # Otherwise prefer any ADMIN user, then fall back to the first user.
+    user = db.query(User).filter(User.role == "ADMIN").order_by(User.id.asc()).first()
+    if user is not None:
+        return user
+
+    return db.query(User).order_by(User.id.asc()).first()
+
+
 @router.get(
     "",
     summary="Webhook root (compat)",
@@ -185,7 +210,12 @@ def tradingview_webhook(
         if isinstance(payload, TradingViewWebhookPayload):
             provided_secret = payload.secret
         else:
-            provided_secret = str(payload.get("secret") or "")
+            meta = payload.get("meta")
+            provided_secret = str(
+                payload.get("secret")
+                or ((meta or {}).get("secret") if isinstance(meta, dict) else None)
+                or ""
+            )
     provided_secret = (provided_secret or "").strip()
 
     if expected_secret and provided_secret != expected_secret:
@@ -202,9 +232,19 @@ def tradingview_webhook(
                     else payload.get("platform")
                 ),
                 "strategy": (
-                    payload.strategy_name
+                    (payload.strategy_id or payload.strategy_name)
                     if isinstance(payload, TradingViewWebhookPayload)
-                    else payload.get("strategy_name")
+                    else (
+                        ((payload.get("signal") or {}).get("strategy_id"))
+                        if isinstance(payload.get("signal"), dict)
+                        else None
+                    )
+                    or (
+                        ((payload.get("signal") or {}).get("strategy_name"))
+                        if isinstance(payload.get("signal"), dict)
+                        else None
+                    )
+                    or payload.get("strategy_name")
                 ),
                 "st_user_id": (
                     payload.st_user_id
@@ -217,6 +257,11 @@ def tradingview_webhook(
                         bool(getattr(payload, "secret", None))
                         if isinstance(payload, TradingViewWebhookPayload)
                         else bool(payload.get("secret"))
+                        or bool(
+                            ((payload.get("meta") or {}).get("secret"))
+                            if isinstance(payload.get("meta"), dict)
+                            else None
+                        )
                     ),
                 },
             },
@@ -227,9 +272,19 @@ def tradingview_webhook(
                 "extra": {
                     "correlation_id": correlation_id,
                     "strategy": (
-                        payload.strategy_name
+                        (payload.strategy_id or payload.strategy_name)
                         if isinstance(payload, TradingViewWebhookPayload)
-                        else payload.get("strategy_name")
+                        else (
+                            ((payload.get("signal") or {}).get("strategy_id"))
+                            if isinstance(payload.get("signal"), dict)
+                            else None
+                        )
+                        or (
+                            ((payload.get("signal") or {}).get("strategy_name"))
+                            if isinstance(payload.get("signal"), dict)
+                            else None
+                        )
+                        or payload.get("strategy_name")
                     ),
                     "platform": (
                         payload.platform
@@ -263,15 +318,36 @@ def tradingview_webhook(
                 "content_type": request.headers.get("content-type"),
                 "payload_keys": sorted(list(payload_with_secret.keys())),
             }
+            error_detail: str | None = None
             if isinstance(exc, ValidationError):
+                errors = exc.errors()
                 details["validation_errors"] = [
                     {
                         "loc": list(err.get("loc") or []),
                         "msg": err.get("msg"),
                         "type": err.get("type"),
                     }
-                    for err in exc.errors()
+                    for err in errors
                 ]
+
+                signal = payload_with_secret.get("signal")
+                side = signal.get("side") if isinstance(signal, dict) else None
+                if any(
+                    list(err.get("loc") or []) == ["trade_details", "order_action"]
+                    and "BUY or SELL" in str(err.get("msg") or "")
+                    for err in errors
+                ):
+                    if isinstance(side, str) and side.strip().startswith("{{"):
+                        error_detail = (
+                            "Invalid TradingView payload: signal.side must resolve to BUY or SELL. "
+                            "Your alert is sending a placeholder token (e.g. {{strategy.order.action}}) "
+                            "that is not being expanded by TradingView. Use a Strategy 'Order fills' alert "
+                            "or set signal.side to BUY/SELL."
+                        )
+                    else:
+                        error_detail = (
+                            "Invalid TradingView payload: signal.side must be BUY or SELL."
+                        )
             record_system_event(
                 db,
                 level="WARNING",
@@ -282,10 +358,7 @@ def tradingview_webhook(
             )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Invalid TradingView payload. Missing required fields "
-                    "or invalid schema."
-                ),
+                detail=(error_detail or "Invalid TradingView payload. Missing required fields or invalid schema."),
             ) from exc
 
     # For now we only process alerts targeting Zerodha / generic TradingView.
@@ -296,24 +369,62 @@ def tradingview_webhook(
             extra={
                 "extra": {
                     "correlation_id": correlation_id,
-                    "strategy": payload.strategy_name,
+                    "strategy": (payload.strategy_id or payload.strategy_name),
                     "platform": payload.platform,
                 }
             },
         )
         return {"status": "ignored", "platform": payload.platform}
 
+    if payload.payload_format:
+        logger.info(
+            "Received TradingView webhook payload",
+            extra={
+                "extra": {
+                    "correlation_id": correlation_id,
+                    "payload_format": payload.payload_format,
+                    "strategy_id": payload.strategy_id,
+                    "strategy_name": payload.strategy_name,
+                }
+            },
+        )
+
     # Route alert to a specific SigmaTrader user. For multi-user safety we
     # require TradingView payloads to carry an explicit st_user_id that
     # matches an existing username; otherwise we ignore the alert.
     st_user = (payload.st_user_id or "").strip()
-    if not st_user:
+
+    user: User | None = None
+    if st_user:
+        user = db.query(User).filter(User.username == st_user).one_or_none()
+    elif payload.payload_format == "TRADINGVIEW_META_SIGNAL_HINTS_V1":
+        user = _pick_default_webhook_user(db, settings)
+        if user is not None:
+            st_user = user.username
+            try:
+                payload.st_user_id = st_user
+            except Exception:
+                pass
+            record_system_event(
+                db,
+                level="INFO",
+                category="alert",
+                message="Alert routed to default user (missing st_user_id)",
+                correlation_id=correlation_id,
+                details={
+                    "strategy_id": payload.strategy_id,
+                    "strategy_name": payload.strategy_name,
+                    "platform": payload.platform,
+                    "default_user": st_user,
+                },
+            )
+    else:
         logger.info(
             "Ignoring webhook without st_user_id",
             extra={
                 "extra": {
                     "correlation_id": correlation_id,
-                    "strategy": payload.strategy_name,
+                    "strategy": (payload.strategy_id or payload.strategy_name),
                     "platform": payload.platform,
                 }
             },
@@ -325,20 +436,19 @@ def tradingview_webhook(
             message="Alert ignored: missing st_user_id",
             correlation_id=correlation_id,
             details={
-                "strategy": payload.strategy_name,
+                "strategy": (payload.strategy_id or payload.strategy_name),
                 "platform": payload.platform,
             },
         )
         return {"status": "ignored", "reason": "missing_st_user_id"}
 
-    user: User | None = db.query(User).filter(User.username == st_user).one_or_none()
     if user is None:
         logger.warning(
             "Ignoring webhook for unknown st_user_id",
             extra={
                 "extra": {
                     "correlation_id": correlation_id,
-                    "strategy": payload.strategy_name,
+                    "strategy": (payload.strategy_id or payload.strategy_name),
                     "platform": payload.platform,
                     "st_user_id": st_user,
                 }
@@ -351,7 +461,7 @@ def tradingview_webhook(
             message="Alert ignored: unknown st_user_id",
             correlation_id=correlation_id,
             details={
-                "strategy": payload.strategy_name,
+                "strategy": (payload.strategy_id or payload.strategy_name),
                 "platform": payload.platform,
                 "st_user_id": st_user,
             },
@@ -370,8 +480,9 @@ def tradingview_webhook(
         settings,
         user_id=user.id,
     )
+    strategy_key = (payload.strategy_id or payload.strategy_name or "").strip()
     strategy: Strategy | None = (
-        db.query(Strategy).filter(Strategy.name == payload.strategy_name).one_or_none()
+        db.query(Strategy).filter(Strategy.name == strategy_key).one_or_none()
     )
     use_strategy_mode = (
         cfg_source == "default" and strategy is not None and strategy.enabled
@@ -512,7 +623,7 @@ def tradingview_webhook(
                     "AUTO execution failed for alert id=%s order id=%s strategy=%s",
                     alert.id,
                     order.id,
-                    payload.strategy_name,
+                    strategy_key,
                 )
                 raise
 
@@ -557,7 +668,7 @@ def tradingview_webhook(
                 "AUTO execution failed for alert id=%s order id=%s strategy=%s",
                 alert.id,
                 order.id,
-                payload.strategy_name,
+                strategy_key,
             )
             raise
 
@@ -570,7 +681,7 @@ def tradingview_webhook(
                 "order_id": order.id,
                 "symbol": alert.symbol,
                 "action": alert.action,
-                "strategy": payload.strategy_name,
+                "strategy": strategy_key,
                 "mode": mode,
             }
         },
@@ -588,7 +699,7 @@ def tradingview_webhook(
             "order_id": order.id,
             "symbol": alert.symbol,
             "action": alert.action,
-            "strategy": payload.strategy_name,
+            "strategy": strategy_key,
             "mode": mode,
         },
     )

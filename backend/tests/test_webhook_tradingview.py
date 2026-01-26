@@ -498,3 +498,151 @@ def test_webhook_auto_strategy_rejected_when_broker_not_connected() -> None:
         assert order.mode == "AUTO"
         assert order.status == "FAILED"
         assert "Zerodha is not connected for AUTO mode." in (order.error_message or "")
+
+
+def test_webhook_accepts_payload_builder_v1_schema_with_body_secret() -> None:
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"TV_BUILDER_V1_{uuid4().hex}",
+            "strategy_name": "Builder v1 test strategy",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "BUY",
+            "price": 320.29,
+            "timeframe": "5",
+            "timestamp": "2026-01-26T00:00:00Z",
+            "order_id": "OID-1",
+        },
+        "hints": {"note": "hello", "tv_quantity": 1},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        user = session.query(User).filter(User.username == "webhook-user").one()
+        alert = session.get(Alert, data["alert_id"])
+        assert alert is not None
+        assert alert.user_id == user.id
+        assert alert.symbol == "INFY"
+        assert alert.exchange == "NSE"
+        assert alert.interval == "5"
+        assert alert.action == "BUY"
+        assert alert.qty == 0
+        assert alert.price == 320.29
+        assert '"hints"' in alert.raw_payload
+
+        order = session.get(Order, data["order_id"])
+        assert order is not None
+        assert order.user_id == user.id
+        assert order.price == 320.3
+        assert order.qty == 0
+
+
+def test_webhook_accepts_payload_builder_v1_schema_with_header_secret_only() -> None:
+    payload = {
+        "meta": {"platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"TV_BUILDER_V1_HDR_{uuid4().hex}",
+            "strategy_name": "Builder v1 header test",
+            "symbol": "NSE:INFY",
+            "exchange": "NSE",
+            "side": "SELL",
+            "price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-01-26T00:00:00Z",
+            "order_id": "OID-2",
+        },
+        "hints": {},
+    }
+
+    response = client.post(
+        "/webhook/tradingview",
+        json=payload,
+        headers={"X-SIGMATRADER-SECRET": "test-secret"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+
+def test_webhook_rejects_payload_builder_v1_schema_with_invalid_secret() -> None:
+    payload = {
+        "meta": {"secret": "wrong-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"TV_BUILDER_V1_BAD_{uuid4().hex}",
+            "strategy_name": "Builder v1 bad secret test",
+            "symbol": "NSE:INFY",
+            "exchange": "NSE",
+            "side": "BUY",
+            "price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-01-26T00:00:00Z",
+            "order_id": "OID-3",
+        },
+        "hints": {},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 401
+
+
+def test_tradingview_payload_templates_roundtrip_via_settings_api() -> None:
+    # Create / upsert
+    payload = {
+        "name": "TrendSwing_CNC",
+        "config": {
+            "version": "1.0",
+            "signal": {
+                "strategy_id": "DUAL_MA_VOL_REENTRY_V1",
+                "strategy_name": "Dual MA",
+                "symbol": "{{ticker}}",
+                "exchange": "{{exchange}}",
+                "side": "{{strategy.order.action}}",
+                "price": "{{close}}",
+                "timeframe": "{{interval}}",
+                "timestamp": "{{timenow}}",
+                "order_id": "{{strategy.order.id}}",
+            },
+            "signal_enabled": {
+                "strategy_id": True,
+                "strategy_name": True,
+                "symbol": True,
+                "exchange": True,
+                "side": True,
+                "price": True,
+                "timeframe": True,
+                "timestamp": True,
+                "order_id": True,
+            },
+            "hints": [
+                {"key": "note", "type": "string", "value": "Breakout setup"},
+                {"key": "tv_quantity", "type": "number", "value": "{{strategy.order.contracts}}"},
+            ],
+        },
+    }
+    res = client.post("/api/webhook-settings/tradingview-alert-payload-templates", json=payload)
+    assert res.status_code == 200
+    created = res.json()
+    assert created["name"] == "TrendSwing_CNC"
+    tpl_id = created["id"]
+
+    # List
+    res = client.get("/api/webhook-settings/tradingview-alert-payload-templates")
+    assert res.status_code == 200
+    items = res.json()
+    assert any(x["id"] == tpl_id for x in items)
+
+    # Read
+    res = client.get(f"/api/webhook-settings/tradingview-alert-payload-templates/{tpl_id}")
+    assert res.status_code == 200
+    loaded = res.json()
+    assert loaded["id"] == tpl_id
+    assert loaded["config"]["version"] == "1.0"
+
+    # Delete
+    res = client.delete(f"/api/webhook-settings/tradingview-alert-payload-templates/{tpl_id}")
+    assert res.status_code == 200

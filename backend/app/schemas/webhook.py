@@ -80,6 +80,8 @@ class TradingViewWebhookPayload(BaseModel):
 
     secret: str
     platform: str = "TRADINGVIEW"
+    payload_format: Optional[str] = None
+    strategy_id: Optional[str] = None
     strategy_name: str
     st_user_id: Optional[str] = None
     symbol: str
@@ -87,12 +89,63 @@ class TradingViewWebhookPayload(BaseModel):
     interval: Optional[str] = None
     trade_details: TradeDetails
     bar_time: Optional[datetime] = None
+    hints: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
     def _normalize_platform(cls, values: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(values, dict):
             return values
+
+        # v1 canonical payload schema: { meta, signal, hints }
+        if "meta" in values and "signal" in values:
+            meta = values.get("meta")
+            signal = values.get("signal")
+            hints = values.get("hints")
+            if not isinstance(meta, dict):
+                meta = {}
+            if not isinstance(signal, dict):
+                signal = {}
+            if not isinstance(hints, dict):
+                hints = {}
+
+            values.setdefault("payload_format", "TRADINGVIEW_META_SIGNAL_HINTS_V1")
+
+            # Map meta
+            if "secret" not in values and meta.get("secret") is not None:
+                values["secret"] = meta.get("secret")
+            if "platform" not in values and meta.get("platform") is not None:
+                values["platform"] = meta.get("platform")
+
+            # Map signal
+            if "strategy_id" not in values and signal.get("strategy_id") is not None:
+                values["strategy_id"] = signal.get("strategy_id")
+
+            if "strategy_name" not in values:
+                values["strategy_name"] = (
+                    signal.get("strategy_name")
+                    or signal.get("strategy_id")
+                    or values.get("strategy_name")
+                )
+
+            if "symbol" not in values and signal.get("symbol") is not None:
+                values["symbol"] = signal.get("symbol")
+            if "exchange" not in values and signal.get("exchange") is not None:
+                values["exchange"] = signal.get("exchange")
+            if "interval" not in values and signal.get("timeframe") is not None:
+                values["interval"] = signal.get("timeframe")
+
+            if "trade_details" not in values:
+                values["trade_details"] = {
+                    "order_action": signal.get("side"),
+                    "price": signal.get("price"),
+                    # Quantity is intentionally omitted in the v1 schema; SigmaTrader
+                    # treats any quantity hints as informational only.
+                    "quantity": None,
+                }
+
+            if "hints" not in values and hints:
+                values["hints"] = hints
 
         platform = values.get("platform")
         # Accept either a string or a list like ["fyers"]

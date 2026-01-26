@@ -75,6 +75,7 @@ import {
   updateTradingViewWebhookSecret,
   updateTradingViewWebhookConfig,
 } from '../services/webhookSettings'
+import { TradingViewAlertPayloadBuilder } from '../components/TradingViewAlertPayloadBuilder'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
 import { formatInTimeZone } from '../utils/datetime'
@@ -1516,6 +1517,8 @@ export function SettingsPage() {
                 </Typography>
               )}
             </Paper>
+
+            <TradingViewAlertPayloadBuilder webhookSecret={tvWebhookSecretDraft} />
           </Box>
       ) : activeTab === 'risk' ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>

@@ -85,7 +85,7 @@ def normalize_tradingview_payload_for_zerodha(
     return NormalizedAlert(
         user_id=user.id,
         broker_name="zerodha",
-        strategy_name=payload.strategy_name,
+        strategy_name=(payload.strategy_id or payload.strategy_name),
         symbol_display=symbol_display,
         broker_symbol=broker_symbol,
         broker_exchange=broker_exchange,
