@@ -113,6 +113,36 @@ def test_webhook_persists_alert_with_valid_secret() -> None:
         assert order.mode == "MANUAL"
 
 
+def test_webhook_accepts_meta_signal_hints_payload_without_st_user_id() -> None:
+    unique_strategy = f"webhook-test-strategy-v1-{uuid4().hex}"
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": unique_strategy,
+            "strategy_name": unique_strategy,
+            "symbol": "{{ticker}}",
+            "exchange": "NSE",
+            "side": "BUY",
+            "price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-01-01T10:15:00Z",
+            "order_id": "tv-order-abc",
+        },
+        "hints": {"note": "test"},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        default_user = session.query(User).filter(User.username == "webhook-user").one()
+        alert = session.get(Alert, int(data["alert_id"]))
+        assert alert is not None
+        assert alert.user_id == default_user.id
+
+
 def test_webhook_root_accepts_tradingview_payload() -> None:
     unique_strategy = f"webhook-test-strategy-root-{uuid4().hex}"
     payload = {
