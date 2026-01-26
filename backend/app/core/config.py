@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     managed_risk_enabled: bool = True
     managed_risk_poll_interval_sec: float = 2.0
     managed_risk_max_per_cycle: int = 200
+    # Product-specific risk engine (v2): centralized enforcement for CNC/MIS
+    # profiles + drawdown thresholds.
+    risk_engine_v2_enabled: bool = False
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.
@@ -96,6 +99,19 @@ def get_settings() -> Settings:
     """Return cached application settings instance."""
 
     settings = Settings()
+
+    # Lightweight env override for optional settings backends.
+    # When pydantic-settings (or BaseSettings) is unavailable, Settings falls
+    # back to BaseModel and does not automatically read env vars. Keep critical
+    # feature flags usable in that mode.
+    raw_v2 = os.getenv("ST_RISK_ENGINE_V2_ENABLED")
+    if raw_v2 is not None:
+        settings.risk_engine_v2_enabled = str(raw_v2).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     # During pytest runs we want admin-protected APIs to remain easily
     # accessible without configuring HTTP Basic credentials and we do not

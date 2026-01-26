@@ -4,7 +4,7 @@ import inspect
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, List, Optional
+from typing import Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session, joinedload
@@ -614,6 +614,12 @@ def execute_order_internal(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     now_utc = _now_utc()
+    risk_engine_v2_on = bool(getattr(settings, "risk_engine_v2_enabled", False))
+    risk_v2_profile_id: int | None = None
+    risk_v2_drawdown_state: str | None = None
+    risk_v2_category: str | None = None
+    risk_v2_product_hint: str | None = None
+    risk_v2_baseline_equity: float | None = None
     execution_policy_key = None
     execution_policy_interval_min: int | None = None
     execution_policy_apply = False
@@ -627,11 +633,12 @@ def execute_order_internal(
             detail="Only non-simulated WAITING orders can be executed.",
         )
 
-    if order.qty is None or order.qty <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Order has invalid quantity.",
-        )
+    if not risk_engine_v2_on:
+        if order.qty is None or order.qty <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Order has invalid quantity.",
+            )
 
     # Trade-frequency/loss-control execution policy:
     # - Enforced only when risk policy enforcement is enabled.
@@ -647,6 +654,110 @@ def execute_order_internal(
     # webhook AUTO, and other internal flows). The policy is configured in
     # Settings and uses MANUAL equity as the baseline.
     policy, _src = get_risk_policy(db, settings)
+    if risk_engine_v2_on:
+        try:
+            from app.services.risk_engine_v2 import evaluate_order_risk_v2, record_decision_log
+
+            user_obj = db.get(User, order.user_id) if order.user_id is not None else None
+
+            product_hint: str | None = None
+            try:
+                if order.alert is not None and getattr(order.alert, "raw_payload", None):
+                    raw = str(order.alert.raw_payload)
+                    if raw.strip().startswith("{"):
+                        data = json.loads(raw)
+                        if isinstance(data, dict):
+                            trade_details = data.get("trade_details")
+                            if not isinstance(trade_details, dict):
+                                trade_details = {}
+                            signal = data.get("signal")
+                            if not isinstance(signal, dict):
+                                signal = {}
+                            hints = data.get("hints")
+                            if not isinstance(hints, dict):
+                                hints = {}
+                            product_hint = (
+                                data.get("product_hint")
+                                or signal.get("product_hint")
+                                or hints.get("product_hint")
+                                or trade_details.get("product")
+                            )
+            except Exception:
+                product_hint = None
+
+            baseline_equity = float(
+                getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0
+            )
+            decision = evaluate_order_risk_v2(
+                db,
+                user=user_obj,
+                order=order,
+                baseline_equity=baseline_equity,
+                now_utc=now_utc,
+                product_hint=product_hint,
+            )
+            risk_v2_profile_id = decision.risk_profile_id
+            risk_v2_drawdown_state = decision.drawdown_state
+            risk_v2_category = decision.risk_category
+            risk_v2_product_hint = product_hint
+            risk_v2_baseline_equity = baseline_equity
+            record_decision_log(
+                db,
+                user_id=(user_obj.id if user_obj is not None else order.user_id),
+                alert=order.alert,
+                order=order,
+                decision=decision,
+                product_hint=product_hint,
+            )
+
+            if decision.blocked:
+                reason = "; ".join([r for r in decision.reasons if r]) or "Blocked by risk engine v2."
+                order.status = "REJECTED_RISK"
+                order.error_message = reason
+                db.add(order)
+                db.commit()
+                db.refresh(order)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Order rejected by risk engine v2: {reason}",
+                )
+
+            changed = False
+            if decision.resolved_product and decision.resolved_product != order.product:
+                order.product = decision.resolved_product
+                changed = True
+            if decision.final_order_type and decision.final_order_type != order.order_type:
+                order.order_type = decision.final_order_type
+                changed = True
+            if decision.final_price and (order.price is None or float(order.price or 0.0) <= 0):
+                order.price = float(decision.final_price)
+                changed = True
+            if decision.final_qty and (order.qty is None or float(order.qty or 0.0) <= 0):
+                order.qty = float(decision.final_qty)
+                changed = True
+            if changed:
+                db.add(order)
+                db.commit()
+                db.refresh(order)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Fail closed: if v2 is enabled but errors, block execution.
+            order.status = "REJECTED_RISK"
+            order.error_message = f"Risk engine v2 error: {exc}"
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Order rejected by risk engine v2 (internal error).",
+            )
+
+    if order.qty is None or order.qty <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Order has invalid quantity.",
+        )
     if getattr(policy, "enabled", False):
         risk = evaluate_execution_risk_policy(db, settings, order=order, policy=policy)
     else:
@@ -1166,6 +1277,204 @@ def execute_order_internal(
             },
         )
         return order
+
+    # Risk engine v2 broker-aware guards (MIS-only, entries only).
+    if risk_engine_v2_on and risk_v2_profile_id is not None:
+        from app.models import RiskProfile
+
+        def _reject_v2(detail: str) -> None:
+            order.status = "REJECTED_RISK"
+            order.error_message = detail
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            record_system_event(
+                db,
+                level="WARNING",
+                category="risk",
+                message="Order rejected by risk engine v2 (broker-aware guards)",
+                correlation_id=correlation_id,
+                details={"order_id": order.id, "reason": detail},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Order rejected by risk engine v2: {detail}",
+            )
+
+        profile_v2 = db.get(RiskProfile, int(risk_v2_profile_id))
+        if profile_v2 is None:
+            _reject_v2("RiskProfile is missing.")
+
+        is_exit_reduce = bool(getattr(order, "is_exit", False))
+        if not is_exit_reduce:
+            try:
+                pos = (
+                    db.query(Position)
+                    .filter(
+                        Position.broker_name == broker_name,
+                        Position.symbol == tradingsymbol.strip().upper(),
+                        Position.exchange == exchange_u,
+                        Position.product == str(getattr(order, "product", "MIS")).strip().upper(),
+                    )
+                    .one_or_none()
+                )
+                pos_qty = float(getattr(pos, "qty", 0.0) or 0.0) if pos is not None else 0.0
+                side = str(getattr(order, "side", "") or "").strip().upper()
+                qty = float(getattr(order, "qty", 0.0) or 0.0)
+                delta = qty if side == "BUY" else -qty if side == "SELL" else 0.0
+                if abs(pos_qty + delta) < abs(pos_qty):
+                    is_exit_reduce = True
+            except Exception:
+                is_exit_reduce = bool(getattr(order, "is_exit", False))
+
+        if not is_exit_reduce and str(getattr(order, "product", "MIS")).strip().upper() == "MIS":
+            # Fetch last price and previous close (when available).
+            last_price: float | None = None
+            prev_close: float | None = None
+            try:
+                if broker_name == "angelone":
+                    if angelone_token is None:
+                        raise RuntimeError("Missing AngelOne symbol token.")
+                    last_price = float(
+                        client.get_ltp(  # type: ignore[call-arg]
+                            exchange=exchange_u,
+                            tradingsymbol=broker_tradingsymbol,
+                            symboltoken=angelone_token,
+                        )
+                    )
+                else:
+                    quote_bulk = getattr(client, "get_quote_bulk", None)
+                    if callable(quote_bulk):
+                        out = quote_bulk([(exchange, tradingsymbol)])
+                        q = out.get((exchange, tradingsymbol)) or {}
+                        last_price = float(q.get("last_price") or 0.0)
+                        pc = q.get("prev_close")
+                        prev_close = float(pc) if pc is not None else None
+                    else:
+                        last_price = float(
+                            client.get_ltp(exchange=exchange, tradingsymbol=tradingsymbol)  # type: ignore[call-arg]
+                        )
+            except Exception as exc:
+                _reject_v2(f"Failed to fetch LTP for risk checks: {exc}")
+
+            if last_price is None or last_price <= 0:
+                _reject_v2("Failed to fetch LTP for risk checks.")
+
+            gap_guard_pct = float(getattr(profile_v2, "gap_guard_pct", 0.0) or 0.0)
+            if gap_guard_pct > 0:
+                if prev_close is None or prev_close <= 0:
+                    _reject_v2("Gap guard enabled but previous close is unavailable.")
+                gap_pct = abs(last_price - float(prev_close)) / float(prev_close) * 100.0
+                if gap_pct > gap_guard_pct:
+                    _reject_v2(
+                        f"Gap guard triggered ({gap_pct:.2f}% > {gap_guard_pct:.2f}%)."
+                    )
+
+            slippage_guard_bps = float(getattr(profile_v2, "slippage_guard_bps", 0.0) or 0.0)
+            if slippage_guard_bps > 0:
+                ref = None
+                if getattr(order, "trigger_price", None) is not None and float(order.trigger_price or 0.0) > 0:
+                    ref = float(order.trigger_price)
+                elif getattr(order, "price", None) is not None and float(order.price or 0.0) > 0:
+                    ref = float(order.price)
+                if not ref or ref <= 0:
+                    _reject_v2("Slippage guard enabled but trigger/price is missing.")
+                dev_bps = abs(last_price - ref) / ref * 10000.0
+                if dev_bps > slippage_guard_bps:
+                    _reject_v2(
+                        f"Slippage guard triggered ({dev_bps:.1f} bps > {slippage_guard_bps:.1f} bps)."
+                    )
+
+            leverage_mode = str(getattr(profile_v2, "leverage_mode", "") or "AUTO").strip().upper()
+            if leverage_mode not in {"AUTO", "STATIC", "OFF"}:
+                _reject_v2(f"Invalid leverage_mode: {leverage_mode}.")
+            if leverage_mode != "OFF":
+                max_lev = float(getattr(profile_v2, "max_effective_leverage", 0.0) or 0.0)
+                max_margin_pct = float(getattr(profile_v2, "max_margin_used_pct", 0.0) or 0.0)
+                baseline_equity = float(risk_v2_baseline_equity or 0.0)
+                if max_lev <= 0 or max_margin_pct <= 0 or baseline_equity <= 0:
+                    _reject_v2(
+                        "MIS leverage settings missing/invalid (set leverage_mode, "
+                        "max_effective_leverage, max_margin_used_pct, and manual equity)."
+                    )
+
+                cap_trade = float(getattr(profile_v2, "capital_per_trade", 0.0) or 0.0)
+                if str(risk_v2_drawdown_state or "").strip().upper() == "CAUTION":
+                    cap_trade *= 0.7
+                cap_portfolio = baseline_equity * max_margin_pct / 100.0
+
+                order_type = str(getattr(order, "order_type", "MARKET") or "MARKET").strip().upper()
+                order_price = float(getattr(order, "price", 0.0) or 0.0)
+                notional_px = order_price if order_type != "MARKET" and order_price > 0 else float(last_price)
+                qty_f = float(getattr(order, "qty", 0.0) or 0.0)
+                if qty_f <= 0:
+                    _reject_v2("Invalid quantity for MIS margin checks.")
+                notional = qty_f * notional_px
+
+                required_margin = None
+                if leverage_mode == "STATIC":
+                    required_margin = notional
+                else:
+                    if broker_name != "zerodha" or not callable(getattr(client, "order_margins", None)):
+                        _reject_v2(
+                            "AUTO leverage mode requires Zerodha order_margins support."
+                        )
+                    preview_order: dict[str, Any] = {
+                        "exchange": exchange,
+                        "tradingsymbol": tradingsymbol,
+                        "transaction_type": str(order.side).upper(),
+                        "quantity": int(qty_f),
+                        "product": str(order.product).upper(),
+                        "order_type": order_type,
+                        "variety": "regular",
+                    }
+                    if order_price > 0:
+                        preview_order["price"] = order_price
+                    if getattr(order, "trigger_price", None) is not None and float(order.trigger_price or 0.0) > 0:
+                        preview_order["trigger_price"] = float(order.trigger_price)
+                    preview_list = client.order_margins([preview_order])  # type: ignore[call-arg]
+                    if not preview_list:
+                        _reject_v2("Broker did not return margin preview.")
+                    entry = preview_list[0]
+                    required_raw = entry.get("total") or entry.get("margin") or 0.0
+                    required_margin = float(required_raw or 0.0)
+
+                if required_margin is None or required_margin <= 0:
+                    _reject_v2("Invalid margin requirement from broker.")
+
+                eff_lev = notional / required_margin if required_margin > 0 else 0.0
+                if eff_lev > max_lev:
+                    _reject_v2(
+                        f"Effective leverage exceeds cap ({eff_lev:.2f} > {max_lev:.2f})."
+                    )
+
+                limit = min(cap_trade, cap_portfolio)
+                if limit > 0 and required_margin > limit and qty_f > 0:
+                    factor = limit / required_margin
+                    old_qty = float(qty_f)
+                    new_qty = int(old_qty * factor)
+                    if new_qty <= 0:
+                        _reject_v2(
+                            "MIS margin caps reduce quantity to 0; increase capital_per_trade or limits."
+                        )
+                    order.qty = float(new_qty)
+                    db.add(order)
+                    db.commit()
+                    db.refresh(order)
+                    record_system_event(
+                        db,
+                        level="INFO",
+                        category="risk",
+                        message="MIS margin caps clamped quantity",
+                        correlation_id=correlation_id,
+                        details={
+                            "order_id": order.id,
+                            "old_qty": old_qty,
+                            "new_qty": float(new_qty),
+                            "cap_trade": cap_trade,
+                            "cap_portfolio": cap_portfolio,
+                        },
+                    )
 
     # Handle broker-native GTT orders by creating a Zerodha GTT instead of a
     # regular/AMO order. We currently support single-leg LIMIT GTTs
