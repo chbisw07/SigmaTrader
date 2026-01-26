@@ -22,6 +22,13 @@ from .rebalance import (
     RebalanceRunOrder,
     RebalanceSchedule,
 )
+from .risk_engine import (
+    AlertDecisionLog,
+    DrawdownThreshold,
+    EquitySnapshot,
+    RiskProfile,
+    SymbolRiskCategory,
+)
 from .risk_covariance_cache import RiskCovarianceCache
 from .screener_v3 import ScreenerRun
 from .signal_strategies import SignalStrategy, SignalStrategyVersion
@@ -88,4 +95,9 @@ __all__ = [
     "SignalStrategy",
     "SignalStrategyVersion",
     "TradingViewAlertPayloadTemplate",
+    "RiskProfile",
+    "SymbolRiskCategory",
+    "DrawdownThreshold",
+    "EquitySnapshot",
+    "AlertDecisionLog",
 ]
