@@ -316,6 +316,92 @@ export const riskSettingsHelp: HelpContext = {
   ],
   sections: [
     {
+      id: 'risk-v2-profiles',
+      title: 'Product-specific risk profiles (CNC/MIS)',
+      qas: [
+        {
+          id: 'risk-v2-profiles-what',
+          question: 'What are product-specific risk profiles?',
+          answer: [
+            {
+              type: 'p',
+              text: 'These profiles define execution-layer limits separately for CNC (delivery) and MIS (intraday/margin). SigmaTrader resolves the product from the selected profile and enforces the profile at execute time. TradingView alerts are treated as signals, not orders.',
+            },
+            {
+              type: 'callout',
+              tone: 'warning',
+              text: 'Fail-closed: if required config is missing (no enabled profile, missing drawdown thresholds, missing symbol category), SigmaTrader blocks new entries and records the reason in the Decision Log / System Events.',
+            },
+          ],
+        },
+        {
+          id: 'risk-v2-profiles-setup',
+          question: 'How should I set it up?',
+          answer: [
+            {
+              type: 'bullets',
+              items: [
+                'Create at least one enabled profile for CNC and/or MIS.',
+                'Mark exactly one profile per product as Default (Default CNC / Default MIS).',
+                'Set conservative capital_per_trade, max_positions, max_exposure_pct first.',
+                'For MIS, configure time controls (entry cutoff / force square-off) and optional slippage/gap guards.',
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'risk-v2-drawdown-thresholds',
+      title: 'Drawdown thresholds (product × category)',
+      qas: [
+        {
+          id: 'risk-v2-drawdown-what',
+          question: 'What do these thresholds do?',
+          answer: [
+            {
+              type: 'p',
+              text: 'SigmaTrader computes a portfolio-level drawdown % and maps it to NORMAL / CAUTION / DEFENSE / HALT using the thresholds configured per (product, category).',
+            },
+            {
+              type: 'bullets',
+              items: [
+                'CAUTION: SigmaTrader throttles new entries (currently reduces capital_per_trade and max_positions).',
+                'DEFENSE: SigmaTrader restricts new entries to ETF/LC symbols only (others are blocked).',
+                'HARD STOP/HALT: SigmaTrader blocks new entries; exits are still allowed.',
+              ],
+            },
+          ],
+        },
+        {
+          id: 'risk-v2-drawdown-requires-categories',
+          question: 'Why do I need symbol categories (LC/MC/SC/ETF)?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Because thresholds are keyed by product × category. When product-specific risk engine is enabled, SigmaTrader needs a category for each symbol to pick the correct thresholds. If a symbol has no category, new entries fail closed.',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'risk-v2-decision-log',
+      title: 'Decision log',
+      qas: [
+        {
+          id: 'risk-v2-decision-log-what',
+          question: 'What is the Alert decision log?',
+          answer: [
+            {
+              type: 'p',
+              text: 'It records what SigmaTrader resolved (product/profile/category/drawdown state) and whether an execution was placed or blocked, along with reasons. Use this first when troubleshooting.',
+            },
+          ],
+        },
+      ],
+    },
+    {
       id: 'risk-enforcement',
       title: 'How enforcement works',
       qas: [
@@ -569,6 +655,100 @@ export const riskManagementGuide: HelpContext = {
     'It documents what is enforced, where it is enforced, what happens when something is blocked, and known limitations.',
   ],
   sections: [
+    {
+      id: 'product-specific-risk-profiles-v2',
+      title: 'Product-specific risk profiles (CNC/MIS)',
+      qas: [
+        {
+          id: 'v2-profiles-why',
+          question: 'Why separate CNC and MIS profiles?',
+          answer: [
+            {
+              type: 'p',
+              text: 'CNC (delivery) and MIS (intraday) have different leverage/margin behavior and operational constraints. SigmaTrader enforces different limits per product to reduce risk in MIS while allowing more flexible CNC behavior (or vice versa).',
+            },
+          ],
+        },
+        {
+          id: 'v2-profiles-authority',
+          question: 'Does TradingView decide product/quantity?',
+          answer: [
+            {
+              type: 'p',
+              text: 'No. TradingView is a signal source. SigmaTrader resolves the product from the selected RiskProfile and may derive/clamp quantity. Any “hints” from alerts are advisory only and may be ignored.',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'drawdown-thresholds-v2',
+      title: 'Drawdown thresholds (by product × category)',
+      qas: [
+        {
+          id: 'v2-drawdown-state-machine',
+          question: 'How does the drawdown state machine work?',
+          answer: [
+            {
+              type: 'p',
+              text: 'SigmaTrader computes a portfolio drawdown % and maps it to NORMAL / CAUTION / DEFENSE / HALT based on thresholds configured per (product, category). The chosen RiskProfile product determines which threshold row is used.',
+            },
+            {
+              type: 'bullets',
+              items: [
+                'NORMAL: full behavior',
+                'CAUTION: throttled entries (example: lower capital_per_trade)',
+                'DEFENSE: restricted entries (example: ETF/LC only)',
+                'HALT: block new entries (manual review)',
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'symbol-risk-categories-v2',
+      title: 'Symbol categories (LC/MC/SC/ETF)',
+      qas: [
+        {
+          id: 'v2-categories-required',
+          question: 'Do I have to tag every symbol with a category?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Yes, if you enable the product-specific risk engine. SigmaTrader uses the category to pick the correct (product × category) drawdown thresholds. Missing categories cause new entries to fail closed (blocked).',
+            },
+            {
+              type: 'bullets',
+              items: [
+                'Set categories from Holdings/Universe (Category column).',
+                'Start by tagging your actively traded symbols first.',
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'alert-decision-log-v2',
+      title: 'Alert decision log',
+      qas: [
+        {
+          id: 'v2-decision-log-why',
+          question: 'Where do I see why something was blocked?',
+          answer: [
+            {
+              type: 'bullets',
+              items: [
+                'Settings → Risk → Alert decision log (resolved product/profile/category + reasons)',
+                'Orders page → Error column (REJECTED_RISK details)',
+                'System Events page → category=risk (structured details)',
+              ],
+            },
+          ],
+        },
+      ],
+    },
     {
       id: 'broker-vs-app',
       title: 'SigmaTrader vs broker enforcement',

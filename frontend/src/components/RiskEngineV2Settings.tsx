@@ -1,4 +1,5 @@
 import AddIcon from '@mui/icons-material/Add'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -22,6 +23,7 @@ import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import {
   createRiskProfile,
@@ -81,6 +83,7 @@ const DEFAULT_PROFILE: RiskProfileCreate = {
 }
 
 export function RiskEngineV2Settings() {
+  const navigate = useNavigate()
   const [profiles, setProfiles] = useState<RiskProfile[]>([])
   const [profilesBusy, setProfilesBusy] = useState(false)
   const [profilesError, setProfilesError] = useState<string | null>(null)
@@ -100,11 +103,15 @@ export function RiskEngineV2Settings() {
   const [draft, setDraft] = useState<RiskProfileCreate>({ ...DEFAULT_PROFILE })
   const [saving, setSaving] = useState(false)
 
+  const openGuide = (hash: string) => {
+    navigate(`/risk-guide#${hash}`)
+  }
+
   const loadProfiles = async () => {
     setProfilesBusy(true)
     try {
       const res = await fetchRiskProfiles()
-      setProfiles(res)
+      setProfiles(Array.isArray(res) ? res : [])
       setProfilesError(null)
     } catch (err) {
       setProfilesError(err instanceof Error ? err.message : 'Failed to load risk profiles')
@@ -116,7 +123,8 @@ export function RiskEngineV2Settings() {
   const loadThresholds = async () => {
     setThresholdsBusy(true)
     try {
-      const rows = await fetchDrawdownThresholds()
+      const rowsRes = await fetchDrawdownThresholds()
+      const rows = Array.isArray(rowsRes) ? rowsRes : []
       const next: Record<
         string,
         { caution_pct: number; defense_pct: number; hard_stop_pct: number }
@@ -143,7 +151,8 @@ export function RiskEngineV2Settings() {
   const loadDecisionLog = async () => {
     setDecisionBusy(true)
     try {
-      const rows = await fetchAlertDecisionLog(200)
+      const rowsRes = await fetchAlertDecisionLog(200)
+      const rows = Array.isArray(rowsRes) ? rowsRes : []
       setDecisionRows(rows)
       setDecisionError(null)
     } catch (err) {
@@ -155,7 +164,7 @@ export function RiskEngineV2Settings() {
 
   const defaultBadges = useMemo(() => {
     const out = new Map<number, string>()
-    for (const p of profiles) {
+    for (const p of profiles ?? []) {
       if (p.is_default) out.set(p.id, `Default ${p.product}`)
     }
     return out
@@ -326,6 +335,15 @@ export function RiskEngineV2Settings() {
           <Typography variant="h6" sx={{ flex: 1, minWidth: 260 }}>
             Product-specific risk profiles (CNC/MIS)
           </Typography>
+          <Tooltip title="Help" arrow placement="top">
+            <IconButton
+              size="small"
+              onClick={() => openGuide('product-specific-risk-profiles-v2')}
+              aria-label="risk profiles help"
+            >
+              <HelpOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Refresh" arrow placement="top">
             <IconButton size="small" onClick={() => void loadProfiles()} disabled={profilesBusy}>
               <RefreshIcon fontSize="small" />
@@ -395,6 +413,15 @@ export function RiskEngineV2Settings() {
           <Typography variant="h6" sx={{ flex: 1, minWidth: 260 }}>
             Drawdown thresholds (by product × category)
           </Typography>
+          <Tooltip title="Help" arrow placement="top">
+            <IconButton
+              size="small"
+              onClick={() => openGuide('drawdown-thresholds-v2')}
+              aria-label="drawdown thresholds help"
+            >
+              <HelpOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Refresh" arrow placement="top">
             <IconButton size="small" onClick={() => void loadThresholds()} disabled={thresholdsBusy}>
               <RefreshIcon fontSize="small" />
@@ -406,7 +433,7 @@ export function RiskEngineV2Settings() {
             onClick={() => void handleSaveThresholds()}
             disabled={thresholdsBusy}
           >
-            Save
+            Save thresholds
           </Button>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
@@ -493,6 +520,15 @@ export function RiskEngineV2Settings() {
           <Typography variant="h6" sx={{ flex: 1, minWidth: 260 }}>
             Alert decision log
           </Typography>
+          <Tooltip title="Help" arrow placement="top">
+            <IconButton
+              size="small"
+              onClick={() => openGuide('alert-decision-log-v2')}
+              aria-label="decision log help"
+            >
+              <HelpOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="Refresh" arrow placement="top">
             <IconButton size="small" onClick={() => void loadDecisionLog()} disabled={decisionBusy}>
               <RefreshIcon fontSize="small" />
