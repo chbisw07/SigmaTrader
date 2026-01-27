@@ -62,6 +62,13 @@ import { fetchDailyPositions, fetchHoldings, type Holding } from '../services/po
 import { fetchAngeloneStatus } from '../services/angelone'
 import { fetchMarginsForBroker } from '../services/brokerRuntime'
 import {
+  fetchSymbolCategories,
+  upsertSymbolCategory,
+  type RiskCategory,
+  type SymbolRiskCategory,
+} from '../services/riskEngine'
+import { resolveSymbolRiskCategory } from '../utils/symbolRiskCategories'
+import {
   fetchHoldingsCorrelation,
   type HoldingsCorrelationResult,
   computeRiskSizing,
@@ -213,6 +220,9 @@ export function HoldingsPage() {
   const [tradeBrokerName, setTradeBrokerName] = useState<'zerodha' | 'angelone'>(
     'zerodha',
   )
+  const [symbolCategoryRows, setSymbolCategoryRows] = useState<SymbolRiskCategory[]>([])
+  const [symbolCategoryBusyByKey, setSymbolCategoryBusyByKey] = useState<Record<string, boolean>>({})
+  const [symbolCategoryError, setSymbolCategoryError] = useState<string | null>(null)
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
   const [activeGroup, setActiveGroup] = useState<GroupDetail | null>(null)
   const [activeGroupDataset, setActiveGroupDataset] = useState<{
@@ -258,6 +268,62 @@ export function HoldingsPage() {
   )
   const [tradeExecutionTarget, setTradeExecutionTarget] = useState<'LIVE' | 'PAPER'>(
     'LIVE',
+  )
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        setSymbolCategoryError(null)
+        const rows = await fetchSymbolCategories('*')
+        if (!active) return
+        setSymbolCategoryRows(rows)
+      } catch (err) {
+        if (!active) return
+        setSymbolCategoryError(err instanceof Error ? err.message : 'Failed to load symbol categories')
+        setSymbolCategoryRows([])
+      }
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const handleSetSymbolCategory = useCallback(
+    async (exchangeRaw: string | null | undefined, symbolRaw: string | null | undefined, category: RiskCategory) => {
+      const sym = (symbolRaw || '').trim().toUpperCase()
+      const exch = (exchangeRaw || 'NSE').trim().toUpperCase() || 'NSE'
+      if (!sym) return
+      const key = `${exch}:${sym}`
+      setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: true }))
+      try {
+        const saved = await upsertSymbolCategory({
+          broker_name: '*',
+          exchange: '*',
+          symbol: sym,
+          risk_category: category,
+        })
+        setSymbolCategoryRows((prev) => {
+          const symKey = (saved.symbol || '').trim().toUpperCase()
+          const exchKey = (saved.exchange || '').trim().toUpperCase()
+          const brokerKey = (saved.broker_name || '').trim().toLowerCase()
+          const next = prev.filter(
+            (r) =>
+              (r.symbol || '').trim().toUpperCase() !== symKey
+              || (r.exchange || '').trim().toUpperCase() !== exchKey
+              || (r.broker_name || '').trim().toLowerCase() !== brokerKey,
+          )
+          return [...next, saved]
+        })
+        setSymbolCategoryError(null)
+      } catch (err) {
+        setSymbolCategoryError(err instanceof Error ? err.message : 'Failed to save symbol category')
+      } finally {
+        setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: false }))
+      }
+    },
+    [],
   )
   const [tradeBracketEnabled, setTradeBracketEnabled] = useState<boolean>(false)
   const [riskSlEnabled, setRiskSlEnabled] = useState<boolean>(false)
@@ -3597,6 +3663,47 @@ export function HoldingsPage() {
       },
     },
     {
+      field: 'risk_category',
+      headerName: 'Category',
+      width: 130,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => {
+        const row = params.row as HoldingRow
+        const sym = (row.symbol || '').trim().toUpperCase()
+        const exch = (row.exchange ?? 'NSE').toString().trim().toUpperCase() || 'NSE'
+        const key = `${exch}:${sym}`
+        const busy = Boolean(sym && symbolCategoryBusyByKey[key])
+        const value = sym
+          ? (resolveSymbolRiskCategory(symbolCategoryRows, {
+              broker_name: tradeBrokerName,
+              exchange: exch,
+              symbol: sym,
+            }) ?? '')
+          : ''
+        return (
+          <TextField
+            select
+            size="small"
+            value={value}
+            disabled={!sym || busy}
+            onChange={(e) =>
+              void handleSetSymbolCategory(exch, sym, e.target.value as RiskCategory)
+            }
+            sx={{ minWidth: 110 }}
+          >
+            <MenuItem value="" disabled>
+              â€”
+            </MenuItem>
+            <MenuItem value="LC">LC</MenuItem>
+            <MenuItem value="MC">MC</MenuItem>
+            <MenuItem value="SC">SC</MenuItem>
+            <MenuItem value="ETF">ETF</MenuItem>
+          </TextField>
+        )
+      },
+    },
+    {
       field: 'goal_label',
       headerName: 'Label',
       width: 120,
@@ -4568,6 +4675,7 @@ export function HoldingsPage() {
     const defaultModel: GridColumnVisibilityModel = buildShowOnlyModel(
       [
         'symbol',
+        'risk_category',
         'chart',
         'average_price',
         'last_price',
@@ -6397,6 +6505,11 @@ export function HoldingsPage() {
       {error && (
         <Typography variant="body2" color="error" sx={{ mb: 1 }}>
           {error}
+        </Typography>
+      )}
+      {symbolCategoryError && (
+        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
+          {symbolCategoryError}
         </Typography>
       )}
       {refreshing && !loading && (

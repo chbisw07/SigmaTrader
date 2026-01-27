@@ -160,17 +160,24 @@ def resolve_symbol_category(
     sym = symbol.strip().upper()
     ex = exchange.strip().upper() or "NSE"
     broker = (broker_name or "zerodha").strip().lower() or "zerodha"
-    row = (
+    # Allow broker/exchange wildcards ("*") so categories can be treated as
+    # broker-independent in the UI while still supporting per-broker overrides.
+    candidates = (
         db.query(SymbolRiskCategory)
         .filter(
             SymbolRiskCategory.user_id == user_id,
-            SymbolRiskCategory.broker_name == broker,
             SymbolRiskCategory.symbol == sym,
-            SymbolRiskCategory.exchange == ex,
+            SymbolRiskCategory.broker_name.in_([broker, "*"]),
+            SymbolRiskCategory.exchange.in_([ex, "*"]),
         )
-        .one_or_none()
+        # Prefer the most recently updated mapping (lets "global" overrides win
+        # without needing to delete older broker/exchange-specific rows).
+        .order_by(SymbolRiskCategory.updated_at.desc())
+        .all()
     )
-    return row.risk_category if row is not None else None
+    if not candidates:
+        return None
+    return candidates[0].risk_category
 
 
 def resolve_drawdown_config(

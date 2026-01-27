@@ -31,6 +31,7 @@ import {
   DataGrid,
   type GridColDef,
   type GridRenderCellParams,
+  type GridRowSelectionModel,
 } from '@mui/x-data-grid'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -46,13 +47,16 @@ import { fetchHoldings, fetchDailyPositions, syncPositions } from '../services/p
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 import {
   fetchSymbolCategories,
+  bulkUpsertSymbolCategories,
   upsertSymbolCategory,
   type RiskCategory,
+  type SymbolRiskCategory,
 } from '../services/riskEngine'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 import { downloadCsv } from '../utils/csv'
 import { computeHoldingsWeights, normalizeTargetWeights } from '../utils/groupWeights'
+import { resolveSymbolRiskCategory } from '../utils/symbolRiskCategories'
 import {
   addGroupMember,
   bulkAddGroupMembers,
@@ -239,35 +243,44 @@ export function GroupsPage() {
       .replace(/[^a-z0-9_-]+/gi, '_')
       .slice(0, 80)
 
-    const rows = (selectedGroup.members ?? []).map((m) => {
-      const exch = (m.exchange || 'NSE').trim().toUpperCase() || 'NSE'
-      const sym = (m.symbol || '').trim().toUpperCase()
-      const q = watchlistQuotesByKey[`${exch}:${sym}`]
-      return {
-        group_id: selectedGroup.id,
-        group_name: selectedGroup.name,
-        group_kind: selectedGroup.kind,
+      const rows = (selectedGroup.members ?? []).map((m) => {
+        const exch = (m.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+        const sym = (m.symbol || '').trim().toUpperCase()
+        const q = watchlistQuotesByKey[`${exch}:${sym}`]
+        const category =
+          sym
+            ? resolveSymbolRiskCategory(symbolCategoryRows, {
+                broker_name: compareBroker,
+                exchange: exch,
+                symbol: sym,
+              })
+            : null
+        return {
+          group_id: selectedGroup.id,
+          group_name: selectedGroup.name,
+          group_kind: selectedGroup.kind,
         funds: selectedGroup.funds ?? '',
         frozen_at: selectedGroup.frozen_at ?? '',
         origin_basket_id: selectedGroup.origin_basket_id ?? '',
         bought_at: selectedGroup.bought_at ?? '',
-        symbol: sym,
-        exchange: exch,
-        target_weight_pct:
-          m.target_weight != null && Number.isFinite(Number(m.target_weight))
-            ? Number(m.target_weight) * 100
-            : '',
+          symbol: sym,
+          exchange: exch,
+          category: category ?? '',
+          target_weight_pct:
+            m.target_weight != null && Number.isFinite(Number(m.target_weight))
+              ? Number(m.target_weight) * 100
+              : '',
         weight_locked: m.weight_locked ?? '',
         frozen_price: m.frozen_price ?? '',
         reference_qty: m.reference_qty ?? '',
         reference_price: m.reference_price ?? '',
         ltp: q?.ltp ?? '',
         day_pct: q?.day_pct ?? '',
-      }
-    })
+        }
+      })
 
-    downloadCsv(`${safeName}_${selectedGroup.kind}_${stamp}.csv`, rows)
-  }, [selectedGroup, watchlistQuotesByKey])
+      downloadCsv(`${safeName}_${selectedGroup.kind}_${stamp}.csv`, rows)
+  }, [compareBroker, selectedGroup, symbolCategoryRows, watchlistQuotesByKey])
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkState, setBulkState] = useState<BulkAddState>(DEFAULT_BULK_ADD)
@@ -302,13 +315,22 @@ export function GroupsPage() {
   >({})
   const [autoCalculateWeights, setAutoCalculateWeights] = useState(false)
   const [allocationTotalsByKey, setAllocationTotalsByKey] = useState<Record<string, number>>({})
-  const [symbolCategoriesByKey, setSymbolCategoriesByKey] = useState<
-    Record<string, RiskCategory>
-  >({})
+  const [symbolCategoryRows, setSymbolCategoryRows] = useState<SymbolRiskCategory[]>([])
   const [symbolCategoryBusyByKey, setSymbolCategoryBusyByKey] = useState<
     Record<string, boolean>
   >({})
   const [symbolCategoryError, setSymbolCategoryError] = useState<string | null>(null)
+  const [memberSelectionModel, setMemberSelectionModel] = useState<GridRowSelectionModel>([])
+  const [bulkCategory, setBulkCategory] = useState<RiskCategory>('LC')
+  const [bulkCategoryBusy, setBulkCategoryBusy] = useState(false)
+  const [bulkCategoryError, setBulkCategoryError] = useState<string | null>(null)
+  const [categoryImportOpen, setCategoryImportOpen] = useState(false)
+  const [categoryImportBusy, setCategoryImportBusy] = useState(false)
+  const [categoryImportError, setCategoryImportError] = useState<string | null>(null)
+  const [categoryImportPreview, setCategoryImportPreview] = useState<
+    Array<{ symbol: string; exchange: string | null; category: RiskCategory }>
+  >([])
+  const [categoryImportText, setCategoryImportText] = useState('')
 
   const [reconcileOpen, setReconcileOpen] = useState(false)
   const [reconcileBusy, setReconcileBusy] = useState(false)
@@ -499,6 +521,10 @@ export function GroupsPage() {
   }, [selectedGroupId])
 
   useEffect(() => {
+    setMemberSelectionModel([])
+  }, [selectedGroupId])
+
+  useEffect(() => {
     let active = true
     const loadHoldings = async () => {
       if (!selectedGroup || (selectedGroup.kind !== 'PORTFOLIO' && selectedGroup.kind !== 'HOLDINGS_VIEW')) {
@@ -643,29 +669,22 @@ export function GroupsPage() {
     const load = async () => {
       try {
         setSymbolCategoryError(null)
-        const rows = await fetchSymbolCategories(compareBroker)
+        const rows = await fetchSymbolCategories('*')
         if (!active) return
-        const next: Record<string, RiskCategory> = {}
-        for (const r of rows) {
-          const sym = (r.symbol || '').trim().toUpperCase()
-          const exch = (r.exchange || 'NSE').trim().toUpperCase()
-          if (!sym) continue
-          next[`${exch}:${sym}`] = r.risk_category
-        }
-        setSymbolCategoriesByKey(next)
+        setSymbolCategoryRows(rows)
       } catch (err) {
         if (!active) return
         setSymbolCategoryError(
           err instanceof Error ? err.message : 'Failed to load symbol risk categories',
         )
-        setSymbolCategoriesByKey({})
+        setSymbolCategoryRows([])
       }
     }
     void load()
     return () => {
       active = false
     }
-  }, [compareBroker])
+  }, [])
 
   const holdingsBySymbol = useMemo(() => {
     const agg: Record<
@@ -768,16 +787,23 @@ export function GroupsPage() {
       setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: true }))
       try {
         const saved = await upsertSymbolCategory({
-          broker_name: compareBroker,
+          broker_name: '*',
           symbol: sym,
-          exchange: exch,
+          exchange: '*',
           risk_category: category,
         })
-        setSymbolCategoriesByKey((prev) => ({
-          ...prev,
-          [`${(saved.exchange || 'NSE').trim().toUpperCase()}:${(saved.symbol || '').trim().toUpperCase()}`]:
-            saved.risk_category,
-        }))
+        setSymbolCategoryRows((prev) => {
+          const symKey = (saved.symbol || '').trim().toUpperCase()
+          const exchKey = (saved.exchange || '').trim().toUpperCase()
+          const brokerKey = (saved.broker_name || '').trim().toLowerCase()
+          const next = prev.filter(
+            (r) =>
+              (r.symbol || '').trim().toUpperCase() !== symKey
+              || (r.exchange || '').trim().toUpperCase() !== exchKey
+              || (r.broker_name || '').trim().toLowerCase() !== brokerKey,
+          )
+          return [...next, saved]
+        })
         setSymbolCategoryError(null)
       } catch (err) {
         setSymbolCategoryError(
@@ -787,8 +813,168 @@ export function GroupsPage() {
         setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: false }))
       }
     },
-    [compareBroker],
+    [],
   )
+
+  const parseCategoryImport = useCallback((text: string) => {
+    const raw = (text || '').trim()
+    if (!raw) return []
+
+    const parsed = parseCsv(raw)
+    const headerLower = parsed.headers.map((h) => (h || '').trim().toLowerCase())
+    const hasHeader = headerLower.some((h) => h.includes('symbol') || h.includes('category') || h.includes('risk'))
+
+    let dataRows = parsed.rows
+    let symbolIdx = 0
+    let exchangeIdx: number | null = null
+    let categoryIdx = 1
+
+    if (hasHeader) {
+      const findIdx = (pred: (h: string) => boolean) => headerLower.findIndex(pred)
+      const s = findIdx((h) => h === 'symbol' || h.includes('symbol') || h.includes('tradingsymbol'))
+      const c = findIdx((h) => h === 'category' || h.includes('category') || h.includes('risk_category'))
+      const e = findIdx((h) => h === 'exchange' || h === 'exch' || h.includes('exchange'))
+      if (s < 0 || c < 0) {
+        throw new Error('CSV must include columns for symbol and category.')
+      }
+      symbolIdx = s
+      categoryIdx = c
+      exchangeIdx = e >= 0 ? e : null
+    } else {
+      // No header: treat the "headers" row as a data row too.
+      dataRows = [parsed.headers, ...parsed.rows]
+      // 2 cols => symbol, category; 3+ cols => symbol, exchange, category
+      if ((dataRows[0]?.length ?? 0) >= 3) {
+        exchangeIdx = 1
+        categoryIdx = 2
+      }
+    }
+
+    const outBySymbol = new Map<string, { symbol: string; exchange: string | null; category: RiskCategory }>()
+    for (const row of dataRows) {
+      const symRaw = (row[symbolIdx] ?? '').trim()
+      const catRaw = (row[categoryIdx] ?? '').trim()
+      if (!symRaw || !catRaw) continue
+
+      const symbol = symRaw.toUpperCase()
+      const exchange =
+        exchangeIdx != null && (row[exchangeIdx] ?? '').trim()
+          ? (row[exchangeIdx] ?? '').trim().toUpperCase()
+          : null
+      const cat = catRaw.toUpperCase()
+      if (cat !== 'LC' && cat !== 'MC' && cat !== 'SC' && cat !== 'ETF') {
+        continue
+      }
+      outBySymbol.set(symbol, { symbol, exchange, category: cat as RiskCategory })
+    }
+
+    return Array.from(outBySymbol.values()).sort((a, b) => a.symbol.localeCompare(b.symbol))
+  }, [])
+
+  const applyBulkCategoryToSelected = useCallback(async () => {
+    if (!selectedGroup?.members?.length) return
+    const selectedIds = new Set(memberSelectionModel.map((v) => Number(v)))
+    const members = selectedGroup.members.filter((m) => selectedIds.has(m.id))
+    if (!members.length) return
+
+    const uniq = new Map<string, { symbol: string; exchange: string }>() // symbol-keyed
+    for (const m of members) {
+      const sym = (m.symbol || '').trim().toUpperCase()
+      if (!sym) continue
+      const exch = (m.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+      uniq.set(sym, { symbol: sym, exchange: exch })
+    }
+    const payload = Array.from(uniq.values()).map((m) => ({
+      broker_name: '*',
+      exchange: '*',
+      symbol: m.symbol,
+      risk_category: bulkCategory,
+    }))
+    if (!payload.length) return
+
+    setBulkCategoryBusy(true)
+    try {
+      const saved = await bulkUpsertSymbolCategories(payload)
+      setSymbolCategoryRows((prev) => {
+        const next = [...prev]
+        for (const s of saved) {
+          const symKey = (s.symbol || '').trim().toUpperCase()
+          const exchKey = (s.exchange || '').trim().toUpperCase()
+          const brokerKey = (s.broker_name || '').trim().toLowerCase()
+          for (let i = next.length - 1; i >= 0; i--) {
+            const r = next[i]
+            if (
+              (r.symbol || '').trim().toUpperCase() === symKey
+              && (r.exchange || '').trim().toUpperCase() === exchKey
+              && (r.broker_name || '').trim().toLowerCase() === brokerKey
+            ) {
+              next.splice(i, 1)
+            }
+          }
+          next.push(s)
+        }
+        return next
+      })
+      setBulkCategoryError(null)
+    } catch (err) {
+      setBulkCategoryError(err instanceof Error ? err.message : 'Bulk category update failed')
+    } finally {
+      setBulkCategoryBusy(false)
+    }
+  }, [bulkCategory, bulkUpsertSymbolCategories, memberSelectionModel, selectedGroup])
+
+  const handleCategoryImportParse = useCallback(() => {
+    try {
+      const parsed = parseCategoryImport(categoryImportText)
+      setCategoryImportPreview(parsed)
+      setCategoryImportError(null)
+    } catch (err) {
+      setCategoryImportPreview([])
+      setCategoryImportError(err instanceof Error ? err.message : 'Failed to parse CSV')
+    }
+  }, [categoryImportText, parseCategoryImport])
+
+  const applyCategoryImport = useCallback(async () => {
+    if (!categoryImportPreview.length) return
+    setCategoryImportBusy(true)
+    try {
+      const payload = categoryImportPreview.map((r) => ({
+        broker_name: '*',
+        exchange: '*',
+        symbol: r.symbol,
+        risk_category: r.category,
+      }))
+      const saved = await bulkUpsertSymbolCategories(payload)
+      setSymbolCategoryRows((prev) => {
+        const next = [...prev]
+        for (const s of saved) {
+          const symKey = (s.symbol || '').trim().toUpperCase()
+          const exchKey = (s.exchange || '').trim().toUpperCase()
+          const brokerKey = (s.broker_name || '').trim().toLowerCase()
+          for (let i = next.length - 1; i >= 0; i--) {
+            const r = next[i]
+            if (
+              (r.symbol || '').trim().toUpperCase() === symKey
+              && (r.exchange || '').trim().toUpperCase() === exchKey
+              && (r.broker_name || '').trim().toLowerCase() === brokerKey
+            ) {
+              next.splice(i, 1)
+            }
+          }
+          next.push(s)
+        }
+        return next
+      })
+      setCategoryImportError(null)
+      setCategoryImportOpen(false)
+      setCategoryImportText('')
+      setCategoryImportPreview([])
+    } catch (err) {
+      setCategoryImportError(err instanceof Error ? err.message : 'Failed to import categories')
+    } finally {
+      setCategoryImportBusy(false)
+    }
+  }, [bulkUpsertSymbolCategories, categoryImportPreview])
 
   const groupsById = useMemo(() => {
     const m = new Map<number, Group>()
@@ -1482,7 +1668,13 @@ export function GroupsPage() {
           const sym = (row.symbol || '').trim().toUpperCase()
           const exch = (row.exchange || 'NSE').trim().toUpperCase()
           const key = `${exch}:${sym}`
-          const value = sym ? symbolCategoriesByKey[key] ?? '' : ''
+          const value = sym
+            ? (resolveSymbolRiskCategory(symbolCategoryRows, {
+                broker_name: compareBroker,
+                exchange: exch,
+                symbol: sym,
+              }) ?? '')
+            : ''
           const busy = Boolean(sym && symbolCategoryBusyByKey[key])
           return (
             <TextField
@@ -1665,13 +1857,14 @@ export function GroupsPage() {
   }, [
     autoCalculateWeights,
     allocationTotalsByKey,
+    compareBroker,
     computedWeightsByKey,
     getHoldingsSnapshot,
     handleSetSymbolCategory,
     notesEnabled,
     openReconcileForMember,
     selectedGroup?.kind,
-    symbolCategoriesByKey,
+    symbolCategoryRows,
     symbolCategoryBusyByKey,
   ])
 
@@ -2064,6 +2257,46 @@ export function GroupsPage() {
                   >
                     Equal weights
                   </Button>
+                  <FormControl size="small" sx={{ minWidth: 140 }}>
+                    <InputLabel id="bulk-category-label">Set category</InputLabel>
+                    <Select
+                      labelId="bulk-category-label"
+                      label="Set category"
+                      value={bulkCategory}
+                      onChange={(e) => setBulkCategory(e.target.value as RiskCategory)}
+                      disabled={!selectedGroup?.members?.length || bulkCategoryBusy}
+                    >
+                      <MenuItem value="LC">LC</MenuItem>
+                      <MenuItem value="MC">MC</MenuItem>
+                      <MenuItem value="SC">SC</MenuItem>
+                      <MenuItem value="ETF">ETF</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={
+                      bulkCategoryBusy
+                      || !selectedGroup?.members?.length
+                      || memberSelectionModel.length === 0
+                    }
+                    onClick={() => void applyBulkCategoryToSelected()}
+                  >
+                    Apply to selected
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={categoryImportBusy}
+                    onClick={() => {
+                      setCategoryImportError(null)
+                      setCategoryImportPreview([])
+                      setCategoryImportText('')
+                      setCategoryImportOpen(true)
+                    }}
+                  >
+                    Import categories
+                  </Button>
                   {(selectedGroup?.kind === 'HOLDINGS_VIEW' || selectedGroup?.kind === 'PORTFOLIO') && (
                     <FormControlLabel
                       control={
@@ -2082,6 +2315,11 @@ export function GroupsPage() {
                     />
                   )}
                 </Stack>
+                {bulkCategoryError ? (
+                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                    {bulkCategoryError}
+                  </Typography>
+                ) : null}
 
                 <Box sx={{ mt: 1.5, flexGrow: 1 }}>
                   <DataGrid
@@ -2089,6 +2327,9 @@ export function GroupsPage() {
                     columns={membersColumns}
                     getRowId={(row) => row.id}
                     disableRowSelectionOnClick
+                    checkboxSelection
+                    rowSelectionModel={memberSelectionModel}
+                    onRowSelectionModelChange={(next) => setMemberSelectionModel(next)}
                     initialState={{
                       pagination: { paginationModel: { pageSize: 10, page: 0 } },
                     }}
@@ -2648,6 +2889,99 @@ export function GroupsPage() {
           <Button onClick={() => setEditMemberOpen(false)}>Cancel</Button>
           <Button variant="contained" onClick={() => void submitMemberEditor()}>
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={categoryImportOpen}
+        onClose={() => {
+          if (categoryImportBusy) return
+          setCategoryImportOpen(false)
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Import symbol categories (CSV)</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary">
+              Provide a CSV with columns like <code>symbol,category</code> (optional <code>exchange</code>). Category values: LC/MC/SC/ETF.
+              Imports are stored as global (<code>*</code>) mappings so the same category appears across groups and brokers.
+            </Typography>
+
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <Button component="label" size="small" variant="outlined" disabled={categoryImportBusy}>
+                Upload CSV
+                <input
+                  hidden
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0]
+                    if (!f) return
+                    const text = await f.text()
+                    setCategoryImportText(text)
+                    try {
+                      const parsed = parseCategoryImport(text)
+                      setCategoryImportPreview(parsed)
+                      setCategoryImportError(null)
+                    } catch (err) {
+                      setCategoryImportPreview([])
+                      setCategoryImportError(err instanceof Error ? err.message : 'Failed to parse CSV')
+                    }
+                  }}
+                />
+              </Button>
+              <Button size="small" variant="outlined" onClick={handleCategoryImportParse} disabled={categoryImportBusy}>
+                Parse
+              </Button>
+              <Box sx={{ flexGrow: 1 }} />
+              <Typography variant="caption" color="text.secondary">
+                Parsed: {categoryImportPreview.length}
+              </Typography>
+            </Stack>
+
+            <TextField
+              label="CSV text"
+              value={categoryImportText}
+              onChange={(e) => setCategoryImportText(e.target.value)}
+              placeholder={'symbol,category\nTCS,LC\nINFY,MC'}
+              minRows={6}
+              multiline
+              fullWidth
+            />
+
+            {categoryImportError ? <Alert severity="error">{categoryImportError}</Alert> : null}
+
+            {categoryImportPreview.length ? (
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                  Preview (first 10)
+                </Typography>
+                <Box component="ul" sx={{ pl: 2.25, my: 0 }}>
+                  {categoryImportPreview.slice(0, 10).map((r) => (
+                    <li key={r.symbol}>
+                      <Typography variant="caption">
+                        {r.symbol} {r.exchange ? `(${r.exchange})` : ''} â†’ {r.category}
+                      </Typography>
+                    </li>
+                  ))}
+                </Box>
+              </Box>
+            ) : null}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCategoryImportOpen(false)} disabled={categoryImportBusy}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            disabled={categoryImportBusy || categoryImportPreview.length === 0}
+            onClick={() => void applyCategoryImport()}
+          >
+            {categoryImportBusy ? 'Importingâ€¦' : 'Import'}
           </Button>
         </DialogActions>
       </Dialog>

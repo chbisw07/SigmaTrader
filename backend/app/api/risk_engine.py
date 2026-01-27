@@ -187,15 +187,11 @@ def list_symbol_categories(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[SymbolRiskCategoryRead]:
-    rows = (
-        db.query(SymbolRiskCategory)
-        .filter(
-            SymbolRiskCategory.user_id == user.id,
-            SymbolRiskCategory.broker_name == broker_name,
-        )
-        .order_by(SymbolRiskCategory.exchange, SymbolRiskCategory.symbol)
-        .all()
-    )
+    broker = (broker_name or "zerodha").strip().lower() or "zerodha"
+    query = db.query(SymbolRiskCategory).filter(SymbolRiskCategory.user_id == user.id)
+    if broker != "*":
+        query = query.filter(SymbolRiskCategory.broker_name.in_([broker, "*"]))
+    rows = query.order_by(SymbolRiskCategory.exchange, SymbolRiskCategory.symbol).all()
     return [SymbolRiskCategoryRead(**_model_to_dict(r)) for r in rows]
 
 
@@ -233,6 +229,46 @@ def upsert_symbol_category(
     db.commit()
     db.refresh(row)
     return SymbolRiskCategoryRead(**_model_to_dict(row))
+
+
+@router.put("/symbol-categories/bulk", response_model=list[SymbolRiskCategoryRead])
+def bulk_upsert_symbol_categories(
+    payload: list[SymbolRiskCategoryUpsert],
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[SymbolRiskCategoryRead]:
+    rows: list[SymbolRiskCategory] = []
+    for item in payload:
+        broker = (item.broker_name or "zerodha").strip().lower() or "zerodha"
+        symbol = item.symbol.strip().upper()
+        exchange = (item.exchange or "NSE").strip().upper() or "NSE"
+        row = (
+            db.query(SymbolRiskCategory)
+            .filter(
+                SymbolRiskCategory.user_id == user.id,
+                SymbolRiskCategory.broker_name == broker,
+                SymbolRiskCategory.symbol == symbol,
+                SymbolRiskCategory.exchange == exchange,
+            )
+            .one_or_none()
+        )
+        if row is None:
+            row = SymbolRiskCategory(
+                user_id=user.id,
+                broker_name=broker,
+                symbol=symbol,
+                exchange=exchange,
+                risk_category=item.risk_category,
+            )
+            db.add(row)
+        else:
+            row.risk_category = item.risk_category
+            db.add(row)
+        rows.append(row)
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return [SymbolRiskCategoryRead(**_model_to_dict(r)) for r in rows]
 
 
 @router.get("/decision-log", response_model=list[AlertDecisionLogRead])

@@ -213,6 +213,23 @@ export async function upsertSymbolCategory(
   return (await res.json()) as SymbolRiskCategory
 }
 
+export async function bulkUpsertSymbolCategories(
+  payload: SymbolRiskCategoryUpsert[],
+): Promise<SymbolRiskCategory[]> {
+  const res = await fetch('/api/risk-engine/symbol-categories/bulk', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await readTextSafe(res)
+    throw new Error(
+      `Failed to bulk save symbol categories (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as SymbolRiskCategory[]
+}
+
 export async function fetchAlertDecisionLog(limit = 100): Promise<AlertDecisionLogRow[]> {
   const url = new URL('/api/risk-engine/decision-log', window.location.origin)
   url.searchParams.set('limit', String(limit))
