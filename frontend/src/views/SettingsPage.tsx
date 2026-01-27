@@ -77,6 +77,7 @@ import {
 } from '../services/webhookSettings'
 import { TradingViewAlertPayloadBuilder } from '../components/TradingViewAlertPayloadBuilder'
 import { RiskEngineV2Settings } from '../components/RiskEngineV2Settings'
+import { EffectiveRiskSummaryPanel } from '../components/EffectiveRiskSummaryPanel'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
 import { formatInTimeZone } from '../utils/datetime'
@@ -1522,9 +1523,18 @@ export function SettingsPage() {
             <TradingViewAlertPayloadBuilder webhookSecret={tvWebhookSecretDraft} />
           </Box>
       ) : activeTab === 'risk' ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>
-            <RiskEngineV2Settings />
-            <Paper sx={{ p: 2 }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 2,
+              mb: 3,
+              alignItems: 'start',
+              gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) 420px' },
+            }}
+          >
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              <RiskEngineV2Settings />
+              <Paper sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
                   Risk policy
@@ -2951,7 +2961,9 @@ export function SettingsPage() {
                   })()}
                 </>
               )}
-            </Paper>
+              </Paper>
+            </Box>
+            <EffectiveRiskSummaryPanel />
           </Box>
       ) : null}
     </Box>

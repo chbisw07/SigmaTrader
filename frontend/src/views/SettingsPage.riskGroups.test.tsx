@@ -70,6 +70,122 @@ function makePolicy(): RiskPolicy {
   }
 }
 
+function makeCompiledFixture() {
+  return {
+    context: { product: 'CNC', category: 'LC', scenario: null, symbol: null, strategy_id: null },
+    inputs: {
+      compiled_at: '2026-01-27T10:00:00Z',
+      risk_policy_source: 'db',
+      risk_policy_enabled: true,
+      risk_engine_v2_enabled: true,
+      manual_equity_inr: 1000000,
+      drawdown_pct: 0.0,
+    },
+    effective: {
+      allow_new_entries: true,
+      blocking_reasons: [],
+      risk_policy_by_source: {
+        TRADINGVIEW: {
+          allow_product: true,
+          allow_short_selling: true,
+          manual_equity_inr: 1000000,
+          max_daily_loss_pct: 1,
+          max_daily_loss_abs: null,
+          max_exposure_pct: 60,
+          max_open_positions: 6,
+          max_concurrent_symbols: 6,
+          max_order_value_pct: 2.5,
+          max_order_value_abs_from_pct: null,
+          max_order_value_abs_override: null,
+          max_quantity_per_order: null,
+          max_risk_per_trade_pct: 0.5,
+          hard_max_risk_pct: 0.75,
+          stop_loss_mandatory: true,
+          capital_per_trade: 20000,
+          allow_scale_in: false,
+          pyramiding: 1,
+          stop_reference: 'ATR',
+          atr_period: 14,
+          atr_mult_initial_stop: 2,
+          fallback_stop_pct: 1,
+          min_stop_distance_pct: 0.5,
+          max_stop_distance_pct: 3,
+          trailing_stop_enabled: true,
+          trail_activation_atr: 2.5,
+          trail_activation_pct: 3,
+          max_trades_per_symbol_per_day: 2,
+          min_bars_between_trades: 10,
+          cooldown_after_loss_bars: 20,
+          max_consecutive_losses: 3,
+          pause_after_loss_streak: true,
+          pause_duration: 'EOD',
+        },
+        SIGMATRADER: {
+          allow_product: true,
+          allow_short_selling: true,
+          manual_equity_inr: 1000000,
+          max_daily_loss_pct: 1,
+          max_daily_loss_abs: null,
+          max_exposure_pct: 60,
+          max_open_positions: 6,
+          max_concurrent_symbols: 6,
+          max_order_value_pct: 2.5,
+          max_order_value_abs_from_pct: null,
+          max_order_value_abs_override: null,
+          max_quantity_per_order: null,
+          max_risk_per_trade_pct: 0.5,
+          hard_max_risk_pct: 0.75,
+          stop_loss_mandatory: true,
+          capital_per_trade: 20000,
+          allow_scale_in: false,
+          pyramiding: 1,
+          stop_reference: 'ATR',
+          atr_period: 14,
+          atr_mult_initial_stop: 2,
+          fallback_stop_pct: 1,
+          min_stop_distance_pct: 0.5,
+          max_stop_distance_pct: 3,
+          trailing_stop_enabled: true,
+          trail_activation_atr: 2.5,
+          trail_activation_pct: 3,
+          max_trades_per_symbol_per_day: 2,
+          min_bars_between_trades: 10,
+          cooldown_after_loss_bars: 20,
+          max_consecutive_losses: 3,
+          pause_after_loss_streak: true,
+          pause_duration: 'EOD',
+        },
+      },
+      risk_engine_v2: {
+        drawdown_pct: 0.0,
+        drawdown_state: 'NORMAL',
+        allow_new_entries: true,
+        throttle_multiplier: 1.0,
+        profile: { id: 1, name: 'CNC_DEFAULT', product: 'CNC', enabled: true, is_default: true },
+        thresholds: { caution_pct: 6, defense_pct: 10, hard_stop_pct: 14 },
+        capital_per_trade: 20000,
+        max_positions: 6,
+        max_exposure_pct: 60,
+        risk_per_trade_pct: 0.5,
+        hard_risk_pct: 0.75,
+        daily_loss_pct: 1,
+        hard_daily_loss_pct: 1,
+        max_consecutive_losses: 3,
+        entry_cutoff_time: null,
+        force_squareoff_time: null,
+        max_trades_per_day: null,
+        max_trades_per_symbol_per_day: 2,
+        min_bars_between_trades: 10,
+        cooldown_after_loss_bars: 20,
+        slippage_guard_bps: null,
+        gap_guard_pct: null,
+      },
+    },
+    overrides: [],
+    provenance: {},
+  }
+}
+
 describe('SettingsPage Risk settings selective enforcement', () => {
   beforeEach(() => {
     let currentPolicy = makePolicy()
@@ -91,6 +207,9 @@ describe('SettingsPage Risk settings selective enforcement', () => {
       if (url.includes('/api/risk-policy/reset') && init?.method === 'POST') {
         currentPolicy = makePolicy()
         return { ok: true, json: async () => currentPolicy } as unknown as Response
+      }
+      if (url.includes('/api/risk/compiled')) {
+        return { ok: true, json: async () => makeCompiledFixture() } as unknown as Response
       }
       return { ok: true, json: async () => ({}) } as unknown as Response
     })
@@ -143,6 +262,9 @@ describe('SettingsPage Risk settings selective enforcement', () => {
         const body = init.body ? JSON.parse(String(init.body)) : null
         currentPolicy = body as RiskPolicy
         return { ok: true, json: async () => currentPolicy } as unknown as Response
+      }
+      if (url.includes('/api/risk/compiled')) {
+        return { ok: true, json: async () => makeCompiledFixture() } as unknown as Response
       }
       return { ok: true, json: async () => ({}) } as unknown as Response
     })
