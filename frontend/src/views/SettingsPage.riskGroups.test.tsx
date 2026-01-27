@@ -189,10 +189,25 @@ function makeCompiledFixture() {
 describe('SettingsPage Risk settings selective enforcement', () => {
   beforeEach(() => {
     let currentPolicy = makePolicy()
+    let v2Enabled = true
 
     const fetchMock = vi.fn()
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
+        } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/v2-enabled') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        v2Enabled = Boolean(body?.enabled)
+        return {
+          ok: true,
+          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
+        } as unknown as Response
+      }
       if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
         return {
           ok: true,
@@ -249,9 +264,24 @@ describe('SettingsPage Risk settings selective enforcement', () => {
   it('persists group toggle changes via Save', async () => {
     const fetchMock = vi.fn()
     let currentPolicy = makePolicy()
+    let v2Enabled = true
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
+        } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/v2-enabled') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        v2Enabled = Boolean(body?.enabled)
+        return {
+          ok: true,
+          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
+        } as unknown as Response
+      }
       if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
         return {
           ok: true,
@@ -301,5 +331,103 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     const putCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/risk-policy') && c[1]?.method === 'PUT')
     const body = putCall?.[1]?.body ? JSON.parse(String(putCall?.[1]?.body)) : null
     expect(body.enforcement.trade_frequency).toBe(false)
+  })
+
+  it('disables risk policy fields when enforcement is OFF', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=risk']}>
+        <AppThemeProvider>
+          <TimeSettingsProvider>
+            <SettingsPage />
+          </TimeSettingsProvider>
+        </AppThemeProvider>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Account-level risk')).toBeInTheDocument()
+    })
+
+    const master = screen.getByRole('checkbox', { name: /enable enforcement/i })
+    fireEvent.click(master)
+
+    const equityInput = screen.getByRole('spinbutton', { name: /manual equity/i })
+    await waitFor(() => {
+      expect(equityInput).toBeDisabled()
+    })
+  })
+
+  it('disables risk engine v2 settings when v2 is OFF', async () => {
+    const fetchMock = vi.fn()
+    let currentPolicy = makePolicy()
+    let v2Enabled = false
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
+        } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/v2-enabled') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        v2Enabled = Boolean(body?.enabled)
+        return {
+          ok: true,
+          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
+        } as unknown as Response
+      }
+      if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
+        return {
+          ok: true,
+          json: async () => ({ policy: currentPolicy, source: 'db' }),
+        } as unknown as Response
+      }
+      if (url.includes('/api/risk-policy') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        currentPolicy = body as RiskPolicy
+        return { ok: true, json: async () => currentPolicy } as unknown as Response
+      }
+      if (url.includes('/api/risk/compiled')) {
+        const compiled = makeCompiledFixture()
+        compiled.inputs.risk_engine_v2_enabled = false
+        return { ok: true, json: async () => compiled } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/risk-profiles')) {
+        return { ok: true, json: async () => [] } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/drawdown-thresholds')) {
+        return { ok: true, json: async () => [] } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/decision-log')) {
+        return { ok: true, json: async () => [] } as unknown as Response
+      }
+      return { ok: true, json: async () => ({}) } as unknown as Response
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=risk']}>
+        <AppThemeProvider>
+          <TimeSettingsProvider>
+            <SettingsPage />
+          </TimeSettingsProvider>
+        </AppThemeProvider>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Risk engine v2')).toBeInTheDocument()
+    })
+
+    const createBtn = screen.getByRole('button', { name: /create profile/i })
+    await waitFor(() => {
+      expect(createBtn).toBeDisabled()
+    })
+
+    const saveThresholds = screen.getByRole('button', { name: /save thresholds/i })
+    expect(saveThresholds).toBeDisabled()
   })
 })
