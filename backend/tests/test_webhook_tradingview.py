@@ -409,6 +409,7 @@ def test_tradingview_webhook_config_roundtrip_via_settings_api() -> None:
     assert data["mode"] == "MANUAL"
     assert data["broker_name"] == "zerodha"
     assert data["execution_target"] == "LIVE"
+    assert data["default_product"] == "CNC"
     assert data["fallback_to_waiting_on_error"] is True
 
     response = client.put(
@@ -417,6 +418,7 @@ def test_tradingview_webhook_config_roundtrip_via_settings_api() -> None:
             "mode": "AUTO",
             "broker_name": "zerodha",
             "execution_target": "LIVE",
+            "default_product": "MIS",
             "fallback_to_waiting_on_error": False,
         },
     )
@@ -425,10 +427,59 @@ def test_tradingview_webhook_config_roundtrip_via_settings_api() -> None:
     assert data["mode"] == "AUTO"
     assert data["broker_name"] == "zerodha"
     assert data["execution_target"] == "LIVE"
+    assert data["default_product"] == "MIS"
     assert data["fallback_to_waiting_on_error"] is False
 
     # Clean up: remove the config row so other tests keep using the legacy
     # strategy-driven behavior.
+    from app.services.tradingview_webhook_config import TRADINGVIEW_WEBHOOK_CONFIG_KEY
+    from app.services.webhook_secrets import WEBHOOK_BROKER_NAME
+
+    with SessionLocal() as session:
+        session.query(BrokerSecret).filter(
+            BrokerSecret.broker_name == WEBHOOK_BROKER_NAME,
+            BrokerSecret.key == TRADINGVIEW_WEBHOOK_CONFIG_KEY,
+            BrokerSecret.user_id.is_(None),
+        ).delete()
+        session.commit()
+
+
+def test_tradingview_webhook_default_product_applies_when_payload_omits_product() -> None:
+    # Set global config to default to CNC so orders do not accidentally go MIS.
+    response = client.put(
+        "/api/webhook-settings/tradingview-config",
+        json={
+            "mode": "MANUAL",
+            "broker_name": "zerodha",
+            "execution_target": "LIVE",
+            "default_product": "CNC",
+            "fallback_to_waiting_on_error": True,
+        },
+    )
+    assert response.status_code == 200
+
+    unique_strategy = f"webhook-test-strategy-default-product-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "BSE:TCS",
+        "exchange": "BSE",
+        "interval": "15",
+        "trade_details": {"order_action": "BUY", "quantity": 1, "price": 100.0},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+
+    with SessionLocal() as session:
+        order = session.get(Order, data["order_id"])
+        assert order is not None
+        assert order.product == "CNC"
+
+    # Clean up config row so other tests keep using legacy behavior.
     from app.services.tradingview_webhook_config import TRADINGVIEW_WEBHOOK_CONFIG_KEY
     from app.services.webhook_secrets import WEBHOOK_BROKER_NAME
 

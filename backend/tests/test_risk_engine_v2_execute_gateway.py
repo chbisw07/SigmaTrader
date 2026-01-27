@@ -213,7 +213,8 @@ def _create_waiting_order_qty_missing() -> int:
         "symbol": "NSE:TCS",
         "exchange": "NSE",
         "interval": "1",
-        "trade_details": {"order_action": "BUY", "quantity": None, "price": 100.0},
+        # Explicitly set product for this test module (it seeds MIS-only profiles).
+        "trade_details": {"order_action": "BUY", "quantity": None, "price": 100.0, "product": "MIS"},
     }
     response = client.post("/webhook/tradingview", json=payload)
     assert response.status_code == 201
