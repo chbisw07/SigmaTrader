@@ -103,6 +103,23 @@ def get_settings() -> Settings:
     # Lightweight env override for optional settings backends.
     # When pydantic-settings (or BaseSettings) is unavailable, Settings falls
     # back to BaseModel and does not automatically read env vars. Keep critical
+    # settings usable in that mode.
+    raw_crypto = os.getenv("ST_CRYPTO_KEY")
+    if raw_crypto is not None:
+        settings.crypto_key = str(raw_crypto).strip() or None
+
+    raw_tv_secret = os.getenv("ST_TRADINGVIEW_WEBHOOK_SECRET")
+    if raw_tv_secret is not None:
+        settings.tradingview_webhook_secret = str(raw_tv_secret).strip() or None
+
+    raw_admin_user = os.getenv("ST_ADMIN_USERNAME")
+    if raw_admin_user is not None:
+        settings.admin_username = str(raw_admin_user).strip() or None
+
+    raw_admin_pass = os.getenv("ST_ADMIN_PASSWORD")
+    if raw_admin_pass is not None:
+        settings.admin_password = str(raw_admin_pass).strip() or None
+
     # feature flags usable in that mode.
     raw_v2 = os.getenv("ST_RISK_ENGINE_V2_ENABLED")
     if raw_v2 is not None:
