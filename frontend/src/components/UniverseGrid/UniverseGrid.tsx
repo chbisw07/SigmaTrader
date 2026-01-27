@@ -14,6 +14,8 @@ type UniverseGridProps<RowT extends GridValidRowModel> = {
   rows: RowT[]
   columns: GridColDef[]
   getRowId: DataGridProps<RowT>['getRowId']
+  apiRef?: DataGridProps<RowT>['apiRef']
+  getRowClassName?: DataGridProps<RowT>['getRowClassName']
   loading?: boolean
   rowSelectionModel: GridRowSelectionModel
   onRowSelectionModelChange: (next: GridRowSelectionModel) => void
@@ -38,6 +40,8 @@ export function UniverseGrid<RowT extends GridValidRowModel>(
     rows,
     columns,
     getRowId,
+    apiRef,
+    getRowClassName,
     loading = false,
     rowSelectionModel,
     onRowSelectionModelChange,
@@ -58,6 +62,7 @@ export function UniverseGrid<RowT extends GridValidRowModel>(
   return (
     <Paper sx={{ mt: 1, height, width: '100%' }}>
       <DataGrid
+        apiRef={apiRef}
         rows={rows}
         columns={columns}
         getRowId={getRowId}
@@ -69,6 +74,7 @@ export function UniverseGrid<RowT extends GridValidRowModel>(
         columnVisibilityModel={columnVisibilityModel}
         onColumnVisibilityModelChange={onColumnVisibilityModelChange}
         disableRowSelectionOnClick={disableRowSelectionOnClick}
+        getRowClassName={getRowClassName}
         sx={{ height: '100%', ...sx }}
         slots={slots ?? { toolbar: GridToolbar }}
         slotProps={{

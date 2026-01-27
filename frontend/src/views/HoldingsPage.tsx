@@ -35,6 +35,7 @@ import {
   type GridColumnVisibilityModel,
   GridLogicOperator,
   type GridRowSelectionModel,
+  useGridApiRef,
 } from '@mui/x-data-grid'
 import {
   useCallback,
@@ -99,6 +100,8 @@ import {
   type HoldingGoal,
   type HoldingGoalReview,
 } from '../services/holdingsGoals'
+import { InstrumentSearch } from '../components/InstrumentSearch'
+import type { InstrumentSearchResult } from '../services/instruments'
 
 type HoldingIndicators = {
   rsi14?: number
@@ -206,6 +209,7 @@ const GOAL_DUE_SOON_DAYS = 7
 const GOAL_NEAR_TARGET_PCT = 5
 
 export function HoldingsPage() {
+  const gridApiRef = useGridApiRef()
   const navigate = useNavigate()
   const location = useLocation()
   const [holdings, setHoldings] = useState<HoldingRow[]>([])
@@ -357,6 +361,8 @@ export function HoldingsPage() {
   const [tradeStopPrice, setTradeStopPrice] = useState<string>('')
   const [tradeMaxLoss, setTradeMaxLoss] = useState<number | null>(null)
   const [bulkTradeHoldings, setBulkTradeHoldings] = useState<HoldingRow[]>([])
+  const [highlightSymbol, setHighlightSymbol] = useState<string | null>(null)
+  const highlightTimerRef = useRef<number | null>(null)
   const [rowSelectionModel, setRowSelectionModel] = useState<GridRowSelectionModel>([])
   const [bulkPriceOverrides, setBulkPriceOverrides] = useState<Record<string, string>>(
     {},
@@ -2755,6 +2761,82 @@ export function HoldingsPage() {
     })()
     setTradeError(null)
     setTradeOpen(true)
+  }
+
+  const openQuickTradeDialog = (inst: InstrumentSearchResult) => {
+    // Create a minimal "holding" stub so the existing trade flow works.
+    const stub: HoldingRow = {
+      symbol: inst.symbol,
+      exchange: inst.exchange,
+      quantity: 0,
+      average_price: 0,
+      last_price: null,
+      pnl: null,
+      last_purchase_date: null,
+      total_pnl_percent: null,
+      today_pnl_percent: null,
+      broker_name: tradeBrokerName,
+    }
+
+    setBulkTradeHoldings([])
+    setTradeHolding(stub)
+    setTradeSide('BUY')
+    setTradeSymbol(`${inst.exchange}:${inst.symbol}`)
+    setTradeQty('1')
+    setTradePrice('')
+    setTradeTriggerPrice('')
+    setTradeSizeMode('QTY')
+    setTradeAmount('')
+    setTradePctEquity('')
+    setTradeProduct('CNC')
+    setTradeOrderType('MARKET')
+    setTradeBracketEnabled(false)
+    setRiskSlEnabled(false)
+    setRiskSlMode('PCT')
+    setRiskSlValue('2')
+    setRiskSlAtrPeriod('14')
+    setRiskSlAtrTf('5m')
+    setRiskTrailEnabled(false)
+    setRiskTrailMode('PCT')
+    setRiskTrailValue('1')
+    setRiskTrailAtrPeriod('14')
+    setRiskTrailAtrTf('5m')
+    setRiskActivationEnabled(false)
+    setRiskActivationMode('PCT')
+    setRiskActivationValue('3')
+    setRiskActivationAtrPeriod('14')
+    setRiskActivationAtrTf('5m')
+    setTradeMtpPct('')
+    setTradeGtt(false)
+    setTradeExecutionMode('MANUAL')
+    setTradeExecutionTarget('LIVE')
+
+    if (!universeId.startsWith('group:')) {
+      setTradeBrokerName(universeId === 'holdings:angelone' ? 'angelone' : 'zerodha')
+    }
+    setTradePortfolioGroupId(activeGroup?.kind === 'PORTFOLIO' ? activeGroup.id : null)
+    setTradePortfolioOptions([])
+    setTradePortfolioLoading(false)
+    setTradeError(null)
+    setTradeOpen(true)
+  }
+
+  const handleQuickTradeSelect = (inst: InstrumentSearchResult) => {
+    const sym = (inst.symbol || '').toUpperCase()
+    if (sym) {
+      const idx = filteredRows.findIndex((r) => String(r.symbol || '').toUpperCase() === sym)
+      if (idx >= 0) {
+        try {
+          gridApiRef.current.scrollToIndexes({ rowIndex: idx })
+        } catch {
+          // ignore
+        }
+        setHighlightSymbol(sym)
+        if (highlightTimerRef.current != null) window.clearTimeout(highlightTimerRef.current)
+        highlightTimerRef.current = window.setTimeout(() => setHighlightSymbol(null), 2000)
+      }
+    }
+    openQuickTradeDialog(inst)
   }
 
   const closeTradeDialog = () => {
@@ -5992,6 +6074,13 @@ export function HoldingsPage() {
             >
               Refresh now
             </Button>
+            <Box sx={{ flex: '1 1 240px', minWidth: 260, maxWidth: 420, ml: { xs: 0, md: 'auto' } }}>
+              <InstrumentSearch
+                label="Quick trade"
+                brokerName={universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'}
+                onSelect={handleQuickTradeSelect}
+              />
+            </Box>
           </Box>
           {totalActiveAlerts > 0 && (
             <Typography variant="caption" color="text.secondary">
@@ -6522,6 +6611,7 @@ export function HoldingsPage() {
         </Typography>
       )}
       <UniverseGrid
+        apiRef={gridApiRef}
         rows={filteredRows}
         columns={columns}
         getRowId={(row) => row.symbol}
@@ -6560,9 +6650,19 @@ export function HoldingsPage() {
           }
         }}
         disableRowSelectionOnClick
+        getRowClassName={(params) => {
+          const id = String(params.id || '').toUpperCase()
+          return highlightSymbol && id === highlightSymbol ? 'st-row-highlight' : ''
+        }}
         sx={{
           '& .pnl-negative': {
             color: 'error.main',
+          },
+          '& .MuiDataGrid-row.st-row-highlight': {
+            backgroundColor: (theme) =>
+              theme.palette.mode === 'dark'
+                ? 'rgba(255, 193, 7, 0.22)'
+                : 'rgba(255, 193, 7, 0.16)',
           },
           '& .goal-overdue': {
             color: 'error.main',

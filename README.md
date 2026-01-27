@@ -7,6 +7,7 @@ SigmaTrader is a trading companion app that turns **TradingView alerts** into **
 - **Risk management layer** (position limits, capital limits, daily loss, short-sell protection)
 - **Order tracking & status sync** with Zerodha
 - **Trade analytics** for strategy-level performance insights
+- **Holdings Quick trade search** (see `docs/holdings_quick_trade_search.md`)
 
 Architecture:
 
