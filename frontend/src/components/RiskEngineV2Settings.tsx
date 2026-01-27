@@ -1,9 +1,11 @@
 import AddIcon from '@mui/icons-material/Add'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
+import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
+import CircularProgress from '@mui/material/CircularProgress'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -28,10 +30,12 @@ import { useNavigate } from 'react-router-dom'
 import {
   createRiskProfile,
   deleteRiskProfile,
+  fetchRiskEngineV2Enabled,
   fetchAlertDecisionLog,
   fetchDrawdownThresholds,
   fetchRiskProfiles,
   upsertDrawdownThresholds,
+  updateRiskEngineV2Enabled,
   updateRiskProfile,
   type AlertDecisionLogRow,
   type DrawdownThresholdUpsert,
@@ -39,6 +43,7 @@ import {
   type RiskProduct,
   type RiskProfile,
   type RiskProfileCreate,
+  type RiskEngineV2Enabled,
 } from '../services/riskEngine'
 
 const PRODUCTS: RiskProduct[] = ['CNC', 'MIS']
@@ -84,6 +89,13 @@ const DEFAULT_PROFILE: RiskProfileCreate = {
 
 export function RiskEngineV2Settings() {
   const navigate = useNavigate()
+  const [v2Flag, setV2Flag] = useState<RiskEngineV2Enabled | null>(null)
+  const [v2Busy, setV2Busy] = useState(false)
+  const [v2Error, setV2Error] = useState<string | null>(null)
+
+  const v2Enabled = Boolean(v2Flag?.enabled)
+  const v2ConfigDisabled = !v2Enabled
+
   const [profiles, setProfiles] = useState<RiskProfile[]>([])
   const [profilesBusy, setProfilesBusy] = useState(false)
   const [profilesError, setProfilesError] = useState<string | null>(null)
@@ -105,6 +117,19 @@ export function RiskEngineV2Settings() {
 
   const openGuide = (hash: string) => {
     navigate(`/risk-guide#${hash}`)
+  }
+
+  const loadV2Flag = async () => {
+    setV2Busy(true)
+    try {
+      const res = await fetchRiskEngineV2Enabled()
+      setV2Flag(res)
+      setV2Error(null)
+    } catch (err) {
+      setV2Error(err instanceof Error ? err.message : 'Failed to load risk engine v2 flag')
+    } finally {
+      setV2Busy(false)
+    }
   }
 
   const loadProfiles = async () => {
@@ -171,6 +196,7 @@ export function RiskEngineV2Settings() {
   }, [profiles])
 
   useEffect(() => {
+    void loadV2Flag()
     void loadProfiles()
     void loadThresholds()
     void loadDecisionLog()
@@ -178,12 +204,14 @@ export function RiskEngineV2Settings() {
   }, [])
 
   const openCreate = () => {
+    if (v2ConfigDisabled) return
     setEditingId(null)
     setDraft({ ...DEFAULT_PROFILE })
     setEditorOpen(true)
   }
 
   const openEdit = (p: RiskProfile) => {
+    if (v2ConfigDisabled) return
     setEditingId(p.id)
     setDraft({
       name: p.name,
@@ -217,6 +245,7 @@ export function RiskEngineV2Settings() {
   }
 
   const handleSaveProfile = async () => {
+    if (v2ConfigDisabled) return
     const name = draft.name.trim()
     if (!name) return
     setSaving(true)
@@ -288,6 +317,7 @@ export function RiskEngineV2Settings() {
   }
 
   const handleDeleteProfile = async (p: RiskProfile) => {
+    if (v2ConfigDisabled) return
     const ok = window.confirm(`Delete risk profile "${p.name}"?`)
     if (!ok) return
     setProfilesBusy(true)
@@ -302,6 +332,7 @@ export function RiskEngineV2Settings() {
   }
 
   const handleSaveThresholds = async () => {
+    if (v2ConfigDisabled) return
     setThresholdsBusy(true)
     try {
       const payload: DrawdownThresholdUpsert[] = []
@@ -332,6 +363,76 @@ export function RiskEngineV2Settings() {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Paper sx={{ p: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
+            Risk engine v2
+          </Typography>
+          {v2Flag?.source ? (
+            <Chip size="small" label={`Source: ${v2Flag.source}`} />
+          ) : null}
+          <Tooltip title="Refresh" arrow placement="top">
+            <span>
+              <IconButton size="small" onClick={() => void loadV2Flag()} disabled={v2Busy}>
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          Enables product-specific profiles (CNC/MIS), drawdown thresholds, and decision logging in the
+          execution layer. Risk Policy enforcement remains independent.
+        </Typography>
+
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', mt: 1.25 }}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={v2Enabled}
+                disabled={v2Busy || v2Flag == null}
+                onChange={async (e) => {
+                  const next = Boolean(e.target.checked)
+                  setV2Busy(true)
+                  try {
+                    const updated = await updateRiskEngineV2Enabled(next)
+                    setV2Flag(updated)
+                    setV2Error(null)
+                    if (!updated.enabled) setEditorOpen(false)
+                  } catch (err) {
+                    setV2Error(
+                      err instanceof Error ? err.message : 'Failed to update risk engine v2 flag',
+                    )
+                  } finally {
+                    setV2Busy(false)
+                  }
+                }}
+              />
+            }
+            label="Enable risk engine v2"
+          />
+          {v2Busy && <CircularProgress size={18} />}
+        </Box>
+
+        {v2Error ? (
+          <Typography variant="caption" color="error" sx={{ mt: 0.75, display: 'block' }}>
+            {v2Error}
+          </Typography>
+        ) : null}
+
+        {v2Flag && !v2Enabled ? (
+          <Alert severity="info" sx={{ mt: 1.25 }}>
+            Risk engine v2 is disabled. Profiles/thresholds below are not enforced at execution time.
+          </Alert>
+        ) : null}
+
+        {v2Flag?.source === 'db_invalid' ? (
+          <Alert severity="warning" sx={{ mt: 1.25 }}>
+            Risk engine v2 flag is present but unreadable. For safety, v2 is OFF. Toggle it once to
+            re-save a valid value.
+          </Alert>
+        ) : null}
+      </Paper>
+
+      <Paper sx={{ p: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <Typography variant="h6" sx={{ flex: 1, minWidth: 260 }}>
             Product-specific risk profiles (CNC/MIS)
           </Typography>
@@ -354,7 +455,7 @@ export function RiskEngineV2Settings() {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={openCreate}
-            disabled={profilesBusy}
+            disabled={profilesBusy || v2ConfigDisabled}
           >
             Create profile
           </Button>
@@ -384,7 +485,12 @@ export function RiskEngineV2Settings() {
                 <TableCell>{p.enabled ? 'Yes' : 'No'}</TableCell>
                 <TableCell align="right">
                   <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                    <Button size="small" variant="outlined" onClick={() => openEdit(p)}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => openEdit(p)}
+                      disabled={v2ConfigDisabled}
+                    >
                       Edit
                     </Button>
                     <Button
@@ -392,6 +498,7 @@ export function RiskEngineV2Settings() {
                       variant="outlined"
                       color="error"
                       onClick={() => void handleDeleteProfile(p)}
+                      disabled={v2ConfigDisabled}
                     >
                       Delete
                     </Button>
@@ -431,7 +538,7 @@ export function RiskEngineV2Settings() {
             size="small"
             variant="contained"
             onClick={() => void handleSaveThresholds()}
-            disabled={thresholdsBusy}
+            disabled={thresholdsBusy || v2ConfigDisabled}
           >
             Save thresholds
           </Button>
@@ -465,6 +572,7 @@ export function RiskEngineV2Settings() {
                         size="small"
                         type="number"
                         value={row.caution_pct}
+                        disabled={v2ConfigDisabled}
                         onChange={(e) =>
                           setThresholdDrafts((prev) => ({
                             ...prev,
@@ -479,6 +587,7 @@ export function RiskEngineV2Settings() {
                         size="small"
                         type="number"
                         value={row.defense_pct}
+                        disabled={v2ConfigDisabled}
                         onChange={(e) =>
                           setThresholdDrafts((prev) => ({
                             ...prev,
@@ -493,6 +602,7 @@ export function RiskEngineV2Settings() {
                         size="small"
                         type="number"
                         value={row.hard_stop_pct}
+                        disabled={v2ConfigDisabled}
                         onChange={(e) =>
                           setThresholdDrafts((prev) => ({
                             ...prev,

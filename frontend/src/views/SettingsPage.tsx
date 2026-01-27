@@ -1,5 +1,6 @@
 import FileDownloadIcon from '@mui/icons-material/FileDownload'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
@@ -1639,7 +1640,18 @@ export function SettingsPage() {
                     </Typography>
                   )}
 
-                  <Divider sx={{ my: 2 }} />
+                  {!riskPolicyDraft.enabled && (
+                    <Alert severity="info" sx={{ mt: 1.5 }}>
+                      Risk policy enforcement is disabled. Enable enforcement to edit these settings.
+                    </Alert>
+                  )}
+
+                  <Box
+                    component="fieldset"
+                    disabled={!riskPolicyDraft.enabled}
+                    sx={{ border: 0, p: 0, m: 0, minInlineSize: 0 }}
+                  >
+                    <Divider sx={{ my: 2 }} />
 
                   <Typography
                     variant="subtitle2"
@@ -2959,6 +2971,7 @@ export function SettingsPage() {
                       </Table>
                     )
                   })()}
+                  </Box>
                 </>
               )}
               </Paper>
