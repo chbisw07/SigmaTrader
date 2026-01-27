@@ -52,6 +52,7 @@ import {
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 import { downloadCsv } from '../utils/csv'
+import { computeHoldingsWeights, normalizeTargetWeights } from '../utils/groupWeights'
 import {
   addGroupMember,
   bulkAddGroupMembers,
@@ -290,15 +291,16 @@ export function GroupsPage() {
     notes: '',
   })
 
-  // Portfolio allocation health (PORTFOLIO groups only).
+  // Portfolio / Holdings-view weights + allocation health.
   const [compareBroker, setCompareBroker] = useState<'zerodha' | 'angelone'>('zerodha')
   const [holdingsReloadNonce, setHoldingsReloadNonce] = useState(0)
   const [holdingsSyncBusy, setHoldingsSyncBusy] = useState(false)
   const [holdingsFetchBusy, setHoldingsFetchBusy] = useState(false)
   const [holdingsSnapshotError, setHoldingsSnapshotError] = useState<string | null>(null)
   const [holdingsByKey, setHoldingsByKey] = useState<
-    Record<string, { qty: number; avgPrice: number | null }>
+    Record<string, { qty: number; avgPrice: number | null; lastPrice: number | null }>
   >({})
+  const [autoCalculateWeights, setAutoCalculateWeights] = useState(false)
   const [allocationTotalsByKey, setAllocationTotalsByKey] = useState<Record<string, number>>({})
   const [symbolCategoriesByKey, setSymbolCategoriesByKey] = useState<
     Record<string, RiskCategory>
@@ -499,7 +501,7 @@ export function GroupsPage() {
   useEffect(() => {
     let active = true
     const loadHoldings = async () => {
-      if (!selectedGroup || selectedGroup.kind !== 'PORTFOLIO') {
+      if (!selectedGroup || (selectedGroup.kind !== 'PORTFOLIO' && selectedGroup.kind !== 'HOLDINGS_VIEW')) {
         setHoldingsByKey({})
         return
       }
@@ -556,18 +558,20 @@ export function GroupsPage() {
             captured_at: capturedAt,
           }
         }
-        const map: Record<string, { qty: number; avgPrice: number | null }> = {}
+        const map: Record<string, { qty: number; avgPrice: number | null; lastPrice: number | null }> = {}
         for (const h of holdings) {
           const sym = (h.symbol || '').trim().toUpperCase()
           const exch = (h.exchange || 'NSE').trim().toUpperCase()
           if (!sym) continue
           const qty = Number(h.quantity ?? 0)
           const avg = h.average_price != null ? Number(h.average_price) : null
+          const last = (h as any).last_price != null ? Number((h as any).last_price) : null
           const baseQty = Number.isFinite(qty) ? qty : 0
           const key = `${exch}:${sym}`
           map[key] = {
             qty: baseQty,
             avgPrice: avg != null && Number.isFinite(avg) && avg > 0 ? avg : null,
+            lastPrice: last != null && Number.isFinite(last) && last > 0 ? last : null,
           }
         }
         // Merge in the latest delivery position snapshot:
@@ -582,7 +586,8 @@ export function GroupsPage() {
             holdingQty + dayBuyQty,
           )
           const avgPrice = map[key]?.avgPrice ?? p.avg_price ?? null
-          map[key] = { qty: effQty, avgPrice }
+          const lastPrice = map[key]?.lastPrice ?? null
+          map[key] = { qty: effQty, avgPrice, lastPrice }
         }
 
         // Ensure a stable display for symbols absent from broker holdings and snapshots.
@@ -600,8 +605,8 @@ export function GroupsPage() {
           if (!sym) continue
           if (presentSymbols.has(sym)) continue
           const key = `${exch}:${sym}`
-          if (map[key] == null) map[key] = { qty: 0, avgPrice: null }
-        }
+           if (map[key] == null) map[key] = { qty: 0, avgPrice: null, lastPrice: null }
+         }
 
         setHoldingsByKey(map)
       } catch (err) {
@@ -620,6 +625,18 @@ export function GroupsPage() {
       active = false
     }
   }, [compareBroker, holdingsReloadNonce, selectedGroup])
+
+  const lastAutoWeightsGroupId = useRef<number | null>(null)
+  useEffect(() => {
+    if (!selectedGroup) {
+      lastAutoWeightsGroupId.current = null
+      setAutoCalculateWeights(false)
+      return
+    }
+    if (lastAutoWeightsGroupId.current === selectedGroup.id) return
+    lastAutoWeightsGroupId.current = selectedGroup.id
+    setAutoCalculateWeights(selectedGroup.kind === 'HOLDINGS_VIEW' || selectedGroup.kind === 'PORTFOLIO')
+  }, [selectedGroup])
 
   useEffect(() => {
     let active = true
@@ -651,7 +668,10 @@ export function GroupsPage() {
   }, [compareBroker])
 
   const holdingsBySymbol = useMemo(() => {
-    const agg: Record<string, { qty: number; costQty: number; cost: number }> = {}
+    const agg: Record<
+      string,
+      { qty: number; costQty: number; cost: number; lastQty: number; lastValue: number }
+    > = {}
     for (const [key, h] of Object.entries(holdingsByKey)) {
       const parts = key.split(':')
       const sym = (parts[1] || '').trim().toUpperCase()
@@ -659,21 +679,28 @@ export function GroupsPage() {
 
       const qty = Number.isFinite(h.qty) ? Number(h.qty) : 0
       const avg = h.avgPrice != null && Number.isFinite(h.avgPrice) ? Number(h.avgPrice) : null
+      const last =
+        h.lastPrice != null && Number.isFinite(h.lastPrice) ? Number(h.lastPrice) : null
 
-      const row = agg[sym] ?? { qty: 0, costQty: 0, cost: 0 }
+      const row = agg[sym] ?? { qty: 0, costQty: 0, cost: 0, lastQty: 0, lastValue: 0 }
       row.qty += qty
       if (avg != null && avg > 0 && qty > 0) {
         row.costQty += qty
         row.cost += qty * avg
       }
+      if (last != null && last > 0 && qty > 0) {
+        row.lastQty += qty
+        row.lastValue += qty * last
+      }
       agg[sym] = row
     }
 
-    const out: Record<string, { qty: number; avgPrice: number | null }> = {}
+    const out: Record<string, { qty: number; avgPrice: number | null; lastPrice: number | null }> = {}
     for (const [sym, v] of Object.entries(agg)) {
       out[sym] = {
         qty: v.qty,
         avgPrice: v.costQty > 0 ? v.cost / v.costQty : null,
+        lastPrice: v.lastQty > 0 ? v.lastValue / v.lastQty : null,
       }
     }
     return out
@@ -701,6 +728,21 @@ export function GroupsPage() {
     },
     [holdingsByKey, holdingsBySymbol],
   )
+
+  const computedWeightsByKey = useMemo(() => {
+    if (!autoCalculateWeights) return {}
+    if (!selectedGroup?.members?.length) return {}
+
+    if (selectedGroup.kind === 'HOLDINGS_VIEW') {
+      return computeHoldingsWeights(selectedGroup.members, getHoldingsSnapshot)
+    }
+
+    if (selectedGroup.kind === 'PORTFOLIO') {
+      return normalizeTargetWeights(selectedGroup.members)
+    }
+
+    return {}
+  }, [autoCalculateWeights, getHoldingsSnapshot, selectedGroup?.kind, selectedGroup?.members])
 
   const refreshHoldingsSnapshot = useCallback(async () => {
     setHoldingsSnapshotError(null)
@@ -1468,8 +1510,21 @@ export function GroupsPage() {
         field: 'target_weight',
         headerName: 'Target weight',
         width: 150,
-        valueGetter: (_value, row) =>
-          row.target_weight != null ? row.target_weight : null,
+        valueGetter: (_value, row) => {
+          const sym = (row.symbol || '').trim().toUpperCase()
+          const exch = (row.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+          if (!sym) return null
+
+          if (
+            autoCalculateWeights
+            && (selectedGroup?.kind === 'HOLDINGS_VIEW' || selectedGroup?.kind === 'PORTFOLIO')
+          ) {
+            const w = computedWeightsByKey[`${exch}:${sym}`]
+            if (w != null && Number.isFinite(Number(w))) return Number(w)
+          }
+
+          return row.target_weight != null ? row.target_weight : null
+        },
         valueFormatter: (v) => formatPercent(v as number | null),
       },
     ]
@@ -1608,7 +1663,9 @@ export function GroupsPage() {
 
     return cols
   }, [
+    autoCalculateWeights,
     allocationTotalsByKey,
+    computedWeightsByKey,
     getHoldingsSnapshot,
     handleSetSymbolCategory,
     notesEnabled,
@@ -1757,7 +1814,7 @@ export function GroupsPage() {
                 </Button>
             </Stack>
 
-            {selectedGroup?.kind === 'PORTFOLIO' && (
+            {(selectedGroup?.kind === 'PORTFOLIO' || selectedGroup?.kind === 'HOLDINGS_VIEW') && (
               <Stack
                 direction={{ xs: 'column', md: 'row' }}
                 spacing={1}
@@ -1790,7 +1847,7 @@ export function GroupsPage() {
                   Refresh (Y)
                 </Button>
                 <Typography variant="caption" color="text.secondary">
-                  Used only for X/Y display and allocation health.
+                  Used for holdings snapshot (weights, X/Y display, allocation health).
                 </Typography>
                 {holdingsSnapshotError && (
                   <Typography variant="caption" color="error">
@@ -2007,6 +2064,23 @@ export function GroupsPage() {
                   >
                     Equal weights
                   </Button>
+                  {(selectedGroup?.kind === 'HOLDINGS_VIEW' || selectedGroup?.kind === 'PORTFOLIO') && (
+                    <FormControlLabel
+                      control={
+                        <Checkbox
+                          checked={autoCalculateWeights}
+                          onChange={(e) => setAutoCalculateWeights(e.target.checked)}
+                          size="small"
+                        />
+                      }
+                      label={
+                        <Typography variant="body2" color="text.secondary">
+                          Auto calculate weights
+                        </Typography>
+                      }
+                      sx={{ ml: 0.5 }}
+                    />
+                  )}
                 </Stack>
 
                 <Box sx={{ mt: 1.5, flexGrow: 1 }}>
