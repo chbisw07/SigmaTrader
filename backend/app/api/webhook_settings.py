@@ -46,6 +46,7 @@ class TradingViewWebhookConfigRead(BaseModel):
     mode: str
     broker_name: str
     execution_target: str
+    default_product: str
     fallback_to_waiting_on_error: bool = True
 
 
@@ -53,6 +54,7 @@ class TradingViewWebhookConfigUpdate(BaseModel):
     mode: str | None = None
     broker_name: str | None = None
     execution_target: str | None = None
+    default_product: str | None = None
     fallback_to_waiting_on_error: bool | None = None
 
 

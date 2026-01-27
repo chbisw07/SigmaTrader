@@ -505,6 +505,7 @@ export function SettingsPage() {
     'LIVE' | 'PAPER'
   >('LIVE')
   const [tvWebhookBrokerName, setTvWebhookBrokerName] = useState<string>('zerodha')
+  const [tvWebhookDefaultProduct, setTvWebhookDefaultProduct] = useState<'CNC' | 'MIS'>('CNC')
   const [tvWebhookFallbackToWaiting, setTvWebhookFallbackToWaiting] =
     useState<boolean>(true)
   const [tvWebhookConfigSaving, setTvWebhookConfigSaving] = useState(false)
@@ -591,6 +592,7 @@ export function SettingsPage() {
         setTvWebhookMode(data.mode)
         setTvWebhookBrokerName(data.broker_name ?? 'zerodha')
         setTvWebhookExecutionTarget(data.execution_target)
+        setTvWebhookDefaultProduct((data.default_product ?? 'CNC') as 'CNC' | 'MIS')
         setTvWebhookFallbackToWaiting(Boolean(data.fallback_to_waiting_on_error))
         setTvWebhookConfigError(null)
         setTvWebhookConfigLoaded(true)
@@ -1480,6 +1482,17 @@ export function SettingsPage() {
                 <TextField
                   select
                   size="small"
+                  label="Default product"
+                  value={tvWebhookDefaultProduct}
+                  onChange={(e) => setTvWebhookDefaultProduct(e.target.value as 'CNC' | 'MIS')}
+                  sx={{ minWidth: 180 }}
+                >
+                  <MenuItem value="CNC">CNC (Delivery)</MenuItem>
+                  <MenuItem value="MIS">MIS (Intraday)</MenuItem>
+                </TextField>
+                <TextField
+                  select
+                  size="small"
                   label="On AUTO failure"
                   value={tvWebhookFallbackToWaiting ? 'WAITING' : 'FAIL'}
                   onChange={(e) => setTvWebhookFallbackToWaiting(e.target.value === 'WAITING')}
@@ -1499,6 +1512,7 @@ export function SettingsPage() {
                         mode: tvWebhookMode,
                         broker_name: tvWebhookBrokerName,
                         execution_target: tvWebhookExecutionTarget,
+                        default_product: tvWebhookDefaultProduct,
                         fallback_to_waiting_on_error: tvWebhookFallbackToWaiting,
                       })
                       setTvWebhookConfigError(null)

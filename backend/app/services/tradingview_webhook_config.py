@@ -19,6 +19,7 @@ class TradingViewWebhookConfig:
     mode: str = "MANUAL"  # MANUAL|AUTO
     broker_name: str = "zerodha"
     execution_target: str = "LIVE"  # LIVE|PAPER
+    default_product: str = "CNC"  # CNC|MIS (used when payload omits product)
     fallback_to_waiting_on_error: bool = True
 
     @classmethod
@@ -36,6 +37,10 @@ class TradingViewWebhookConfig:
         if execution_target not in {"LIVE", "PAPER"}:
             execution_target = "LIVE"
 
+        default_product = str(raw.get("default_product") or "CNC").strip().upper()
+        if default_product not in {"CNC", "MIS"}:
+            default_product = "CNC"
+
         fallback = raw.get("fallback_to_waiting_on_error")
         if isinstance(fallback, bool):
             fallback_to_waiting = fallback
@@ -46,6 +51,7 @@ class TradingViewWebhookConfig:
             mode=mode,
             broker_name=broker_name,
             execution_target=execution_target,
+            default_product=default_product,
             fallback_to_waiting_on_error=fallback_to_waiting,
         )
 
@@ -54,6 +60,7 @@ class TradingViewWebhookConfig:
             "mode": self.mode,
             "broker_name": self.broker_name,
             "execution_target": self.execution_target,
+            "default_product": self.default_product,
             "fallback_to_waiting_on_error": bool(self.fallback_to_waiting_on_error),
         }
 

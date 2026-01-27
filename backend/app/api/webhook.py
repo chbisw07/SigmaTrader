@@ -527,6 +527,7 @@ def tradingview_webhook(
     normalized: NormalizedAlert = normalize_tradingview_payload_for_zerodha(
         payload=payload,
         user=user,
+        default_product=str(getattr(cfg, "default_product", "CNC") or "CNC"),
     )
 
     client_order_id: str | None = None

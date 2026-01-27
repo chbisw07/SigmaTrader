@@ -32,6 +32,8 @@ class NormalizedAlert:
 def normalize_tradingview_payload_for_zerodha(
     payload: TradingViewWebhookPayload,
     user: User,
+    *,
+    default_product: str = "CNC",
 ) -> NormalizedAlert:
     """Map a TradingView webhook payload into the normalized alert schema.
 
@@ -49,7 +51,10 @@ def normalize_tradingview_payload_for_zerodha(
     qty = float(qty_raw) if qty_raw is not None else 0.0
 
     price = payload.trade_details.price
-    product = (payload.trade_details.product or "MIS").upper()
+    fallback_product = (default_product or "CNC").strip().upper()
+    if fallback_product not in {"CNC", "MIS"}:
+        fallback_product = "CNC"
+    product = (payload.trade_details.product or fallback_product).upper()
 
     # Derive order_type:
     # - When a price is provided in the TradingView payload we treat this as

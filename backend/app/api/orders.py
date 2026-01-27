@@ -688,6 +688,14 @@ def execute_order_internal(
             except Exception:
                 product_hint = None
 
+            # If the TradingView payload omitted product, fall back to the order's
+            # current product so risk engine v2 selects the corresponding profile.
+            if not product_hint:
+                try:
+                    product_hint = (getattr(order, "product", None) or "").strip().upper() or None
+                except Exception:
+                    product_hint = None
+
             baseline_equity = float(
                 getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0
             )

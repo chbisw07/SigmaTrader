@@ -7,6 +7,7 @@ export type TradingViewWebhookConfig = {
   mode: 'MANUAL' | 'AUTO'
   broker_name: string
   execution_target: 'LIVE' | 'PAPER'
+  default_product: 'CNC' | 'MIS'
   fallback_to_waiting_on_error: boolean
 }
 
