@@ -620,6 +620,7 @@ def execute_order_internal(
     risk_v2_category: str | None = None
     risk_v2_product_hint: str | None = None
     risk_v2_baseline_equity: float | None = None
+    risk_v2_throttle_multiplier: float | None = None
     execution_policy_key = None
     execution_policy_interval_min: int | None = None
     execution_policy_apply = False
@@ -701,6 +702,28 @@ def execute_order_internal(
             risk_v2_category = decision.risk_category
             risk_v2_product_hint = product_hint
             risk_v2_baseline_equity = baseline_equity
+
+            # Shared compiler output used by the UI "Effective Risk Summary" panel.
+            # Keep the execution path aligned by pulling the effective drawdown throttle
+            # multiplier from the same compiler logic.
+            try:
+                from app.services.risk_compiler import compile_risk_policy
+
+                if decision.resolved_product and decision.risk_category:
+                    compiled = compile_risk_policy(
+                        db,
+                        settings,
+                        user=user_obj,
+                        product=str(decision.resolved_product).strip().upper(),
+                        category=str(decision.risk_category).strip().upper(),
+                        scenario=None,
+                        symbol=str(getattr(order, "symbol", None) or "") or None,
+                        strategy_id=str(getattr(order.alert, "strategy_id", None) or "") or None,
+                    )
+                    v2_eff = (compiled.get("effective") or {}).get("risk_engine_v2") or {}
+                    risk_v2_throttle_multiplier = float(v2_eff.get("throttle_multiplier") or 1.0)
+            except Exception:
+                risk_v2_throttle_multiplier = None
             record_decision_log(
                 db,
                 user_id=(user_obj.id if user_obj is not None else order.user_id),
@@ -1399,8 +1422,8 @@ def execute_order_internal(
                     )
 
                 cap_trade = float(getattr(profile_v2, "capital_per_trade", 0.0) or 0.0)
-                if str(risk_v2_drawdown_state or "").strip().upper() == "CAUTION":
-                    cap_trade *= 0.7
+                if risk_v2_throttle_multiplier is not None:
+                    cap_trade *= float(risk_v2_throttle_multiplier or 1.0)
                 cap_portfolio = baseline_equity * max_margin_pct / 100.0
 
                 order_type = str(getattr(order, "order_type", "MARKET") or "MARKET").strip().upper()

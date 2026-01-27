@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from math import floor
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -22,11 +22,17 @@ from app.models import (
     SymbolRiskCategory,
     User,
 )
+from app.services.risk_compiler import (
+    apply_drawdown_throttle_v2 as _apply_drawdown_throttle_v2,
+    compute_portfolio_pnl_state as _compute_portfolio_pnl_state,
+    drawdown_state as _drawdown_state,
+    resolve_drawdown_config as _resolve_drawdown_config,
+)
 from app.services.risk_policy import _normalized_symbol_exchange  # type: ignore[attr-defined]
 
 logger = logging.getLogger(__name__)
 
-DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HALT"]
+DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HARD_STOP"]
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
@@ -173,23 +179,14 @@ def resolve_drawdown_config(
     product: str,
     category: str,
 ) -> DrawdownConfig | None:
-    prod = (product or "").strip().upper()
-    cat = (category or "").strip().upper()
-    row = (
-        db.query(DrawdownThreshold)
-        .filter(
-            DrawdownThreshold.user_id.is_(None),
-            DrawdownThreshold.product == prod,
-            DrawdownThreshold.category == cat,
-        )
-        .one_or_none()
-    )
-    if row is None:
-        return None
-    return DrawdownConfig(
-        caution_pct=float(row.caution_pct or 0.0),
-        defense_pct=float(row.defense_pct or 0.0),
-        hard_stop_pct=float(row.hard_stop_pct or 0.0),
+    # Delegate to shared compiler logic so UI summaries match runtime behavior.
+    return cast(
+        DrawdownConfig | None,
+        _resolve_drawdown_config(
+            db,
+            product=(str(product or "").strip().upper() or "CNC"),  # type: ignore[arg-type]
+            category=(str(category or "").strip().upper() or "LC"),  # type: ignore[arg-type]
+        ),
     )
 
 
@@ -200,74 +197,19 @@ def compute_portfolio_pnl_state(
     baseline_equity: float,
     now_utc: datetime,
 ) -> PortfolioPnlState:
-    base = float(baseline_equity or 0.0)
-    if base <= 0:
-        return PortfolioPnlState(
-            baseline_equity=base,
-            equity=base,
-            peak_equity=base,
-            drawdown_pct=0.0,
-            pnl_today=0.0,
-            consecutive_losses=0,
-        )
-
-    # Filter analytics trades to the user via entry orders.
-    query = db.query(AnalyticsTrade).join(
-        Order, AnalyticsTrade.entry_order_id == Order.id
-    )
-    if user_id is not None:
-        query = query.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
-    trades = query.order_by(AnalyticsTrade.closed_at.asc()).all()
-
-    start_day, end_day = _day_bounds_ist(now_utc)
-    pnl_today = 0.0
-    cumulative = 0.0
-    peak_cum = 0.0
-
-    for t in trades:
-        pnl = float(t.pnl or 0.0)
-        cumulative += pnl
-        if cumulative > peak_cum:
-            peak_cum = cumulative
-        if t.closed_at >= start_day and t.closed_at < end_day:
-            pnl_today += pnl
-
-    # Consecutive losses: count from the end of the trade list.
-    streak = 0
-    for t in reversed(trades):
-        pnl = float(t.pnl or 0.0)
-        if pnl < 0:
-            streak += 1
-        else:
-            break
-
-    equity = base + cumulative
-    peak_equity = max(base, base + peak_cum)
-    dd = 0.0
-    if peak_equity > 0:
-        dd = ((peak_equity - equity) / peak_equity) * 100.0
-        if dd < 0:
-            dd = 0.0
-
-    return PortfolioPnlState(
-        baseline_equity=base,
-        equity=equity,
-        peak_equity=peak_equity,
-        drawdown_pct=dd,
-        pnl_today=pnl_today,
-        consecutive_losses=streak,
+    return cast(
+        PortfolioPnlState,
+        _compute_portfolio_pnl_state(
+            db,
+            user_id=user_id,
+            baseline_equity=baseline_equity,
+            now_utc=now_utc,
+        ),
     )
 
 
 def drawdown_state(dd_pct: float, cfg: DrawdownConfig) -> DrawdownState:
-    dd = float(dd_pct or 0.0)
-    if dd >= float(cfg.hard_stop_pct or 0.0) and float(cfg.hard_stop_pct or 0.0) > 0:
-        return "HALT"
-    if dd >= float(cfg.defense_pct or 0.0) and float(cfg.defense_pct or 0.0) > 0:
-        return "DEFENSE"
-    if dd >= float(cfg.caution_pct or 0.0) and float(cfg.caution_pct or 0.0) > 0:
-        return "CAUTION"
-    return "NORMAL"
+    return cast(DrawdownState, _drawdown_state(dd_pct, cfg))
 
 
 def _is_structural_exit(db: Session, order: Order) -> bool:
@@ -330,29 +272,12 @@ def _apply_drawdown_throttle(
     state: DrawdownState,
     category: str,
 ) -> tuple[float, int, list[str]]:
-    reasons: list[str] = []
-    cap = float(profile.capital_per_trade or 0.0)
-    max_pos = int(profile.max_positions or 0)
-
-    if state == "CAUTION":
-        # Example in doc: 30k -> 21k (x0.7)
-        cap = cap * 0.7
-        max_pos = max(1, int(floor(max_pos * 0.7))) if max_pos > 0 else 0
-        reasons.append("Drawdown CAUTION: throttling capital_per_trade and max_positions.")
-        return cap, max_pos, reasons
-
-    if state == "DEFENSE":
-        # Restrict new entries to ETF/LC only.
-        cat = (category or "").strip().upper()
-        if cat not in {"ETF", "LC"}:
-            reasons.append("Drawdown DEFENSE: new entries restricted to ETF/LC symbols.")
-        return cap, max_pos, reasons
-
-    if state == "HALT":
-        reasons.append("Drawdown HALT: new entries blocked.")
-        return cap, max_pos, reasons
-
-    return cap, max_pos, reasons
+    out = _apply_drawdown_throttle_v2(
+        profile=profile,
+        state=state,
+        category=(category or "LC").strip().upper(),  # type: ignore[arg-type]
+    )
+    return float(out.effective_capital_per_trade), int(out.effective_max_positions), list(out.reasons)
 
 
 def evaluate_order_risk_v2(
@@ -531,7 +456,7 @@ def evaluate_order_risk_v2(
 
     # Drawdown gating applies to entries; exits are always allowed.
     if not is_exit:
-        if dd_state == "HALT":
+        if dd_state == "HARD_STOP":
             return RiskDecisionV2(
                 blocked=True,
                 reasons=reasons,
