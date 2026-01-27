@@ -20,6 +20,7 @@ from . import (
     paper,
     positions,
     rebalance,
+    risk_compiled,
     risk_policy,
     risk_engine,
     risk_settings,
@@ -228,6 +229,13 @@ router.include_router(
     prefix="/api/risk-policy",
     dependencies=[Depends(require_admin)],
     tags=["risk-policy"],
+)
+
+router.include_router(
+    risk_compiled.router,
+    prefix="/api/risk",
+    dependencies=[Depends(require_admin)],
+    tags=["risk-compiled"],
 )
 
 router.include_router(
