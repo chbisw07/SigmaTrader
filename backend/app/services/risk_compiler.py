@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.models import AnalyticsTrade, DrawdownThreshold, Order, RiskProfile, User
 from app.schemas.risk_policy import OrderSourceBucket, ProductOverrides, ProductType, RiskPolicy
+from app.services.risk_engine_v2_flag_store import get_risk_engine_v2_enabled
 from app.services.risk_policy_enforcement import is_group_enforced
 from app.services.risk_policy_store import get_risk_policy
 
@@ -441,7 +442,7 @@ def compile_risk_policy(
         "SIGMATRADER": _policy_effective("SIGMATRADER"),
     }
 
-    risk_engine_v2_enabled = bool(getattr(settings, "risk_engine_v2_enabled", False))
+    risk_engine_v2_enabled, _v2_src = get_risk_engine_v2_enabled(db, settings)
     allow_new_entries = True
     if risk_engine_v2_enabled and blocking_reasons:
         allow_new_entries = False
@@ -536,4 +537,3 @@ __all__ = [
     "resolve_drawdown_config",
     "select_risk_profile",
 ]
-

@@ -614,7 +614,9 @@ def execute_order_internal(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     now_utc = _now_utc()
-    risk_engine_v2_on = bool(getattr(settings, "risk_engine_v2_enabled", False))
+    from app.services.risk_engine_v2_flag_store import get_risk_engine_v2_enabled
+
+    risk_engine_v2_on, _v2_src = get_risk_engine_v2_enabled(db, settings)
     risk_v2_profile_id: int | None = None
     risk_v2_drawdown_state: str | None = None
     risk_v2_category: str | None = None

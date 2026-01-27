@@ -11,6 +11,19 @@ RiskCategory = Literal["LC", "MC", "SC", "ETF"]
 DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HALT"]
 
 
+RiskEngineV2FlagSource = Literal["db", "env_default", "db_invalid"]
+
+
+class RiskEngineV2FlagRead(BaseModel):
+    enabled: bool
+    source: RiskEngineV2FlagSource
+    updated_at: datetime | None = None
+
+
+class RiskEngineV2FlagUpdate(BaseModel):
+    enabled: bool
+
+
 class RiskProfileBase(BaseModel):
     name: str
     product: RiskProduct
@@ -165,6 +178,8 @@ __all__ = [
     "DrawdownThresholdRead",
     "DrawdownThresholdUpsert",
     "EquitySnapshotRead",
+    "RiskEngineV2FlagRead",
+    "RiskEngineV2FlagUpdate",
     "RiskCategory",
     "RiskProduct",
     "RiskProfileCreate",
