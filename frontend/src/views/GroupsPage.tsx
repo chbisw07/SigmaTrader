@@ -235,7 +235,7 @@ export function GroupsPage() {
     loading: watchlistQuotesLoading,
   } = useMarketQuotes(watchlistQuoteItems)
 
-  const exportSelectedGroupCsv = useCallback(() => {
+  const exportSelectedGroupCsv = () => {
     if (!selectedGroup) return
     const now = new Date()
     const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-')
@@ -243,44 +243,44 @@ export function GroupsPage() {
       .replace(/[^a-z0-9_-]+/gi, '_')
       .slice(0, 80)
 
-      const rows = (selectedGroup.members ?? []).map((m) => {
-        const exch = (m.exchange || 'NSE').trim().toUpperCase() || 'NSE'
-        const sym = (m.symbol || '').trim().toUpperCase()
-        const q = watchlistQuotesByKey[`${exch}:${sym}`]
-        const category =
-          sym
-            ? resolveSymbolRiskCategory(symbolCategoryRows, {
-                broker_name: compareBroker,
-                exchange: exch,
-                symbol: sym,
-              })
-            : null
-        return {
-          group_id: selectedGroup.id,
-          group_name: selectedGroup.name,
-          group_kind: selectedGroup.kind,
+    const rows = (selectedGroup.members ?? []).map((m) => {
+      const exch = (m.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+      const sym = (m.symbol || '').trim().toUpperCase()
+      const q = watchlistQuotesByKey[`${exch}:${sym}`]
+      const category =
+        sym
+          ? resolveSymbolRiskCategory(symbolCategoryRows, {
+              broker_name: compareBroker,
+              exchange: exch,
+              symbol: sym,
+            })
+          : null
+      return {
+        group_id: selectedGroup.id,
+        group_name: selectedGroup.name,
+        group_kind: selectedGroup.kind,
         funds: selectedGroup.funds ?? '',
         frozen_at: selectedGroup.frozen_at ?? '',
         origin_basket_id: selectedGroup.origin_basket_id ?? '',
         bought_at: selectedGroup.bought_at ?? '',
-          symbol: sym,
-          exchange: exch,
-          category: category ?? '',
-          target_weight_pct:
-            m.target_weight != null && Number.isFinite(Number(m.target_weight))
-              ? Number(m.target_weight) * 100
-              : '',
+        symbol: sym,
+        exchange: exch,
+        category: category ?? '',
+        target_weight_pct:
+          m.target_weight != null && Number.isFinite(Number(m.target_weight))
+            ? Number(m.target_weight) * 100
+            : '',
         weight_locked: m.weight_locked ?? '',
         frozen_price: m.frozen_price ?? '',
         reference_qty: m.reference_qty ?? '',
         reference_price: m.reference_price ?? '',
         ltp: q?.ltp ?? '',
         day_pct: q?.day_pct ?? '',
-        }
-      })
+      }
+    })
 
-      downloadCsv(`${safeName}_${selectedGroup.kind}_${stamp}.csv`, rows)
-  }, [compareBroker, selectedGroup, symbolCategoryRows, watchlistQuotesByKey])
+    downloadCsv(`${safeName}_${selectedGroup.kind}_${stamp}.csv`, rows)
+  }
 
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkState, setBulkState] = useState<BulkAddState>(DEFAULT_BULK_ADD)
