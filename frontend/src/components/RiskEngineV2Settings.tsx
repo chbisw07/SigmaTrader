@@ -31,7 +31,6 @@ import {
   createRiskProfile,
   deleteRiskProfile,
   fetchRiskEngineV2Enabled,
-  fetchAlertDecisionLog,
   fetchDrawdownThresholds,
   fetchRiskProfiles,
   fetchSymbolCategories,
@@ -40,7 +39,6 @@ import {
   upsertDrawdownThresholds,
   updateRiskEngineV2Enabled,
   updateRiskProfile,
-  type AlertDecisionLogRow,
   type DrawdownThresholdUpsert,
   type RiskCategory,
   type RiskProduct,
@@ -115,10 +113,6 @@ export function RiskEngineV2Settings() {
   >({})
   const [thresholdsBusy, setThresholdsBusy] = useState(false)
   const [thresholdsError, setThresholdsError] = useState<string | null>(null)
-
-  const [decisionRows, setDecisionRows] = useState<AlertDecisionLogRow[]>([])
-  const [decisionBusy, setDecisionBusy] = useState(false)
-  const [decisionError, setDecisionError] = useState<string | null>(null)
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -218,20 +212,6 @@ export function RiskEngineV2Settings() {
     }
   }
 
-  const loadDecisionLog = async () => {
-    setDecisionBusy(true)
-    try {
-      const rowsRes = await fetchAlertDecisionLog(200)
-      const rows = Array.isArray(rowsRes) ? rowsRes : []
-      setDecisionRows(rows)
-      setDecisionError(null)
-    } catch (err) {
-      setDecisionError(err instanceof Error ? err.message : 'Failed to load decision log')
-    } finally {
-      setDecisionBusy(false)
-    }
-  }
-
   const defaultBadges = useMemo(() => {
     const out = new Map<number, string>()
     for (const p of profiles ?? []) {
@@ -245,7 +225,6 @@ export function RiskEngineV2Settings() {
     void loadProfiles()
     void loadSymbolCategories()
     void loadThresholds()
-    void loadDecisionLog()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -778,99 +757,6 @@ export function RiskEngineV2Settings() {
         {thresholdsError ? (
           <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
             {thresholdsError}
-          </Typography>
-        ) : null}
-      </Paper>
-
-      <Paper sx={{ p: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-          <Typography variant="h6" sx={{ flex: 1, minWidth: 260 }}>
-            Alert decision log
-          </Typography>
-          <Tooltip title="Help" arrow placement="top">
-            <IconButton
-              size="small"
-              onClick={() => openGuide('alert-decision-log-v2')}
-              aria-label="decision log help"
-            >
-              <HelpOutlineIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Refresh" arrow placement="top">
-            <IconButton size="small" onClick={() => void loadDecisionLog()} disabled={decisionBusy}>
-              <RefreshIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Shows resolved product/profile/category and whether the order was placed or blocked.
-        </Typography>
-        <Divider sx={{ my: 2 }} />
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Time</TableCell>
-              <TableCell>Symbol</TableCell>
-              <TableCell>Strategy</TableCell>
-              <TableCell>Hint</TableCell>
-              <TableCell>Resolved</TableCell>
-              <TableCell>Category</TableCell>
-              <TableCell>DD%</TableCell>
-              <TableCell>State</TableCell>
-              <TableCell>Decision</TableCell>
-              <TableCell>Reasons</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {decisionRows.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                  {new Date(r.created_at).toLocaleString()}
-                </TableCell>
-                <TableCell>{r.symbol ?? '—'}</TableCell>
-                <TableCell>{r.strategy_ref ?? '—'}</TableCell>
-                <TableCell>{r.product_hint ?? '—'}</TableCell>
-                <TableCell>{r.resolved_product ?? '—'}</TableCell>
-                <TableCell>{r.risk_category ?? '—'}</TableCell>
-                <TableCell>
-                  {r.drawdown_pct != null ? Number(r.drawdown_pct).toFixed(2) : '—'}
-                </TableCell>
-                <TableCell>{r.drawdown_state ?? '—'}</TableCell>
-                <TableCell>
-                  <Chip
-                    size="small"
-                    label={r.decision}
-                    color={
-                      r.decision === 'PLACED'
-                        ? 'success'
-                        : r.decision === 'BLOCKED'
-                          ? 'error'
-                          : 'default'
-                    }
-                    variant={r.decision === 'PLACED' ? 'filled' : 'outlined'}
-                  />
-                </TableCell>
-                <TableCell sx={{ maxWidth: 320 }}>
-                  <Typography variant="caption" color="text.secondary">
-                    {r.reasons_json}
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ))}
-            {decisionRows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={10}>
-                  <Typography variant="caption" color="text.secondary">
-                    No decision logs yet.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-        {decisionError ? (
-          <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
-            {decisionError}
           </Typography>
         ) : null}
       </Paper>

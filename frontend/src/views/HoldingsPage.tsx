@@ -2336,8 +2336,7 @@ export function HoldingsPage() {
       goalReviewDate.trim() !== ''
         ? goalReviewDate.trim()
         : defaultReviewDateForLabel(goalLabel)
-    const targetType =
-      goalTargetType && goalTargetType !== '' ? goalTargetType : null
+    const targetType = goalTargetType ? goalTargetType : null
     const targetValueRaw = goalTargetValue.trim()
     const targetValue =
       targetType && targetValueRaw !== '' ? Number(targetValueRaw) : null
@@ -7473,6 +7472,11 @@ export function HoldingsPage() {
                     <MenuItem value="CNC">CNC (Delivery)</MenuItem>
                     <MenuItem value="MIS">MIS (Intraday)</MenuItem>
                   </TextField>
+                  {riskEngineV2FlagError ? (
+                    <Typography variant="caption" color="error" sx={{ mt: -0.5 }}>
+                      Risk engine v2 status unavailable: {riskEngineV2FlagError}
+                    </Typography>
+                  ) : null}
                   {riskEngineV2Enabled && !isBulkTrade && tradeHolding && (
                     <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
                       <TextField

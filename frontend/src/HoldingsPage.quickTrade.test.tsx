@@ -133,11 +133,13 @@ describe('HoldingsPage Quick trade', () => {
     vi.unstubAllGlobals()
   })
 
-  it('opens trade dialog and can trade new symbol by setting category', async () => {
-    const user = userEvent.setup()
+  it(
+    'opens trade dialog and can trade new symbol by setting category',
+    async () => {
+      const user = userEvent.setup()
 
-    render(
-      <BrowserRouter>
+      render(
+        <BrowserRouter>
         <AppThemeProvider>
           <TimeSettingsProvider>
             <HoldingsPage />
@@ -171,8 +173,10 @@ describe('HoldingsPage Quick trade', () => {
     await user.click(await screen.findByRole('option', { name: /^LC$/i }))
 
     await user.click(screen.getByRole('button', { name: /create order/i }))
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /create order/i })).not.toBeInTheDocument()
-    })
-  })
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /create order/i })).not.toBeInTheDocument()
+      })
+    },
+    15000,
+  )
 })

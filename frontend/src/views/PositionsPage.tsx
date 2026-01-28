@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mui/x-data-grid'
 import ClearIcon from '@mui/icons-material/Clear'
 
+import { AlertDecisionLogPanel } from '../components/AlertDecisionLogPanel'
 import {
   PriceChart,
   type PriceCandle,
@@ -78,7 +79,7 @@ function PnlChip({ value }: { value: number }) {
 export function PositionsPage() {
   const { displayTimeZone } = useTimeSettings()
   const defaults = defaultDateRange()
-  type PositionsTab = 'snapshots' | 'analysis' | 'transactions'
+  type PositionsTab = 'snapshots' | 'analysis' | 'transactions' | 'risk'
   const [activeTab, setActiveTab] = useState<PositionsTab>('snapshots')
   const [positions, setPositions] = useState<PositionSnapshot[]>([])
   const [loading, setLoading] = useState(true)
@@ -206,6 +207,7 @@ export function PositionsPage() {
   }, [symbolQuery])
 
   const handleRefresh = async () => {
+    if (activeTab === 'risk') return
     setRefreshing(true)
     try {
       await syncPositions(selectedBroker)
@@ -228,6 +230,7 @@ export function PositionsPage() {
   }
 
   const handleApply = async () => {
+    if (activeTab === 'risk') return
     if (symbolApplyTimeoutRef.current != null) {
       window.clearTimeout(symbolApplyTimeoutRef.current)
       symbolApplyTimeoutRef.current = null
@@ -750,102 +753,106 @@ export function PositionsPage() {
             ? 'Daily position snapshots (from broker positions). Refresh captures a new snapshot for today.'
             : activeTab === 'transactions'
               ? 'Transaction timeline and cash/funds curve derived from daily position snapshots (day buy/sell fields).'
+              : activeTab === 'risk'
+                ? 'Execution risk audit (decision logs from the execution layer).'
               : 'Trading insights from executed orders (closed trades) + daily position snapshots (turnover).'}
         </Typography>
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          {brokers.length > 0 && (
+        {activeTab !== 'risk' && (
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            {brokers.length > 0 && (
+              <TextField
+                select
+                label="Broker"
+                size="small"
+                value={selectedBroker}
+                onChange={(e) => setSelectedBroker(e.target.value)}
+                sx={{ minWidth: 170 }}
+              >
+                {brokers.map((b) => (
+                  <MenuItem key={b.name} value={b.name}>
+                    {b.label}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
             <TextField
-              select
-              label="Broker"
+              label="From"
+              type="date"
               size="small"
-              value={selectedBroker}
-              onChange={(e) => setSelectedBroker(e.target.value)}
-              sx={{ minWidth: 170 }}
-            >
-              {brokers.map((b) => (
-                <MenuItem key={b.name} value={b.name}>
-                  {b.label}
-                </MenuItem>
-              ))}
-            </TextField>
-          )}
-          <TextField
-            label="From"
-            type="date"
-            size="small"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-          />
-          <TextField
-            label="To"
-            type="date"
-            size="small"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-          />
-          <TextField
-            label="Symbol"
-            size="small"
-            value={symbolQuery}
-            onChange={(e) => setSymbolQuery(e.target.value.toUpperCase())}
-            sx={{ minWidth: 140 }}
-            InputProps={{
-              endAdornment: symbolQuery ? (
-                <InputAdornment position="end">
-                  <IconButton
-                    size="small"
-                    aria-label="Clear symbol"
-                    onClick={() => setSymbolQuery('')}
-                    edge="end"
-                  >
-                    <ClearIcon fontSize="small" />
-                  </IconButton>
-                </InputAdornment>
-              ) : null,
-            }}
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={activeTab === 'transactions' ? true : includeZero}
-                onChange={(e) => setIncludeZero(e.target.checked)}
-                disabled={activeTab === 'transactions'}
-              />
-            }
-            label="Include zero qty"
-            sx={{ mr: 0 }}
-          />
-          {activeTab === 'transactions' && (
-            <TextField
-              label="Starting cash (₹)"
-              size="small"
-              type="number"
-              value={startingCash}
-              onChange={(e) => setStartingCash(Number(e.target.value))}
-              inputProps={{ min: 0 }}
-              sx={{ width: 190 }}
-              helperText="Used to build cash curve"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
             />
-          )}
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={handleApply}
-            disabled={loading || refreshing}
-          >
-            Apply
-          </Button>
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={handleRefresh}
-            disabled={loading || refreshing}
-          >
-            {refreshing ? 'Refreshing…' : `Refresh from ${selectedBroker}`}
-          </Button>
-        </Stack>
+            <TextField
+              label="To"
+              type="date"
+              size="small"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              label="Symbol"
+              size="small"
+              value={symbolQuery}
+              onChange={(e) => setSymbolQuery(e.target.value.toUpperCase())}
+              sx={{ minWidth: 140 }}
+              InputProps={{
+                endAdornment: symbolQuery ? (
+                  <InputAdornment position="end">
+                    <IconButton
+                      size="small"
+                      aria-label="Clear symbol"
+                      onClick={() => setSymbolQuery('')}
+                      edge="end"
+                    >
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null,
+              }}
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={activeTab === 'transactions' ? true : includeZero}
+                  onChange={(e) => setIncludeZero(e.target.checked)}
+                  disabled={activeTab === 'transactions'}
+                />
+              }
+              label="Include zero qty"
+              sx={{ mr: 0 }}
+            />
+            {activeTab === 'transactions' && (
+              <TextField
+                label="Starting cash (₹)"
+                size="small"
+                type="number"
+                value={startingCash}
+                onChange={(e) => setStartingCash(Number(e.target.value))}
+                inputProps={{ min: 0 }}
+                sx={{ width: 190 }}
+                helperText="Used to build cash curve"
+              />
+            )}
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleApply}
+              disabled={loading || refreshing}
+            >
+              Apply
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleRefresh}
+              disabled={loading || refreshing}
+            >
+              {refreshing ? 'Refreshing…' : `Refresh from ${selectedBroker}`}
+            </Button>
+          </Stack>
+        )}
       </Box>
 
       <Paper sx={{ mb: 2 }}>
@@ -862,6 +869,7 @@ export function PositionsPage() {
           <Tab value="snapshots" label="Daily snapshots" />
           <Tab value="analysis" label="Positions analysis" />
           <Tab value="transactions" label="Transactions charts" />
+          <Tab value="risk" label="Risk management" />
         </Tabs>
       </Paper>
 
@@ -1004,6 +1012,10 @@ export function PositionsPage() {
             </Paper>
           </Box>
         )
+      ) : activeTab === 'risk' ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <AlertDecisionLogPanel title="Alert decision log (execution layer)" helpHash="alert-decision-log-v2" limit={200} />
+        </Box>
       ) : analysisLoading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <CircularProgress size={20} />
