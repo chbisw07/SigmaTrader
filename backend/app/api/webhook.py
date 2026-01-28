@@ -533,12 +533,16 @@ def tradingview_webhook(
     client_order_id: str | None = None
     try:
         raw_order_id = str(getattr(payload, "order_id", "") or "").strip()
-        if raw_order_id and "{{" not in raw_order_id:
-            client_order_id = f"TV:{raw_order_id}"
+        bt = getattr(payload, "bar_time", None)
+        symbol_key = f"{normalized.broker_exchange}:{normalized.broker_symbol}"
+        if raw_order_id and "{{" not in raw_order_id and bt is not None:
+            # Some TradingView setups reuse order_id values across symbols (e.g. "Buy").
+            # Include symbol + timestamp to prevent cross-symbol deduping for group alerts,
+            # while still deduping retries for the same bar/event.
+            client_order_id = f"TV:{symbol_key}:{raw_order_id}:{bt.isoformat()}"
         else:
             # Fallback idempotency key: hash of normalized payload + bar time (if any).
             raw_basis = normalized.raw_payload
-            bt = getattr(payload, "bar_time", None)
             if bt is not None:
                 raw_basis = f"{raw_basis}|{bt.isoformat()}"
             digest = hashlib.sha1(raw_basis.encode("utf-8")).hexdigest()[:20]

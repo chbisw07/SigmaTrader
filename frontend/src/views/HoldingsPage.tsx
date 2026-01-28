@@ -64,6 +64,7 @@ import { fetchAngeloneStatus } from '../services/angelone'
 import { fetchMarginsForBroker } from '../services/brokerRuntime'
 import {
   fetchSymbolCategories,
+  fetchRiskEngineV2Enabled,
   upsertSymbolCategory,
   type RiskCategory,
   type SymbolRiskCategory,
@@ -273,6 +274,10 @@ export function HoldingsPage() {
   const [tradeExecutionTarget, setTradeExecutionTarget] = useState<'LIVE' | 'PAPER'>(
     'LIVE',
   )
+  const [riskEngineV2Enabled, setRiskEngineV2Enabled] = useState(false)
+  const [riskEngineV2FlagError, setRiskEngineV2FlagError] = useState<string | null>(
+    null,
+  )
 
   useEffect(() => {
     let active = true
@@ -288,6 +293,31 @@ export function HoldingsPage() {
         setSymbolCategoryRows([])
       }
     }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        setRiskEngineV2FlagError(null)
+        const flag = await fetchRiskEngineV2Enabled()
+        if (!active) return
+        setRiskEngineV2Enabled(Boolean(flag.enabled))
+      } catch (err) {
+        if (!active) return
+        setRiskEngineV2Enabled(false)
+        setRiskEngineV2FlagError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load risk engine v2 flag.',
+        )
+      }
+    }
+
     void load()
     return () => {
       active = false
@@ -358,6 +388,9 @@ export function HoldingsPage() {
   const [tradeRiskBudgetMode, setTradeRiskBudgetMode] = useState<
     'ABSOLUTE' | 'PORTFOLIO_PCT'
   >('ABSOLUTE')
+  const [tradeRiskCategoryDraft, setTradeRiskCategoryDraft] = useState<
+    RiskCategory | ''
+  >('')
   const [tradeStopPrice, setTradeStopPrice] = useState<string>('')
   const [tradeMaxLoss, setTradeMaxLoss] = useState<number | null>(null)
   const [bulkTradeHoldings, setBulkTradeHoldings] = useState<HoldingRow[]>([])
@@ -1696,6 +1729,31 @@ export function HoldingsPage() {
 
   const isBulkTrade = bulkTradeHoldings.length > 0
 
+  const tradeSymbolCategoryKey = useMemo(() => {
+    if (!tradeHolding || isBulkTrade) return null
+    const sym = (tradeHolding.symbol || '').trim().toUpperCase()
+    const exch = (tradeHolding.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+    if (!sym) return null
+    return `${exch}:${sym}`
+  }, [tradeHolding, isBulkTrade])
+
+  const tradeSymbolCategoryResolved = useMemo(() => {
+    if (!tradeHolding || isBulkTrade) return null
+    const sym = (tradeHolding.symbol || '').trim().toUpperCase()
+    const exch = (tradeHolding.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+    if (!sym) return null
+    return resolveSymbolRiskCategory(symbolCategoryRows, {
+      broker_name: tradeBrokerName,
+      exchange: exch,
+      symbol: sym,
+    })
+  }, [symbolCategoryRows, tradeHolding, tradeBrokerName, isBulkTrade])
+
+  const tradeSymbolCategoryBusy =
+    tradeSymbolCategoryKey != null
+      ? Boolean(symbolCategoryBusyByKey[tradeSymbolCategoryKey])
+      : false
+
   const clampSellToHoldingsQty = shouldClampSellToHoldingsQty({
     side: tradeSide,
     product: tradeProduct,
@@ -2682,6 +2740,17 @@ export function HoldingsPage() {
     setTradeHolding(holding)
     setTradeSide(side)
     setTradeSymbol(holding.symbol)
+    const brokerForCategory = !universeId.startsWith('group:')
+      ? universeId === 'holdings:angelone'
+        ? 'angelone'
+        : 'zerodha'
+      : tradeBrokerName
+    const resolvedCategory = resolveSymbolRiskCategory(symbolCategoryRows, {
+      broker_name: brokerForCategory,
+      exchange: (holding.exchange || 'NSE').trim().toUpperCase() || 'NSE',
+      symbol: (holding.symbol || '').trim().toUpperCase(),
+    })
+    setTradeRiskCategoryDraft(resolvedCategory ?? '')
     const initialProduct: 'CNC' | 'MIS' =
       side === 'SELL' && !(holding.quantity != null && holding.quantity > 0)
         ? 'MIS'
@@ -2782,6 +2851,12 @@ export function HoldingsPage() {
     setTradeHolding(stub)
     setTradeSide('BUY')
     setTradeSymbol(`${inst.exchange}:${inst.symbol}`)
+    const resolvedCategory = resolveSymbolRiskCategory(symbolCategoryRows, {
+      broker_name: tradeBrokerName,
+      exchange: (inst.exchange || 'NSE').trim().toUpperCase() || 'NSE',
+      symbol: (inst.symbol || '').trim().toUpperCase(),
+    })
+    setTradeRiskCategoryDraft(resolvedCategory ?? '')
     setTradeQty('1')
     setTradePrice('')
     setTradeTriggerPrice('')
@@ -2986,6 +3061,57 @@ export function HoldingsPage() {
     if (!targets.length) {
       setTradeError('No holdings selected for trade.')
       return
+    }
+
+    if (!isBulkTrade && riskEngineV2Enabled && primaryHolding) {
+      const sym = (primaryHolding.symbol || '').trim().toUpperCase()
+      const exch = (primaryHolding.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+      const existing = sym
+        ? resolveSymbolRiskCategory(symbolCategoryRows, {
+            broker_name: tradeBrokerName,
+            exchange: exch,
+            symbol: sym,
+          })
+        : null
+      if (!existing) {
+        if (!tradeRiskCategoryDraft) {
+          setTradeError(
+            `${sym || 'Symbol'}: Missing symbol risk category. Select LC/MC/SC/ETF and save to trade with risk engine v2 enabled.`,
+          )
+          return
+        }
+
+        const key = `${exch}:${sym}`
+        setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: true }))
+        try {
+          const saved = await upsertSymbolCategory({
+            broker_name: '*',
+            exchange: '*',
+            symbol: sym,
+            risk_category: tradeRiskCategoryDraft as RiskCategory,
+          })
+          setSymbolCategoryRows((prev) => {
+            const symKey = (saved.symbol || '').trim().toUpperCase()
+            const exchKey = (saved.exchange || '').trim().toUpperCase()
+            const brokerKey = (saved.broker_name || '').trim().toLowerCase()
+            const next = prev.filter(
+              (r) =>
+                (r.symbol || '').trim().toUpperCase() !== symKey ||
+                (r.exchange || '').trim().toUpperCase() !== exchKey ||
+                (r.broker_name || '').trim().toLowerCase() !== brokerKey,
+            )
+            return [...next, saved]
+          })
+          setSymbolCategoryError(null)
+        } catch (err) {
+          setTradeError(
+            err instanceof Error ? err.message : 'Failed to save symbol category.',
+          )
+          return
+        } finally {
+          setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: false }))
+        }
+      }
     }
     const priceNumRaw =
       tradeOrderType === 'MARKET' ||
@@ -7347,6 +7473,57 @@ export function HoldingsPage() {
                     <MenuItem value="CNC">CNC (Delivery)</MenuItem>
                     <MenuItem value="MIS">MIS (Intraday)</MenuItem>
                   </TextField>
+                  {riskEngineV2Enabled && !isBulkTrade && tradeHolding && (
+                    <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                      <TextField
+                        label="Risk category"
+                        select
+                        value={tradeRiskCategoryDraft}
+                        onChange={(e) =>
+                          setTradeRiskCategoryDraft(
+                            e.target.value as RiskCategory | '',
+                          )
+                        }
+                        size="small"
+                        sx={{ flex: 1, minWidth: 220 }}
+                        helperText={
+                          tradeSymbolCategoryResolved
+                            ? `Saved: ${tradeSymbolCategoryResolved}`
+                            : 'Required for risk engine v2 (used for drawdown thresholds).'
+                        }
+                      >
+                        <MenuItem value="">
+                          <em>Unassigned</em>
+                        </MenuItem>
+                        <MenuItem value="LC">LC</MenuItem>
+                        <MenuItem value="MC">MC</MenuItem>
+                        <MenuItem value="SC">SC</MenuItem>
+                        <MenuItem value="ETF">ETF</MenuItem>
+                      </TextField>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={
+                          !tradeRiskCategoryDraft ||
+                          tradeSymbolCategoryBusy ||
+                          tradeHolding == null
+                        }
+                        onClick={() => {
+                          if (!tradeHolding) return
+                          if (!tradeRiskCategoryDraft) return
+                          setTradeError(null)
+                          void handleSetSymbolCategory(
+                            tradeHolding.exchange,
+                            tradeHolding.symbol,
+                            tradeRiskCategoryDraft as RiskCategory,
+                          )
+                        }}
+                        sx={{ mt: 0.25, minWidth: 120 }}
+                      >
+                        {tradeSymbolCategoryBusy ? 'Saving…' : 'Save category'}
+                      </Button>
+                    </Box>
+                  )}
                 </Box>
               </Box>
               <Accordion variant="outlined" defaultExpanded={false} sx={{ mt: 1 }}>

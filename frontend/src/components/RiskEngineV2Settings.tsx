@@ -34,6 +34,9 @@ import {
   fetchAlertDecisionLog,
   fetchDrawdownThresholds,
   fetchRiskProfiles,
+  fetchSymbolCategories,
+  upsertSymbolCategory,
+  deleteSymbolCategory,
   upsertDrawdownThresholds,
   updateRiskEngineV2Enabled,
   updateRiskProfile,
@@ -44,6 +47,7 @@ import {
   type RiskProfile,
   type RiskProfileCreate,
   type RiskEngineV2Enabled,
+  type SymbolRiskCategory,
 } from '../services/riskEngine'
 
 const PRODUCTS: RiskProduct[] = ['CNC', 'MIS']
@@ -100,6 +104,12 @@ export function RiskEngineV2Settings() {
   const [profilesBusy, setProfilesBusy] = useState(false)
   const [profilesError, setProfilesError] = useState<string | null>(null)
 
+  const [symbolCategories, setSymbolCategories] = useState<SymbolRiskCategory[]>([])
+  const [defaultCategory, setDefaultCategory] = useState<RiskCategory | ''>('')
+  const [defaultCategoryBusy, setDefaultCategoryBusy] = useState(false)
+  const [defaultCategoryError, setDefaultCategoryError] = useState<string | null>(null)
+  const [defaultCategoryInfo, setDefaultCategoryInfo] = useState<string | null>(null)
+
   const [thresholdDrafts, setThresholdDrafts] = useState<
     Record<string, { caution_pct: number; defense_pct: number; hard_stop_pct: number }>
   >({})
@@ -118,6 +128,19 @@ export function RiskEngineV2Settings() {
   const openGuide = (hash: string) => {
     navigate(`/risk-guide#${hash}`)
   }
+
+  const defaultCategoryRow = useMemo(() => {
+    const candidates = symbolCategories.filter(
+      (r) =>
+        (r.symbol || '').trim().toUpperCase() === '*' &&
+        (r.broker_name || '').trim().toLowerCase() === '*' &&
+        (r.exchange || '').trim().toUpperCase() === '*',
+    )
+    if (!candidates.length) return null
+    return candidates
+      .slice()
+      .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0]
+  }, [symbolCategories])
 
   const loadV2Flag = async () => {
     setV2Busy(true)
@@ -142,6 +165,28 @@ export function RiskEngineV2Settings() {
       setProfilesError(err instanceof Error ? err.message : 'Failed to load risk profiles')
     } finally {
       setProfilesBusy(false)
+    }
+  }
+
+  const loadSymbolCategories = async () => {
+    try {
+      setDefaultCategoryError(null)
+      const res = await fetchSymbolCategories('*')
+      const rows = Array.isArray(res) ? res : []
+      setSymbolCategories(rows)
+      const row = rows.find(
+        (r) =>
+          (r.symbol || '').trim().toUpperCase() === '*' &&
+          (r.broker_name || '').trim().toLowerCase() === '*' &&
+          (r.exchange || '').trim().toUpperCase() === '*',
+      )
+      setDefaultCategory((row?.risk_category as RiskCategory | undefined) ?? '')
+    } catch (err) {
+      setSymbolCategories([])
+      setDefaultCategory('')
+      setDefaultCategoryError(
+        err instanceof Error ? err.message : 'Failed to load symbol categories',
+      )
     }
   }
 
@@ -198,6 +243,7 @@ export function RiskEngineV2Settings() {
   useEffect(() => {
     void loadV2Flag()
     void loadProfiles()
+    void loadSymbolCategories()
     void loadThresholds()
     void loadDecisionLog()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -428,6 +474,117 @@ export function RiskEngineV2Settings() {
             Risk engine v2 flag is present but unreadable. For safety, v2 is OFF. Toggle it once to
             re-save a valid value.
           </Alert>
+        ) : null}
+      </Paper>
+
+      <Paper sx={{ p: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography variant="h6" sx={{ flex: 1, minWidth: 260 }}>
+            Default category for new symbols
+          </Typography>
+          <Tooltip title="Refresh" arrow placement="top">
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => void loadSymbolCategories()}
+                disabled={defaultCategoryBusy}
+                aria-label="refresh default category"
+              >
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          When enabled, risk engine v2 will use this category for symbols that do not have an
+          explicit category mapping yet. If disabled, orders for new symbols are blocked until you
+          assign a category.
+        </Typography>
+
+        <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1.5 }}>
+          <TextField
+            label="Default risk category"
+            select
+            size="small"
+            value={defaultCategory}
+            onChange={(e) =>
+              setDefaultCategory((e.target.value as RiskCategory | '') ?? '')
+            }
+            sx={{ minWidth: 240 }}
+            disabled={defaultCategoryBusy || v2ConfigDisabled}
+            helperText={defaultCategoryRow ? `Saved: ${defaultCategoryRow.risk_category}` : 'Saved: OFF'}
+          >
+            <MenuItem value="">
+              <em>OFF (block new symbols)</em>
+            </MenuItem>
+            {CATEGORIES.map((c) => (
+              <MenuItem key={c} value={c}>
+                {c}
+              </MenuItem>
+            ))}
+          </TextField>
+          <Button
+            size="small"
+            variant="contained"
+            disabled={defaultCategoryBusy || v2ConfigDisabled}
+            aria-label="save default category"
+            onClick={async () => {
+              setDefaultCategoryBusy(true)
+              setDefaultCategoryError(null)
+              setDefaultCategoryInfo(null)
+              try {
+                if (!defaultCategory) {
+                  if (defaultCategoryRow) {
+                    await deleteSymbolCategory({
+                      broker_name: '*',
+                      exchange: '*',
+                      symbol: '*',
+                    })
+                  }
+                  setDefaultCategoryInfo('Default category disabled.')
+                } else {
+                  const saved = await upsertSymbolCategory({
+                    broker_name: '*',
+                    exchange: '*',
+                    symbol: '*',
+                    risk_category: defaultCategory as RiskCategory,
+                  })
+                  setSymbolCategories((prev) => {
+                    const next = prev.filter(
+                      (r) =>
+                        !(
+                          (r.symbol || '').trim().toUpperCase() === '*' &&
+                          (r.broker_name || '').trim().toLowerCase() === '*' &&
+                          (r.exchange || '').trim().toUpperCase() === '*'
+                        ),
+                    )
+                    return [...next, saved]
+                  })
+                  setDefaultCategoryInfo(`Saved default category: ${saved.risk_category}`)
+                }
+                await loadSymbolCategories()
+              } catch (err) {
+                setDefaultCategoryError(
+                  err instanceof Error ? err.message : 'Failed to update default category',
+                )
+              } finally {
+                setDefaultCategoryBusy(false)
+              }
+            }}
+          >
+            {defaultCategoryBusy ? 'Saving default...' : 'Save default'}
+          </Button>
+        </Box>
+
+        {defaultCategoryError ? (
+          <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+            {defaultCategoryError}
+          </Typography>
+        ) : null}
+        {defaultCategoryInfo ? (
+          <Typography variant="caption" color="success.main" sx={{ mt: 1, display: 'block' }}>
+            {defaultCategoryInfo}
+          </Typography>
         ) : null}
       </Paper>
 

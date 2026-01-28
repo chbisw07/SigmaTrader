@@ -245,6 +245,24 @@ export async function upsertSymbolCategory(
   return (await res.json()) as SymbolRiskCategory
 }
 
+export async function deleteSymbolCategory(params: {
+  broker_name?: string
+  exchange?: string
+  symbol: string
+}): Promise<void> {
+  const url = new URL('/api/risk-engine/symbol-categories', window.location.origin)
+  url.searchParams.set('symbol', params.symbol)
+  url.searchParams.set('broker_name', params.broker_name ?? 'zerodha')
+  url.searchParams.set('exchange', params.exchange ?? 'NSE')
+  const res = await fetch(url.toString(), { method: 'DELETE' })
+  if (!res.ok) {
+    const body = await readTextSafe(res)
+    throw new Error(
+      `Failed to delete symbol category (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+}
+
 export async function bulkUpsertSymbolCategories(
   payload: SymbolRiskCategoryUpsert[],
 ): Promise<SymbolRiskCategory[]> {

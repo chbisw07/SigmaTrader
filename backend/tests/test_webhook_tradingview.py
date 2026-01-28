@@ -143,6 +143,45 @@ def test_webhook_accepts_meta_signal_hints_payload_without_st_user_id() -> None:
         assert alert.user_id == default_user.id
 
 
+def test_webhook_does_not_dedupe_across_symbols_for_same_order_id() -> None:
+    unique_strategy = f"webhook-test-strategy-group-{uuid4().hex}"
+    base = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": unique_strategy,
+            "strategy_name": unique_strategy,
+            "exchange": "NSE",
+            "side": "BUY",
+            "price": 1500.0,
+            "timeframe": "15",
+            "timestamp": "2026-01-28T07:15:06Z",
+            # Some group alerts use a non-unique order_id like "Buy".
+            "order_id": "Buy",
+        },
+        "hints": {},
+    }
+
+    payload_a = json.loads(json.dumps(base))
+    payload_a["signal"]["symbol"] = "ASTRAMICRO"
+    payload_b = json.loads(json.dumps(base))
+    payload_b["signal"]["symbol"] = "BDL"
+
+    resp_a = client.post("/webhook/tradingview", json=payload_a)
+    assert resp_a.status_code == 201
+    assert resp_a.json()["status"] == "accepted"
+
+    resp_b = client.post("/webhook/tradingview", json=payload_b)
+    assert resp_b.status_code == 201
+    assert resp_b.json()["status"] == "accepted"
+
+    with SessionLocal() as session:
+        a = session.get(Order, int(resp_a.json()["order_id"]))
+        b = session.get(Order, int(resp_b.json()["order_id"]))
+        assert a is not None and b is not None
+        assert a.id != b.id
+        assert a.symbol != b.symbol
+
+
 def test_webhook_root_accepts_tradingview_payload() -> None:
     unique_strategy = f"webhook-test-strategy-root-{uuid4().hex}"
     payload = {

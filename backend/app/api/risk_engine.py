@@ -317,6 +317,33 @@ def bulk_upsert_symbol_categories(
     return [SymbolRiskCategoryRead(**_model_to_dict(r)) for r in rows]
 
 
+@router.delete("/symbol-categories", status_code=status.HTTP_204_NO_CONTENT)
+def delete_symbol_category(
+    broker_name: str = Query(default="zerodha"),
+    exchange: str = Query(default="NSE"),
+    symbol: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    broker = (broker_name or "zerodha").strip().lower() or "zerodha"
+    sym = (symbol or "").strip().upper()
+    ex = (exchange or "NSE").strip().upper() or "NSE"
+    row = (
+        db.query(SymbolRiskCategory)
+        .filter(
+            SymbolRiskCategory.user_id == user.id,
+            SymbolRiskCategory.broker_name == broker,
+            SymbolRiskCategory.symbol == sym,
+            SymbolRiskCategory.exchange == ex,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        return
+    db.delete(row)
+    db.commit()
+
+
 @router.get("/decision-log", response_model=list[AlertDecisionLogRead])
 def list_alert_decision_log(
     limit: int = Query(default=100, ge=1, le=1000),

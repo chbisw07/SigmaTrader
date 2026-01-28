@@ -99,3 +99,41 @@ def test_symbol_categories_api_bulk_and_list_include_global_rows() -> None:
     items = listed.json()
     assert any(i["symbol"] == "INFY" and i["broker_name"] == "*" for i in items)
 
+
+def test_symbol_category_symbol_wildcard_fallback_and_clear() -> None:
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "cat-user").one()
+        db.query(SymbolRiskCategory).delete()
+        db.commit()
+
+        # Default category for any symbol (symbol="*") should be used when
+        # there is no explicit mapping for the requested symbol.
+        default_row = SymbolRiskCategory(
+            user_id=user.id,
+            broker_name="*",
+            exchange="*",
+            symbol="*",
+            risk_category="ETF",
+        )
+        db.add(default_row)
+        db.commit()
+
+        resolved = resolve_symbol_category(
+            db,
+            user_id=user.id,
+            broker_name="zerodha",
+            symbol="VIMTALABS",
+            exchange="NSE",
+        )
+        assert resolved == "ETF"
+
+    # Verify API can delete the wildcard row so enforcement returns to fail-closed.
+    deleted = client.delete(
+        "/api/risk-engine/symbol-categories",
+        params={"broker_name": "*", "exchange": "*", "symbol": "*"},
+    )
+    assert deleted.status_code == 204
+
+    listed = client.get("/api/risk-engine/symbol-categories", params={"broker_name": "*"})
+    assert listed.status_code == 200
+    assert not any((i["symbol"] == "*" and i["broker_name"] == "*" and i["exchange"] == "*") for i in listed.json())

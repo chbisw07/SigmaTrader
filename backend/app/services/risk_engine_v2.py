@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from math import floor
 from typing import Any, Literal, Optional, cast
 
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -160,19 +160,23 @@ def resolve_symbol_category(
     sym = symbol.strip().upper()
     ex = exchange.strip().upper() or "NSE"
     broker = (broker_name or "zerodha").strip().lower() or "zerodha"
+    # Support a default category row via symbol wildcard ("*") so new/unseen
+    # symbols can be traded without manual category setup, while keeping
+    # explicit per-symbol mappings authoritative.
+    sym_rank = case((SymbolRiskCategory.symbol == sym, 0), else_=1)
     # Allow broker/exchange wildcards ("*") so categories can be treated as
     # broker-independent in the UI while still supporting per-broker overrides.
     candidates = (
         db.query(SymbolRiskCategory)
         .filter(
             SymbolRiskCategory.user_id == user_id,
-            SymbolRiskCategory.symbol == sym,
+            SymbolRiskCategory.symbol.in_([sym, "*"]),
             SymbolRiskCategory.broker_name.in_([broker, "*"]),
             SymbolRiskCategory.exchange.in_([ex, "*"]),
         )
         # Prefer the most recently updated mapping (lets "global" overrides win
         # without needing to delete older broker/exchange-specific rows).
-        .order_by(SymbolRiskCategory.updated_at.desc())
+        .order_by(sym_rank.asc(), SymbolRiskCategory.updated_at.desc())
         .all()
     )
     if not candidates:
@@ -377,7 +381,7 @@ def evaluate_order_risk_v2(
         return RiskDecisionV2(
             blocked=True,
             reasons=[
-                "Missing symbol risk category (set LC/MC/SC/ETF from Holdings/Universe)."
+                "Missing symbol risk category (set LC/MC/SC/ETF from Holdings/Universe, or configure a default category in Risk settings)."
             ],
             resolved_product=resolved_product,
             risk_profile_id=profile.id,

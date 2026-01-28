@@ -16,7 +16,7 @@ function okJson(data: unknown): Response {
 
 describe('HoldingsPage Quick trade', () => {
   beforeEach(() => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url =
         typeof input === 'string'
           ? input
@@ -29,6 +29,21 @@ describe('HoldingsPage Quick trade', () => {
         return okJson({ available: 0, raw: {} })
       }
 
+      if (url.includes('/api/risk-engine/v2-enabled')) {
+        return okJson({ enabled: true, source: 'db', updated_at: null })
+      }
+      if (url.includes('/api/risk-engine/symbol-categories') && init?.method === 'PUT') {
+        return okJson({
+          id: 1,
+          user_id: null,
+          broker_name: '*',
+          exchange: '*',
+          symbol: 'INFY',
+          risk_category: 'LC',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+      }
       if (url.includes('/api/risk-engine/symbol-categories')) return okJson([])
       if (url.includes('/api/groups/portfolio-allocations')) return okJson([])
       if (url.includes('/api/groups/')) return okJson([])
@@ -81,6 +96,33 @@ describe('HoldingsPage Quick trade', () => {
         ])
       }
 
+      if (url.includes('/api/orders/') && init?.method === 'POST') {
+        return okJson({
+          id: 1,
+          alert_id: null,
+          strategy_id: null,
+          portfolio_group_id: null,
+          origin: null,
+          broker_name: 'zerodha',
+          symbol: 'INFY',
+          exchange: 'NSE',
+          side: 'BUY',
+          qty: 1,
+          price: null,
+          trigger_price: null,
+          order_type: 'MARKET',
+          product: 'CNC',
+          gtt: false,
+          status: 'WAITING',
+          mode: 'MANUAL',
+          execution_target: 'LIVE',
+          simulated: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          error_message: null,
+        })
+      }
+
       return okJson([])
     })
 
@@ -91,7 +133,7 @@ describe('HoldingsPage Quick trade', () => {
     vi.unstubAllGlobals()
   })
 
-  it('opens trade dialog with CNC default on instrument selection', async () => {
+  it('opens trade dialog and can trade new symbol by setting category', async () => {
     const user = userEvent.setup()
 
     render(
@@ -122,5 +164,15 @@ describe('HoldingsPage Quick trade', () => {
     const infyRow = document.querySelector('[data-id="INFY"]')
     expect(infyRow).not.toBeNull()
     expect(infyRow!).toHaveClass('st-row-highlight')
+
+    // Risk engine v2 requires a symbol category for enforcement.
+    const category = screen.getByRole('combobox', { name: /risk category/i })
+    await user.click(category)
+    await user.click(await screen.findByRole('option', { name: /^LC$/i }))
+
+    await user.click(screen.getByRole('button', { name: /create order/i }))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /create order/i })).not.toBeInTheDocument()
+    })
   })
 })

@@ -91,6 +91,7 @@ class TradingViewWebhookPayload(BaseModel):
     interval: Optional[str] = None
     trade_details: TradeDetails
     bar_time: Optional[datetime] = None
+    timestamp: Optional[datetime] = None
     hints: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -149,6 +150,10 @@ class TradingViewWebhookPayload(BaseModel):
             if "order_id" not in values and signal.get("order_id") is not None:
                 values["order_id"] = signal.get("order_id")
 
+            # Map v1 timestamp into bar_time for idempotency + audit.
+            if "bar_time" not in values and signal.get("timestamp") is not None:
+                values["bar_time"] = signal.get("timestamp")
+
             if "hints" not in values and hints:
                 values["hints"] = hints
 
@@ -167,6 +172,11 @@ class TradingViewWebhookPayload(BaseModel):
         # Accept alternate key naming used by some TradingView templates.
         if "trade_details" not in values and "tradeDetails" in values:
             values["trade_details"] = values.get("tradeDetails")
+
+        # Some TradingView templates emit a root-level timestamp; treat it as bar_time
+        # when bar_time is not explicitly provided.
+        if "bar_time" not in values and values.get("timestamp") is not None:
+            values["bar_time"] = values.get("timestamp")
 
         # Backward compatible: allow "flat" order fields at the root (without
         # nesting them under trade_details).
