@@ -330,6 +330,81 @@ def test_block_reason_is_persisted_on_order_row(monkeypatch: Any) -> None:
         assert "RISK_POLICY_TRADE_FREQ_MAX_TRADES" in (order2.error_message or "")
 
 
+def test_concurrent_execution_waits_instead_of_permanently_rejecting(
+    monkeypatch: Any,
+) -> None:
+    _patch_zerodha(monkeypatch)
+    _set_policy(
+        {
+            "enabled": True,
+            "trade_frequency": {
+                "max_trades_per_symbol_per_day": 100,
+                "min_bars_between_trades": 0,
+                "cooldown_after_loss_bars": 0,
+            },
+            "loss_controls": {
+                "max_consecutive_losses": 99,
+                "pause_after_loss_streak": False,
+                "pause_duration": "EOD",
+            },
+        }
+    )
+
+    from app.api import orders as orders_api
+
+    t0 = datetime(2026, 1, 20, 4, 0, tzinfo=UTC)
+    times = [
+        t0,
+        t0 + timedelta(seconds=0.1),
+        t0 + timedelta(seconds=0.2),
+        t0 + timedelta(seconds=0.6),
+        t0 + timedelta(seconds=1.1),
+        t0 + timedelta(seconds=1.2),
+        t0 + timedelta(seconds=1.3),
+    ]
+
+    def _fake_now() -> datetime:
+        return times.pop(0) if times else (t0 + timedelta(seconds=2))
+
+    monkeypatch.setattr(orders_api, "_now_utc", _fake_now)
+    monkeypatch.setattr(orders_api.time, "sleep", lambda _s: None)
+
+    strategy_name = f"tf-concurrent-{uuid4().hex}"
+    inflight_order_id = _create_waiting_order(
+        side="BUY", price=100.0, strategy_name=strategy_name
+    )
+    waiting_order_id = _create_waiting_order(
+        side="BUY", price=101.0, strategy_name=strategy_name
+    )
+
+    with SessionLocal() as session:
+        inflight_order = session.get(Order, inflight_order_id)
+        assert inflight_order is not None
+        key = orders_api.scope_key_for_order(inflight_order)
+        state = orders_api.get_or_create_execution_state(
+            session,
+            key=key,
+            now_utc=t0,
+            interval_minutes=15,
+            lock=True,
+        )
+        state.inflight_order_id = int(inflight_order_id)
+        state.inflight_started_at = t0
+        state.inflight_expires_at = t0 + timedelta(seconds=1)
+        session.add(state)
+        session.commit()
+
+    # Should wait briefly for inflight marker to clear (instead of rejecting as REJECTED_RISK).
+    resp = client.post(f"/api/orders/{waiting_order_id}/execute")
+    assert resp.status_code == 200
+
+    with SessionLocal() as session:
+        order2 = session.get(Order, waiting_order_id)
+        assert order2 is not None
+        assert order2.status != "REJECTED_RISK"
+        assert "RISK_POLICY_CONCURRENT_EXECUTION" not in (order2.error_message or "")
+
+
 def test_entry_only_counting_and_structural_exit_never_blocked(
     monkeypatch: Any,
 ) -> None:

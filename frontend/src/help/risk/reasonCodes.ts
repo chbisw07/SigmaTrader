@@ -73,11 +73,11 @@ export const RISK_REASON_CODES: ReasonCodeEntry[] = [
     code: 'RISK_POLICY_CONCURRENT_EXECUTION',
     title: 'Concurrent execution blocked (safety guard)',
     whenItHappens:
-      'Two executions for the same scope key arrive at the same time; SigmaTrader blocks one to prevent racing past caps.',
+      'Two executions for the same scope key arrive at the same time; SigmaTrader serializes them to prevent racing past caps. If it cannot acquire the lock quickly, the request returns as “busy”.',
     whereYouSeeIt: ['Orders error message / API error detail'],
     whatToDo: [
-      'Retry the blocked order after the other execution finishes.',
-      'If you see this frequently, reduce burst executions for the same symbol/strategy/product.',
+      'Retry after the other execution finishes (usually a few seconds).',
+      'If it happens frequently, reduce burst executions for the same symbol/strategy/product or increase min bars between trades.',
     ],
   },
 ]
@@ -88,4 +88,3 @@ export const EXECUTION_POLICY_INTERVAL_SOURCES = [
   'persisted',
   'default_fallback',
 ] as const
-

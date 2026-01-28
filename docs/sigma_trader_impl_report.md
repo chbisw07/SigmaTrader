@@ -2172,7 +2172,7 @@ With S16/G04, paper trading now respects Indian market hours: new PAPER orders (
   - Default fallback (5m) → `interval_source=default_fallback` (logs a one-time INFO `SystemEvent` per scope key)
 - Trade counting: `trades_today` increments on entry-only executions that open or increase net exposure (`abs(new_position_qty) > abs(previous_position_qty)`).
 - Exit detection: structural (exposure-reducing orders where `abs(new_position_qty) < abs(previous_position_qty)`), with `Order.is_exit=true` as a safety override when state is incomplete. Structural exits are never blocked by trade-frequency/loss-control checks.
-- Concurrency safety: state row is locked (`SELECT ... FOR UPDATE` where supported) and a short-lived `inflight_order_id` reservation prevents concurrent executions from racing past caps (blocked with `RISK_POLICY_CONCURRENT_EXECUTION`).
+- Concurrency safety: state row is locked (`SELECT ... FOR UPDATE` where supported) and a short-lived `inflight_order_id` reservation prevents concurrent executions from racing past caps (serialized best-effort; may return `RISK_POLICY_CONCURRENT_EXECUTION` as a retryable “busy” condition).
 
 ## Risk management help (UI)
 

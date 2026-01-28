@@ -683,6 +683,7 @@ def tradingview_webhook(
                     "is not connected",
                     "market is closed",
                     "paper order rejected",
+                    "concurrent execution",
                 )
             )
             if (

@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, List, Optional
 
@@ -49,6 +50,12 @@ from app.services.system_events import record_system_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# How long to wait (best-effort) when execution-policy state indicates another
+# execution is inflight for the same scope key. This is a concurrency guard to
+# avoid races; we prefer waiting briefly over permanently rejecting.
+DEFAULT_EXECUTION_POLICY_CONCURRENCY_WAIT_SECONDS = 6.0
+DEFAULT_EXECUTION_POLICY_CONCURRENCY_SLEEP_SECONDS = 0.15
 
 
 def _now_utc() -> datetime:
@@ -935,48 +942,87 @@ def execute_order_internal(
         treat_as_exit = bool(is_exit_reduce) or bool(getattr(order, "is_exit", False))
 
         if not treat_as_exit:
+            reason_code = "RISK_POLICY_CONCURRENT_EXECUTION"
+            message = "Another order execution is in progress for this scope key."
+
             inflight_order_id = getattr(state, "inflight_order_id", None)
-            if inflight_order_id is not None and int(inflight_order_id) != int(
-                order.id
-            ):
-                reason_code = "RISK_POLICY_CONCURRENT_EXECUTION"
-                message = "Another order execution is in progress for this scope key."
-                order.status = "REJECTED_RISK"
-                order.error_message = f"{reason_code}: {message}"
-                db.add(order)
-                db.add(state)
-                db.commit()
-                db.refresh(order)
-                log_block(
-                    reason_code=reason_code,
-                    message=message,
-                    key=key,
-                    policy=policy,
-                    extra={"order_id": int(order.id)},
+            if inflight_order_id is not None and int(inflight_order_id) != int(order.id):
+                wait_deadline = now_utc + timedelta(
+                    seconds=float(DEFAULT_EXECUTION_POLICY_CONCURRENCY_WAIT_SECONDS)
                 )
-                record_system_event(
-                    db,
-                    level="WARNING",
-                    category="risk",
-                    message="Order blocked by risk policy (concurrent execution)",
-                    correlation_id=correlation_id,
-                    details={
-                        "order_id": int(order.id),
-                        "reason_code": reason_code,
-                        "message": message,
-                        "strategy_ref": key.strategy_ref,
-                        "symbol": key.symbol,
-                        "product": key.product,
-                    },
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "status": "blocked",
-                        "reason_code": reason_code,
-                        "message": message,
-                    },
-                )
+                # Best-effort: wait for inflight marker to clear. This prevents
+                # spurious permanent blocks when multiple alerts arrive together.
+                while (
+                    inflight_order_id is not None
+                    and int(inflight_order_id) != int(order.id)
+                    and now_utc < wait_deadline
+                ):
+                    # Release any row lock before sleeping.
+                    try:
+                        db.commit()
+                    except Exception:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+
+                    time.sleep(float(DEFAULT_EXECUTION_POLICY_CONCURRENCY_SLEEP_SECONDS))
+                    now_utc = _now_utc()
+
+                    state = get_or_create_execution_state(
+                        db,
+                        key=key,
+                        now_utc=now_utc,
+                        interval_minutes=int(interval_min),
+                        interval_source=interval_source,
+                        lock=True,
+                    )
+                    # Clear stale inflight reservations (defensive for crashes/timeouts).
+                    try:
+                        inflight_expires = getattr(state, "inflight_expires_at", None)
+                        if inflight_expires is not None and now_utc >= inflight_expires:
+                            state.inflight_order_id = None
+                            state.inflight_started_at = None
+                            state.inflight_expires_at = None
+                            db.add(state)
+                            db.commit()
+                    except Exception:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+
+                    inflight_order_id = getattr(state, "inflight_order_id", None)
+
+                inflight_order_id = getattr(state, "inflight_order_id", None)
+                if inflight_order_id is not None and int(inflight_order_id) != int(order.id):
+                    # Do not mark as REJECTED_RISK: this is a transient concurrency
+                    # guard and the order may still be eligible once the inflight
+                    # marker clears. Leave the order in WAITING and return a
+                    # retryable response.
+                    record_system_event(
+                        db,
+                        level="WARNING",
+                        category="risk",
+                        message="Order deferred by risk policy (concurrent execution)",
+                        correlation_id=correlation_id,
+                        details={
+                            "order_id": int(order.id),
+                            "reason_code": reason_code,
+                            "message": message,
+                            "strategy_ref": key.strategy_ref,
+                            "symbol": key.symbol,
+                            "product": key.product,
+                        },
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "status": "busy",
+                            "reason_code": reason_code,
+                            "message": message,
+                        },
+                    )
 
             allowed, reason_code, message = apply_pre_trade_checks(
                 policy,
