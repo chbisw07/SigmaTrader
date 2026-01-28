@@ -139,6 +139,19 @@ export async function executeOrder(orderId: number): Promise<Order> {
   return (await res.json()) as Order
 }
 
+export async function moveOrderToWaiting(orderId: number): Promise<Order> {
+  const res = await fetch(`/api/orders/${orderId}/move-to-waiting`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to move order to waiting queue (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as Order
+}
+
 export async function updateOrder(
   orderId: number,
   payload: {

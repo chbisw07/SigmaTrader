@@ -674,43 +674,90 @@ def tradingview_webhook(
                 raise
 
             # New-config AUTO behavior: optionally fall back to Waiting Queue so
-            # the user can retry after fixing broker connectivity or market-hours.
+            # the user can retry after fixing settings or editing the order.
             db.refresh(order)
             detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-            transient = any(
-                s in detail.lower()
-                for s in (
-                    "is not connected",
-                    "market is closed",
-                    "paper order rejected",
-                    "concurrent execution",
+            queue_order = None
+            moved_to_waiting = False
+            if cfg.fallback_to_waiting_on_error:
+                # Only move when the broker was definitely not contacted.
+                broker_order_id = (
+                    getattr(order, "broker_order_id", None)
+                    or getattr(order, "zerodha_order_id", None)
                 )
-            )
-            if (
-                cfg.fallback_to_waiting_on_error
-                and order.status == "WAITING"
-                and transient
-            ):
-                order.mode = "MANUAL"
-                order.error_message = (
-                    f"AUTO dispatch failed: {detail}. Moved to Waiting Queue."
-                )
-                db.add(order)
-                db.commit()
-                db.refresh(order)
-                record_system_event(
-                    db,
-                    level="WARNING",
-                    category="order",
-                    message="AUTO order moved to waiting queue",
-                    correlation_id=correlation_id,
-                    details={
-                        "order_id": order.id,
-                        "symbol": order.symbol,
-                        "reason": detail,
-                        "broker_name": broker_name,
+                already_sent = str(getattr(order, "status", "") or "").strip().upper() in {
+                    "SENT",
+                    "OPEN",
+                    "EXECUTED",
+                }
+                if (
+                    not getattr(order, "simulated", False)
+                    and not already_sent
+                    and not broker_order_id
+                ):
+                    # Keep the original order as history. If the execute path did
+                    # not transition it out of WAITING, mark it FAILED so it is
+                    # visible as an AUTO failure.
+                    if str(getattr(order, "status", "") or "").strip().upper() == "WAITING":
+                        order.status = "FAILED"
+                        order.error_message = detail
+                        db.add(order)
+                        db.commit()
+                        db.refresh(order)
+
+                    from app.services.orders import requeue_order_to_waiting
+
+                    queue_order = requeue_order_to_waiting(
+                        db,
+                        source=order,
+                        reason="AUTO dispatch failed. Moved to Waiting Queue.",
+                    )
+
+                    # Mark source order as requeued for UX clarity.
+                    suffix = f"Requeued to Waiting Queue as order #{int(queue_order.id)}."
+                    if suffix not in (order.error_message or ""):
+                        base = (order.error_message or "").strip()
+                        order.error_message = f"{base} {suffix}".strip() if base else suffix
+                        db.add(order)
+                        db.commit()
+                        db.refresh(order)
+
+                    moved_to_waiting = True
+                    record_system_event(
+                        db,
+                        level="WARNING",
+                        category="order",
+                        message="AUTO order moved to waiting queue",
+                        correlation_id=correlation_id,
+                        details={
+                            "source_order_id": order.id,
+                            "queue_order_id": queue_order.id,
+                            "symbol": queue_order.symbol,
+                            "reason": detail,
+                            "broker_name": broker_name,
+                        },
+                    )
+            if moved_to_waiting:
+                logger.info(
+                    "AUTO dispatch failed; moved to waiting queue",
+                    extra={
+                        "extra": {
+                            "correlation_id": correlation_id,
+                            "alert_id": alert.id,
+                            "order_id": queue_order.id if queue_order is not None else order.id,
+                            "strategy": strategy_key,
+                            "reason": detail,
+                        }
                     },
                 )
+                return {
+                    "id": alert.id,
+                    "alert_id": alert.id,
+                    "order_id": queue_order.id if queue_order is not None else order.id,
+                    "original_order_id": order.id,
+                    "status": "accepted",
+                    "dispatch": "WAITING",
+                }
             logger.exception(
                 "AUTO execution failed for alert id=%s order id=%s strategy=%s",
                 alert.id,

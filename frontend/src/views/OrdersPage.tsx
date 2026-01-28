@@ -5,10 +5,12 @@ import Paper from '@mui/material/Paper'
 import Typography from '@mui/material/Typography'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
+import Snackbar from '@mui/material/Snackbar'
+import Alert from '@mui/material/Alert'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { fetchOrdersHistory, type Order } from '../services/orders'
+import { fetchOrdersHistory, moveOrderToWaiting, type Order } from '../services/orders'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import { syncOrdersForBroker } from '../services/brokerRuntime'
 import { fetchManagedRiskPositions } from '../services/managedRisk'
@@ -39,6 +41,12 @@ export function OrdersPanel({
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
   const [managedRiskCount, setManagedRiskCount] = useState<number>(0)
+  const [moveBusyId, setMoveBusyId] = useState<number | null>(null)
+  const [snackbar, setSnackbar] = useState<{
+    open: boolean
+    message: string
+    severity: 'success' | 'error' | 'info'
+  }>({ open: false, message: '', severity: 'info' })
 
   const loadOrders = async () => {
     try {
@@ -252,6 +260,70 @@ export function OrdersPanel({
         </Typography>
       ),
     },
+    {
+      field: 'actions',
+      headerName: 'Actions',
+      width: 170,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams) => {
+        const order = params.row as Order
+        const status = String(order.status ?? '').toUpperCase()
+        const brokerId = order.broker_order_id ?? order.zerodha_order_id ?? null
+        const alreadyRequeued = (order.error_message ?? '').includes(
+          'Requeued to Waiting Queue as order #',
+        )
+        const eligible =
+          !order.simulated &&
+          !brokerId &&
+          !alreadyRequeued &&
+          (status === 'FAILED' || status === 'REJECTED_RISK' || status === 'CANCELLED')
+
+        if (!eligible) return null
+
+        return (
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={moveBusyId === order.id}
+            onClick={() => {
+              void (async () => {
+                setMoveBusyId(order.id)
+                try {
+                  const queued = await moveOrderToWaiting(order.id)
+                  setOrders((prev) => {
+                    const suffix = `Requeued to Waiting Queue as order #${queued.id}.`
+                    const next = prev.map((o) => {
+                      if (o.id !== order.id) return o
+                      const base = (o.error_message ?? '').trim()
+                      const msg = base ? `${base} ${suffix}` : suffix
+                      return { ...o, error_message: msg }
+                    })
+                    return [queued, ...next.filter((o) => o.id !== queued.id)]
+                  })
+                  setSnackbar({
+                    open: true,
+                    message: `Queued a new WAITING order (#${queued.id}).`,
+                    severity: 'success',
+                  })
+                  navigate('/queue?tab=waiting')
+                } catch (err) {
+                  setSnackbar({
+                    open: true,
+                    message: err instanceof Error ? err.message : 'Failed to move order',
+                    severity: 'error',
+                  })
+                } finally {
+                  setMoveBusyId(null)
+                }
+              })()
+            }}
+          >
+            {moveBusyId === order.id ? 'Moving…' : 'Move to queue'}
+          </Button>
+        )
+      },
+    },
   ]
 
   return (
@@ -345,6 +417,20 @@ export function OrdersPanel({
           />
         </Paper>
       )}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={3500}
+        onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={snackbar.severity}
+          onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+          variant="filled"
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }

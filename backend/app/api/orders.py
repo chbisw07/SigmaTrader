@@ -2071,6 +2071,88 @@ def execute_order(
     )
 
 
+@router.post("/{order_id}/move-to-waiting", response_model=OrderRead)
+def move_order_to_waiting_queue(
+    order_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Order:
+    """Create a new manual WAITING order cloned from an existing order.
+
+    This is a "requeue" operation:
+    - The original order stays as immutable history (FAILED/REJECTED_RISK/etc).
+    - A new order row is created with mode=MANUAL, status=WAITING so it appears
+      in the Waiting Queue for editing/execution.
+    """
+
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if order.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if order.simulated:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Simulated/PAPER orders cannot be moved to the manual queue.",
+        )
+
+    broker_order_id = getattr(order, "broker_order_id", None) or getattr(
+        order, "zerodha_order_id", None
+    )
+    if broker_order_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Order already has a broker order id; cannot move to waiting queue.",
+        )
+
+    status_u = str(getattr(order, "status", "") or "").strip().upper()
+    if status_u in {"SENT", "OPEN", "EXECUTED", "PARTIALLY_EXECUTED"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Order status {status_u} cannot be moved to waiting queue.",
+        )
+
+    if status_u not in {"WAITING", "FAILED", "REJECTED_RISK", "CANCELLED"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Only WAITING/FAILED/REJECTED_RISK/CANCELLED orders can be requeued; "
+                f"got {status_u}."
+            ),
+        )
+
+    from app.services.orders import requeue_order_to_waiting
+
+    queue_order = requeue_order_to_waiting(db, source=order)
+
+    correlation_id = getattr(request.state, "correlation_id", None)
+    # Mark the original order as requeued so the UI does not keep offering the
+    # action on the same row. (The user can requeue again from the latest row.)
+    suffix = f"Requeued to Waiting Queue as order #{int(queue_order.id)}."
+    if suffix not in (order.error_message or ""):
+        base = (order.error_message or "").strip()
+        order.error_message = f"{base} {suffix}".strip() if base else suffix
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
+    record_system_event(
+        db,
+        level="INFO",
+        category="order",
+        message="Order requeued to waiting queue",
+        correlation_id=correlation_id,
+        details={
+            "source_order_id": int(order.id),
+            "queue_order_id": int(queue_order.id),
+            "symbol": queue_order.symbol,
+            "status": status_u,
+        },
+    )
+    return queue_order
+
+
 @router.post("/sync", response_model=dict)
 def sync_orders(
     broker_name: Annotated[str, Query(min_length=1)] = "zerodha",

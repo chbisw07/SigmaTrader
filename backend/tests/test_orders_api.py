@@ -157,3 +157,37 @@ def test_manual_order_cannot_execute_when_broker_not_connected() -> None:
         order = session.get(Order, order_id)
         assert order is not None
         assert order.status == "WAITING"
+
+
+def test_move_failed_order_to_waiting_queue_requires_auth_and_succeeds() -> None:
+    # Create via webhook so it belongs to queue-user.
+    order_id = _create_order_via_webhook()
+
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        order.status = "FAILED"
+        order.mode = "AUTO"
+        order.error_message = "Test failure"
+        session.add(order)
+        session.commit()
+
+    # Authenticate as queue-user (session cookie stored on client).
+    login = client.post(
+        "/api/auth/login",
+        json={"username": "queue-user", "password": "queue-password"},
+    )
+    assert login.status_code == 200
+
+    moved = client.post(f"/api/orders/{order_id}/move-to-waiting")
+    assert moved.status_code == 200
+    data = moved.json()
+    assert data["id"] != order_id
+    assert data["status"] == "WAITING"
+    assert data["mode"] == "MANUAL"
+
+    with SessionLocal() as session:
+        original = session.get(Order, order_id)
+        assert original is not None
+        assert original.status == "FAILED"
+        assert original.mode == "AUTO"

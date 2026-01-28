@@ -531,6 +531,75 @@ def test_tradingview_webhook_default_product_applies_when_payload_omits_product(
         session.commit()
 
 
+def test_webhook_new_config_auto_failure_moves_to_waiting_queue(
+    monkeypatch: Any,
+) -> None:
+    # Enable new-config routing so we do not use legacy strategy mode.
+    response = client.put(
+        "/api/webhook-settings/tradingview-config",
+        json={
+            "mode": "AUTO",
+            "broker_name": "zerodha",
+            "execution_target": "LIVE",
+            "default_product": "CNC",
+            "fallback_to_waiting_on_error": True,
+        },
+    )
+    assert response.status_code == 200
+
+    # Force broker placement to fail so we can verify fallback behavior.
+    from app.api import orders as orders_api
+
+    class _FailClient:
+        def place_order(self, **_params: Any) -> Any:  # pragma: no cover - invoked by API
+            raise RuntimeError("Insufficient stock holding")
+
+    monkeypatch.setattr(orders_api, "_get_zerodha_client", lambda _db, _settings: _FailClient())
+
+    unique_strategy = f"webhook-newcfg-auto-fallback-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:TCS",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "BUY", "quantity": 1, "price": 3500.0},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+    assert data.get("dispatch") == "WAITING"
+    assert data.get("original_order_id") is not None
+
+    with SessionLocal() as session:
+        queue_order = session.get(Order, data["order_id"])
+        assert queue_order is not None
+        assert queue_order.mode == "MANUAL"
+        assert queue_order.status == "WAITING"
+        assert "Moved to Waiting Queue" in (queue_order.error_message or "")
+
+        original = session.get(Order, int(data["original_order_id"]))
+        assert original is not None
+        assert original.mode == "AUTO"
+        assert original.status in {"FAILED", "REJECTED_RISK"}
+
+    # Clean up config row so other tests keep using legacy behavior.
+    from app.services.tradingview_webhook_config import TRADINGVIEW_WEBHOOK_CONFIG_KEY
+    from app.services.webhook_secrets import WEBHOOK_BROKER_NAME
+
+    with SessionLocal() as session:
+        session.query(BrokerSecret).filter(
+            BrokerSecret.broker_name == WEBHOOK_BROKER_NAME,
+            BrokerSecret.key == TRADINGVIEW_WEBHOOK_CONFIG_KEY,
+            BrokerSecret.user_id.is_(None),
+        ).delete()
+        session.commit()
+
+
 def test_webhook_manual_strategy_creates_waiting_order_for_user() -> None:
     """MANUAL strategies should create per-user WAITING orders without execution."""
 

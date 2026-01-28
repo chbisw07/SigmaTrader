@@ -243,6 +243,38 @@ export const tradingViewWebhookHelp: HelpContext = {
           ],
         },
         {
+          id: 'tv-auto-failure-fallback',
+          question: 'What happens when AUTO fails?',
+          answer: [
+            {
+              type: 'p',
+              text: 'AUTO failures can happen due to risk blocks (REJECTED_RISK), validation errors, broker connectivity, or broker-side rejections. SigmaTrader always keeps a history row in Orders so you can see the failure reason.',
+            },
+            {
+              type: 'bullets',
+              items: [
+                'If Routing → On AUTO failure is set to “Move to Waiting Queue”, SigmaTrader creates a new MANUAL/WAITING order (a requeued copy) so you can edit and execute later.',
+                'The original AUTO row remains in Orders as history and is marked as requeued (so you don’t keep requeueing the same attempt).',
+              ],
+            },
+          ],
+        },
+        {
+          id: 'tv-move-to-queue-button',
+          question: 'What does “Move to queue” in Orders do?',
+          answer: [
+            {
+              type: 'p',
+              text: 'This is a manual recovery action for failed/blocked orders. It creates a new MANUAL/WAITING order cloned from the selected row (new id + created time), then sends you to the Waiting Queue.',
+            },
+            {
+              type: 'callout',
+              tone: 'warning',
+              text: 'Move to queue is available only when SigmaTrader can confirm the order was not accepted by the broker yet (no broker order id, not SENT/OPEN/EXECUTED).',
+            },
+          ],
+        },
+        {
           id: 'tv-interval-bars',
           question: 'What does “bars” mean for Trade frequency (min bars / cooldown)?',
           answer: [
@@ -300,6 +332,7 @@ export const tradingViewWebhookHelp: HelpContext = {
             'Orders page → Error column (often includes a reason code).',
             'System Events page → category=risk with the reason and scope key.',
             'If MANUAL mode: the order sits in the Waiting Queue until you execute it.',
+            'If AUTO + On AUTO failure = “Move to Waiting Queue”: look for a new WAITING order in the Waiting Queue (it is a requeued copy of the failed attempt).',
           ],
         },
       ],

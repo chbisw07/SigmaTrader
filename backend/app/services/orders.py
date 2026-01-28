@@ -6,6 +6,70 @@ from app.models import Alert, Order
 from app.services.price_ticks import round_price_to_tick
 
 
+def requeue_order_to_waiting(
+    db: Session,
+    *,
+    source: Order,
+    reason: str | None = None,
+) -> Order:
+    """Create a new manual WAITING order cloned from an existing order.
+
+    Notes:
+    - client_order_id is intentionally cleared so webhook idempotency remains
+      anchored on the original row.
+    - Broker ids are cleared so the queued order is always "not yet sent".
+    """
+
+    base_reason = (reason or "").strip()
+    if not base_reason:
+        base_reason = f"Requeued from order #{int(source.id)}."
+
+    msg = base_reason
+    if (source.error_message or "").strip():
+        msg = f"{msg} Original: {str(source.error_message).strip()}"
+
+    queue_order = Order(
+        user_id=source.user_id,
+        alert_id=source.alert_id,
+        strategy_id=source.strategy_id,
+        portfolio_group_id=getattr(source, "portfolio_group_id", None),
+        deployment_id=getattr(source, "deployment_id", None),
+        deployment_action_id=getattr(source, "deployment_action_id", None),
+        client_order_id=None,
+        symbol=source.symbol,
+        exchange=source.exchange,
+        side=source.side,
+        qty=source.qty,
+        price=source.price,
+        order_type=source.order_type,
+        trigger_price=source.trigger_price,
+        trigger_percent=source.trigger_percent,
+        product=source.product,
+        gtt=source.gtt,
+        synthetic_gtt=source.synthetic_gtt,
+        trigger_operator=source.trigger_operator,
+        armed_at=None,
+        last_checked_at=None,
+        last_seen_price=None,
+        triggered_at=None,
+        status="WAITING",
+        mode="MANUAL",
+        execution_target=getattr(source, "execution_target", None) or "LIVE",
+        broker_name=getattr(source, "broker_name", None) or "zerodha",
+        broker_order_id=None,
+        zerodha_order_id=None,
+        broker_account_id=getattr(source, "broker_account_id", None),
+        error_message=msg,
+        simulated=False,
+        risk_spec_json=getattr(source, "risk_spec_json", None),
+        is_exit=bool(getattr(source, "is_exit", False)),
+    )
+    db.add(queue_order)
+    db.commit()
+    db.refresh(queue_order)
+    return queue_order
+
+
 def create_order_from_alert(
     db: Session,
     alert: Alert,
@@ -54,4 +118,4 @@ def create_order_from_alert(
     return order
 
 
-__all__ = ["create_order_from_alert"]
+__all__ = ["create_order_from_alert", "requeue_order_to_waiting"]
