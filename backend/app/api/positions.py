@@ -368,6 +368,16 @@ def list_daily_positions(
 
         avg_price = float(r.avg_price or 0.0)
         close_price = float(r.close_price) if r.close_price is not None else None
+
+        # Realised P&L (trade-based): (avg_sell - avg_buy) * closed_qty.
+        # Show it whenever we have both averages and both buy/sell quantities.
+        if avg_buy is not None and avg_sell is not None:
+            qty_buy = day_buy_qty if day_buy_qty > 0 else buy_qty
+            qty_sell = day_sell_qty if day_sell_qty > 0 else sell_qty
+            closed_qty = min(qty_buy, qty_sell) if qty_buy > 0 and qty_sell > 0 else 0.0
+            if closed_qty > 0 and float(avg_buy) != 0.0:
+                pnl_value = (float(avg_sell) - float(avg_buy)) * float(closed_qty)
+                pnl_pct = (pnl_value / (float(avg_buy) * float(closed_qty))) * 100.0
         pnl_qty = net_qty
         pnl_price_base = avg_price
 
@@ -377,14 +387,6 @@ def list_daily_positions(
                 pnl_qty = holding_qty
                 if avg_buy is not None and avg_buy != 0:
                     pnl_price_base = float(avg_buy)
-
-        # Canonical P&L: use broker net qty + average_price + last_price.
-        # This matches the broker UI (Kite/SmartAPI) semantics: realised +
-        # unrealised P&L is reflected in `average_price` and is therefore
-        # captured by `qty * (last - avg)`.
-        if pnl_qty and item.ltp is not None and pnl_price_base:
-            pnl_value = pnl_qty * (item.ltp - pnl_price_base)
-            pnl_pct = (pnl_value / (abs(pnl_qty) * pnl_price_base)) * 100.0
 
         # "Today" P&L: mark-to-market vs previous close (if available).
         if pnl_qty and item.ltp is not None and close_price:
@@ -396,13 +398,10 @@ def list_daily_positions(
         item.today_pnl = today_pnl
         item.today_pnl_pct = today_pnl_pct
 
-        # Fallbacks: if we could not derive numbers (missing prices), use
+        # Fallback: if we could not derive today's number (missing prices), use
         # broker-provided fields so the UI doesn't show empty cells.
-        broker_pnl = float(r.pnl or 0.0)
-        if item.pnl_value is None:
-            item.pnl_value = broker_pnl
-
         if item.today_pnl is None:
+            broker_pnl = float(r.pnl or 0.0)
             item.today_pnl = (
                 float(r.m2m)
                 if r.m2m is not None and float(r.m2m) != 0.0
@@ -429,10 +428,6 @@ def list_daily_positions(
         qty_base = abs(pnl_qty) if pnl_qty else None
         price_base = pnl_price_base if pnl_price_base else (avg_buy or avg_sell)
 
-        if item.pnl_pct is None:
-            item.pnl_pct = _pct_from_notional(
-                item.pnl_value, qty_base=qty_base, price_base=price_base
-            )
         if item.today_pnl_pct is None:
             item.today_pnl_pct = _pct_from_notional(
                 item.today_pnl, qty_base=qty_base, price_base=price_base

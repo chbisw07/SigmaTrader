@@ -494,8 +494,7 @@ export function PositionsPage() {
       type: 'number',
       valueGetter: (_value, row) => {
         const r = row as PositionSnapshot
-        const orderType = (r.order_type || '').toUpperCase()
-        if (orderType === 'BUY' || orderType === 'HOLD') return null
+        if (r.avg_buy_price == null || r.avg_sell_price == null) return null
         return r.pnl_value ?? null
       },
       valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : '-'),
@@ -509,8 +508,7 @@ export function PositionsPage() {
       type: 'number',
       valueGetter: (_value, row) => {
         const r = row as PositionSnapshot
-        const orderType = (r.order_type || '').toUpperCase()
-        if (orderType === 'BUY' || orderType === 'HOLD') return null
+        if (r.avg_buy_price == null || r.avg_sell_price == null) return null
         return r.pnl_pct ?? null
       },
       valueFormatter: (v) => (v != null ? `${Number(v).toFixed(2)}%` : '-'),

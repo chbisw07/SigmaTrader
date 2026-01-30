@@ -11,6 +11,7 @@ import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import Checkbox from '@mui/material/Checkbox'
 import FormControlLabel from '@mui/material/FormControlLabel'
+import InputAdornment from '@mui/material/InputAdornment'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -38,6 +39,7 @@ import {
   previewOrderForBroker,
   type BrokerCapabilities,
 } from '../services/brokerRuntime'
+import { fetchHoldings, type Holding } from '../services/positions'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 
@@ -86,10 +88,48 @@ export function WaitingQueuePanel({
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
   const [brokerCaps, setBrokerCaps] = useState<Record<string, BrokerCapabilities>>({})
   const [managedRiskCount, setManagedRiskCount] = useState<number>(0)
+  const [holdings, setHoldings] = useState<Holding[] | null>(null)
+  const [holdingsBroker, setHoldingsBroker] = useState<string | null>(null)
+  const [holdingsLoading, setHoldingsLoading] = useState(false)
+  const [holdingsError, setHoldingsError] = useState<string | null>(null)
+  const [holdingsPct, setHoldingsPct] = useState<string>('100')
 
   const getCaps = (brokerName?: string | null): BrokerCapabilities | null => {
     const name = (brokerName ?? selectedBroker ?? 'zerodha').toLowerCase()
     return brokerCaps[name] ?? null
+  }
+
+  const normalizeSymbolExchange = (
+    rawSymbol: string,
+    exchange?: string | null,
+  ): { symbol: string; exchange: string } => {
+    const baseExchange = (exchange ?? 'NSE').trim().toUpperCase() || 'NSE'
+    const s = (rawSymbol ?? '').trim()
+    if (s.includes(':')) {
+      const [ex, sym] = s.split(':', 2)
+      return {
+        symbol: (sym ?? '').trim().toUpperCase(),
+        exchange: (ex ?? '').trim().toUpperCase() || baseExchange,
+      }
+    }
+    return { symbol: s.toUpperCase(), exchange: baseExchange }
+  }
+
+  const loadHoldings = async (brokerName: string) => {
+    const b = (brokerName ?? 'zerodha').toLowerCase()
+    try {
+      setHoldingsLoading(true)
+      setHoldingsError(null)
+      const data = await fetchHoldings(b)
+      setHoldings(data)
+      setHoldingsBroker(b)
+    } catch (err) {
+      setHoldings(null)
+      setHoldingsBroker(b)
+      setHoldingsError(err instanceof Error ? err.message : 'Failed to load holdings')
+    } finally {
+      setHoldingsLoading(false)
+    }
   }
 
   const loadQueue = async (options: { silent?: boolean } = {}) => {
@@ -198,6 +238,15 @@ export function WaitingQueuePanel({
   }, [editingOrder, selectedBroker])
 
   useEffect(() => {
+    if (!editingOrder) return
+    const brokerName = (editingOrder.broker_name ?? selectedBroker ?? 'zerodha').toLowerCase()
+    if (holdingsLoading) return
+    if (holdingsBroker === brokerName && holdings != null) return
+    void loadHoldings(brokerName)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingOrder, selectedBroker])
+
+  useEffect(() => {
     if (!editingOrder || ltp == null) return
     if (editOrderType !== 'SL' && editOrderType !== 'SL-M') return
 
@@ -254,6 +303,63 @@ export function WaitingQueuePanel({
     setLtp(null)
     setLtpError(null)
     setError(null)
+  }
+
+  const editBrokerName = (editingOrder?.broker_name ?? selectedBroker ?? 'zerodha').toLowerCase()
+  const editProductNorm = (editProduct ?? '').trim().toUpperCase()
+  const editQtyNum = Number(editQty)
+  const editSymbolNorm = editingOrder
+    ? normalizeSymbolExchange(editingOrder.symbol, editingOrder.exchange)
+    : null
+  const holdingQty = (() => {
+    if (!editSymbolNorm || !holdings) return null
+    const sym = editSymbolNorm.symbol
+    const ex = editSymbolNorm.exchange
+    const h = holdings.find((x) => {
+      const hx = (x.exchange ?? 'NSE').toUpperCase()
+      return hx === ex && x.symbol.toUpperCase() === sym
+    })
+    if (!h) return 0
+    const q = Number(h.quantity ?? 0)
+    return Number.isFinite(q) ? q : 0
+  })()
+  const queuedCncSellQty = (() => {
+    if (!editSymbolNorm) return 0
+    const sym = editSymbolNorm.symbol
+    const ex = editSymbolNorm.exchange
+    return orders
+      .filter((o) => {
+        if (editingOrder && o.id === editingOrder.id) return false
+        if ((o.broker_name ?? selectedBroker ?? 'zerodha').toLowerCase() !== editBrokerName) {
+          return false
+        }
+        if ((o.side ?? '').toUpperCase() !== 'SELL') return false
+        if ((o.product ?? '').toUpperCase() !== 'CNC') return false
+        if ((o.execution_target ?? 'LIVE').toUpperCase() !== 'LIVE') return false
+        const on = normalizeSymbolExchange(o.symbol, o.exchange)
+        return on.symbol === sym && on.exchange === ex
+      })
+      .reduce((acc, o) => acc + Number(o.qty ?? 0), 0)
+  })()
+  const availableHoldingQty =
+    holdingQty == null ? null : Math.max(0, Math.floor(holdingQty) - Math.floor(queuedCncSellQty))
+
+  const setQtyFromHoldings = (qty: number) => {
+    const n = Math.max(0, Math.floor(qty))
+    setEditQty(String(n))
+  }
+
+  const applyHoldingsPctToQty = () => {
+    if (holdingQty == null) return
+    const pct = Number(holdingsPct)
+    if (!Number.isFinite(pct) || pct < 0) return
+    const base = Math.floor(holdingQty)
+    const computed = Math.floor((base * pct) / 100)
+    if (editSide === 'SELL' && editProductNorm === 'CNC' && availableHoldingQty != null) {
+      setQtyFromHoldings(Math.min(computed, availableHoldingQty))
+      return
+    }
+    setQtyFromHoldings(computed)
   }
 
   const closeEditDialog = () => {
@@ -875,7 +981,136 @@ export function WaitingQueuePanel({
                 onChange={(e) => setEditQty(e.target.value)}
                 fullWidth
                 size="small"
+                error={
+                  editSide === 'SELL' &&
+                  editProductNorm === 'CNC' &&
+                  holdingQty != null &&
+                  !holdingsLoading &&
+                  holdingsError == null &&
+                  Number.isFinite(editQtyNum) &&
+                  availableHoldingQty != null &&
+                  editQtyNum > availableHoldingQty
+                }
+                helperText={(() => {
+                  if (editSide !== 'SELL') return undefined
+                  if (editProductNorm !== 'CNC') {
+                    if (holdingQty != null && holdingQty > 0) {
+                      return 'For delivery holdings exits, use CNC. MIS is intraday and may not match holdings.'
+                    }
+                    return undefined
+                  }
+                  if (holdingsLoading) return 'Loading holdings for quantity helpers…'
+                  if (holdingsError) return `Holdings unavailable: ${holdingsError}`
+                  if (holdingQty == null) return undefined
+                  const hq = Math.floor(holdingQty)
+                  const reserved = Math.floor(queuedCncSellQty)
+                  const avail = availableHoldingQty ?? hq
+                  if (Number.isFinite(editQtyNum) && editQtyNum > avail) {
+                    return `Available CNC holdings: ${avail} (holdings ${hq} − queued CNC sells ${reserved}).`
+                  }
+                  return `Available CNC holdings: ${avail} (holdings ${hq} − queued CNC sells ${reserved}).`
+                })()}
               />
+
+              {editSide === 'SELL' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        if (holdingQty == null) return
+                        setQtyFromHoldings(holdingQty)
+                      }}
+                      disabled={
+                        editProductNorm !== 'CNC' ||
+                        holdingsLoading ||
+                        holdingsError != null ||
+                        holdingQty == null
+                      }
+                    >
+                      Set = holdings qty
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        if (availableHoldingQty == null) return
+                        setQtyFromHoldings(availableHoldingQty)
+                      }}
+                      disabled={
+                        editProductNorm !== 'CNC' ||
+                        holdingsLoading ||
+                        holdingsError != null ||
+                        availableHoldingQty == null
+                      }
+                    >
+                      Set = available qty
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={() => {
+                        void loadHoldings(editBrokerName)
+                      }}
+                      disabled={holdingsLoading}
+                    >
+                      Refresh holdings
+                    </Button>
+                  </Box>
+
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <TextField
+                      label="% of holdings"
+                      type="number"
+                      value={holdingsPct}
+                      onChange={(e) => setHoldingsPct(e.target.value)}
+                      size="small"
+                      sx={{ width: 170 }}
+                      InputProps={{
+                        endAdornment: <InputAdornment position="end">%</InputAdornment>,
+                      }}
+                      disabled={
+                        editProductNorm !== 'CNC' ||
+                        holdingsLoading ||
+                        holdingsError != null ||
+                        holdingQty == null
+                      }
+                    />
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={applyHoldingsPctToQty}
+                      disabled={
+                        editProductNorm !== 'CNC' ||
+                        holdingsLoading ||
+                        holdingsError != null ||
+                        holdingQty == null
+                      }
+                    >
+                      Set from %
+                    </Button>
+                    {editProductNorm === 'MIS' && holdingQty != null && holdingQty > 0 && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => {
+                          setEditProduct('CNC')
+                          setQtyFromHoldings(holdingQty)
+                        }}
+                      >
+                        Switch to CNC + set qty
+                      </Button>
+                    )}
+                  </Box>
+
+                  {editProductNorm === 'CNC' && holdingQty != null && (
+                    <Typography variant="caption" color="text.secondary">
+                      Holdings-based helpers use live holdings and clamp to an integer (floor). Available qty subtracts other LIVE CNC SELL orders still in the queue.
+                    </Typography>
+                  )}
+                </Box>
+              )}
               <TextField
                 label="Order type"
                 select
