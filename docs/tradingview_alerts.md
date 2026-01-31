@@ -169,6 +169,30 @@ Top-level fields:
 - `trade_type` (string, optional): alternate way to set product (e.g. `cash_and_carry` → `CNC`).
 - `comment` / `alert_message` (string, optional): stored as the alert “reason” for traceability.
 
+## 5.1 Important SELL behavior (qty resolution + exit-only safety)
+
+BUY alerts generally use the TradingView `quantity` as-is.
+
+SELL alerts are more complex because a SELL can mean either:
+
+- an exit (sell existing holdings / close an open position), or
+- a fresh short sell (sell without an existing position).
+
+SigmaTrader treats **TradingView SELL as exit-first** to avoid accidental shorting and broker rejections:
+
+- If SigmaTrader can fetch broker state, it will:
+  - Prefer **holdings qty** (delivery) when available and use it as the SELL qty.
+  - Otherwise, fall back to **open positions qty** (intraday/delivery) and use it as the SELL qty.
+-  If neither holdings nor a long position exists, SigmaTrader will still create a **WAITING** order (MANUAL) so you can review/edit (qty/product) before execution.
+- If SigmaTrader cannot fetch broker state (not connected / temporary broker error), it falls back to the TradingView payload qty (legacy behavior).
+
+Practical implications:
+
+- Your TradingView SELL `quantity` may be overridden when SigmaTrader can confirm your actual holdings/position.
+- To do deliberate short-selling (SELL without position), use:
+  - manual order entry, or
+  - SigmaTrader deployments/strategies designed for shorting (future/advanced flow).
+
 ## 6) How to interpret what you see in SigmaTrader
 
 ### A) Where to see incoming alerts / orders
@@ -327,4 +351,3 @@ Suggested filenames:
 - `queue_orders_created.png`
 
 Then reference them from this doc (standard Markdown image links).
-

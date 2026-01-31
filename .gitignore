@@ -49,6 +49,7 @@ build/
 *.sqlite
 *.sqlite3
 *.db
+*.db-journal
 
 # IDE / editor
 .vscode/
@@ -58,4 +59,3 @@ build/
 # Backend config (keep examples only)
 backend/config/*.json
 !backend/config/*.json.example
-

@@ -26,6 +26,7 @@ from app.services.tradingview_zerodha_adapter import (
     NormalizedAlert,
     normalize_tradingview_payload_for_zerodha,
 )
+from app.services.tradingview_sell_qty import resolve_tradingview_sell_qty
 from app.services.webhook_secrets import get_tradingview_webhook_secret
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -530,6 +531,34 @@ def tradingview_webhook(
         default_product=str(getattr(cfg, "default_product", "CNC") or "CNC"),
     )
 
+    sell_resolution = None
+    if str(normalized.side).strip().upper() == "SELL":
+        try:
+            sell_resolution = resolve_tradingview_sell_qty(
+                db,
+                settings,
+                user=user,
+                broker_name=broker_name,
+                exchange=normalized.broker_exchange,
+                symbol=normalized.broker_symbol,
+                desired_product=normalized.product,
+                payload_qty=float(normalized.qty or 0.0),
+            )
+        except Exception:
+            sell_resolution = None
+
+        if sell_resolution is not None and not bool(getattr(sell_resolution, "reject", False)):
+            # Best-effort: override qty/product when we found a sellable quantity.
+            try:
+                normalized.qty = float(
+                    getattr(sell_resolution, "qty", normalized.qty) or 0.0
+                )
+            except Exception:
+                pass
+            resolved_product = getattr(sell_resolution, "resolved_product", None)
+            if resolved_product:
+                normalized.product = str(resolved_product).strip().upper()
+
     client_order_id: str | None = None
     try:
         raw_order_id = str(getattr(payload, "order_id", "") or "").strip()
@@ -573,6 +602,26 @@ def tradingview_webhook(
                 "alert_id": existing.alert_id,
             }
 
+    alert_reason = normalized.reason
+    if sell_resolution is not None and str(normalized.side).strip().upper() == "SELL":
+        src = str(getattr(sell_resolution, "source", "") or "").strip().lower()
+        qty_note = None
+        try:
+            qty_note = float(getattr(sell_resolution, "qty", 0.0) or 0.0)
+        except Exception:
+            qty_note = None
+        if src in {"holdings", "positions"} and qty_note is not None and qty_note > 0:
+            suffix = f"ST: SELL qty resolved from {src} ({qty_note})."
+            alert_reason = f"{(alert_reason or '').strip()} | {suffix}".strip(" |")
+        elif bool(getattr(sell_resolution, "reject", False)) and bool(
+            getattr(sell_resolution, "checked_live", False)
+        ):
+            suffix = (
+                "ST: SELL could not be matched to holdings/positions; "
+                "created as WAITING for review."
+            )
+            alert_reason = f"{(alert_reason or '').strip()} | {suffix}".strip(" |")
+
     alert = Alert(
         user_id=normalized.user_id,
         # Keep legacy strategy linkage only when operating in legacy
@@ -591,12 +640,22 @@ def tradingview_webhook(
         source="TRADINGVIEW",
         raw_payload=normalized.raw_payload,
         bar_time=normalized.bar_time,
-        reason=normalized.reason,
+        reason=alert_reason,
     )
 
     db.add(alert)
     db.commit()
     db.refresh(alert)
+
+    # Safety: when we can confirm this SELL does not map to an existing
+    # holding/position, do not auto-dispatch. Create a WAITING order so the
+    # user can correct qty/product or intentionally proceed.
+    if sell_resolution is not None and str(alert.action).strip().upper() == "SELL":
+        if bool(getattr(sell_resolution, "reject", False)) and bool(
+            getattr(sell_resolution, "checked_live", False)
+        ):
+            mode = "MANUAL"
+            auto_execute = False
 
     order = create_order_from_alert(
         db=db,
@@ -608,7 +667,26 @@ def tradingview_webhook(
         execution_target=exec_target,
         user_id=alert.user_id,
         client_order_id=client_order_id,
+        is_exit=bool(getattr(sell_resolution, "is_exit", False))
+        if sell_resolution is not None and str(alert.action).strip().upper() == "SELL"
+        else False,
     )
+
+    if sell_resolution is not None and str(order.side).strip().upper() == "SELL":
+        if bool(getattr(sell_resolution, "reject", False)) and bool(
+            getattr(sell_resolution, "checked_live", False)
+        ):
+            # Make the issue obvious in the Waiting Queue without preventing edits.
+            note = getattr(sell_resolution, "note", None) or "no holdings/positions found"
+            msg = (
+                "TV SELL needs review: SigmaTrader could not find holdings/positions "
+                f"for this symbol ({note}). Edit qty/product or execute intentionally."
+            )
+            if not (order.error_message or "").strip():
+                order.error_message = msg
+                db.add(order)
+                db.commit()
+                db.refresh(order)
 
     # For AUTO webhooks we immediately execute the order via the same execution
     # path used by the manual queue endpoint. When configured for PAPER
