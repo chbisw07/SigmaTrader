@@ -11,11 +11,15 @@ from app.main import app  # noqa: F401  # ensure routes are imported
 
 client = TestClient(app)
 
+def _set_env(**pairs: str) -> None:
+    for k, v in pairs.items():
+        os.environ[k] = v
+    get_settings.cache_clear()
+
 
 def setup_module() -> None:  # type: ignore[override]
     os.environ.setdefault("ST_ENVIRONMENT", "test")
-    os.environ["ST_HOLDINGS_EXIT_ENABLED"] = "1"
-    get_settings.cache_clear()
+    _set_env(ST_HOLDINGS_EXIT_ENABLED="1", ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS="")
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
@@ -99,3 +103,56 @@ def test_create_rejects_auto_dispatch() -> None:
     }
     res = client.post("/api/holdings-exit-subscriptions", json=payload)
     assert res.status_code == 400
+
+
+def test_create_dedup_returns_existing_subscription() -> None:
+    payload = {
+        "broker_name": "zerodha",
+        "symbol": "NSE:INFY",
+        "exchange": "NSE",
+        "product": "CNC",
+        "trigger_kind": "TARGET_ABS_PRICE",
+        "trigger_value": 1234.0,
+        "price_source": "LTP",
+        "size_mode": "ABS_QTY",
+        "size_value": 1.0,
+        "min_qty": 1,
+        "order_type": "MARKET",
+        "dispatch_mode": "MANUAL",
+        "execution_target": "LIVE",
+        "cooldown_seconds": 300,
+    }
+    a = client.post("/api/holdings-exit-subscriptions", json=payload)
+    assert a.status_code == 200, a.text
+    b = client.post("/api/holdings-exit-subscriptions", json=payload)
+    assert b.status_code == 200, b.text
+    assert int(a.json()["id"]) == int(b.json()["id"])
+
+
+def test_allowlist_blocks_non_allowed_symbol() -> None:
+    _set_env(ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS="NSE:TCS")
+    try:
+        payload = {
+            "broker_name": "zerodha",
+            "symbol": "NSE:INFY",
+            "exchange": "NSE",
+            "product": "CNC",
+            "trigger_kind": "TARGET_ABS_PRICE",
+            "trigger_value": 10.0,
+            "size_mode": "ABS_QTY",
+            "size_value": 1,
+            "dispatch_mode": "MANUAL",
+        }
+        res = client.post("/api/holdings-exit-subscriptions", json=payload)
+        assert res.status_code == 403, res.text
+    finally:
+        _set_env(ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS="")
+
+
+def test_feature_flag_disabled_returns_400() -> None:
+    _set_env(ST_HOLDINGS_EXIT_ENABLED="0")
+    try:
+        res = client.get("/api/holdings-exit-subscriptions")
+        assert res.status_code == 400, res.text
+    finally:
+        _set_env(ST_HOLDINGS_EXIT_ENABLED="1")

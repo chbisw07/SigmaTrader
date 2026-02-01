@@ -521,6 +521,170 @@ Rounding rules (especially for partial exits) may generate invalid or unintended
 
 ---
 
+## 17. MVP Implementation Runbook (What Exists In Code Today)
+
+This section documents the **actual implementation** that ships with the MVP so a developer can operate, debug, and extend it safely.
+
+### 17.1 Feature Flags / Settings (Backend)
+
+Holdings Exit Automation is gated behind explicit flags:
+
+- `ST_HOLDINGS_EXIT_ENABLED=1` (default off)
+- `ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS` (optional)
+  - comma-separated allowlist
+  - allowed formats: `NSE:INFY`, `BSE:TCS`, or bare `INFY`
+- `ST_HOLDINGS_EXIT_POLL_INTERVAL_SEC` (default ~5s)
+- `ST_HOLDINGS_EXIT_MAX_PER_CYCLE` (default ~200)
+
+Implementation: `backend/app/core/config.py`
+
+### 17.2 Database Schema (Backend)
+
+Alembic migration adds two tables:
+
+- `holding_exit_subscriptions`
+  - Key fields:
+    - scope: `user_id`, `broker_name`, `exchange`, `symbol`, `product`
+    - trigger: `trigger_kind`, `trigger_value`, `price_source`
+    - sizing: `size_mode`, `size_value`, `min_qty`
+    - execution: `order_type`, `dispatch_mode`, `execution_target`
+    - state: `status`, `pending_order_id`, `last_error`
+    - scheduling: `next_eval_at`, `cooldown_seconds`, `cooldown_until`
+  - Safety constraints:
+    - `CHECK` constraints on enums (status/trigger/size/etc.)
+    - a de-dupe `UNIQUE` constraint on the "semantic identity":
+      `(user_id, broker_name, exchange, symbol, product, trigger_kind, trigger_value, size_mode, size_value)`
+  - Indices:
+    - `status/broker/user` for listing
+    - `next_eval_at` for scheduler scan
+    - symbol scope index for lookups
+
+- `holding_exit_events`
+  - append-only audit log per subscription (`subscription_id`, `event_type`, `event_ts`)
+  - `details_json` and optional `price_snapshot_json` for debugging/forensics
+
+Implementation: `backend/app/models/holdings_exit.py`
+
+### 17.3 API Surface (Backend)
+
+Base router: `backend/app/api/holdings_exit_subscriptions.py`
+
+Endpoints (all are gated by `_ensure_enabled()`):
+
+- `GET /api/holding-exit-subscriptions`
+  - filters: `status`, `broker_name`, `exchange`, `symbol`
+- `POST /api/holding-exit-subscriptions`
+  - creates ACTIVE subscription
+  - best-effort de-dupe returns the existing record when inputs match
+- `PATCH /api/holding-exit-subscriptions/{id}`
+  - edits ACTIVE/PAUSED/ERROR only
+- `POST /api/holding-exit-subscriptions/{id}/pause`
+- `POST /api/holding-exit-subscriptions/{id}/resume`
+- `DELETE /api/holding-exit-subscriptions/{id}`
+- `GET /api/holding-exit-subscriptions/{id}/events?limit=200`
+
+Allowlist enforcement:
+- if `ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS` is set and the symbol is not present, API returns `403`
+
+### 17.4 Engine (Backend)
+
+The engine is a polling loop that:
+1) reconciles subscriptions that have a `pending_order_id`
+2) evaluates due ACTIVE subscriptions to decide whether to create a new WAITING order
+
+Implementation: `backend/app/services/holdings_exit_engine.py`
+
+Scheduler wiring:
+- `backend/app/main.py` starts the daemon loop only when `ST_HOLDINGS_EXIT_ENABLED=1`
+- scheduler auto-disables under pytest (no background threads in tests)
+
+Core evaluation semantics (MVP posture enforced in engine):
+- broker: Zerodha only
+- product: CNC only (others -> subscription ERROR)
+- order_type: MARKET only (validated in API; engine uses subscription value)
+- dispatch_mode: MANUAL only (AUTO -> subscription ERROR)
+- price_source: LTP only
+- trigger kinds:
+  - `TARGET_ABS_PRICE`: compare LTP against target
+  - `TARGET_PCT_FROM_AVG_BUY`: compute target = avg_buy * (1 + pct/100)
+
+Holdings source of truth:
+- Zerodha holdings snapshot drives:
+  - whether the holding exists
+  - current holdings qty
+  - avg buy (needed for pct targets)
+
+When holdings qty becomes 0:
+- subscription transitions to `COMPLETED` with event `SUB_COMPLETED(reason=no_holdings)`
+
+Order creation (trigger met):
+- creates a new `Order` record with:
+  - `status=WAITING`, `mode=MANUAL`, `side=SELL`, `is_exit=True`
+  - `product=CNC`, `order_type=MARKET`
+  - `error_message="Holdings exit automation (queued)."` (UI-visible note)
+  - `client_order_id` prefixed with `HEXIT:{subscription_id}:...` for easy tracing
+- sets subscription:
+  - `status=ORDER_CREATED`
+  - `pending_order_id=<order.id>`
+  - `cooldown_until=now + cooldown_seconds`
+
+Reconciliation:
+- if pending order becomes terminal success:
+  - subscription -> `COMPLETED`, clears `pending_order_id`
+- if pending order becomes terminal failure/rejection:
+  - subscription -> `ERROR`, clears `pending_order_id`, stores reason in `last_error`
+
+Important note on "duplicate exit arbitration":
+- The MVP engine **does not** suppress additional WAITING exits when another exit order already exists.
+- Safety is still preserved because execution is manual-first and the main order execution flow enforces its own atomicity guards.
+- A future iteration should implement the "Exit Arbiter" described in Section 10 to reduce queue noise.
+
+### 17.5 Frontend UX Entry Points (MVP)
+
+The MVP surfaces "Managed Exits" in the Queue area:
+
+- Queue page:
+  - shows a dedicated "Holdings exits" panel under Managed exits
+- Holdings Goal editor:
+  - user can create a holdings-exit subscription while editing a holding's goal
+  - subscription shows up in Managed exits
+
+Implementation references:
+- `frontend/src/views/HoldingsExitPanel.tsx`
+- `frontend/src/views/ManagedExitsPanel.tsx`
+- `frontend/src/views/QueueManagementPage.tsx`
+- `frontend/src/views/HoldingsPage.tsx`
+- `frontend/src/services/holdingsExit.ts`
+
+### 17.6 Operational Debugging
+
+Recommended workflow to troubleshoot a report like "my exit didn't trigger":
+
+1) confirm backend flags:
+   - `ST_HOLDINGS_EXIT_ENABLED=1`
+   - symbol is allowed by `ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS` if set
+2) inspect subscription row:
+   - `status`, `last_error`, `last_evaluated_at`, `next_eval_at`, `pending_order_id`
+3) fetch audit events:
+   - `GET /api/holding-exit-subscriptions/{id}/events`
+   - look for: `EVAL`, `EVAL_SKIPPED_*`, `TRIGGER_MET`, `ORDER_CREATED`, `ORDER_FAILED`
+4) if an order was created:
+   - locate it by `client_order_id` prefix `HEXIT:{id}:...`
+   - if it was executed/rejected, reconciliation should have moved the subscription to COMPLETED/ERROR
+
+---
+
+## 18. QA & Regression Checklist (MVP)
+
+The detailed QA checklist for this MVP lives here:
+- `docs/qa/holdings_exit_automation_mvp.md`
+
+Test coverage added for the MVP:
+- API gating + allowlist + de-dupe: `backend/tests/test_holdings_exit_subscriptions_api.py`
+- Engine trigger/reconcile paths: `backend/tests/test_holdings_exit_engine.py`
+
+---
+
 ### 16.6 Subscription State Machine Ambiguity
 
 **Risk**  

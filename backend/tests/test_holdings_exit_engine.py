@@ -265,3 +265,222 @@ def test_engine_reconciles_success_and_marks_completed(monkeypatch: pytest.Monke
         sub2 = db.query(HoldingExitSubscription).one()
         assert sub2.status == "COMPLETED"
         assert sub2.pending_order_id is None
+
+
+def test_engine_trigger_pct_from_avg_buy(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import holdings_exit_engine as eng
+
+    # avg buy = 100, target = +10% => 110; ltp=111 triggers
+    fake = _FakeZerodhaClient(
+        holdings=[
+            {
+                "tradingsymbol": "INFY",
+                "exchange": "NSE",
+                "quantity": 10,
+                "average_price": 100.0,
+            }
+        ],
+        ltp_map={
+            ("NSE", "INFY"): {"last_price": 111.0, "prev_close": 110.0},
+        },
+    )
+    monkeypatch.setattr(
+        eng,
+        "_get_zerodha_client",
+        lambda db, settings, *, user_id: fake,
+    )
+
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        admin = db.query(User).filter(User.username == "admin").one()
+        sub = HoldingExitSubscription(
+            user_id=admin.id,
+            broker_name="zerodha",
+            symbol="INFY",
+            exchange="NSE",
+            product="CNC",
+            trigger_kind="TARGET_PCT_FROM_AVG_BUY",
+            trigger_value=10.0,
+            price_source="LTP",
+            size_mode="ABS_QTY",
+            size_value=1.0,
+            min_qty=1,
+            order_type="MARKET",
+            dispatch_mode="MANUAL",
+            execution_target="LIVE",
+            status="ACTIVE",
+            pending_order_id=None,
+            last_error=None,
+            last_evaluated_at=None,
+            last_triggered_at=None,
+            next_eval_at=now - timedelta(seconds=1),
+            cooldown_seconds=0,
+            cooldown_until=None,
+            trigger_key=None,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(sub)
+        db.commit()
+
+    processed = process_holdings_exit_once()
+    assert processed >= 1
+    with SessionLocal() as db:
+        sub2 = db.query(HoldingExitSubscription).one()
+        assert sub2.status == "ORDER_CREATED"
+        assert sub2.pending_order_id is not None
+
+
+def test_engine_pct_from_avg_buy_missing_avg_marks_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import holdings_exit_engine as eng
+
+    fake = _FakeZerodhaClient(
+        holdings=[
+            {
+                "tradingsymbol": "INFY",
+                "exchange": "NSE",
+                "quantity": 10,
+                "average_price": None,
+            }
+        ],
+        ltp_map={
+            ("NSE", "INFY"): {"last_price": 999.0, "prev_close": 110.0},
+        },
+    )
+    monkeypatch.setattr(
+        eng,
+        "_get_zerodha_client",
+        lambda db, settings, *, user_id: fake,
+    )
+
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        admin = db.query(User).filter(User.username == "admin").one()
+        sub = HoldingExitSubscription(
+            user_id=admin.id,
+            broker_name="zerodha",
+            symbol="INFY",
+            exchange="NSE",
+            product="CNC",
+            trigger_kind="TARGET_PCT_FROM_AVG_BUY",
+            trigger_value=10.0,
+            price_source="LTP",
+            size_mode="ABS_QTY",
+            size_value=1.0,
+            min_qty=1,
+            order_type="MARKET",
+            dispatch_mode="MANUAL",
+            execution_target="LIVE",
+            status="ACTIVE",
+            pending_order_id=None,
+            last_error=None,
+            last_evaluated_at=None,
+            last_triggered_at=None,
+            next_eval_at=now - timedelta(seconds=1),
+            cooldown_seconds=0,
+            cooldown_until=None,
+            trigger_key=None,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(sub)
+        db.commit()
+
+    processed = process_holdings_exit_once()
+    assert processed >= 1
+    with SessionLocal() as db:
+        sub2 = db.query(HoldingExitSubscription).one()
+        assert sub2.status == "ERROR"
+        assert sub2.pending_order_id is None
+
+
+def test_engine_reconcile_failed_order_marks_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Reconciliation should not require broker access.
+    from app.services import holdings_exit_engine as eng
+
+    monkeypatch.setattr(
+        eng,
+        "_get_zerodha_client",
+        lambda db, settings, *, user_id: None,
+    )
+
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        admin = db.query(User).filter(User.username == "admin").one()
+        order = Order(
+            user_id=admin.id,
+            alert_id=None,
+            strategy_id=None,
+            portfolio_group_id=None,
+            client_order_id="HEXIT:test:2",
+            symbol="INFY",
+            exchange="NSE",
+            side="SELL",
+            qty=1.0,
+            price=None,
+            order_type="MARKET",
+            product="CNC",
+            gtt=False,
+            synthetic_gtt=False,
+            status="FAILED",
+            mode="MANUAL",
+            execution_target="LIVE",
+            broker_name="zerodha",
+            broker_order_id=None,
+            zerodha_order_id=None,
+            broker_account_id=None,
+            error_message="boom",
+            simulated=False,
+            risk_spec_json=None,
+            is_exit=True,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
+        sub = HoldingExitSubscription(
+            user_id=admin.id,
+            broker_name="zerodha",
+            symbol="INFY",
+            exchange="NSE",
+            product="CNC",
+            trigger_kind="TARGET_ABS_PRICE",
+            trigger_value=100.0,
+            price_source="LTP",
+            size_mode="ABS_QTY",
+            size_value=1.0,
+            min_qty=1,
+            order_type="MARKET",
+            dispatch_mode="MANUAL",
+            execution_target="LIVE",
+            status="ORDER_CREATED",
+            pending_order_id=order.id,
+            last_error=None,
+            last_evaluated_at=None,
+            last_triggered_at=now,
+            next_eval_at=now - timedelta(seconds=1),
+            cooldown_seconds=0,
+            cooldown_until=None,
+            trigger_key=None,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(sub)
+        db.commit()
+
+    processed = process_holdings_exit_once()
+    assert processed >= 1
+    with SessionLocal() as db:
+        sub2 = db.query(HoldingExitSubscription).one()
+        assert sub2.status == "ERROR"
+        assert sub2.pending_order_id is None
+
+
+def test_engine_respects_feature_flag_off() -> None:
+    os.environ["ST_HOLDINGS_EXIT_ENABLED"] = "0"
+    get_settings.cache_clear()
+    assert process_holdings_exit_once() == 0
