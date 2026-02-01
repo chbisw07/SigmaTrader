@@ -625,9 +625,6 @@ def execute_order_internal(
 
     risk_engine_v2_on, _v2_src = get_risk_engine_v2_enabled(db, settings)
     risk_v2_profile_id: int | None = None
-    risk_v2_drawdown_state: str | None = None
-    risk_v2_category: str | None = None
-    risk_v2_product_hint: str | None = None
     risk_v2_baseline_equity: float | None = None
     risk_v2_throttle_multiplier: float | None = None
     execution_policy_key = None
@@ -715,9 +712,6 @@ def execute_order_internal(
                 product_hint=product_hint,
             )
             risk_v2_profile_id = decision.risk_profile_id
-            risk_v2_drawdown_state = decision.drawdown_state
-            risk_v2_category = decision.risk_category
-            risk_v2_product_hint = product_hint
             risk_v2_baseline_equity = baseline_equity
 
             # Shared compiler output used by the UI "Effective Risk Summary" panel.
@@ -791,7 +785,7 @@ def execute_order_internal(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Order rejected by risk engine v2 (internal error).",
-            )
+            ) from exc
 
     if order.qty is None or order.qty <= 0:
         raise HTTPException(

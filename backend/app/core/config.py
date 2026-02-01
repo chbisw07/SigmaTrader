@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     # Product-specific risk engine (v2): centralized enforcement for CNC/MIS
     # profiles + drawdown thresholds.
     risk_engine_v2_enabled: bool = False
+    # Holdings Exit Automation (new): conservative by default, gated behind a flag.
+    holdings_exit_enabled: bool = False
+    # Optional allowlist for rollout: comma-separated symbol keys like
+    # "NSE:INFY,BSE:TCS" (also accepts bare symbols like "INFY").
+    holdings_exit_allowlist_symbols: str | None = None
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from app.core.auth import hash_password
 from app.core.config import get_settings
@@ -247,4 +246,3 @@ def test_compiler_includes_risk_policy_by_source() -> None:
     rp = compiled["effective"]["risk_policy_by_source"]
     assert "TRADINGVIEW" in rp and "SIGMATRADER" in rp
     assert isinstance(rp["TRADINGVIEW"]["capital_per_trade"], (int, float))
-

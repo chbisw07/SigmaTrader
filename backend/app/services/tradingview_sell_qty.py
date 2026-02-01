@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings

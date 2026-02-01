@@ -6,7 +6,6 @@ from datetime import UTC, date, datetime
 from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user, get_current_user_optional

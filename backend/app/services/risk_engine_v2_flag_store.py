@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal, Tuple
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
@@ -79,4 +79,3 @@ def set_risk_engine_v2_enabled(db: Session, settings: Settings, enabled: bool) -
 
 
 __all__ = ["get_risk_engine_v2_enabled", "set_risk_engine_v2_enabled"]
-

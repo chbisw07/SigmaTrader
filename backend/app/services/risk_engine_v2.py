@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from math import floor
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
@@ -14,7 +14,6 @@ from app.models import (
     Alert,
     AlertDecisionLog,
     AnalyticsTrade,
-    DrawdownThreshold,
     EquitySnapshot,
     Order,
     Position,
@@ -121,13 +120,20 @@ def pick_risk_profile(
         for p in ("CNC", "MIS"):
             row = (
                 db.query(RiskProfile)
-                .filter(RiskProfile.enabled.is_(True), RiskProfile.is_default.is_(True), RiskProfile.product == p)
+                .filter(
+                    RiskProfile.enabled.is_(True),
+                    RiskProfile.is_default.is_(True),
+                    RiskProfile.product == p,
+                )
                 .one_or_none()
             )
             if row is not None:
                 return row
         return (
-            db.query(RiskProfile).filter(RiskProfile.enabled.is_(True)).order_by(RiskProfile.product, RiskProfile.id).first()
+            db.query(RiskProfile)
+            .filter(RiskProfile.enabled.is_(True))
+            .order_by(RiskProfile.product, RiskProfile.id)
+            .first()
         )
 
     row = (
@@ -381,7 +387,10 @@ def evaluate_order_risk_v2(
         return RiskDecisionV2(
             blocked=True,
             reasons=[
-                "Missing symbol risk category (set LC/MC/SC/ETF from Holdings/Universe, or configure a default category in Risk settings)."
+                (
+                    "Missing symbol risk category (set LC/MC/SC/ETF from Holdings/Universe, "
+                    "or configure a default category in Risk settings)."
+                )
             ],
             resolved_product=resolved_product,
             risk_profile_id=profile.id,
@@ -496,13 +505,16 @@ def evaluate_order_risk_v2(
 
     # Daily loss checks (entries only).
     if not is_exit and profile.daily_loss_pct and profile.daily_loss_pct > 0:
-        daily_loss_pct = (abs(min(0.0, pnl_state.pnl_today)) / pnl_state.baseline_equity) * 100.0
-        if profile.hard_daily_loss_pct and profile.hard_daily_loss_pct > 0 and daily_loss_pct >= float(profile.hard_daily_loss_pct):
+        daily_loss_pct = (
+            abs(min(0.0, pnl_state.pnl_today)) / pnl_state.baseline_equity
+        ) * 100.0
+        hard_daily_loss_pct = float(profile.hard_daily_loss_pct or 0.0)
+        if hard_daily_loss_pct > 0 and daily_loss_pct >= hard_daily_loss_pct:
             return RiskDecisionV2(
                 blocked=True,
                 reasons=[
                     *reasons,
-                    f"Hard daily loss limit reached ({daily_loss_pct:.2f}% >= {float(profile.hard_daily_loss_pct):.2f}%).",
+                    f"Hard daily loss limit reached ({daily_loss_pct:.2f}% >= {hard_daily_loss_pct:.2f}%).",
                 ],
                 resolved_product=resolved_product,
                 risk_profile_id=profile.id,
@@ -532,12 +544,13 @@ def evaluate_order_risk_v2(
 
     # Loss streak checks (entries only).
     if not is_exit and profile.max_consecutive_losses and profile.max_consecutive_losses > 0:
-        if pnl_state.consecutive_losses >= int(profile.max_consecutive_losses):
+        max_losses = int(profile.max_consecutive_losses)
+        if pnl_state.consecutive_losses >= max_losses:
             return RiskDecisionV2(
                 blocked=True,
                 reasons=[
                     *reasons,
-                    f"Max consecutive losses reached ({pnl_state.consecutive_losses} >= {int(profile.max_consecutive_losses)}).",
+                    f"Max consecutive losses reached ({pnl_state.consecutive_losses} >= {max_losses}).",
                 ],
                 resolved_product=resolved_product,
                 risk_profile_id=profile.id,
@@ -623,6 +636,7 @@ def evaluate_order_risk_v2(
                 )
 
         if profile.max_trades_per_symbol_per_day and int(profile.max_trades_per_symbol_per_day) > 0:
+            max_trades_sym = int(profile.max_trades_per_symbol_per_day)
             q = db.query(Order).filter(
                 Order.created_at >= start_day,
                 Order.created_at < end_day,
@@ -636,12 +650,12 @@ def evaluate_order_risk_v2(
             if user_id is not None:
                 q = q.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
             trades_sym = q.count()
-            if trades_sym >= int(profile.max_trades_per_symbol_per_day):
+            if trades_sym >= max_trades_sym:
                 return RiskDecisionV2(
                     blocked=True,
                     reasons=[
                         *reasons,
-                        f"Max trades/symbol/day reached ({trades_sym} >= {int(profile.max_trades_per_symbol_per_day)}).",
+                        f"Max trades/symbol/day reached ({trades_sym} >= {max_trades_sym}).",
                     ],
                     resolved_product=resolved_product,
                     risk_profile_id=profile.id,
@@ -766,7 +780,10 @@ def evaluate_order_risk_v2(
         if int(open_positions) >= int(max_pos_eff):
             return RiskDecisionV2(
                 blocked=True,
-                reasons=[*reasons, f"Max positions reached for {resolved_product} ({open_positions} >= {max_pos_eff})."],
+                reasons=[
+                    *reasons,
+                    f"Max positions reached for {resolved_product} ({open_positions} >= {max_pos_eff}).",
+                ],
                 resolved_product=resolved_product,
                 risk_profile_id=profile.id,
                 risk_category=category,
@@ -899,19 +916,33 @@ def record_decision_log(
                         )
             except Exception:
                 strategy_ref = None
-            if strategy_ref is None and getattr(alert, "strategy_id", None) is not None:
-                strategy_ref = f"strategy_db_id:{getattr(alert, 'strategy_id')}"
+            if strategy_ref is None and alert.strategy_id is not None:
+                strategy_ref = f"strategy_db_id:{alert.strategy_id}"
+
+        source = (
+            "TRADINGVIEW"
+            if (alert is not None and (alert.source or "").upper() == "TRADINGVIEW")
+            else "ALERT"
+        )
+        symbol = order.symbol if order is not None else (alert.symbol if alert is not None else None)
+        exchange = order.exchange if order is not None else (alert.exchange if alert is not None else None)
+        side = order.side if order is not None else (alert.action if alert is not None else None)
+        trigger_price = None
+        if order is not None and order.price is not None:
+            trigger_price = float(order.price)
+        elif alert is not None and alert.price is not None:
+            trigger_price = float(alert.price)
 
         log = AlertDecisionLog(
             user_id=user_id,
             alert_id=(alert.id if alert is not None else None),
             order_id=(order.id if order is not None else None),
-            source=("TRADINGVIEW" if (alert is not None and (alert.source or "").upper() == "TRADINGVIEW") else "ALERT"),
+            source=source,
             strategy_ref=strategy_ref,
-            symbol=(order.symbol if order is not None else (alert.symbol if alert is not None else None)),
-            exchange=(order.exchange if order is not None else (alert.exchange if alert is not None else None)),
-            side=(order.side if order is not None else (alert.action if alert is not None else None)),
-            trigger_price=(float(order.price) if (order is not None and order.price is not None) else (float(alert.price) if (alert is not None and alert.price is not None) else None)),
+            symbol=symbol,
+            exchange=exchange,
+            side=side,
+            trigger_price=trigger_price,
             product_hint=(product_hint or None),
             resolved_product=(decision.resolved_product or None),
             risk_profile_id=decision.risk_profile_id,

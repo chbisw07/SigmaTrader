@@ -106,7 +106,10 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.CheckConstraint(
-            "trigger_kind IN ('TARGET_ABS_PRICE','TARGET_PCT_FROM_AVG_BUY','DRAWDOWN_ABS_PRICE','DRAWDOWN_PCT_FROM_PEAK')",
+            (
+                "trigger_kind IN ('TARGET_ABS_PRICE','TARGET_PCT_FROM_AVG_BUY',"
+                "'DRAWDOWN_ABS_PRICE','DRAWDOWN_PCT_FROM_PEAK')"
+            ),
             name="ck_holding_exit_subscriptions_trigger_kind",
         ),
         sa.CheckConstraint(
@@ -195,7 +198,12 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.CheckConstraint(
-            "event_type IN ('SUB_CREATED','SUB_UPDATED','SUB_PAUSED','SUB_RESUMED','EVAL','EVAL_SKIPPED_MISSING_QUOTE','EVAL_SKIPPED_BROKER_UNAVAILABLE','TRIGGER_MET','ORDER_CREATED','ORDER_DISPATCHED','ORDER_FAILED','EXIT_QUEUED_DUE_TO_PENDING_EXIT','SUB_COMPLETED','SUB_ERROR')",
+            (
+                "event_type IN ('SUB_CREATED','SUB_UPDATED','SUB_PAUSED','SUB_RESUMED',"
+                "'EVAL','EVAL_SKIPPED_MISSING_QUOTE','EVAL_SKIPPED_BROKER_UNAVAILABLE',"
+                "'TRIGGER_MET','ORDER_CREATED','ORDER_DISPATCHED','ORDER_FAILED',"
+                "'EXIT_QUEUED_DUE_TO_PENDING_EXIT','SUB_COMPLETED','SUB_ERROR')"
+            ),
             name="ck_holding_exit_events_event_type",
         ),
     )
@@ -232,4 +240,3 @@ def downgrade() -> None:
         table_name="holding_exit_subscriptions",
     )
     op.drop_table("holding_exit_subscriptions")
-
