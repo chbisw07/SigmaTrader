@@ -12,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from .api.routes import router as api_router
 from .core.config import get_settings
 from .core.logging import RequestContextMiddleware, configure_logging
+from .db.base import Base
 from .db.session import SessionLocal
 from .services.alerts_v3 import schedule_alerts_v3
 from .services.deployment_runtime import start_deployments_runtime
@@ -65,6 +66,43 @@ def _run_migrations_if_needed() -> None:
         logger.exception("Failed to run Alembic migrations on startup.")
 
 
+def _repair_schema_if_corrupted() -> None:
+    """Repair missing tables in-place for local SQLite dev DBs.
+
+    We've observed cases where the SQLite file can end up with an Alembic
+    version stamp but missing core tables (e.g. `users`). In that scenario
+    Alembic won't recreate the tables, and the app fails at runtime.
+
+    This is a conservative fallback:
+    - Only runs for SQLite (dev-friendly)
+    - Only runs when `users` is missing
+    - Uses `create_all(checkfirst=True)` so existing tables are not modified
+    """
+
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    if not settings.database_url.startswith("sqlite"):
+        return
+
+    try:
+        with SessionLocal() as db:
+            inspector = inspect(db.get_bind())
+            existing = set(inspector.get_table_names())
+            if "users" in existing:
+                return
+
+            # Ensure all models are imported so Base.metadata has all tables.
+            from . import models  # noqa: F401
+
+            logger.warning(
+                "Database is missing core tables; attempting repair via create_all(checkfirst=True).",
+                extra={"extra": {"missing_table": "users", "database_url": settings.database_url}},
+            )
+            Base.metadata.create_all(bind=db.get_bind(), checkfirst=True)
+    except Exception:
+        logger.exception("Failed to repair database schema.")
+
+
 def _bootstrap_admin_user() -> None:
     """Ensure the default admin user exists at startup."""
 
@@ -89,6 +127,7 @@ async def _lifespan(_app: FastAPI):
     """FastAPI lifespan handler for startup/shutdown tasks."""
 
     _run_migrations_if_needed()
+    _repair_schema_if_corrupted()
     _bootstrap_admin_user()
 
     # Startup: begin background market data sync when not under pytest.
