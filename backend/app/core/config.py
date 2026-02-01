@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     risk_engine_v2_enabled: bool = False
     # Holdings Exit Automation (new): conservative by default, gated behind a flag.
     holdings_exit_enabled: bool = False
+    # Engine poll interval for evaluating subscriptions (seconds).
+    holdings_exit_poll_interval_sec: float = 5.0
+    # Safety cap for work per cycle to avoid long stalls on large portfolios.
+    holdings_exit_max_per_cycle: int = 200
     # Optional allowlist for rollout: comma-separated symbol keys like
     # "NSE:INFY,BSE:TCS" (also accepts bare symbols like "INFY").
     holdings_exit_allowlist_symbols: str | None = None
@@ -134,6 +138,33 @@ def get_settings() -> Settings:
             "yes",
             "on",
         }
+
+    raw_holdings_exit = os.getenv("ST_HOLDINGS_EXIT_ENABLED")
+    if raw_holdings_exit is not None:
+        settings.holdings_exit_enabled = str(raw_holdings_exit).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    raw_allow = os.getenv("ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS")
+    if raw_allow is not None:
+        settings.holdings_exit_allowlist_symbols = str(raw_allow).strip() or None
+
+    raw_poll = os.getenv("ST_HOLDINGS_EXIT_POLL_INTERVAL_SEC")
+    if raw_poll is not None:
+        try:
+            settings.holdings_exit_poll_interval_sec = float(raw_poll)
+        except Exception:
+            pass
+
+    raw_max = os.getenv("ST_HOLDINGS_EXIT_MAX_PER_CYCLE")
+    if raw_max is not None:
+        try:
+            settings.holdings_exit_max_per_cycle = int(raw_max)
+        except Exception:
+            pass
 
     # During pytest runs we want admin-protected APIs to remain easily
     # accessible without configuring HTTP Basic credentials and we do not

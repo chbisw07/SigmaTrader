@@ -17,6 +17,7 @@ from .db.session import SessionLocal
 from .services.alerts_v3 import schedule_alerts_v3
 from .services.deployment_runtime import start_deployments_runtime
 from .services.instruments_sync import schedule_instrument_master_sync
+from .services.holdings_exit_engine import schedule_holdings_exit
 from .services.managed_risk import schedule_managed_risk
 from .services.market_data import schedule_market_data_sync
 from .services.synthetic_gtt import schedule_synthetic_gtt
@@ -141,6 +142,8 @@ async def _lifespan(_app: FastAPI):
         schedule_alerts_v3()
         schedule_synthetic_gtt()
         schedule_managed_risk()
+        if getattr(settings, "holdings_exit_enabled", False):
+            schedule_holdings_exit()
 
     enable_deployments = (
         (os.getenv("ST_ENABLE_DEPLOYMENTS_RUNTIME") or "").strip().lower()
