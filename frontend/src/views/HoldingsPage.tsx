@@ -103,6 +103,7 @@ import {
 } from '../services/holdingsGoals'
 import { InstrumentSearch } from '../components/InstrumentSearch'
 import type { InstrumentSearchResult } from '../services/instruments'
+import { createHoldingsExitSubscription } from '../services/holdingsExit'
 
 type HoldingIndicators = {
   rsi14?: number
@@ -442,6 +443,13 @@ export function HoldingsPage() {
   const [goalNote, setGoalNote] = useState('')
   const [goalSaving, setGoalSaving] = useState(false)
   const [goalSaveError, setGoalSaveError] = useState<string | null>(null)
+  // Holdings Exit Automation (MVP): optional subscription derived from goal target.
+  const [goalExitSubscribe, setGoalExitSubscribe] = useState(false)
+  const [goalExitSizeMode, setGoalExitSizeMode] = useState<'PCT_OF_POSITION' | 'ABS_QTY'>(
+    'PCT_OF_POSITION',
+  )
+  const [goalExitSizeValue, setGoalExitSizeValue] = useState('50')
+  const [goalExitError, setGoalExitError] = useState<string | null>(null)
   const [goalReviewActionError, setGoalReviewActionError] = useState<string | null>(
     null,
   )
@@ -2240,6 +2248,10 @@ export function HoldingsPage() {
       )
       setGoalNote(goal?.note ?? '')
       setGoalSaveError(null)
+      setGoalExitSubscribe(false)
+      setGoalExitSizeMode('PCT_OF_POSITION')
+      setGoalExitSizeValue('50')
+      setGoalExitError(null)
       setGoalEditOpen(true)
     },
     [defaultReviewDateForLabel, getGoalForRow, universeId],
@@ -2368,11 +2380,57 @@ export function HoldingsPage() {
         const next = prev.filter((g) => g.id !== updated.id)
         return [...next, updated]
       })
+
+      // Best-effort: create a holdings-exit subscription derived from the goal
+      // target (MVP supports only ABSOLUTE_PRICE and PCT_FROM_AVG_BUY).
+      if (goalExitSubscribe) {
+        setGoalExitError(null)
+        const targetType2 = goalTargetType ? goalTargetType : null
+        if (!targetType2) {
+          throw new Error('Holdings exit subscription requires a goal target type.')
+        }
+        if (targetType2 === 'PCT_FROM_LTP') {
+          throw new Error('Holdings exit does not support % from LTP (MVP).')
+        }
+        const tv2 = targetValue
+        if (tv2 == null || !Number.isFinite(tv2) || tv2 <= 0) {
+          throw new Error('Holdings exit subscription requires a positive target value.')
+        }
+        const sizeV = Number(goalExitSizeValue.trim())
+        if (!Number.isFinite(sizeV) || sizeV <= 0) {
+          throw new Error('Sell size must be a positive number.')
+        }
+        const trigger_kind =
+          targetType2 === 'ABSOLUTE_PRICE'
+            ? 'TARGET_ABS_PRICE'
+            : 'TARGET_PCT_FROM_AVG_BUY'
+        await createHoldingsExitSubscription({
+          broker_name: brokerName,
+          symbol: goalEditRow.symbol,
+          exchange: goalEditRow.exchange ?? 'NSE',
+          product: 'CNC',
+          trigger_kind,
+          trigger_value: Number(tv2),
+          price_source: 'LTP',
+          size_mode: goalExitSizeMode,
+          size_value: sizeV,
+          min_qty: 1,
+          order_type: 'MARKET',
+          dispatch_mode: 'MANUAL',
+          execution_target: 'LIVE',
+          cooldown_seconds: 300,
+        })
+      }
+
       setGoalEditOpen(false)
     } catch (err) {
-      setGoalSaveError(
-        err instanceof Error ? err.message : 'Failed to save goal.',
-      )
+      const msg = err instanceof Error ? err.message : 'Failed to save goal.'
+      if (goalExitSubscribe) {
+        // Keep the dialog open so the user sees the subscription error.
+        setGoalExitError(msg)
+      } else {
+        setGoalSaveError(msg)
+      }
     } finally {
       setGoalSaving(false)
     }
@@ -2384,6 +2442,9 @@ export function HoldingsPage() {
     goalReviewDate,
     goalTargetType,
     goalTargetValue,
+    goalExitSubscribe,
+    goalExitSizeMode,
+    goalExitSizeValue,
     universeId,
   ])
 
@@ -2832,6 +2893,22 @@ export function HoldingsPage() {
   }
 
   const openQuickTradeDialog = (inst: InstrumentSearchResult) => {
+    // If the symbol already exists in the current holdings grid, reuse the
+    // normal trade dialog (better defaults + consistent validations).
+    const symU = (inst.symbol || '').trim().toUpperCase()
+    const exchU = (inst.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+    if (symU) {
+      const existing = holdings.find((h) => {
+        const hs = (h.symbol || '').trim().toUpperCase()
+        const he = (h.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+        return hs === symU && he === exchU
+      })
+      if (existing) {
+        openTradeDialog(existing, 'BUY')
+        return
+      }
+    }
+
     // Create a minimal "holding" stub so the existing trade flow works.
     const stub: HoldingRow = {
       symbol: inst.symbol,
@@ -5340,6 +5417,61 @@ export function HoldingsPage() {
                 value={goalTargetPreview?.label ?? '—'}
                 InputProps={{ readOnly: true }}
               />
+
+              <Box sx={{ mt: 1 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={goalExitSubscribe}
+                      onChange={(e) => {
+                        setGoalExitSubscribe(Boolean(e.target.checked))
+                        setGoalExitError(null)
+                      }}
+                      disabled={goalTargetType === '' || goalTargetType === 'PCT_FROM_LTP'}
+                    />
+                  }
+                  label="Subscribe to holdings exit automation (MVP)"
+                />
+                <Typography variant="caption" color="text.secondary">
+                  When enabled, SigmaTrader will monitor this holding and create a CNC SELL
+                  order in the Waiting Queue when the target is met. Manual-only (safe).
+                </Typography>
+                {goalTargetType === 'PCT_FROM_LTP' && (
+                  <Typography variant="caption" color="warning.main" display="block">
+                    % from LTP target is not supported for holdings exit automation (MVP).
+                  </Typography>
+                )}
+                {goalExitSubscribe && (
+                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 1 }}>
+                    <TextField
+                      select
+                      label="Sell sizing"
+                      value={goalExitSizeMode}
+                      onChange={(e) =>
+                        setGoalExitSizeMode(
+                          e.target.value as 'PCT_OF_POSITION' | 'ABS_QTY',
+                        )
+                      }
+                      sx={{ minWidth: 220 }}
+                    >
+                      <MenuItem value="PCT_OF_POSITION">% of position</MenuItem>
+                      <MenuItem value="ABS_QTY">Qty</MenuItem>
+                    </TextField>
+                    <TextField
+                      label={goalExitSizeMode === 'ABS_QTY' ? 'Qty' : '% of position'}
+                      value={goalExitSizeValue}
+                      onChange={(e) => setGoalExitSizeValue(e.target.value)}
+                      sx={{ minWidth: 160 }}
+                    />
+                  </Box>
+                )}
+                {goalExitError && (
+                  <Typography variant="caption" color="error" display="block">
+                    {goalExitError}
+                  </Typography>
+                )}
+              </Box>
+
               <TextField
                 label="Thesis note (optional)"
                 value={goalNote}

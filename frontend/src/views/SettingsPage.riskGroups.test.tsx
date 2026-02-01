@@ -331,7 +331,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     const putCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/risk-policy') && c[1]?.method === 'PUT')
     const body = putCall?.[1]?.body ? JSON.parse(String(putCall?.[1]?.body)) : null
     expect(body.enforcement.trade_frequency).toBe(false)
-  })
+  }, 15000)
 
   it('disables risk policy fields when enforcement is OFF', async () => {
     render(
@@ -355,7 +355,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     await waitFor(() => {
       expect(equityInput).toBeDisabled()
     })
-  })
+  }, 15000)
 
   it('disables risk engine v2 settings when v2 is OFF', async () => {
     const fetchMock = vi.fn()

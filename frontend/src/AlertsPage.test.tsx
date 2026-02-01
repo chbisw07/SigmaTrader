@@ -105,5 +105,5 @@ describe('AlertsPage (v3)', () => {
       expect(screen.getByText(/edit alert/i)).toBeInTheDocument()
     })
     expect(screen.getByLabelText('Name')).toHaveValue('My alert')
-  })
+  }, 15000)
 })

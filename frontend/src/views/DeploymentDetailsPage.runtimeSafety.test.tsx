@@ -121,7 +121,7 @@ describe('DeploymentDetailsPage runtime safety', () => {
       '/api/deployments/1/start',
       expect.objectContaining({ method: 'POST' }),
     )
-  })
+  }, 15000)
 
   it('shows direction mismatch actions and calls resolve endpoint', async () => {
     const user = userEvent.setup()

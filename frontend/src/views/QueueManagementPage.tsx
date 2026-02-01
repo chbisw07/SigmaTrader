@@ -5,7 +5,7 @@ import Typography from '@mui/material/Typography'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { ManagedRiskPanel } from './ManagedRiskPage'
+import { ManagedExitsPanel } from './ManagedExitsPanel'
 import { OrdersPanel } from './OrdersPage'
 import { WaitingQueuePanel } from './QueuePage'
 import { TvAlertsPanel } from './TvAlertsPanel'
@@ -77,7 +77,7 @@ export function QueueManagementPage() {
         <OrdersPanel embedded active={tab === 'orders'} />
       </Box>
       <Box sx={{ display: tab === 'risk' ? 'block' : 'none' }}>
-        <ManagedRiskPanel embedded active={tab === 'risk'} />
+        <ManagedExitsPanel embedded active={tab === 'risk'} />
       </Box>
     </Box>
   )

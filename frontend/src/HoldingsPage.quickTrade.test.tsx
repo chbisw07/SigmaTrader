@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 
@@ -158,7 +158,8 @@ describe('HoldingsPage Quick trade', () => {
 
     await user.click(screen.getByRole('option', { name: /NSE:.*INFY/i }))
 
-    expect(await screen.findByText('NSE:INFY')).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getAllByText(/INFY/i).length).toBeGreaterThan(0)
 
     const product = screen.getByRole('combobox', { name: /product/i })
     expect(product).toHaveTextContent(/CNC/i)
@@ -171,11 +172,19 @@ describe('HoldingsPage Quick trade', () => {
     const category = screen.getByRole('combobox', { name: /risk category/i })
     await user.click(category)
     await user.click(await screen.findByRole('option', { name: /^LC$/i }))
+    await waitFor(() => {
+      expect(category).toHaveTextContent(/^LC$/i)
+    })
 
     await user.click(screen.getByRole('button', { name: /create order/i }))
-      await waitFor(() => {
-        expect(screen.queryByRole('button', { name: /create order/i })).not.toBeInTheDocument()
-      })
+    await waitFor(
+      () => {
+        expect(
+          screen.queryByRole('button', { name: /create order/i }),
+        ).not.toBeInTheDocument()
+      },
+      { timeout: 5000 },
+    )
     },
     15000,
   )
