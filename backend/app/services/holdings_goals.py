@@ -16,6 +16,7 @@ from app.schemas.holdings import (
     HoldingGoalReviewActionRequest,
     HoldingGoalUpsert,
 )
+from app.holdings_exit.symbols import normalize_holding_symbol_exchange
 
 LABEL_DEFAULT_REVIEW_DAYS: dict[GoalLabel, int] = {
     "CORE": 180,
@@ -27,19 +28,9 @@ LABEL_DEFAULT_REVIEW_DAYS: dict[GoalLabel, int] = {
 }
 
 
-def normalize_symbol_exchange(
-    symbol: str, exchange: str | None
-) -> tuple[str, str]:
-    raw_symbol = (symbol or "").strip().upper()
-    raw_exchange = (exchange or "").strip().upper() if exchange else ""
-    if ":" in raw_symbol:
-        prefix, rest = raw_symbol.split(":", 1)
-        if prefix in {"NSE", "BSE"} and rest.strip():
-            raw_exchange = prefix
-            raw_symbol = rest.strip().upper()
-    if not raw_exchange:
-        raw_exchange = "NSE"
-    return raw_symbol, raw_exchange
+def normalize_symbol_exchange(symbol: str, exchange: str | None) -> tuple[str, str]:
+    # Backward-compatible alias used by Holding Goals (and a few other modules).
+    return normalize_holding_symbol_exchange(symbol, exchange)
 
 
 def _default_review_date(label: GoalLabel) -> date:

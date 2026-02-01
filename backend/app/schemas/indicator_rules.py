@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.pydantic_compat import PYDANTIC_V2, ConfigDict
+
 IndicatorType = Literal[
     "PRICE",
     "RSI",
@@ -98,8 +100,12 @@ class IndicatorRuleRead(IndicatorRuleBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:  # Pydantic v1
-        orm_mode = True
+    if PYDANTIC_V2:
+        model_config = ConfigDict(from_attributes=True)
+    else:  # pragma: no cover - Pydantic v1
+
+        class Config:
+            orm_mode = True
 
 
 __all__ = [

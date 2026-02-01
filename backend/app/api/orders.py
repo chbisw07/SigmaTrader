@@ -947,15 +947,17 @@ def execute_order_internal(
 
             inflight_order_id = getattr(state, "inflight_order_id", None)
             if inflight_order_id is not None and int(inflight_order_id) != int(order.id):
-                wait_deadline = now_utc + timedelta(
-                    seconds=float(DEFAULT_EXECUTION_POLICY_CONCURRENCY_WAIT_SECONDS)
+                # Use monotonic time for the wait budget so tests (and some callers)
+                # can safely monkeypatch `_now_utc` without causing an infinite loop.
+                wait_deadline_mono = time.monotonic() + float(
+                    DEFAULT_EXECUTION_POLICY_CONCURRENCY_WAIT_SECONDS
                 )
                 # Best-effort: wait for inflight marker to clear. This prevents
                 # spurious permanent blocks when multiple alerts arrive together.
                 while (
                     inflight_order_id is not None
                     and int(inflight_order_id) != int(order.id)
-                    and now_utc < wait_deadline
+                    and time.monotonic() < wait_deadline_mono
                 ):
                     # Release any row lock before sleeping.
                     try:

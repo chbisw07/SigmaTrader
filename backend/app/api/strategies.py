@@ -13,6 +13,7 @@ from app.schemas.strategies import StrategyScope
 from app.services.alert_expression import expression_to_dict
 from app.services.alert_expression_dsl import parse_expression
 from app.services.indicator_alerts import IndicatorAlertError
+from app.pydantic_compat import model_to_dict
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -167,7 +168,7 @@ def update_strategy(
             detail="Strategy not found.",
         )
 
-    update_data = payload.dict(exclude_unset=True)
+    update_data = model_to_dict(payload, exclude_unset=True)
 
     # Built-in strategies are largely immutable from the API, but we allow
     # toggling a small, safe subset of fields (currently: available_for_alert)

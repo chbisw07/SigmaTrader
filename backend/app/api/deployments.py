@@ -20,6 +20,7 @@ from app.models import (
     StrategyDeploymentState,
     User,
 )
+from app.pydantic_compat import PYDANTIC_V2, model_to_dict
 from app.schemas.deployments import (
     DeploymentKind,
     DeploymentUniverse,
@@ -124,14 +125,22 @@ def _parse_config(
     kind: DeploymentKind, cfg: dict
 ) -> Tuple[dict, str, str, str, str, str]:
     if kind == "STRATEGY":
-        parsed = StrategyDeploymentConfigIn.parse_obj(cfg)
+        parsed = (
+            StrategyDeploymentConfigIn.model_validate(cfg)
+            if PYDANTIC_V2
+            else StrategyDeploymentConfigIn.parse_obj(cfg)
+        )
     else:
-        parsed = PortfolioStrategyDeploymentConfigIn.parse_obj(cfg)
+        parsed = (
+            PortfolioStrategyDeploymentConfigIn.model_validate(cfg)
+            if PYDANTIC_V2
+            else PortfolioStrategyDeploymentConfigIn.parse_obj(cfg)
+        )
 
     daily = None
     if parsed.timeframe == "1d":
         if parsed.daily_via_intraday is not None:
-            daily = parsed.daily_via_intraday.normalize().dict()
+            daily = model_to_dict(parsed.daily_via_intraday.normalize())
     else:
         if parsed.daily_via_intraday is not None and parsed.daily_via_intraday.enabled:
             raise HTTPException(
@@ -148,7 +157,7 @@ def _parse_config(
         )
     _validate_dsl(entry_dsl, exit_dsl)
 
-    normalized = parsed.dict()
+    normalized = model_to_dict(parsed)
     normalized["entry_dsl"] = entry_dsl
     normalized["exit_dsl"] = exit_dsl
     normalized["daily_via_intraday"] = daily
@@ -704,7 +713,7 @@ def create_deployment(
     config_json = _json_dump(
         {
             "kind": payload.kind,
-            "universe": payload.universe.dict(),
+            "universe": model_to_dict(payload.universe),
             "config": normalized_cfg,
         }
     )
@@ -766,14 +775,18 @@ def update_deployment(
 ) -> StrategyDeploymentRead:
     dep = _get_owned_deployment(db, deployment_id=deployment_id, user=user)
 
-    update_data = payload.dict(exclude_unset=True)
+    update_data = model_to_dict(payload, exclude_unset=True)
 
     universe = dep_universe = None
     config = None
     kind: DeploymentKind = dep.kind  # type: ignore[assignment]
     if "universe" in update_data:
         universe_raw = update_data.pop("universe")
-        universe = DeploymentUniverse.parse_obj(universe_raw or {})
+        universe = (
+            DeploymentUniverse.model_validate(universe_raw or {})
+            if PYDANTIC_V2
+            else DeploymentUniverse.parse_obj(universe_raw or {})
+        )
     if "config" in update_data:
         config = update_data.pop("config")
 
@@ -782,7 +795,11 @@ def update_deployment(
             payload_obj = json.loads(dep.config_json or "{}")
         except Exception:
             payload_obj = {}
-        dep_universe = DeploymentUniverse.parse_obj(payload_obj.get("universe") or {})
+        dep_universe = (
+            DeploymentUniverse.model_validate(payload_obj.get("universe") or {})
+            if PYDANTIC_V2
+            else DeploymentUniverse.parse_obj(payload_obj.get("universe") or {})
+        )
         dep_config = payload_obj.get("config") or {}
 
         new_universe = universe if universe is not None else dep_universe
@@ -817,7 +834,7 @@ def update_deployment(
         dep.config_json = _json_dump(
             {
                 "kind": kind,
-                "universe": new_universe.dict(),
+                "universe": model_to_dict(new_universe),
                 "config": normalized_cfg,
             }
         )

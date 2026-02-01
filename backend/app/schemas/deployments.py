@@ -7,6 +7,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.backtests import UniverseSymbol
 from app.schemas.backtests_portfolio import BrokerName, ProductType
 from app.schemas.backtests_portfolio_strategy import (
@@ -277,7 +278,11 @@ class StrategyDeploymentRead(BaseModel):
             description=obj.description,
             kind=obj.kind,
             enabled=bool(obj.enabled),
-            universe=DeploymentUniverse.parse_obj(universe),
+            universe=(
+                DeploymentUniverse.model_validate(universe)
+                if PYDANTIC_V2
+                else DeploymentUniverse.parse_obj(universe)
+            ),
             config=config,
             state=state_read,
             state_summary=summary,

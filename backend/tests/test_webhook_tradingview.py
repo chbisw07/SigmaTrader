@@ -349,7 +349,7 @@ def test_webhook_accepts_tradingview_text_plain_json_body() -> None:
 
     response = client.post(
         "/webhook/tradingview",
-        data=json.dumps(payload),
+        content=json.dumps(payload),
         headers={"Content-Type": "text/plain"},
     )
     assert response.status_code == 201
@@ -372,7 +372,7 @@ def test_webhook_root_accepts_tradingview_text_plain_json_body() -> None:
 
     response = client.post(
         "/webhook",
-        data=json.dumps(payload),
+        content=json.dumps(payload),
         headers={"Content-Type": "text/plain"},
     )
     assert response.status_code == 201
@@ -412,7 +412,7 @@ def test_webhook_accepts_text_plain_body_with_unquoted_thousands_number() -> Non
 
     response = client.post(
         "/webhook/tradingview",
-        data=body,
+        content=body,
         headers={"Content-Type": "text/plain"},
     )
     assert response.status_code == 201

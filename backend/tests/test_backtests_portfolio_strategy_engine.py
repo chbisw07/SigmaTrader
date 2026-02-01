@@ -294,14 +294,16 @@ def test_portfolio_strategy_reentry_disabled_does_not_change_results(
         charges_bps=0.0,
         include_dp_charges=False,
     )
-    cfg_disabled = cfg_base.copy(
-        update={
-            "allow_reentry_after_trailing_stop": False,
-            "reentry_cooldown_bars": 3,
-            "reentry_rank_gate_enabled": True,
-            "reentry_rank_gate_buffer": 2,
-        }
-    )
+    update = {
+        "allow_reentry_after_trailing_stop": False,
+        "reentry_cooldown_bars": 3,
+        "reentry_rank_gate_enabled": True,
+        "reentry_rank_gate_buffer": 2,
+    }
+    if hasattr(cfg_base, "model_copy"):
+        cfg_disabled = cfg_base.model_copy(update=update)  # type: ignore[attr-defined]
+    else:  # pragma: no cover - Pydantic v1 fallback
+        cfg_disabled = cfg_base.copy(update=update)
 
     with SessionLocal() as db:
         res_base = ps.run_portfolio_strategy_backtest(

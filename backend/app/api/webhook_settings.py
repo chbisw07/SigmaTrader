@@ -21,6 +21,7 @@ from app.services.tradingview_webhook_config import (
     get_tradingview_webhook_config,
     set_tradingview_webhook_config,
 )
+from app.pydantic_compat import model_to_dict
 from app.services.webhook_secrets import (
     TRADINGVIEW_WEBHOOK_SECRET_KEY,
     WEBHOOK_BROKER_NAME,
@@ -131,10 +132,11 @@ def update_tradingview_webhook_config(
     settings: Settings = Depends(get_settings),
 ) -> TradingViewWebhookConfigRead:
     existing = get_tradingview_webhook_config(db, settings, user_id=None)
+    payload_data = model_to_dict(payload)
     merged = TradingViewWebhookConfig.from_dict(
         {
             **existing.to_dict(),
-            **{k: v for k, v in payload.dict().items() if v is not None},
+            **{k: v for k, v in payload_data.items() if v is not None},
         }
     )
     try:

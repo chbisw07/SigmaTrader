@@ -41,10 +41,19 @@ from app.services.rebalance_schedule import (
     normalize_schedule_config,
     schedule_config_to_json,
 )
+from app.pydantic_compat import PYDANTIC_V2
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
 router = APIRouter()
+
+
+def _rebalance_run_read(obj: RebalanceRun) -> RebalanceRunRead:
+    return (
+        RebalanceRunRead.model_validate(obj)
+        if PYDANTIC_V2
+        else RebalanceRunRead.from_orm(obj)
+    )
 
 
 def _now_utc() -> datetime:
@@ -354,7 +363,7 @@ def rebalance_execute(
                 ]
                 results.append(
                     RebalanceExecuteResult(
-                        run=RebalanceRunRead.from_orm(existing),
+                        run=_rebalance_run_read(existing),
                         created_order_ids=[int(x) for x in created],
                     )
                 )
@@ -531,7 +540,7 @@ def rebalance_execute(
 
         results.append(
             RebalanceExecuteResult(
-                run=RebalanceRunRead.from_orm(run),
+                run=_rebalance_run_read(run),
                 created_order_ids=created_order_ids,
             )
         )
@@ -583,7 +592,7 @@ def list_rebalance_runs(
         if b in {"zerodha", "angelone"}:
             q = q.filter(RebalanceRun.broker_name == b)
     rows = q.order_by(RebalanceRun.created_at.desc()).limit(200).all()
-    return [RebalanceRunRead.from_orm(r) for r in rows]
+    return [_rebalance_run_read(r) for r in rows]
 
 
 @router.get("/runs/{run_id}", response_model=RebalanceRunRead)
@@ -599,7 +608,7 @@ def get_rebalance_run(
     )
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    return RebalanceRunRead.from_orm(run)
+    return _rebalance_run_read(run)
 
 
 __all__ = ["router"]

@@ -12,6 +12,7 @@ from app.api.auth import get_current_user, get_current_user_optional
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import BacktestRun, User
+from app.pydantic_compat import PYDANTIC_V2, model_to_dict
 from app.schemas.backtests import (
     BacktestRunCreate,
     BacktestRunRead,
@@ -67,7 +68,11 @@ def create_backtest_run(
     exec_cfg_in = None
     if kind == "SIGNAL":
         try:
-            cfg_in = SignalBacktestConfigIn.parse_obj(payload.config)
+            cfg_in = (
+                SignalBacktestConfigIn.model_validate(payload.config)
+                if PYDANTIC_V2
+                else SignalBacktestConfigIn.parse_obj(payload.config)
+            )
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -80,7 +85,11 @@ def create_backtest_run(
             )
     elif kind == "PORTFOLIO":
         try:
-            pf_cfg_in = PortfolioBacktestConfigIn.parse_obj(payload.config)
+            pf_cfg_in = (
+                PortfolioBacktestConfigIn.model_validate(payload.config)
+                if PYDANTIC_V2
+                else PortfolioBacktestConfigIn.parse_obj(payload.config)
+            )
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -98,7 +107,11 @@ def create_backtest_run(
             )
     elif kind == "STRATEGY":
         try:
-            st_cfg_in = StrategyBacktestConfigIn.parse_obj(payload.config)
+            st_cfg_in = (
+                StrategyBacktestConfigIn.model_validate(payload.config)
+                if PYDANTIC_V2
+                else StrategyBacktestConfigIn.parse_obj(payload.config)
+            )
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -118,7 +131,11 @@ def create_backtest_run(
             )
     elif kind == "PORTFOLIO_STRATEGY":
         try:
-            pf_st_cfg_in = PortfolioStrategyBacktestConfigIn.parse_obj(payload.config)
+            pf_st_cfg_in = (
+                PortfolioStrategyBacktestConfigIn.model_validate(payload.config)
+                if PYDANTIC_V2
+                else PortfolioStrategyBacktestConfigIn.parse_obj(payload.config)
+            )
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -146,7 +163,11 @@ def create_backtest_run(
         from app.schemas.backtests_execution import ExecutionBacktestConfigIn
 
         try:
-            exec_cfg_in = ExecutionBacktestConfigIn.parse_obj(payload.config)
+            exec_cfg_in = (
+                ExecutionBacktestConfigIn.model_validate(payload.config)
+                if PYDANTIC_V2
+                else ExecutionBacktestConfigIn.parse_obj(payload.config)
+            )
         except ValidationError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -185,7 +206,7 @@ def create_backtest_run(
     config = {
         "kind": kind,
         "title": title,
-        "universe": payload.universe.dict(),
+        "universe": model_to_dict(payload.universe),
         "config": payload.config,
     }
     now = datetime.now(UTC)

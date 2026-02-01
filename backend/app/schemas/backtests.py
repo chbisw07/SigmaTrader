@@ -80,7 +80,7 @@ class BacktestRunRead(BaseModel):
 
 
 class EodCandleLoadRequest(BaseModel):
-    symbols: list[UniverseSymbol] = Field(min_items=1)
+    symbols: list[UniverseSymbol] = Field(min_length=1)
     start: datetime
     end: datetime
     allow_fetch: bool = True
@@ -93,7 +93,7 @@ class EodCandleLoadResponse(BaseModel):
 
 
 class BacktestRunsDeleteRequest(BaseModel):
-    ids: list[int] = Field(min_items=1)
+    ids: list[int] = Field(min_length=1)
 
 
 class BacktestRunsDeleteResponse(BaseModel):

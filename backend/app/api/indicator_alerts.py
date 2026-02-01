@@ -26,6 +26,7 @@ from app.services.indicator_alerts import (
     compute_indicator_preview,
 )
 from app.services.market_data import Timeframe
+from app.pydantic_compat import PYDANTIC_V2, model_to_dict
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -44,7 +45,14 @@ def _deserialize_conditions_json(rule: IndicatorRule) -> list[IndicatorCondition
         parsed = [parsed]
     if not isinstance(parsed, list):
         parsed = []
-    return [IndicatorCondition.parse_obj(item) for item in parsed]
+    out: list[IndicatorCondition] = []
+    for item in parsed:
+        out.append(
+            IndicatorCondition.model_validate(item)
+            if PYDANTIC_V2
+            else IndicatorCondition.parse_obj(item)
+        )
+    return out
 
 
 def _indicator_rule_to_read(rule: IndicatorRule) -> IndicatorRuleRead:
@@ -170,10 +178,6 @@ def create_indicator_rule(
 
     import json
 
-    from app.schemas.indicator_rules import (  # local import to avoid cycles
-        IndicatorCondition,
-    )
-
     if not payload.conditions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -198,7 +202,7 @@ def create_indicator_rule(
         )
 
     conditions_json = json.dumps(
-        [IndicatorCondition.parse_obj(c).dict() for c in payload.conditions],
+        [model_to_dict(c) for c in payload.conditions],
         default=str,
     )
     action_params_json = json.dumps(payload.action_params or {}, default=str)

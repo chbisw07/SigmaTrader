@@ -86,25 +86,16 @@ def _normalize_weights(members: list[GroupMember]) -> dict[str, float]:
 def _rebalance_indices(dates: list[date], cadence: RebalanceCadence) -> list[int]:
     if not dates:
         return []
+    # IMPORTANT: treat cadence as a *frequency* (trading-day based), not calendar
+    # boundaries. Calendar-boundary rebalances make very short windows behave
+    # inconsistently (e.g. a 3-day run crossing month-end would rebalance
+    # multiple times).
     out: list[int] = [0]
 
-    if cadence == "WEEKLY":
-        last_week = dates[0].isocalendar().week
-        for i, d in enumerate(dates[1:], start=1):
-            week = d.isocalendar().week
-            if week != last_week:
-                out.append(i - 1)
-                last_week = week
-        out.append(len(dates) - 1)
-        return sorted(set(out))
+    step = 5 if cadence == "WEEKLY" else 21  # approx trading days
+    for i in range(step, len(dates), step):
+        out.append(i)
 
-    # MONTHLY: last trading day each month.
-    last_month = dates[0].month
-    for i, d in enumerate(dates[1:], start=1):
-        if d.month != last_month:
-            out.append(i - 1)
-            last_month = d.month
-    out.append(len(dates) - 1)
     return sorted(set(out))
 
 
@@ -752,171 +743,188 @@ def run_portfolio_backtest(
                         },
                     }
                 )
-                continue
-            value_before = _portfolio_value(
-                cash=cash, positions=positions, px_by_key=px_close_by_key
-            )
-            if value_before > 0:
-                budget_cap = value_before * (float(config.budget_pct) / 100.0)
-
-                target_weights: dict[str, float] = {}
-                if config.method == "TARGET_WEIGHTS":
-                    for key in keys:
-                        target_weights[key] = float(weights_by_key.get(key, 0.0) or 0.0)
-                elif config.method == "ROTATION":
-                    window = max(1, int(config.ranking_window))
-                    scores: list[tuple[str, float]] = []
-                    for key in keys:
-                        first = rotation_first_idx.get(key)
-                        closes = rotation_closes.get(key)
-                        if first is None or not closes:
-                            continue
-                        local_i = i - first
-                        if local_i < window or local_i >= len(closes):
-                            continue
-                        if eligible_expr is not None:
-                            series_map = rotation_cache.get(key, {})
-                            if not _eval_expr_at(eligible_expr, series_map, local_i):
-                                continue
-                        p0 = closes[local_i - window]
-                        p1 = closes[local_i]
-                        if p0 <= 0:
-                            continue
-                        score = (p1 / p0 - 1.0) * 100.0
-                        scores.append((key, float(score)))
-                    scores.sort(key=lambda x: x[1], reverse=True)
-                    picks = [k for k, _ in scores[: max(1, int(config.top_n))]]
-                    if picks:
-                        w = 1.0 / len(picks)
-                        target_weights = {k: w for k in picks}
-                elif config.method == "RISK_PARITY":
-                    window = max(2, int(config.risk_window))
-                    min_obs = max(2, min(int(config.min_observations), window))
-                    obs = min(window, i)
-                    start_i = i - obs
-
-                    eligible: list[str] = []
-                    returns: list[list[float]] = []
-                    if obs >= min_obs and start_i >= 0:
-                        for key in keys:
-                            if key not in px_close_by_key:
-                                continue
-                            series = close_ff.get(key, [])
-                            if i >= len(series):
-                                continue
-                            ok = True
-                            rets: list[float] = []
-                            for j in range(start_i + 1, i + 1):
-                                p0 = series[j - 1]
-                                p1 = series[j]
-                                if p0 is None or p1 is None or p0 <= 0 or p1 <= 0:
-                                    ok = False
-                                    break
-                                rets.append(float(p1 / p0 - 1.0))
-                            if not ok or len(rets) < min_obs:
-                                continue
-                            eligible.append(key)
-                            returns.append(rets[-min_obs:])
-
-                    if len(eligible) == 1:
-                        target_weights = {eligible[0]: 1.0}
-                    elif len(eligible) >= 2:
-                        try:
-                            cov = _compute_covariance(returns)
-                            rp = solve_risk_parity_erc(
-                                cov,
-                                min_weight=float(config.min_weight),
-                                max_weight=float(config.max_weight),
-                                max_iter=200,
-                                tol=1e-6,
-                            )
-                            target_weights = {
-                                k: float(w)
-                                for k, w in zip(eligible, rp.weights, strict=False)
-                            }
-                        except Exception:
-                            w = 1.0 / len(eligible)
-                            target_weights = {k: w for k in eligible}
-
-                desired_qty: dict[str, int] = {}
-                for key in keys:
-                    w = float(target_weights.get(key, 0.0) or 0.0)
-                    px = px_close_by_key.get(key)
-                    if px is None or px <= 0:
-                        continue
-                    desired_value = value_before * w
-                    desired_qty[key] = int(math.floor(desired_value / px))
-
-                trade_candidates: list[tuple[str, int, float, float]] = []
-                for key, dq in desired_qty.items():
-                    cq = int(positions.get(key, 0) or 0)
-                    delta = int(dq - cq)
-                    if delta == 0:
-                        continue
-                    px = px_close_by_key.get(key)
-                    if px is None or px <= 0:
-                        continue
-                    notional = abs(delta) * px
-                    if notional < float(config.min_trade_value):
-                        continue
-                    trade_candidates.append((key, delta, float(px), float(notional)))
-
-                trade_candidates.sort(key=lambda x: x[3], reverse=True)
-                trade_candidates = trade_candidates[: int(config.max_trades)]
-
-                targets_sorted = (
-                    sorted(target_weights.items(), key=lambda x: x[1], reverse=True)
-                    if config.method in {"ROTATION", "RISK_PARITY"}
-                    else None
+            else:
+                value_before = _portfolio_value(
+                    cash=cash, positions=positions, px_by_key=px_close_by_key
                 )
+                if value_before > 0:
+                    budget_cap = value_before * (float(config.budget_pct) / 100.0)
 
-                if config.fill_timing == "CLOSE":
-                    cash, used, trades, turnover = _execute_trade_candidates(
-                        trade_candidates=trade_candidates,
-                        px_fill_by_key=px_close_by_key,
-                        positions=positions,
-                        cash=cash,
-                        budget_cap=budget_cap,
-                        slip=slip,
-                        charges_rate=charges_rate,
-                        charges_model=config.charges_model,
-                        charges_broker=config.charges_broker,
-                        product=config.product,
-                        include_dp_charges=bool(config.include_dp_charges),
+                    target_weights: dict[str, float] = {}
+                    if config.method == "TARGET_WEIGHTS":
+                        for key in keys:
+                            target_weights[key] = float(
+                                weights_by_key.get(key, 0.0) or 0.0
+                            )
+                    elif config.method == "ROTATION":
+                        window = max(1, int(config.ranking_window))
+                        scores: list[tuple[str, float]] = []
+                        for key in keys:
+                            first = rotation_first_idx.get(key)
+                            closes = rotation_closes.get(key)
+                            if first is None or not closes:
+                                continue
+                            local_i = i - first
+                            if local_i < window or local_i >= len(closes):
+                                continue
+                            if eligible_expr is not None:
+                                series_map = rotation_cache.get(key, {})
+                                if not _eval_expr_at(
+                                    eligible_expr,
+                                    series_map,
+                                    local_i,
+                                ):
+                                    continue
+                            p0 = closes[local_i - window]
+                            p1 = closes[local_i]
+                            if p0 <= 0:
+                                continue
+                            score = (p1 / p0 - 1.0) * 100.0
+                            scores.append((key, float(score)))
+                        scores.sort(key=lambda x: x[1], reverse=True)
+                        picks = [k for k, _ in scores[: max(1, int(config.top_n))]]
+                        if picks:
+                            w = 1.0 / len(picks)
+                            target_weights = {k: w for k in picks}
+                    elif config.method == "RISK_PARITY":
+                        window = max(2, int(config.risk_window))
+                        min_obs = max(2, min(int(config.min_observations), window))
+                        obs = min(window, i)
+                        start_i = i - obs
+
+                        eligible: list[str] = []
+                        returns: list[list[float]] = []
+                        if obs >= min_obs and start_i >= 0:
+                            for key in keys:
+                                if key not in px_close_by_key:
+                                    continue
+                                series = close_ff.get(key, [])
+                                if i >= len(series):
+                                    continue
+                                ok = True
+                                rets: list[float] = []
+                                for j in range(start_i + 1, i + 1):
+                                    p0 = series[j - 1]
+                                    p1 = series[j]
+                                    if (
+                                        p0 is None
+                                        or p1 is None
+                                        or p0 <= 0
+                                        or p1 <= 0
+                                    ):
+                                        ok = False
+                                        break
+                                    rets.append(float(p1 / p0 - 1.0))
+                                if not ok or len(rets) < min_obs:
+                                    continue
+                                eligible.append(key)
+                                returns.append(rets[-min_obs:])
+
+                        if len(eligible) == 1:
+                            target_weights = {eligible[0]: 1.0}
+                        elif len(eligible) >= 2:
+                            try:
+                                cov = _compute_covariance(returns)
+                                rp = solve_risk_parity_erc(
+                                    cov,
+                                    min_weight=float(config.min_weight),
+                                    max_weight=float(config.max_weight),
+                                    max_iter=200,
+                                    tol=1e-6,
+                                )
+                                target_weights = {
+                                    k: float(w)
+                                    for k, w in zip(eligible, rp.weights, strict=False)
+                                }
+                            except Exception:
+                                w = 1.0 / len(eligible)
+                                target_weights = {k: w for k in eligible}
+
+                    desired_qty: dict[str, int] = {}
+                    for key in keys:
+                        w = float(target_weights.get(key, 0.0) or 0.0)
+                        px = px_close_by_key.get(key)
+                        if px is None or px <= 0:
+                            continue
+                        desired_value = value_before * w
+                        desired_qty[key] = int(math.floor(desired_value / px))
+
+                    trade_candidates: list[tuple[str, int, float, float]] = []
+                    for key, dq in desired_qty.items():
+                        cq = int(positions.get(key, 0) or 0)
+                        delta = int(dq - cq)
+                        if delta == 0:
+                            continue
+                        px = px_close_by_key.get(key)
+                        if px is None or px <= 0:
+                            continue
+                        notional = abs(delta) * px
+                        if notional < float(config.min_trade_value):
+                            continue
+                        trade_candidates.append(
+                            (key, delta, float(px), float(notional))
+                        )
+
+                    trade_candidates.sort(key=lambda x: x[3], reverse=True)
+                    trade_candidates = trade_candidates[: int(config.max_trades)]
+
+                    targets_sorted = (
+                        sorted(target_weights.items(), key=lambda x: x[1], reverse=True)
+                        if config.method in {"ROTATION", "RISK_PARITY"}
+                        else None
                     )
-                    total_charges += sum(float(t.get("charges") or 0.0) for t in trades)
-                    total_turnover += turnover
-                    value_after = _portfolio_value(
-                        cash=cash, positions=positions, px_by_key=px_close_by_key
-                    )
-                    actions.append(
-                        {
-                            "date": d.isoformat(),
-                            "executed_on": d.isoformat(),
-                            "fill_timing": "CLOSE",
-                            "value_before": value_before,
-                            "value_after": value_after,
-                            "budget_cap": budget_cap,
-                            "budget_used": used,
-                            "turnover_pct": (
-                                (used / value_before * 100.0) if value_before else 0.0
-                            ),
-                            "targets": targets_sorted,
-                            "trades": trades,
-                        }
-                    )
-                else:
-                    exec_i = i + 1
-                    if exec_i <= sim_end and trade_candidates:
-                        pending.setdefault(exec_i, []).append(
+
+                    if config.fill_timing == "CLOSE":
+                        cash, used, trades, turnover = _execute_trade_candidates(
+                            trade_candidates=trade_candidates,
+                            px_fill_by_key=px_close_by_key,
+                            positions=positions,
+                            cash=cash,
+                            budget_cap=budget_cap,
+                            slip=slip,
+                            charges_rate=charges_rate,
+                            charges_model=config.charges_model,
+                            charges_broker=config.charges_broker,
+                            product=config.product,
+                            include_dp_charges=bool(config.include_dp_charges),
+                        )
+                        total_charges += sum(
+                            float(t.get("charges") or 0.0) for t in trades
+                        )
+                        total_turnover += turnover
+                        value_after = _portfolio_value(
+                            cash=cash, positions=positions, px_by_key=px_close_by_key
+                        )
+                        actions.append(
                             {
-                                "decision_date": d.isoformat(),
+                                "date": d.isoformat(),
+                                "executed_on": d.isoformat(),
+                                "fill_timing": "CLOSE",
                                 "value_before": value_before,
+                                "value_after": value_after,
                                 "budget_cap": budget_cap,
+                                "budget_used": used,
+                                "turnover_pct": (
+                                    (used / value_before * 100.0)
+                                    if value_before
+                                    else 0.0
+                                ),
                                 "targets": targets_sorted,
-                                "trade_candidates": trade_candidates,
+                                "trades": trades,
                             }
                         )
+                    else:
+                        exec_i = i + 1
+                        if exec_i <= sim_end and trade_candidates:
+                            pending.setdefault(exec_i, []).append(
+                                {
+                                    "decision_date": d.isoformat(),
+                                    "value_before": value_before,
+                                    "budget_cap": budget_cap,
+                                    "targets": targets_sorted,
+                                    "trade_candidates": trade_candidates,
+                                }
+                            )
 
         if config.product == "MIS":
             # Intraday approximation: flatten all positions at close.

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.models import BacktestRun
+from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.backtests_execution import ExecutionBacktestConfigIn
 from app.schemas.backtests_portfolio import PortfolioBacktestConfigIn
 from app.services.backtests_portfolio import run_portfolio_backtest
@@ -33,7 +34,11 @@ def _parse_base_portfolio_config(
 
     base_config = (cfg.get("config") or {}) if isinstance(cfg, dict) else {}
     try:
-        pf_cfg = PortfolioBacktestConfigIn.parse_obj(base_config)
+        pf_cfg = (
+            PortfolioBacktestConfigIn.model_validate(base_config)
+            if PYDANTIC_V2
+            else PortfolioBacktestConfigIn.parse_obj(base_config)
+        )
     except ValidationError as exc:
         raise ValueError(f"base_run has invalid portfolio config: {exc}") from exc
 
@@ -50,25 +55,28 @@ def run_execution_backtest(
 ) -> dict[str, Any]:
     group_id, base_pf_cfg = _parse_base_portfolio_config(base_run)
 
-    ideal_cfg = base_pf_cfg.copy(
-        update={
-            "fill_timing": "CLOSE",
-            "slippage_bps": 0.0,
-            "charges_bps": 0.0,
-            "charges_model": "BPS",
-        }
-    )
-    realistic_cfg = base_pf_cfg.copy(
-        update={
-            "fill_timing": config.fill_timing,
-            "slippage_bps": float(config.slippage_bps),
-            "charges_bps": float(config.charges_bps),
-            "charges_model": config.charges_model,
-            "charges_broker": config.charges_broker,
-            "product": config.product,
-            "include_dp_charges": bool(config.include_dp_charges),
-        }
-    )
+    ideal_update = {
+        "fill_timing": "CLOSE",
+        "slippage_bps": 0.0,
+        "charges_bps": 0.0,
+        "charges_model": "BPS",
+    }
+    realistic_update = {
+        "fill_timing": config.fill_timing,
+        "slippage_bps": float(config.slippage_bps),
+        "charges_bps": float(config.charges_bps),
+        "charges_model": config.charges_model,
+        "charges_broker": config.charges_broker,
+        "product": config.product,
+        "include_dp_charges": bool(config.include_dp_charges),
+    }
+
+    if PYDANTIC_V2:
+        ideal_cfg = base_pf_cfg.model_copy(update=ideal_update)
+        realistic_cfg = base_pf_cfg.model_copy(update=realistic_update)
+    else:  # pragma: no cover - Pydantic v1
+        ideal_cfg = base_pf_cfg.copy(update=ideal_update)
+        realistic_cfg = base_pf_cfg.copy(update=realistic_update)
 
     ideal = run_portfolio_backtest(
         db,

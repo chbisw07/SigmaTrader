@@ -165,7 +165,14 @@ def _create_waiting_order_via_webhook() -> int:
         "symbol": "NSE:TCS",
         "exchange": "NSE",
         "interval": "1",
-        "trade_details": {"order_action": "BUY", "quantity": None, "price": 100.0},
+        # Explicit product keeps this regression test stable even if the global
+        # TradingView default product changes (CNC vs MIS).
+        "trade_details": {
+            "order_action": "BUY",
+            "quantity": None,
+            "price": 100.0,
+            "product": "MIS",
+        },
     }
     response = client.post("/webhook/tradingview", json=payload)
     assert response.status_code == 201
@@ -228,4 +235,3 @@ def test_execute_calls_compiler_on_success_path(monkeypatch: Any) -> None:
     assert resp.status_code == 200
     assert called["n"] >= 1
     assert broker.calls, "Expected broker placement call"
-

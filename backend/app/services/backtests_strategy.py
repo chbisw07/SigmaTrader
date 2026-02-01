@@ -358,7 +358,13 @@ def run_strategy_backtest(
 
     from app.schemas.backtests_strategy import StrategyBacktestConfigIn
 
-    cfg = StrategyBacktestConfigIn.parse_obj(config)
+    from app.pydantic_compat import PYDANTIC_V2
+
+    cfg = (
+        StrategyBacktestConfigIn.model_validate(config)
+        if PYDANTIC_V2
+        else StrategyBacktestConfigIn.parse_obj(config)
+    )
 
     tf: Timeframe = cfg.timeframe  # type: ignore[assignment]
     if cfg.product == "CNC" and cfg.direction != "LONG":
