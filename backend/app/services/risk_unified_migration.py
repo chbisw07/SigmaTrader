@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BASELINE_EQUITY_INR = 1_000_000.0
 _DEFAULT_CATEGORY = "LC"
 _CATEGORIES = ("LC", "MC", "SC", "ETF")
+_DEFAULT_CAPITAL_PER_TRADE = 20_000.0
+_DEFAULT_MAX_POSITIONS = 6
+_DEFAULT_MAX_EXPOSURE_PCT = 60.0
 
 
 def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) -> bool:
@@ -26,11 +29,12 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
     # Ensure singleton exists.
     global_row = get_or_create_risk_global_config(db)
 
-    # Load v1 policy if present; if not, do nothing.
+    # Load v1 policy if present; if not, still seed the unified tables so the
+    # unified engine can run in fresh installs/tests (do not depend on legacy).
     try:
         policy, source = get_risk_policy(db, settings)
     except Exception:
-        return False
+        policy, source = None, "unavailable"
 
     # Even when the legacy policy is the built-in default, we still ensure the
     # unified tables are seeded so the profile-based engine can operate without
@@ -39,8 +43,12 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
     changed = False
 
     # Baseline equity drives v2 drawdown and daily loss checks; without it v2 blocks entries.
+    v1_equity = 0.0
     try:
-        v1_equity = float(getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0)
+        if policy is not None:
+            v1_equity = float(
+                getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0
+            )
     except Exception:
         v1_equity = 0.0
     if float(global_row.baseline_equity_inr or 0.0) <= 0:
@@ -51,24 +59,44 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
         changed = True
 
     # Map a few global caps into both product profiles (CNC/MIS) so behavior remains similar.
+    cap_per_trade = 0.0
     try:
-        cap_per_trade = float(getattr(getattr(policy, "position_sizing", None), "capital_per_trade", 0.0) or 0.0)
+        if policy is not None:
+            cap_per_trade = float(
+                getattr(getattr(policy, "position_sizing", None), "capital_per_trade", 0.0) or 0.0
+            )
     except Exception:
         cap_per_trade = 0.0
+    max_positions = 0
     try:
-        max_positions = int(getattr(getattr(policy, "account_risk", None), "max_open_positions", 0) or 0)
+        if policy is not None:
+            max_positions = int(
+                getattr(getattr(policy, "account_risk", None), "max_open_positions", 0) or 0
+            )
     except Exception:
         max_positions = 0
+    max_exposure_pct = 0.0
     try:
-        max_exposure_pct = float(getattr(getattr(policy, "account_risk", None), "max_exposure_pct", 0.0) or 0.0)
+        if policy is not None:
+            max_exposure_pct = float(
+                getattr(getattr(policy, "account_risk", None), "max_exposure_pct", 0.0) or 0.0
+            )
     except Exception:
         max_exposure_pct = 0.0
+    daily_loss_pct = 0.0
     try:
-        daily_loss_pct = float(getattr(getattr(policy, "account_risk", None), "max_daily_loss_pct", 0.0) or 0.0)
+        if policy is not None:
+            daily_loss_pct = float(
+                getattr(getattr(policy, "account_risk", None), "max_daily_loss_pct", 0.0) or 0.0
+            )
     except Exception:
         daily_loss_pct = 0.0
+    max_losses = 0
     try:
-        max_losses = int(getattr(getattr(policy, "loss_controls", None), "max_consecutive_losses", 0) or 0)
+        if policy is not None:
+            max_losses = int(
+                getattr(getattr(policy, "loss_controls", None), "max_consecutive_losses", 0) or 0
+            )
     except Exception:
         max_losses = 0
 
@@ -85,8 +113,24 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
                 product=prod,
                 enabled=True,
                 is_default=True,
+                # Safe defaults so the v2 engine can size orders immediately in fresh installs/tests.
+                capital_per_trade=float(_DEFAULT_CAPITAL_PER_TRADE),
+                max_positions=int(_DEFAULT_MAX_POSITIONS),
+                max_exposure_pct=float(_DEFAULT_MAX_EXPOSURE_PCT),
+                # Avoid requiring broker-margin tuning out of the box.
+                leverage_mode="OFF",
             )
             db.add(prof)
+            changed = True
+        # Ensure fresh installs do not end up with blocking zero values.
+        if float(getattr(prof, "capital_per_trade", 0.0) or 0.0) <= 0:
+            prof.capital_per_trade = float(_DEFAULT_CAPITAL_PER_TRADE)
+            changed = True
+        if int(getattr(prof, "max_positions", 0) or 0) <= 0:
+            prof.max_positions = int(_DEFAULT_MAX_POSITIONS)
+            changed = True
+        if float(getattr(prof, "max_exposure_pct", 0.0) or 0.0) <= 0:
+            prof.max_exposure_pct = float(_DEFAULT_MAX_EXPOSURE_PCT)
             changed = True
         if cap_per_trade > 0 and float(getattr(prof, "capital_per_trade", 0.0) or 0.0) <= 0:
             prof.capital_per_trade = float(cap_per_trade)

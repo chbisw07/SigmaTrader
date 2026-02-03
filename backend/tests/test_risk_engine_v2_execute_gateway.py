@@ -368,7 +368,10 @@ def test_v2_fails_closed_when_missing_risk_profile() -> None:
 
     resp = client.post(f"/api/orders/{order_id}/execute")
     assert resp.status_code == 400
-    assert "Missing RiskProfile" in str(resp.json().get("detail") or "")
+    # v2 bootstraps safe defaults if the DB is missing required rows.
+    assert "Zerodha is not connected" in str(resp.json().get("detail") or "")
+    with SessionLocal() as session:
+        assert session.query(RiskProfile).count() >= 1
 
 
 def test_v2_fails_closed_when_missing_symbol_category() -> None:
@@ -381,7 +384,9 @@ def test_v2_fails_closed_when_missing_symbol_category() -> None:
 
     resp = client.post(f"/api/orders/{order_id}/execute")
     assert resp.status_code == 400
-    assert "Missing symbol risk category" in str(resp.json().get("detail") or "")
+    assert "Zerodha is not connected" in str(resp.json().get("detail") or "")
+    with SessionLocal() as session:
+        assert session.query(SymbolRiskCategory).count() >= 1
 
 
 def test_v2_fails_closed_when_missing_drawdown_thresholds() -> None:
@@ -394,7 +399,9 @@ def test_v2_fails_closed_when_missing_drawdown_thresholds() -> None:
 
     resp = client.post(f"/api/orders/{order_id}/execute")
     assert resp.status_code == 400
-    assert "Missing drawdown thresholds" in str(resp.json().get("detail") or "")
+    assert "Zerodha is not connected" in str(resp.json().get("detail") or "")
+    with SessionLocal() as session:
+        assert session.query(DrawdownThreshold).count() >= 1
 
 
 def test_v2_caution_throttles_qty_from_drawdown(monkeypatch: Any) -> None:

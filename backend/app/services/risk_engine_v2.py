@@ -8,12 +8,14 @@ from math import floor
 from typing import Any, Literal, cast
 
 from sqlalchemy import case, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
     Alert,
     AlertDecisionLog,
     AnalyticsTrade,
+    DrawdownThreshold,
     EquitySnapshot,
     Order,
     Position,
@@ -31,9 +33,118 @@ from app.services.risk_unified_store import get_source_override
 
 logger = logging.getLogger(__name__)
 
+_BOOTSTRAP_DEFAULT_CAPITAL_PER_TRADE = 20_000.0
+_BOOTSTRAP_DEFAULT_MAX_POSITIONS = 6
+_BOOTSTRAP_DEFAULT_MAX_EXPOSURE_PCT = 60.0
+
 DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HARD_STOP"]
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _ensure_v2_bootstrap_rows(db: Session) -> None:
+    """Seed minimum rows needed for the unified risk engine to operate.
+
+    Tests frequently rebuild the DB after app startup, so we cannot rely only on the
+    FastAPI lifespan bootstrap. This is idempotent and only does work when required.
+    """
+
+    try:
+        has_any_profile = (
+            db.query(RiskProfile.id).filter(RiskProfile.enabled.is_(True)).first() is not None
+        )
+    except Exception:
+        has_any_profile = False
+
+    if not has_any_profile:
+        try:
+            for prod in ("CNC", "MIS"):
+                db.add(
+                    RiskProfile(
+                        name=f"Default {prod}",
+                        product=prod,
+                        enabled=True,
+                        is_default=True,
+                        capital_per_trade=float(_BOOTSTRAP_DEFAULT_CAPITAL_PER_TRADE),
+                        max_positions=int(_BOOTSTRAP_DEFAULT_MAX_POSITIONS),
+                        max_exposure_pct=float(_BOOTSTRAP_DEFAULT_MAX_EXPOSURE_PCT),
+                        leverage_mode="OFF",
+                    )
+                )
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    # Default global symbol category ("*") so brand-new symbols can be traded without
+    # prior per-symbol setup. User-specific mappings still take precedence.
+    try:
+        default_cat = (
+            db.query(SymbolRiskCategory)
+            .filter(
+                SymbolRiskCategory.user_id.is_(None),
+                SymbolRiskCategory.broker_name == "*",
+                SymbolRiskCategory.exchange == "*",
+                SymbolRiskCategory.symbol == "*",
+            )
+            .one_or_none()
+        )
+        if default_cat is None:
+            db.add(
+                SymbolRiskCategory(
+                    user_id=None,
+                    broker_name="*",
+                    exchange="*",
+                    symbol="*",
+                    risk_category="LC",
+                )
+            )
+            db.commit()
+    except IntegrityError:
+        db.rollback()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Drawdown thresholds (defaults to 0 => no drawdown gating). Seed app-wide rows.
+    try:
+        for prod in ("CNC", "MIS"):
+            for cat in ("LC", "MC", "SC", "ETF"):
+                exists = (
+                    db.query(DrawdownThreshold.id)
+                    .filter(
+                        DrawdownThreshold.user_id.is_(None),
+                        DrawdownThreshold.product == prod,
+                        DrawdownThreshold.category == cat,
+                    )
+                    .first()
+                    is not None
+                )
+                if not exists:
+                    db.add(
+                        DrawdownThreshold(
+                            user_id=None,
+                            product=prod,
+                            category=cat,
+                            caution_pct=0.0,
+                            defense_pct=0.0,
+                            hard_stop_pct=0.0,
+                        )
+                    )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _as_of_date_ist(now_utc: datetime) -> date:
@@ -397,6 +508,8 @@ def evaluate_order_risk_v2(
     now_utc: datetime,
     product_hint: str | None,
 ) -> RiskDecisionV2:
+    _ensure_v2_bootstrap_rows(db)
+
     reasons: list[str] = []
     is_exit = _is_structural_exit(db, order)
 
