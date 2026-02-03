@@ -143,7 +143,7 @@ export function RiskEngineV2Settings() {
       setV2Flag(res)
       setV2Error(null)
     } catch (err) {
-      setV2Error(err instanceof Error ? err.message : 'Failed to load risk engine v2 flag')
+      setV2Error(err instanceof Error ? err.message : 'Failed to load profile engine status')
     } finally {
       setV2Busy(false)
     }
@@ -389,7 +389,7 @@ export function RiskEngineV2Settings() {
       <Paper sx={{ p: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
-            Risk engine v2
+            Product risk profiles
           </Typography>
           {v2Flag?.source ? (
             <Chip size="small" label={`Source: ${v2Flag.source}`} />
@@ -403,8 +403,8 @@ export function RiskEngineV2Settings() {
           </Tooltip>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Enables product-specific profiles (CNC/MIS), drawdown thresholds, and decision logging in the
-          execution layer. Risk Policy enforcement remains independent.
+          Configure product-specific profiles (CNC/MIS), drawdown thresholds, and execution safeguards
+          used by SigmaTrader during order dispatch/execute.
         </Typography>
 
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', mt: 1.25 }}>
@@ -423,7 +423,7 @@ export function RiskEngineV2Settings() {
                     if (!updated.enabled) setEditorOpen(false)
                   } catch (err) {
                     setV2Error(
-                      err instanceof Error ? err.message : 'Failed to update risk engine v2 flag',
+                      err instanceof Error ? err.message : 'Failed to update profile engine status',
                     )
                   } finally {
                     setV2Busy(false)
@@ -431,7 +431,7 @@ export function RiskEngineV2Settings() {
                 }}
               />
             }
-            label="Enable risk engine v2"
+            label="Enable profile-based risk engine"
           />
           {v2Busy && <CircularProgress size={18} />}
         </Box>
@@ -444,14 +444,15 @@ export function RiskEngineV2Settings() {
 
         {v2Flag && !v2Enabled ? (
           <Alert severity="info" sx={{ mt: 1.25 }}>
-            Risk engine v2 is disabled. Profiles/thresholds below are not enforced at execution time.
+            Profile-based engine is disabled. Profiles/thresholds below are not enforced at execution
+            time.
           </Alert>
         ) : null}
 
         {v2Flag?.source === 'db_invalid' ? (
           <Alert severity="warning" sx={{ mt: 1.25 }}>
-            Risk engine v2 flag is present but unreadable. For safety, v2 is OFF. Toggle it once to
-            re-save a valid value.
+            Profile engine flag is present but unreadable. For safety, the engine is OFF. Toggle it
+            once to re-save a valid value.
           </Alert>
         ) : null}
       </Paper>
@@ -475,7 +476,7 @@ export function RiskEngineV2Settings() {
           </Tooltip>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          When enabled, risk engine v2 will use this category for symbols that do not have an
+          When enabled, the profile engine will use this category for symbols that do not have an
           explicit category mapping yet. If disabled, orders for new symbols are blocked until you
           assign a category.
         </Typography>

@@ -190,10 +190,54 @@ describe('SettingsPage Risk settings selective enforcement', () => {
   beforeEach(() => {
     let currentPolicy = makePolicy()
     let v2Enabled = true
+    let unifiedGlobal = {
+      enabled: true,
+      manual_override_enabled: false,
+      baseline_equity_inr: 1000000,
+      updated_at: null,
+    }
+    let sourceOverrides: unknown[] = []
+    let holdingsExitCfg = { enabled: false, allowlist_symbols: null, source: 'db', updated_at: null }
 
     const fetchMock = vi.fn()
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk/global') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
+      }
+      if (url.includes('/api/risk/global') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        unifiedGlobal = { ...unifiedGlobal, ...(body ?? {}) }
+        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => sourceOverrides } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        const key = `${body?.source_bucket}:${body?.product}`
+        sourceOverrides = (sourceOverrides as any[]).filter(
+          (r) => `${r?.source_bucket}:${r?.product}` !== key,
+        )
+        sourceOverrides.push({ ...body, updated_at: null })
+        return { ok: true, json: async () => ({ ...body, updated_at: null }) } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides/') && init?.method === 'DELETE') {
+        const parts = url.split('/api/risk/source-overrides/')[1]?.split('/') ?? []
+        const key = `${decodeURIComponent(parts[0] ?? '')}:${decodeURIComponent(parts[1] ?? '')}`
+        sourceOverrides = (sourceOverrides as any[]).filter(
+          (r) => `${r?.source_bucket}:${r?.product}` !== key,
+        )
+        return { ok: true, json: async () => ({ deleted: true }) } as unknown as Response
+      }
+      if (url.includes('/api/holdings-exit/config') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
+      }
+      if (url.includes('/api/holdings-exit/config') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        holdingsExitCfg = { ...holdingsExitCfg, ...(body ?? {}) }
+        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
+      }
       if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
         return {
           ok: true,
@@ -265,9 +309,53 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     const fetchMock = vi.fn()
     let currentPolicy = makePolicy()
     let v2Enabled = true
+    let unifiedGlobal = {
+      enabled: true,
+      manual_override_enabled: false,
+      baseline_equity_inr: 1000000,
+      updated_at: null,
+    }
+    let sourceOverrides: unknown[] = []
+    let holdingsExitCfg = { enabled: false, allowlist_symbols: null, source: 'db', updated_at: null }
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk/global') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
+      }
+      if (url.includes('/api/risk/global') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        unifiedGlobal = { ...unifiedGlobal, ...(body ?? {}) }
+        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => sourceOverrides } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        const key = `${body?.source_bucket}:${body?.product}`
+        sourceOverrides = (sourceOverrides as any[]).filter(
+          (r) => `${r?.source_bucket}:${r?.product}` !== key,
+        )
+        sourceOverrides.push({ ...body, updated_at: null })
+        return { ok: true, json: async () => ({ ...body, updated_at: null }) } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides/') && init?.method === 'DELETE') {
+        const parts = url.split('/api/risk/source-overrides/')[1]?.split('/') ?? []
+        const key = `${decodeURIComponent(parts[0] ?? '')}:${decodeURIComponent(parts[1] ?? '')}`
+        sourceOverrides = (sourceOverrides as any[]).filter(
+          (r) => `${r?.source_bucket}:${r?.product}` !== key,
+        )
+        return { ok: true, json: async () => ({ deleted: true }) } as unknown as Response
+      }
+      if (url.includes('/api/holdings-exit/config') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
+      }
+      if (url.includes('/api/holdings-exit/config') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        holdingsExitCfg = { ...holdingsExitCfg, ...(body ?? {}) }
+        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
+      }
       if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
         return {
           ok: true,
@@ -361,9 +449,53 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     const fetchMock = vi.fn()
     let currentPolicy = makePolicy()
     let v2Enabled = false
+    let unifiedGlobal = {
+      enabled: true,
+      manual_override_enabled: false,
+      baseline_equity_inr: 1000000,
+      updated_at: null,
+    }
+    let sourceOverrides: unknown[] = []
+    let holdingsExitCfg = { enabled: false, allowlist_symbols: null, source: 'db', updated_at: null }
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/api/risk/global') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
+      }
+      if (url.includes('/api/risk/global') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        unifiedGlobal = { ...unifiedGlobal, ...(body ?? {}) }
+        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => sourceOverrides } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        const key = `${body?.source_bucket}:${body?.product}`
+        sourceOverrides = (sourceOverrides as any[]).filter(
+          (r) => `${r?.source_bucket}:${r?.product}` !== key,
+        )
+        sourceOverrides.push({ ...body, updated_at: null })
+        return { ok: true, json: async () => ({ ...body, updated_at: null }) } as unknown as Response
+      }
+      if (url.includes('/api/risk/source-overrides/') && init?.method === 'DELETE') {
+        const parts = url.split('/api/risk/source-overrides/')[1]?.split('/') ?? []
+        const key = `${decodeURIComponent(parts[0] ?? '')}:${decodeURIComponent(parts[1] ?? '')}`
+        sourceOverrides = (sourceOverrides as any[]).filter(
+          (r) => `${r?.source_bucket}:${r?.product}` !== key,
+        )
+        return { ok: true, json: async () => ({ deleted: true }) } as unknown as Response
+      }
+      if (url.includes('/api/holdings-exit/config') && (!init || !init.method || init.method === 'GET')) {
+        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
+      }
+      if (url.includes('/api/holdings-exit/config') && init?.method === 'PUT') {
+        const body = init.body ? JSON.parse(String(init.body)) : null
+        holdingsExitCfg = { ...holdingsExitCfg, ...(body ?? {}) }
+        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
+      }
       if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
         return {
           ok: true,
@@ -419,7 +551,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Risk engine v2')).toBeInTheDocument()
+      expect(screen.getByText('Product risk profiles')).toBeInTheDocument()
     })
 
     const createBtn = screen.getByRole('button', { name: /create profile/i })

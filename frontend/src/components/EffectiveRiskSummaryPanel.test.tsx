@@ -154,7 +154,7 @@ describe('EffectiveRiskSummaryPanel', () => {
 
     expect(screen.getByText('Effective Risk Summary')).toBeInTheDocument()
     expect(screen.getByText('Throttle multiplier')).toBeInTheDocument()
-    expect(screen.getByText('Stops model (Risk policy)')).toBeInTheDocument()
+    expect(screen.getByText('Stops model (legacy defaults)')).toBeInTheDocument()
   })
 
   it('refetches on context change and supports copy/export', async () => {

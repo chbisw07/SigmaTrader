@@ -58,8 +58,10 @@ function renderSummaryText(data: CompiledRiskResponse): string {
   if (data.context.symbol) lines.push(`Symbol: ${data.context.symbol}`)
   if (data.context.strategy_id) lines.push(`Strategy ID: ${data.context.strategy_id}`)
   lines.push('')
-  lines.push(`Risk engine v2 enabled: ${data.inputs.risk_engine_v2_enabled ? 'YES' : 'NO'}`)
-  lines.push(`Risk policy enabled: ${data.inputs.risk_policy_enabled ? 'YES' : 'NO'} (source=${data.inputs.risk_policy_source})`)
+  lines.push(`Profile engine enabled: ${data.inputs.risk_engine_v2_enabled ? 'YES' : 'NO'}`)
+  lines.push(
+    `Legacy defaults enabled: ${data.inputs.risk_policy_enabled ? 'YES' : 'NO'} (source=${data.inputs.risk_policy_source})`,
+  )
   lines.push(`Manual equity (INR): ${fmtNum(data.inputs.manual_equity_inr, 0)}`)
   lines.push(`Drawdown%: ${fmtNum(data.inputs.drawdown_pct, 2)}`)
   lines.push(`Drawdown state: ${data.effective.risk_engine_v2.drawdown_state ?? '—'}`)
@@ -151,7 +153,7 @@ export function EffectiveRiskSummaryPanel() {
       setData(res)
       setError(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load compiled risk policy')
+      setError(e instanceof Error ? e.message : 'Failed to load effective risk summary')
     } finally {
       setBusy(false)
     }
@@ -301,7 +303,7 @@ export function EffectiveRiskSummaryPanel() {
         <>
           <Section title="Gating">
             <Row
-              label="Enforcement (Risk policy)"
+              label="Legacy defaults (enforcement)"
               value={
                 <Chip
                   size="small"
@@ -312,7 +314,7 @@ export function EffectiveRiskSummaryPanel() {
               }
             />
             <Row
-              label="Risk engine v2"
+              label="Profile engine"
               value={
                 <Chip
                   size="small"
@@ -329,7 +331,7 @@ export function EffectiveRiskSummaryPanel() {
 
           <Divider sx={{ my: 1.5 }} />
 
-          <Section title="Account caps (Risk policy)">
+          <Section title="Account caps (legacy defaults)">
             <Row label="Manual equity (INR)" value={fmtNum(data.inputs.manual_equity_inr, 0)} />
             <Row label="Max daily loss %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.max_daily_loss_pct, 2)} />
             <Row label="Max daily loss (INR)" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.max_daily_loss_abs, 0)} />
@@ -340,7 +342,7 @@ export function EffectiveRiskSummaryPanel() {
 
           <Divider sx={{ my: 1.5 }} />
 
-          <Section title="Sizing (v2 profile + drawdown throttle)">
+          <Section title="Sizing (profile + drawdown throttle)">
             <Row label="Throttle multiplier" value={fmtNum(data.effective.risk_engine_v2.throttle_multiplier, 2)} />
             <Row label="Capital per trade (effective)" value={fmtNum(data.effective.risk_engine_v2.capital_per_trade, 0)} />
             <Row label="Max positions (effective)" value={data.effective.risk_engine_v2.max_positions ?? '—'} />
@@ -349,7 +351,7 @@ export function EffectiveRiskSummaryPanel() {
 
           <Divider sx={{ my: 1.5 }} />
 
-          <Section title="Per-trade risk (Risk policy)">
+          <Section title="Per-trade risk (legacy defaults)">
             <Row label="Max risk per trade %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.max_risk_per_trade_pct, 2)} />
             <Row label="Hard risk %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.hard_max_risk_pct, 2)} />
             <Row label="Stop mandatory" value={data.effective.risk_policy_by_source.TRADINGVIEW.stop_loss_mandatory ? 'YES' : 'NO'} />
@@ -357,7 +359,7 @@ export function EffectiveRiskSummaryPanel() {
 
           <Divider sx={{ my: 1.5 }} />
 
-          <Section title="Stops model (Risk policy)">
+          <Section title="Stops model (legacy defaults)">
             <Row label="Stop basis" value={data.effective.risk_policy_by_source.TRADINGVIEW.stop_reference} />
             <Row label="ATR period" value={data.effective.risk_policy_by_source.TRADINGVIEW.atr_period} />
             <Row label="ATR mult (initial stop)" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.atr_mult_initial_stop, 2)} />
@@ -367,7 +369,7 @@ export function EffectiveRiskSummaryPanel() {
 
           <Divider sx={{ my: 1.5 }} />
 
-          <Section title="Trade frequency & loss controls (Risk policy)">
+          <Section title="Trade frequency & loss controls (legacy defaults)">
             <Row label="Max trades/symbol/day" value={data.effective.risk_policy_by_source.TRADINGVIEW.max_trades_per_symbol_per_day} />
             <Row label="Min bars between trades" value={data.effective.risk_policy_by_source.TRADINGVIEW.min_bars_between_trades} />
             <Row label="Cooldown after loss (bars)" value={data.effective.risk_policy_by_source.TRADINGVIEW.cooldown_after_loss_bars} />
@@ -379,7 +381,7 @@ export function EffectiveRiskSummaryPanel() {
           {data.context.product === 'MIS' ? (
             <>
               <Divider sx={{ my: 1.5 }} />
-              <Section title="MIS-only (v2 profile)">
+              <Section title="MIS-only (profile)">
                 <Row label="Entry cutoff time" value={data.effective.risk_engine_v2.entry_cutoff_time ?? '—'} />
                 <Row label="Force square-off time" value={data.effective.risk_engine_v2.force_squareoff_time ?? '—'} />
                 <Row label="Slippage guard (bps)" value={fmtNum(data.effective.risk_engine_v2.slippage_guard_bps, 1)} />

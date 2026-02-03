@@ -238,7 +238,7 @@ export const tradingViewWebhookHelp: HelpContext = {
             {
               type: 'callout',
               tone: 'info',
-              text: 'Risk Policy enforcement happens at dispatch/execute time in both modes when Risk policy → Enable enforcement is ON.',
+              text: 'Risk enforcement happens at dispatch/execute time in both modes when enforcement is enabled in Settings → Risk.',
             },
           ],
         },
@@ -627,7 +627,7 @@ export const riskSettingsHelp: HelpContext = {
           items: [
             'Open Orders and look at the Error column (often includes a reason code).',
             'Check System Events (category=risk) for a detailed record.',
-            'Adjust Risk policy values (or wait for cooldown/pause windows to expire).',
+            'Adjust risk settings (or wait for cooldown/pause windows to expire).',
           ],
         },
       ],

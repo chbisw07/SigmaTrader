@@ -79,6 +79,8 @@ import {
 import { TradingViewAlertPayloadBuilder } from '../components/TradingViewAlertPayloadBuilder'
 import { RiskEngineV2Settings } from '../components/RiskEngineV2Settings'
 import { HoldingsExitAutomationSettings } from '../components/HoldingsExitAutomationSettings'
+import { RiskGlobalsPanel } from '../components/RiskGlobalsPanel'
+import { RiskSourceOverridesPanel } from '../components/RiskSourceOverridesPanel'
 import { EffectiveRiskSummaryPanel } from '../components/EffectiveRiskSummaryPanel'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
@@ -619,7 +621,7 @@ export function SettingsPage() {
       } catch (err) {
         if (!active) return
         setRiskPolicyError(
-          err instanceof Error ? err.message : 'Failed to load risk policy',
+          err instanceof Error ? err.message : 'Failed to load execution defaults',
         )
       }
     })()
@@ -1549,12 +1551,14 @@ export function SettingsPage() {
             }}
           >
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              <RiskGlobalsPanel />
               <RiskEngineV2Settings />
+              <RiskSourceOverridesPanel />
               <HoldingsExitAutomationSettings />
               <Paper sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
-                  Risk policy
+                  Execution defaults
                 </Typography>
                 <Tooltip title="Help" arrow placement="top">
                   <IconButton
@@ -1574,7 +1578,7 @@ export function SettingsPage() {
               {!riskPolicyLoaded || !riskPolicyDraft ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
                   <CircularProgress size={20} />
-                  <Typography variant="body2">Loading risk policy…</Typography>
+                  <Typography variant="body2">Loading execution defaults…</Typography>
                 </Box>
               ) : (
                 <>
@@ -1615,7 +1619,7 @@ export function SettingsPage() {
                           setRiskPolicyError(null)
                         } catch (err) {
                           setRiskPolicyError(
-                            err instanceof Error ? err.message : 'Failed to save risk policy',
+                            err instanceof Error ? err.message : 'Failed to save settings',
                           )
                         } finally {
                           setRiskPolicyBusy(false)
@@ -1629,7 +1633,7 @@ export function SettingsPage() {
                       variant="outlined"
                       disabled={riskPolicyBusy}
                       onClick={async () => {
-                        const confirmed = window.confirm('Reset risk policy to defaults?')
+                        const confirmed = window.confirm('Reset settings to defaults?')
                         if (!confirmed) return
                         setRiskPolicyBusy(true)
                         try {
@@ -1639,14 +1643,14 @@ export function SettingsPage() {
                           setRiskPolicyError(null)
                         } catch (err) {
                           setRiskPolicyError(
-                            err instanceof Error ? err.message : 'Failed to reset risk policy',
+                            err instanceof Error ? err.message : 'Failed to reset settings',
                           )
                         } finally {
                           setRiskPolicyBusy(false)
                         }
                       }}
                     >
-                      Reset to defaults
+                      Reset defaults
                     </Button>
                   </Box>
 
@@ -1658,7 +1662,7 @@ export function SettingsPage() {
 
                   {!riskPolicyDraft.enabled && (
                     <Alert severity="info" sx={{ mt: 1.5 }}>
-                      Risk policy enforcement is disabled. Enable enforcement to edit these settings.
+                      Enforcement is disabled. Enable enforcement to edit these settings.
                     </Alert>
                   )}
 

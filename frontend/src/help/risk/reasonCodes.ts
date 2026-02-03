@@ -13,7 +13,7 @@ export const RISK_REASON_CODES: ReasonCodeEntry[] = [
     ],
     whatToDo: [
       'Open the Error field and read the reason code/message.',
-      'Adjust your Risk policy settings or the order parameters (qty/product/stop).',
+      'Adjust your risk settings or the order parameters (qty/product/stop).',
       'Retry execution after the condition clears (e.g., cooldown ends, pause expires).',
     ],
   },

@@ -314,7 +314,7 @@ export function HoldingsPage() {
         setRiskEngineV2FlagError(
           err instanceof Error
             ? err.message
-            : 'Failed to load risk engine v2 flag.',
+            : 'Failed to load profile engine status.',
         )
       }
     }
@@ -3152,7 +3152,7 @@ export function HoldingsPage() {
       if (!existing) {
         if (!tradeRiskCategoryDraft) {
           setTradeError(
-            `${sym || 'Symbol'}: Missing symbol risk category. Select LC/MC/SC/ETF and save to trade with risk engine v2 enabled.`,
+            `${sym || 'Symbol'}: Missing symbol risk category. Select LC/MC/SC/ETF and save to trade with profile engine enabled.`,
           )
           return
         }
@@ -7606,7 +7606,7 @@ export function HoldingsPage() {
                   </TextField>
                   {riskEngineV2FlagError ? (
                     <Typography variant="caption" color="error" sx={{ mt: -0.5 }}>
-                      Risk engine v2 status unavailable: {riskEngineV2FlagError}
+                      Profile engine status unavailable: {riskEngineV2FlagError}
                     </Typography>
                   ) : null}
                   {riskEngineV2Enabled && !isBulkTrade && tradeHolding && (
@@ -7625,7 +7625,7 @@ export function HoldingsPage() {
                         helperText={
                           tradeSymbolCategoryResolved
                             ? `Saved: ${tradeSymbolCategoryResolved}`
-                            : 'Required for risk engine v2 (used for drawdown thresholds).'
+                            : 'Required for the profile engine (used for drawdown thresholds).'
                         }
                       >
                         <MenuItem value="">

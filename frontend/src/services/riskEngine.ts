@@ -122,7 +122,7 @@ export async function fetchRiskEngineV2Enabled(): Promise<RiskEngineV2Enabled> {
   if (!res.ok) {
     const body = await readTextSafe(res)
     throw new Error(
-      `Failed to load risk engine v2 flag (${res.status})${body ? `: ${body}` : ''}`,
+      `Failed to load profile engine status (${res.status})${body ? `: ${body}` : ''}`,
     )
   }
   return (await res.json()) as RiskEngineV2Enabled
@@ -137,7 +137,7 @@ export async function updateRiskEngineV2Enabled(enabled: boolean): Promise<RiskE
   if (!res.ok) {
     const body = await readTextSafe(res)
     throw new Error(
-      `Failed to update risk engine v2 flag (${res.status})${body ? `: ${body}` : ''}`,
+      `Failed to update profile engine status (${res.status})${body ? `: ${body}` : ''}`,
     )
   }
   return (await res.json()) as RiskEngineV2Enabled
