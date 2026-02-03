@@ -5,11 +5,15 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.models import RiskProfile
+from app.models import DrawdownThreshold, RiskProfile, SymbolRiskCategory
 from app.services.risk_policy_store import get_risk_policy
 from app.services.risk_unified_store import get_or_create_risk_global_config
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_BASELINE_EQUITY_INR = 1_000_000.0
+_DEFAULT_CATEGORY = "LC"
+_CATEGORIES = ("LC", "MC", "SC", "ETF")
 
 
 def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) -> bool:
@@ -39,8 +43,11 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
         v1_equity = float(getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0)
     except Exception:
         v1_equity = 0.0
-    if float(global_row.baseline_equity_inr or 0.0) <= 0 and v1_equity > 0:
-        global_row.baseline_equity_inr = float(v1_equity)
+    if float(global_row.baseline_equity_inr or 0.0) <= 0:
+        if v1_equity > 0:
+            global_row.baseline_equity_inr = float(v1_equity)
+        else:
+            global_row.baseline_equity_inr = float(_DEFAULT_BASELINE_EQUITY_INR)
         changed = True
 
     # Map a few global caps into both product profiles (CNC/MIS) so behavior remains similar.
@@ -73,7 +80,14 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
             .first()
         )
         if prof is None:
-            continue
+            prof = RiskProfile(
+                name=f"Default {prod}",
+                product=prod,
+                enabled=True,
+                is_default=True,
+            )
+            db.add(prof)
+            changed = True
         if cap_per_trade > 0 and float(getattr(prof, "capital_per_trade", 0.0) or 0.0) <= 0:
             prof.capital_per_trade = float(cap_per_trade)
             changed = True
@@ -86,10 +100,68 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
         if daily_loss_pct > 0 and float(getattr(prof, "daily_loss_pct", 0.0) or 0.0) <= 0:
             prof.daily_loss_pct = float(daily_loss_pct)
             changed = True
+        if daily_loss_pct > 0 and float(getattr(prof, "hard_daily_loss_pct", 0.0) or 0.0) <= 0:
+            prof.hard_daily_loss_pct = float(daily_loss_pct)
+            changed = True
         if max_losses > 0 and int(getattr(prof, "max_consecutive_losses", 0) or 0) <= 0:
             prof.max_consecutive_losses = int(max_losses)
             changed = True
         db.add(prof)
+
+    # Ensure global default symbol risk category exists so enforcement doesn't
+    # block new/unseen symbols in fresh installs. Per-user mappings still win.
+    try:
+        default_cat = (
+            db.query(SymbolRiskCategory)
+            .filter(
+                SymbolRiskCategory.user_id.is_(None),
+                SymbolRiskCategory.broker_name == "*",
+                SymbolRiskCategory.exchange == "*",
+                SymbolRiskCategory.symbol == "*",
+            )
+            .one_or_none()
+        )
+        if default_cat is None:
+            db.add(
+                SymbolRiskCategory(
+                    user_id=None,
+                    broker_name="*",
+                    exchange="*",
+                    symbol="*",
+                    risk_category=_DEFAULT_CATEGORY,
+                )
+            )
+            changed = True
+    except Exception:
+        pass
+
+    # Ensure drawdown threshold rows exist for all categories (defaults to 0 => no gating).
+    try:
+        for prod in ("CNC", "MIS"):
+            for cat in _CATEGORIES:
+                row = (
+                    db.query(DrawdownThreshold)
+                    .filter(
+                        DrawdownThreshold.user_id.is_(None),
+                        DrawdownThreshold.product == prod,
+                        DrawdownThreshold.category == cat,
+                    )
+                    .one_or_none()
+                )
+                if row is None:
+                    db.add(
+                        DrawdownThreshold(
+                            user_id=None,
+                            product=prod,
+                            category=cat,
+                            caution_pct=0.0,
+                            defense_pct=0.0,
+                            hard_stop_pct=0.0,
+                        )
+                    )
+                    changed = True
+    except Exception:
+        pass
 
     if changed:
         db.add(global_row)
@@ -99,4 +171,3 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
 
 
 __all__ = ["migrate_legacy_risk_policy_v1_to_unified"]
-

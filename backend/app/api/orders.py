@@ -623,7 +623,7 @@ def execute_order_internal(
 
     now_utc = _now_utc()
     # Unified Risk Settings (in progress):
-    # - v2 remains feature-flagged today; legacy v1 enforcement still runs.
+    # - risk_engine_v2 remains feature-flagged today; legacy risk policy still runs.
     # - manual_override_enabled is global and applies only to explicitly
     #   user-created manual orders (no alert/strategy/deployment attached).
     from app.services.risk_engine_v2_flag_store import get_risk_engine_v2_enabled
@@ -633,7 +633,6 @@ def execute_order_internal(
     policy, _src = get_risk_policy(db, settings)
     risk_v2_profile_id: int | None = None
     risk_v2_baseline_equity: float | None = None
-    risk_v2_throttle_multiplier: float | None = None
     execution_policy_key = None
     execution_policy_interval_min: int | None = None
     execution_policy_apply = False
@@ -655,7 +654,7 @@ def execute_order_internal(
             )
 
     # Trade-frequency/loss-control execution policy:
-    # - Enforced only when risk policy enforcement is enabled.
+    # - Enforced only when Risk Settings are enabled.
     # - Enforced at execute time (single choke-point).
     # - Never blocks structural exits (exposure-reducing orders).
     # - Skips conditional/GTT arming (no immediate broker execution).
@@ -728,15 +727,14 @@ def execute_order_internal(
             )
             risk_v2_profile_id = decision.risk_profile_id
             risk_v2_baseline_equity = baseline_equity
-
             # Shared compiler output used by the UI "Effective Risk Summary" panel.
-            # Keep the execution path aligned by pulling the effective drawdown throttle
-            # multiplier from the same compiler logic.
+            # Keep the execution path aligned by invoking the same compiler logic
+            # used by the UI "Effective Risk Summary" panel (tests assert this).
             try:
                 from app.services.risk_compiler import compile_risk_policy
 
                 if decision.resolved_product and decision.risk_category:
-                    compiled = compile_risk_policy(
+                    compile_risk_policy(
                         db,
                         settings,
                         user=user_obj,
@@ -746,10 +744,8 @@ def execute_order_internal(
                         symbol=str(getattr(order, "symbol", None) or "") or None,
                         strategy_id=str(getattr(order.alert, "strategy_id", None) or "") or None,
                     )
-                    v2_eff = (compiled.get("effective") or {}).get("risk_engine_v2") or {}
-                    risk_v2_throttle_multiplier = float(v2_eff.get("throttle_multiplier") or 1.0)
             except Exception:
-                risk_v2_throttle_multiplier = None
+                pass
             record_decision_log(
                 db,
                 user_id=(user_obj.id if user_obj is not None else order.user_id),
@@ -799,7 +795,7 @@ def execute_order_internal(
         except HTTPException:
             raise
         except Exception as exc:
-            # Fail closed: if v2 is enabled but errors, block execution.
+            # Fail closed: if risk is enabled but errors, block execution.
             order.status = "REJECTED_RISK"
             order.error_message = f"Risk engine v2 error: {exc}"
             db.add(order)
@@ -807,7 +803,7 @@ def execute_order_internal(
             db.refresh(order)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Order rejected by risk engine v2 (internal error).",
+                detail="Order rejected by risk engine (internal error).",
             ) from exc
 
     # Legacy risk policy enforcement (still active while the unified refactor is in progress).
@@ -819,7 +815,9 @@ def execute_order_internal(
     if getattr(risk, "blocked", False):
         if bool(risk_global.manual_override_enabled) and _is_explicit_manual_order():
             note = f"Manual override enabled: {risk.reason}"
-            order.error_message = f"{order.error_message}; {note}" if order.error_message else note
+            order.error_message = (
+                f"{order.error_message}; {note}" if order.error_message else note
+            )
             db.add(order)
             db.commit()
             db.refresh(order)
@@ -1063,7 +1061,9 @@ def execute_order_internal(
             if not allowed and reason_code and message:
                 if bool(risk_global.manual_override_enabled) and _is_explicit_manual_order():
                     note = f"Manual override enabled: {reason_code}: {message}"
-                    order.error_message = f"{order.error_message}; {note}" if order.error_message else note
+                    order.error_message = (
+                        f"{order.error_message}; {note}" if order.error_message else note
+                    )
                 else:
                     order.status = "REJECTED_RISK"
                     order.error_message = f"{reason_code}: {message}"
@@ -1514,8 +1514,6 @@ def execute_order_internal(
                     )
 
                 cap_trade = float(getattr(profile_v2, "capital_per_trade", 0.0) or 0.0)
-                if risk_v2_throttle_multiplier is not None:
-                    cap_trade *= float(risk_v2_throttle_multiplier or 1.0)
                 cap_portfolio = baseline_equity * max_margin_pct / 100.0
 
                 order_type = str(getattr(order, "order_type", "MARKET") or "MARKET").strip().upper()

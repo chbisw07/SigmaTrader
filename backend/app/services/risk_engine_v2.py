@@ -22,12 +22,12 @@ from app.models import (
     User,
 )
 from app.services.risk_compiler import (
-    apply_drawdown_throttle_v2 as _apply_drawdown_throttle_v2,
     compute_portfolio_pnl_state as _compute_portfolio_pnl_state,
     drawdown_state as _drawdown_state,
     resolve_drawdown_config as _resolve_drawdown_config,
 )
 from app.services.risk_policy import _normalized_symbol_exchange  # type: ignore[attr-defined]
+from app.services.risk_unified_store import get_source_override
 
 logger = logging.getLogger(__name__)
 
@@ -172,17 +172,20 @@ def resolve_symbol_category(
     sym_rank = case((SymbolRiskCategory.symbol == sym, 0), else_=1)
     # Allow broker/exchange wildcards ("*") so categories can be treated as
     # broker-independent in the UI while still supporting per-broker overrides.
+    # Support app-wide defaults via user_id NULL while keeping user-specific
+    # mappings authoritative when present.
+    user_rank = case((SymbolRiskCategory.user_id == user_id, 0), else_=1)
     candidates = (
         db.query(SymbolRiskCategory)
         .filter(
-            SymbolRiskCategory.user_id == user_id,
+            SymbolRiskCategory.user_id.in_([user_id, None]),
             SymbolRiskCategory.symbol.in_([sym, "*"]),
             SymbolRiskCategory.broker_name.in_([broker, "*"]),
             SymbolRiskCategory.exchange.in_([ex, "*"]),
         )
-        # Prefer the most recently updated mapping (lets "global" overrides win
-        # without needing to delete older broker/exchange-specific rows).
-        .order_by(sym_rank.asc(), SymbolRiskCategory.updated_at.desc())
+        # Prefer (1) user-specific over global, (2) exact symbol over "*",
+        # then most recently updated.
+        .order_by(user_rank.asc(), sym_rank.asc(), SymbolRiskCategory.updated_at.desc())
         .all()
     )
     if not candidates:
@@ -260,10 +263,65 @@ def _is_structural_exit(db: Session, order: Order) -> bool:
 
 
 def _price_for_sizing(order: Order) -> float | None:
-    if order.price is None:
-        return None
-    p = float(order.price or 0.0)
-    return p if p > 0 else None
+    # Prefer explicit order price; fall back to alert trigger price when present.
+    candidates = [getattr(order, "price", None)]
+    try:
+        if getattr(order, "alert", None) is not None:
+            candidates.append(getattr(order.alert, "price", None))
+    except Exception:
+        pass
+    for c in candidates:
+        if c is None:
+            continue
+        try:
+            p = float(c or 0.0)
+        except Exception:
+            continue
+        if p > 0:
+            return p
+    return None
+
+
+def _source_bucket_for_order(order: Order) -> str:
+    try:
+        if getattr(order, "alert", None) is not None:
+            src = (getattr(order.alert, "source", None) or "").strip().upper()
+            if src == "TRADINGVIEW":
+                return "TRADINGVIEW"
+    except Exception:
+        pass
+    return "SIGMATRADER"
+
+
+def _would_open_or_increase_short(
+    db: Session,
+    order: Order,
+    *,
+    product: str,
+    qty: float,
+) -> bool:
+    side = (order.side or "").strip().upper()
+    if side != "SELL":
+        return False
+    if (product or "").strip().upper() == "CNC":
+        return False
+    if qty <= 0:
+        return False
+
+    broker = (getattr(order, "broker_name", None) or "zerodha").strip().lower()
+    symbol, exchange = _normalized_symbol_exchange(order)
+    pos = (
+        db.query(Position)
+        .filter(
+            Position.broker_name == broker,
+            Position.symbol == symbol,
+            Position.exchange == exchange,
+            Position.product == (product or "MIS").strip().upper(),
+        )
+        .one_or_none()
+    )
+    pos_qty = float(pos.qty) if pos is not None else 0.0
+    return (pos_qty - qty) < 0.0
 
 
 def _interval_minutes(raw: str | None) -> int | None:
@@ -285,16 +343,37 @@ def _interval_minutes(raw: str | None) -> int | None:
 
 
 def _apply_drawdown_throttle(
-    profile: RiskProfile,
+    *,
+    capital_per_trade: float,
+    max_positions: int,
     state: DrawdownState,
     category: str,
 ) -> tuple[float, int, list[str]]:
-    out = _apply_drawdown_throttle_v2(
-        profile=profile,
-        state=state,
-        category=(category or "LC").strip().upper(),  # type: ignore[arg-type]
-    )
-    return float(out.effective_capital_per_trade), int(out.effective_max_positions), list(out.reasons)
+    # Keep this aligned with risk_compiler.apply_drawdown_throttle_v2 so runtime
+    # behavior matches the "Effective Risk Summary" UI.
+    reasons: list[str] = []
+    cap = float(capital_per_trade or 0.0)
+    max_pos = int(max_positions or 0)
+    multiplier = 1.0
+
+    if state == "CAUTION":
+        multiplier = 0.7
+        cap = cap * multiplier
+        max_pos = max(1, int(floor(max_pos * multiplier))) if max_pos > 0 else 0
+        reasons.append("Drawdown CAUTION: throttling capital_per_trade and max_positions.")
+        return cap, max_pos, reasons
+
+    if state == "DEFENSE":
+        cat = (category or "").strip().upper()
+        if cat not in {"ETF", "LC"}:
+            reasons.append("Drawdown DEFENSE: new entries restricted to ETF/LC symbols.")
+        return cap, max_pos, reasons
+
+    if state == "HARD_STOP":
+        reasons.append("Drawdown HARD_STOP: new entries blocked.")
+        return cap, max_pos, reasons
+
+    return cap, max_pos, reasons
 
 
 def evaluate_order_risk_v2(
@@ -343,8 +422,35 @@ def evaluate_order_risk_v2(
 
     resolved_product = (profile.product or "").strip().upper()
 
+    source_bucket = _source_bucket_for_order(order)
+    source_override = get_source_override(
+        db,
+        source_bucket=source_bucket,  # type: ignore[arg-type]
+        product=resolved_product,  # type: ignore[arg-type]
+    )
+
+    # Product gating at the source layer (entries only). Structural exits are already bypassed.
+    if source_override is not None and source_override.allow_product is False:
+        return RiskDecisionV2(
+            blocked=True,
+            reasons=[f"{source_bucket} {resolved_product} disabled by Risk Settings."],
+            resolved_product=resolved_product,
+            risk_profile_id=profile.id,
+            risk_category=None,
+            drawdown_state=None,
+            drawdown_pct=None,
+            final_qty=None,
+            final_order_type=None,
+            final_price=None,
+        )
+
     # Order-type policy (optional): comma-separated allowlist (e.g. "MARKET,LIMIT,SL,SL-M").
-    otp = str(getattr(profile, "order_type_policy", "") or "").strip()
+    otp = (
+        str(getattr(source_override, "order_type_policy", "") or "").strip()
+        if source_override is not None and source_override.order_type_policy is not None
+        else str(getattr(profile, "order_type_policy", "") or "").strip()
+    )
+    # Order-type policy (optional): comma-separated allowlist (e.g. "MARKET,LIMIT,SL,SL-M").
     if otp:
         allowed = {t.strip().upper() for t in otp.replace(";", ",").split(",") if t.strip()}
         if not allowed:
@@ -374,6 +480,91 @@ def evaluate_order_risk_v2(
                 final_order_type=None,
                 final_price=None,
             )
+
+    # Effective per-order caps / overrides (source overrides win over profile defaults).
+    allow_short_selling = (
+        bool(source_override.allow_short_selling)
+        if source_override is not None and source_override.allow_short_selling is not None
+        else True
+    )
+    max_qty_per_order = (
+        float(source_override.max_quantity_per_order)
+        if source_override is not None and source_override.max_quantity_per_order is not None
+        else None
+    )
+    max_order_value_abs = None
+    if source_override is not None:
+        if source_override.max_order_value_abs is not None:
+            max_order_value_abs = float(source_override.max_order_value_abs)
+        elif source_override.max_order_value_pct is not None:
+            base = float(baseline_equity or 0.0)
+            if base > 0:
+                max_order_value_abs = base * float(source_override.max_order_value_pct) / 100.0
+            else:
+                reasons.append(
+                    "max_order_value_pct configured but baseline equity is missing; skipping order value cap."
+                )
+
+    cap_per_trade_base = (
+        float(source_override.capital_per_trade)
+        if source_override is not None and source_override.capital_per_trade is not None
+        else float(getattr(profile, "capital_per_trade", 0.0) or 0.0)
+    )
+    max_positions_base = (
+        int(source_override.max_positions)
+        if source_override is not None and source_override.max_positions is not None
+        else int(getattr(profile, "max_positions", 0) or 0)
+    )
+    max_exposure_pct_base = (
+        float(source_override.max_exposure_pct)
+        if source_override is not None and source_override.max_exposure_pct is not None
+        else float(getattr(profile, "max_exposure_pct", 0.0) or 0.0)
+    )
+    daily_loss_pct_base = (
+        float(source_override.daily_loss_pct)
+        if source_override is not None and source_override.daily_loss_pct is not None
+        else float(getattr(profile, "daily_loss_pct", 0.0) or 0.0)
+    )
+    hard_daily_loss_pct_base = (
+        float(source_override.hard_daily_loss_pct)
+        if source_override is not None and source_override.hard_daily_loss_pct is not None
+        else float(getattr(profile, "hard_daily_loss_pct", 0.0) or 0.0)
+    )
+    max_consecutive_losses_base = (
+        int(source_override.max_consecutive_losses)
+        if source_override is not None and source_override.max_consecutive_losses is not None
+        else int(getattr(profile, "max_consecutive_losses", 0) or 0)
+    )
+    entry_cutoff_time = (
+        str(source_override.entry_cutoff_time)
+        if source_override is not None and source_override.entry_cutoff_time is not None
+        else getattr(profile, "entry_cutoff_time", None)
+    )
+    force_squareoff_time = (
+        str(source_override.force_squareoff_time)
+        if source_override is not None and source_override.force_squareoff_time is not None
+        else getattr(profile, "force_squareoff_time", None)
+    )
+    max_trades_per_day = (
+        int(source_override.max_trades_per_day)
+        if source_override is not None and source_override.max_trades_per_day is not None
+        else getattr(profile, "max_trades_per_day", None)
+    )
+    max_trades_per_symbol_per_day = (
+        int(source_override.max_trades_per_symbol_per_day)
+        if source_override is not None and source_override.max_trades_per_symbol_per_day is not None
+        else getattr(profile, "max_trades_per_symbol_per_day", None)
+    )
+    min_bars_between_trades = (
+        int(source_override.min_bars_between_trades)
+        if source_override is not None and source_override.min_bars_between_trades is not None
+        else getattr(profile, "min_bars_between_trades", None)
+    )
+    cooldown_after_loss_bars = (
+        int(source_override.cooldown_after_loss_bars)
+        if source_override is not None and source_override.cooldown_after_loss_bars is not None
+        else getattr(profile, "cooldown_after_loss_bars", None)
+    )
 
     symbol, exchange = _normalized_symbol_exchange(order)
     category = resolve_symbol_category(
@@ -428,7 +619,7 @@ def evaluate_order_risk_v2(
     if pnl_state.baseline_equity <= 0:
         return RiskDecisionV2(
             blocked=True,
-            reasons=["Missing/invalid baseline equity (set Manual equity in Risk Policy)."],
+            reasons=["Missing/invalid baseline equity (set Baseline equity in Risk Settings)."],
             resolved_product=resolved_product,
             risk_profile_id=profile.id,
             risk_category=category,
@@ -471,7 +662,12 @@ def evaluate_order_risk_v2(
 
     dd_state = drawdown_state(pnl_state.drawdown_pct, dd_cfg)
 
-    cap_eff, max_pos_eff, dd_reasons = _apply_drawdown_throttle(profile, dd_state, category)
+    cap_eff, max_pos_eff, dd_reasons = _apply_drawdown_throttle(
+        capital_per_trade=cap_per_trade_base,
+        max_positions=max_positions_base,
+        state=dd_state,
+        category=category,
+    )
     reasons.extend(dd_reasons)
 
     # Drawdown gating applies to entries; exits are always allowed.
@@ -504,11 +700,11 @@ def evaluate_order_risk_v2(
             )
 
     # Daily loss checks (entries only).
-    if not is_exit and profile.daily_loss_pct and profile.daily_loss_pct > 0:
+    if not is_exit and daily_loss_pct_base and daily_loss_pct_base > 0:
         daily_loss_pct = (
             abs(min(0.0, pnl_state.pnl_today)) / pnl_state.baseline_equity
         ) * 100.0
-        hard_daily_loss_pct = float(profile.hard_daily_loss_pct or 0.0)
+        hard_daily_loss_pct = float(hard_daily_loss_pct_base or 0.0)
         if hard_daily_loss_pct > 0 and daily_loss_pct >= hard_daily_loss_pct:
             return RiskDecisionV2(
                 blocked=True,
@@ -525,12 +721,12 @@ def evaluate_order_risk_v2(
                 final_order_type=None,
                 final_price=None,
             )
-        if daily_loss_pct >= float(profile.daily_loss_pct):
+        if daily_loss_pct >= float(daily_loss_pct_base):
             return RiskDecisionV2(
                 blocked=True,
                 reasons=[
                     *reasons,
-                    f"Daily loss limit reached ({daily_loss_pct:.2f}% >= {float(profile.daily_loss_pct):.2f}%).",
+                    f"Daily loss limit reached ({daily_loss_pct:.2f}% >= {float(daily_loss_pct_base):.2f}%).",
                 ],
                 resolved_product=resolved_product,
                 risk_profile_id=profile.id,
@@ -543,8 +739,8 @@ def evaluate_order_risk_v2(
             )
 
     # Loss streak checks (entries only).
-    if not is_exit and profile.max_consecutive_losses and profile.max_consecutive_losses > 0:
-        max_losses = int(profile.max_consecutive_losses)
+    if not is_exit and max_consecutive_losses_base and max_consecutive_losses_base > 0:
+        max_losses = int(max_consecutive_losses_base)
         if pnl_state.consecutive_losses >= max_losses:
             return RiskDecisionV2(
                 blocked=True,
@@ -564,11 +760,11 @@ def evaluate_order_risk_v2(
 
     # Entry time cutoff (MIS-only, entries only).
     if not is_exit and resolved_product == "MIS":
-        cutoff = _parse_hhmm(profile.entry_cutoff_time)
+        cutoff = _parse_hhmm(entry_cutoff_time)
         if cutoff is not None and _now_time_ist(now_utc) >= cutoff:
             return RiskDecisionV2(
                 blocked=True,
-                reasons=[*reasons, f"MIS entry cutoff time reached ({profile.entry_cutoff_time})."],
+                reasons=[*reasons, f"MIS entry cutoff time reached ({entry_cutoff_time})."],
                 resolved_product=resolved_product,
                 risk_profile_id=profile.id,
                 risk_category=category,
@@ -579,13 +775,13 @@ def evaluate_order_risk_v2(
                 final_price=None,
             )
 
-        squareoff = _parse_hhmm(profile.force_squareoff_time)
+        squareoff = _parse_hhmm(force_squareoff_time)
         if squareoff is not None and _now_time_ist(now_utc) >= squareoff:
             return RiskDecisionV2(
                 blocked=True,
                 reasons=[
                     *reasons,
-                    f"MIS force square-off time reached ({profile.force_squareoff_time}).",
+                    f"MIS force square-off time reached ({force_squareoff_time}).",
                 ],
                 resolved_product=resolved_product,
                 risk_profile_id=profile.id,
@@ -606,7 +802,7 @@ def evaluate_order_risk_v2(
             alt = f"{exchange}:{symbol}"
             return or_(Order.symbol == symbol, Order.symbol == alt)
 
-        if profile.max_trades_per_day and int(profile.max_trades_per_day) > 0:
+        if max_trades_per_day is not None and int(max_trades_per_day) > 0:
             q = db.query(Order).filter(
                 Order.created_at >= start_day,
                 Order.created_at < end_day,
@@ -618,12 +814,12 @@ def evaluate_order_risk_v2(
             if user_id is not None:
                 q = q.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
             trades_today = q.count()
-            if trades_today >= int(profile.max_trades_per_day):
+            if trades_today >= int(max_trades_per_day):
                 return RiskDecisionV2(
                     blocked=True,
                     reasons=[
                         *reasons,
-                        f"Max trades/day reached ({trades_today} >= {int(profile.max_trades_per_day)}).",
+                        f"Max trades/day reached ({trades_today} >= {int(max_trades_per_day)}).",
                     ],
                     resolved_product=resolved_product,
                     risk_profile_id=profile.id,
@@ -635,8 +831,11 @@ def evaluate_order_risk_v2(
                     final_price=None,
                 )
 
-        if profile.max_trades_per_symbol_per_day and int(profile.max_trades_per_symbol_per_day) > 0:
-            max_trades_sym = int(profile.max_trades_per_symbol_per_day)
+        if (
+            max_trades_per_symbol_per_day is not None
+            and int(max_trades_per_symbol_per_day) > 0
+        ):
+            max_trades_sym = int(max_trades_per_symbol_per_day)
             q = db.query(Order).filter(
                 Order.created_at >= start_day,
                 Order.created_at < end_day,
@@ -668,7 +867,7 @@ def evaluate_order_risk_v2(
                 )
 
         # Min bars between trades (same symbol/product).
-        if profile.min_bars_between_trades and int(profile.min_bars_between_trades) > 0:
+        if min_bars_between_trades is not None and int(min_bars_between_trades) > 0:
             if order.alert is None:
                 return RiskDecisionV2(
                     blocked=True,
@@ -717,7 +916,7 @@ def evaluate_order_risk_v2(
                 prev_t = getattr(a2, "bar_time", None) or getattr(a2, "received_at", None)
                 if prev_t is not None:
                     mins = (now_bar - prev_t).total_seconds() / 60.0
-                    required = float(interval_min) * float(int(profile.min_bars_between_trades))
+                    required = float(interval_min) * float(int(min_bars_between_trades))
                     if mins < required:
                         return RiskDecisionV2(
                             blocked=True,
@@ -736,7 +935,11 @@ def evaluate_order_risk_v2(
                         )
 
         # Cooldown after loss (same symbol): approximate using last losing trade close time.
-        if profile.cooldown_after_loss_bars and int(profile.cooldown_after_loss_bars) > 0 and order.alert is not None:
+        if (
+            cooldown_after_loss_bars is not None
+            and int(cooldown_after_loss_bars) > 0
+            and order.alert is not None
+        ):
             interval_min = _interval_minutes(getattr(order.alert, "interval", None))
             if interval_min is not None and interval_min > 0:
                 now_bar = getattr(order.alert, "bar_time", None) or getattr(order.alert, "received_at", None) or now_utc
@@ -747,7 +950,7 @@ def evaluate_order_risk_v2(
                 last_trade = q.order_by(AnalyticsTrade.closed_at.desc()).first()
                 if last_trade is not None and float(last_trade.pnl or 0.0) < 0:
                     mins = (now_bar - last_trade.closed_at).total_seconds() / 60.0
-                    required = float(interval_min) * float(int(profile.cooldown_after_loss_bars))
+                    required = float(interval_min) * float(int(cooldown_after_loss_bars))
                     if mins < required:
                         return RiskDecisionV2(
                             blocked=True,
@@ -794,6 +997,7 @@ def evaluate_order_risk_v2(
                 final_price=None,
             )
 
+    # Quantity sizing (simple capital-based sizing).
     price = _price_for_sizing(order)
     if price is None:
         return RiskDecisionV2(
@@ -809,7 +1013,6 @@ def evaluate_order_risk_v2(
             final_price=None,
         )
 
-    # Quantity sizing (simple capital-based sizing).
     cap_budget = float(cap_eff or 0.0)
     if cap_budget <= 0:
         return RiskDecisionV2(
@@ -840,8 +1043,75 @@ def evaluate_order_risk_v2(
             final_price=price,
         )
 
+    # Apply per-order caps to the resolved qty (whether provided or sized).
+    if max_qty_per_order is not None and float(max_qty_per_order) > 0 and float(qty) > float(max_qty_per_order):
+        return RiskDecisionV2(
+            blocked=True,
+            reasons=[
+                *reasons,
+                f"max_quantity_per_order exceeded ({float(qty):.0f} > {float(max_qty_per_order):.0f}).",
+            ],
+            resolved_product=resolved_product,
+            risk_profile_id=profile.id,
+            risk_category=category,
+            drawdown_state=dd_state,
+            drawdown_pct=pnl_state.drawdown_pct,
+            final_qty=None,
+            final_order_type=None,
+            final_price=price,
+        )
+    if max_order_value_abs is not None and float(max_order_value_abs) > 0 and price is not None:
+        order_value = float(qty) * float(price)
+        if order_value > float(max_order_value_abs):
+            return RiskDecisionV2(
+                blocked=True,
+                reasons=[
+                    *reasons,
+                    f"max_order_value exceeded ({order_value:.2f} > {float(max_order_value_abs):.2f}).",
+                ],
+                resolved_product=resolved_product,
+                risk_profile_id=profile.id,
+                risk_category=category,
+                drawdown_state=dd_state,
+                drawdown_pct=pnl_state.drawdown_pct,
+                final_qty=None,
+                final_order_type=None,
+                final_price=price,
+            )
+
+    # Short-selling guard (MIS-only), applied to entries.
+    if not allow_short_selling and _would_open_or_increase_short(
+        db, order, product=resolved_product, qty=float(qty)
+    ):
+        return RiskDecisionV2(
+            blocked=True,
+            reasons=[*reasons, "Short selling blocked by Risk Settings."],
+            resolved_product=resolved_product,
+            risk_profile_id=profile.id,
+            risk_category=category,
+            drawdown_state=dd_state,
+            drawdown_pct=pnl_state.drawdown_pct,
+            final_qty=None,
+            final_order_type=None,
+            final_price=price,
+        )
+
     # Max exposure cap (product-level, portfolio-based).
-    if profile.max_exposure_pct and float(profile.max_exposure_pct) > 0:
+    if max_exposure_pct_base and float(max_exposure_pct_base) > 0:
+        if price is None:
+            reasons.append("max_exposure cap configured but price is unavailable; skipping exposure check.")
+            return RiskDecisionV2(
+                blocked=False,
+                reasons=reasons,
+                resolved_product=resolved_product,
+                risk_profile_id=profile.id,
+                risk_category=category,
+                drawdown_state=dd_state,
+                drawdown_pct=pnl_state.drawdown_pct,
+                final_qty=float(qty),
+                final_order_type=(order.order_type or "MARKET").strip().upper(),
+                final_price=None,
+            )
         broker = (getattr(order, "broker_name", None) or "zerodha").strip().lower()
         existing_exposure = 0.0
         try:
@@ -859,7 +1129,7 @@ def evaluate_order_risk_v2(
         except Exception:
             existing_exposure = 0.0
 
-        max_exposure = float(pnl_state.equity) * float(profile.max_exposure_pct) / 100.0
+        max_exposure = float(pnl_state.equity) * float(max_exposure_pct_base) / 100.0
         order_value = float(qty) * float(price)
         if max_exposure > 0 and (existing_exposure + order_value) > max_exposure:
             return RiskDecisionV2(
