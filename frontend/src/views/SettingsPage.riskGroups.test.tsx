@@ -1,74 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import { AppThemeProvider } from '../themeContext'
 import { TimeSettingsProvider } from '../timeSettingsContext'
-import type { RiskPolicy } from '../services/riskPolicy'
 import { SettingsPage } from './SettingsPage'
-
-function makePolicy(): RiskPolicy {
-  return {
-    version: 1,
-    enabled: true,
-    enforcement: {
-      account_level: true,
-      per_trade: true,
-      position_sizing: true,
-      stop_rules: true,
-      trade_frequency: true,
-      loss_controls: true,
-      correlation_controls: true,
-      execution_safety: true,
-      emergency_controls: true,
-      overrides: true,
-    },
-    equity: { equity_mode: 'MANUAL', manual_equity_inr: 1_000_000 },
-    account_risk: {
-      max_daily_loss_pct: 1,
-      max_daily_loss_abs: null,
-      max_open_positions: 6,
-      max_concurrent_symbols: 6,
-      max_exposure_pct: 60,
-    },
-    trade_risk: {
-      max_risk_per_trade_pct: 0.5,
-      hard_max_risk_pct: 0.75,
-      stop_loss_mandatory: true,
-      stop_reference: 'ATR',
-    },
-    position_sizing: {
-      sizing_mode: 'FIXED_CAPITAL',
-      capital_per_trade: 20000,
-      allow_scale_in: false,
-      pyramiding: 1,
-    },
-    stop_rules: {
-      atr_period: 14,
-      initial_stop_atr: 2,
-      fallback_stop_pct: 1,
-      min_stop_distance_pct: 0.5,
-      max_stop_distance_pct: 3,
-      trailing_stop_enabled: true,
-      trail_activation_atr: 2.5,
-      trail_activation_pct: 3,
-    },
-    trade_frequency: { max_trades_per_symbol_per_day: 2, min_bars_between_trades: 10, cooldown_after_loss_bars: 20 },
-    loss_controls: { max_consecutive_losses: 3, pause_after_loss_streak: true, pause_duration: 'EOD' },
-    correlation_rules: { max_same_sector_positions: 2, sector_correlation_limit: 0.7 },
-    execution_safety: {
-      allow_mis: false,
-      allow_cnc: true,
-      allow_short_selling: true,
-      max_order_value_pct: 2.5,
-      reject_if_margin_exceeded: true,
-    },
-    emergency_controls: { panic_stop: false, stop_all_trading_on_error: true, stop_on_unexpected_qty: true },
-    overrides: {
-      TRADINGVIEW: { MIS: {}, CNC: {} },
-      SIGMATRADER: { MIS: {}, CNC: {} },
-    },
-  }
-}
 
 function makeCompiledFixture() {
   return {
@@ -78,7 +13,7 @@ function makeCompiledFixture() {
       risk_policy_source: 'db',
       risk_policy_enabled: true,
       risk_engine_v2_enabled: true,
-      manual_equity_inr: 1000000,
+      manual_equity_inr: 1_000_000,
       drawdown_pct: 0.0,
     },
     effective: {
@@ -86,33 +21,19 @@ function makeCompiledFixture() {
       blocking_reasons: [],
       risk_policy_by_source: {
         TRADINGVIEW: {
-          allow_product: true,
-          allow_short_selling: true,
-          manual_equity_inr: 1000000,
           max_daily_loss_pct: 1,
           max_daily_loss_abs: null,
           max_exposure_pct: 60,
           max_open_positions: 6,
           max_concurrent_symbols: 6,
-          max_order_value_pct: 2.5,
-          max_order_value_abs_from_pct: null,
-          max_order_value_abs_override: null,
-          max_quantity_per_order: null,
           max_risk_per_trade_pct: 0.5,
           hard_max_risk_pct: 0.75,
           stop_loss_mandatory: true,
-          capital_per_trade: 20000,
-          allow_scale_in: false,
-          pyramiding: 1,
           stop_reference: 'ATR',
           atr_period: 14,
           atr_mult_initial_stop: 2,
           fallback_stop_pct: 1,
-          min_stop_distance_pct: 0.5,
-          max_stop_distance_pct: 3,
           trailing_stop_enabled: true,
-          trail_activation_atr: 2.5,
-          trail_activation_pct: 3,
           max_trades_per_symbol_per_day: 2,
           min_bars_between_trades: 10,
           cooldown_after_loss_bars: 20,
@@ -120,41 +41,8 @@ function makeCompiledFixture() {
           pause_after_loss_streak: true,
           pause_duration: 'EOD',
         },
-        SIGMATRADER: {
-          allow_product: true,
-          allow_short_selling: true,
-          manual_equity_inr: 1000000,
-          max_daily_loss_pct: 1,
-          max_daily_loss_abs: null,
-          max_exposure_pct: 60,
-          max_open_positions: 6,
-          max_concurrent_symbols: 6,
-          max_order_value_pct: 2.5,
-          max_order_value_abs_from_pct: null,
-          max_order_value_abs_override: null,
-          max_quantity_per_order: null,
-          max_risk_per_trade_pct: 0.5,
-          hard_max_risk_pct: 0.75,
-          stop_loss_mandatory: true,
-          capital_per_trade: 20000,
-          allow_scale_in: false,
-          pyramiding: 1,
-          stop_reference: 'ATR',
-          atr_period: 14,
-          atr_mult_initial_stop: 2,
-          fallback_stop_pct: 1,
-          min_stop_distance_pct: 0.5,
-          max_stop_distance_pct: 3,
-          trailing_stop_enabled: true,
-          trail_activation_atr: 2.5,
-          trail_activation_pct: 3,
-          max_trades_per_symbol_per_day: 2,
-          min_bars_between_trades: 10,
-          cooldown_after_loss_bars: 20,
-          max_consecutive_losses: 3,
-          pause_after_loss_streak: true,
-          pause_duration: 'EOD',
-        },
+        SIGMATRADER: {},
+        MANUAL: {},
       },
       risk_engine_v2: {
         drawdown_pct: 0.0,
@@ -186,14 +74,25 @@ function makeCompiledFixture() {
   }
 }
 
-describe('SettingsPage Risk settings selective enforcement', () => {
+function renderRiskSettings() {
+  render(
+    <MemoryRouter initialEntries={['/settings?tab=risk']}>
+      <AppThemeProvider>
+        <TimeSettingsProvider>
+          <SettingsPage />
+        </TimeSettingsProvider>
+      </AppThemeProvider>
+    </MemoryRouter>,
+  )
+}
+
+describe('SettingsPage Risk settings (unified)', () => {
   beforeEach(() => {
-    let currentPolicy = makePolicy()
     let v2Enabled = true
     let unifiedGlobal = {
       enabled: true,
       manual_override_enabled: false,
-      baseline_equity_inr: 1000000,
+      baseline_equity_inr: 1_000_000,
       updated_at: null,
     }
     let sourceOverrides: unknown[] = []
@@ -202,6 +101,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     const fetchMock = vi.fn()
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
+
       if (url.includes('/api/risk/global') && (!init || !init.method || init.method === 'GET')) {
         return { ok: true, json: async () => unifiedGlobal } as unknown as Response
       }
@@ -210,6 +110,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
         unifiedGlobal = { ...unifiedGlobal, ...(body ?? {}) }
         return { ok: true, json: async () => unifiedGlobal } as unknown as Response
       }
+
       if (url.includes('/api/risk/source-overrides') && (!init || !init.method || init.method === 'GET')) {
         return { ok: true, json: async () => sourceOverrides } as unknown as Response
       }
@@ -230,6 +131,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
         )
         return { ok: true, json: async () => ({ deleted: true }) } as unknown as Response
       }
+
       if (url.includes('/api/holdings-exit/config') && (!init || !init.method || init.method === 'GET')) {
         return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
       }
@@ -238,6 +140,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
         holdingsExitCfg = { ...holdingsExitCfg, ...(body ?? {}) }
         return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
       }
+
       if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
         return {
           ok: true,
@@ -252,26 +155,24 @@ describe('SettingsPage Risk settings selective enforcement', () => {
           json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
         } as unknown as Response
       }
-      if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
-        return {
-          ok: true,
-          json: async () => ({ policy: currentPolicy, source: 'db' }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk-policy') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        currentPolicy = body as RiskPolicy
-        return { ok: true, json: async () => currentPolicy } as unknown as Response
-      }
-      if (url.includes('/api/risk-policy/reset') && init?.method === 'POST') {
-        currentPolicy = makePolicy()
-        return { ok: true, json: async () => currentPolicy } as unknown as Response
-      }
+
       if (url.includes('/api/risk/compiled')) {
         return { ok: true, json: async () => makeCompiledFixture() } as unknown as Response
       }
+
+      if (url.includes('/api/risk-engine/risk-profiles')) {
+        return { ok: true, json: async () => [] } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/drawdown-thresholds')) {
+        return { ok: true, json: async () => [] } as unknown as Response
+      }
+      if (url.includes('/api/risk-engine/decision-log')) {
+        return { ok: true, json: async () => [] } as unknown as Response
+      }
+
       return { ok: true, json: async () => ({}) } as unknown as Response
     })
+
     vi.stubGlobal('fetch', fetchMock)
   })
 
@@ -279,222 +180,63 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders all 10 risk groups', async () => {
-    render(
-      <MemoryRouter initialEntries={['/settings?tab=risk']}>
-        <AppThemeProvider>
-          <TimeSettingsProvider>
-            <SettingsPage />
-          </TimeSettingsProvider>
-        </AppThemeProvider>
-      </MemoryRouter>,
-    )
+  it('renders unified risk panels and hides legacy execution defaults', async () => {
+    renderRiskSettings()
 
     await waitFor(() => {
-      expect(screen.getByText('Account-level risk')).toBeInTheDocument()
+      expect(screen.getByText('Risk globals')).toBeInTheDocument()
     })
 
-    expect(screen.getByText('Per-trade risk')).toBeInTheDocument()
-    expect(screen.getByText('Position sizing')).toBeInTheDocument()
-    expect(screen.getByText('Stop rules & managed exits')).toBeInTheDocument()
-    expect(screen.getByText('Trade frequency')).toBeInTheDocument()
-    expect(screen.getByText('Loss controls')).toBeInTheDocument()
-    expect(screen.getByText('Correlation & symbol controls')).toBeInTheDocument()
-    expect(screen.getByText('Execution safety')).toBeInTheDocument()
-    expect(screen.getByText('Emergency controls')).toBeInTheDocument()
-    expect(screen.getByText('Overrides (source/product)')).toBeInTheDocument()
+    expect(screen.getByText('Product risk profiles')).toBeInTheDocument()
+    expect(screen.getByText('Source overrides')).toBeInTheDocument()
+
+    // Only one equity baseline input should exist in the unified UI.
+    expect(screen.getAllByLabelText('Baseline equity (INR)')).toHaveLength(1)
+
+    // Legacy panel removed from the unified settings flow.
+    expect(screen.queryByText('Execution defaults')).toBeNull()
+    expect(screen.queryByText('Equity baseline (manual)')).toBeNull()
   })
 
-  it('persists group toggle changes via Save', async () => {
-    const fetchMock = vi.fn()
-    let currentPolicy = makePolicy()
-    let v2Enabled = true
-    let unifiedGlobal = {
-      enabled: true,
-      manual_override_enabled: false,
-      baseline_equity_inr: 1000000,
-      updated_at: null,
-    }
-    let sourceOverrides: unknown[] = []
-    let holdingsExitCfg = { enabled: false, allowlist_symbols: null, source: 'db', updated_at: null }
+  it('persists global enforcement toggle via /api/risk/global', async () => {
+    renderRiskSettings()
 
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input.toString()
-      if (url.includes('/api/risk/global') && (!init || !init.method || init.method === 'GET')) {
-        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
-      }
-      if (url.includes('/api/risk/global') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        unifiedGlobal = { ...unifiedGlobal, ...(body ?? {}) }
-        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
-      }
-      if (url.includes('/api/risk/source-overrides') && (!init || !init.method || init.method === 'GET')) {
-        return { ok: true, json: async () => sourceOverrides } as unknown as Response
-      }
-      if (url.includes('/api/risk/source-overrides') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        const key = `${body?.source_bucket}:${body?.product}`
-        sourceOverrides = (sourceOverrides as any[]).filter(
-          (r) => `${r?.source_bucket}:${r?.product}` !== key,
-        )
-        sourceOverrides.push({ ...body, updated_at: null })
-        return { ok: true, json: async () => ({ ...body, updated_at: null }) } as unknown as Response
-      }
-      if (url.includes('/api/risk/source-overrides/') && init?.method === 'DELETE') {
-        const parts = url.split('/api/risk/source-overrides/')[1]?.split('/') ?? []
-        const key = `${decodeURIComponent(parts[0] ?? '')}:${decodeURIComponent(parts[1] ?? '')}`
-        sourceOverrides = (sourceOverrides as any[]).filter(
-          (r) => `${r?.source_bucket}:${r?.product}` !== key,
-        )
-        return { ok: true, json: async () => ({ deleted: true }) } as unknown as Response
-      }
-      if (url.includes('/api/holdings-exit/config') && (!init || !init.method || init.method === 'GET')) {
-        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
-      }
-      if (url.includes('/api/holdings-exit/config') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        holdingsExitCfg = { ...holdingsExitCfg, ...(body ?? {}) }
-        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
-        return {
-          ok: true,
-          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/v2-enabled') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        v2Enabled = Boolean(body?.enabled)
-        return {
-          ok: true,
-          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
-        return {
-          ok: true,
-          json: async () => ({ policy: currentPolicy, source: 'db' }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk-policy') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        currentPolicy = body as RiskPolicy
-        return { ok: true, json: async () => currentPolicy } as unknown as Response
-      }
-      if (url.includes('/api/risk/compiled')) {
-        return { ok: true, json: async () => makeCompiledFixture() } as unknown as Response
-      }
-      return { ok: true, json: async () => ({}) } as unknown as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(
-      <MemoryRouter initialEntries={['/settings?tab=risk']}>
-        <AppThemeProvider>
-          <TimeSettingsProvider>
-            <SettingsPage />
-          </TimeSettingsProvider>
-        </AppThemeProvider>
-      </MemoryRouter>,
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('Trade frequency')).toBeInTheDocument()
-    })
-
-    const tradeGroup = screen.getByTestId('risk-group-trade_frequency')
-    const toggle = within(tradeGroup).getByRole('checkbox')
+    const toggle = await screen.findByRole('checkbox', { name: /enable risk enforcement/i })
     expect(toggle).toBeChecked()
 
     fireEvent.click(toggle)
     expect(toggle).not.toBeChecked()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    fireEvent.click(screen.getByRole('button', { name: /save globals/i }))
 
     await waitFor(() => {
-      const putCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/risk-policy') && c[1]?.method === 'PUT')
+      const putCall = (globalThis.fetch as any).mock.calls.find(
+        (c: any[]) => String(c[0]).includes('/api/risk/global') && c[1]?.method === 'PUT',
+      )
       expect(putCall).toBeTruthy()
     })
+  })
 
-    const putCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/risk-policy') && c[1]?.method === 'PUT')
-    const body = putCall?.[1]?.body ? JSON.parse(String(putCall?.[1]?.body)) : null
-    expect(body.enforcement.trade_frequency).toBe(false)
-  }, 15000)
-
-  it('disables risk policy fields when enforcement is OFF', async () => {
-    render(
-      <MemoryRouter initialEntries={['/settings?tab=risk']}>
-        <AppThemeProvider>
-          <TimeSettingsProvider>
-            <SettingsPage />
-          </TimeSettingsProvider>
-        </AppThemeProvider>
-      </MemoryRouter>,
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('Account-level risk')).toBeInTheDocument()
-    })
-
-    const master = screen.getByRole('checkbox', { name: /enable enforcement/i })
-    fireEvent.click(master)
-
-    const equityInput = screen.getByRole('spinbutton', { name: /manual equity/i })
-    await waitFor(() => {
-      expect(equityInput).toBeDisabled()
-    })
-  }, 15000)
-
-  it('disables risk engine v2 settings when v2 is OFF', async () => {
+  it('disables product risk profiles when v2 is OFF', async () => {
     const fetchMock = vi.fn()
-    let currentPolicy = makePolicy()
     let v2Enabled = false
-    let unifiedGlobal = {
+    const unifiedGlobal = {
       enabled: true,
       manual_override_enabled: false,
-      baseline_equity_inr: 1000000,
+      baseline_equity_inr: 1_000_000,
       updated_at: null,
     }
-    let sourceOverrides: unknown[] = []
-    let holdingsExitCfg = { enabled: false, allowlist_symbols: null, source: 'db', updated_at: null }
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
-      if (url.includes('/api/risk/global') && (!init || !init.method || init.method === 'GET')) {
+      if (url.includes('/api/risk/global')) {
         return { ok: true, json: async () => unifiedGlobal } as unknown as Response
       }
-      if (url.includes('/api/risk/global') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        unifiedGlobal = { ...unifiedGlobal, ...(body ?? {}) }
-        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
+      if (url.includes('/api/risk/source-overrides')) {
+        return { ok: true, json: async () => [] } as unknown as Response
       }
-      if (url.includes('/api/risk/source-overrides') && (!init || !init.method || init.method === 'GET')) {
-        return { ok: true, json: async () => sourceOverrides } as unknown as Response
-      }
-      if (url.includes('/api/risk/source-overrides') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        const key = `${body?.source_bucket}:${body?.product}`
-        sourceOverrides = (sourceOverrides as any[]).filter(
-          (r) => `${r?.source_bucket}:${r?.product}` !== key,
-        )
-        sourceOverrides.push({ ...body, updated_at: null })
-        return { ok: true, json: async () => ({ ...body, updated_at: null }) } as unknown as Response
-      }
-      if (url.includes('/api/risk/source-overrides/') && init?.method === 'DELETE') {
-        const parts = url.split('/api/risk/source-overrides/')[1]?.split('/') ?? []
-        const key = `${decodeURIComponent(parts[0] ?? '')}:${decodeURIComponent(parts[1] ?? '')}`
-        sourceOverrides = (sourceOverrides as any[]).filter(
-          (r) => `${r?.source_bucket}:${r?.product}` !== key,
-        )
-        return { ok: true, json: async () => ({ deleted: true }) } as unknown as Response
-      }
-      if (url.includes('/api/holdings-exit/config') && (!init || !init.method || init.method === 'GET')) {
-        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
-      }
-      if (url.includes('/api/holdings-exit/config') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        holdingsExitCfg = { ...holdingsExitCfg, ...(body ?? {}) }
-        return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
+      if (url.includes('/api/holdings-exit/config')) {
+        return { ok: true, json: async () => ({ enabled: false, allowlist_symbols: null, source: 'db', updated_at: null }) } as unknown as Response
       }
       if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
         return {
@@ -509,17 +251,6 @@ describe('SettingsPage Risk settings selective enforcement', () => {
           ok: true,
           json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
         } as unknown as Response
-      }
-      if (url.includes('/api/risk-policy') && (!init || !init.method || init.method === 'GET')) {
-        return {
-          ok: true,
-          json: async () => ({ policy: currentPolicy, source: 'db' }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk-policy') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        currentPolicy = body as RiskPolicy
-        return { ok: true, json: async () => currentPolicy } as unknown as Response
       }
       if (url.includes('/api/risk/compiled')) {
         const compiled = makeCompiledFixture()
@@ -540,15 +271,7 @@ describe('SettingsPage Risk settings selective enforcement', () => {
 
     vi.stubGlobal('fetch', fetchMock)
 
-    render(
-      <MemoryRouter initialEntries={['/settings?tab=risk']}>
-        <AppThemeProvider>
-          <TimeSettingsProvider>
-            <SettingsPage />
-          </TimeSettingsProvider>
-        </AppThemeProvider>
-      </MemoryRouter>,
-    )
+    renderRiskSettings()
 
     await waitFor(() => {
       expect(screen.getByText('Product risk profiles')).toBeInTheDocument()
@@ -558,8 +281,5 @@ describe('SettingsPage Risk settings selective enforcement', () => {
     await waitFor(() => {
       expect(createBtn).toBeDisabled()
     })
-
-    const saveThresholds = screen.getByRole('button', { name: /save thresholds/i })
-    expect(saveThresholds).toBeDisabled()
   })
 })
