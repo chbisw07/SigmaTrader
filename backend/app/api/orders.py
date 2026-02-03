@@ -670,10 +670,10 @@ def execute_order_internal(
             and getattr(order, "portfolio_group_id", None) is None
         )
 
-    # Apply unified risk checks before contacting the broker (covers manual executes,
+    # Apply risk checks before contacting the broker (covers manual executes,
     # webhook AUTO, and other internal flows). When manual_override_enabled is ON,
     # explicitly user-created manual orders can bypass risk blocks/clamps.
-    if risk_engine_v2_on:
+    if risk_engine_v2_on and bool(risk_global.enabled):
         try:
             from app.services.risk_engine_v2 import evaluate_order_risk_v2, record_decision_log
 
@@ -812,7 +812,7 @@ def execute_order_internal(
     else:
         risk = evaluate_order_risk(db, order)
 
-    if getattr(risk, "blocked", False):
+    if bool(risk_global.enabled) and getattr(risk, "blocked", False):
         if bool(risk_global.manual_override_enabled) and _is_explicit_manual_order():
             note = f"Manual override enabled: {risk.reason}"
             order.error_message = (
@@ -850,7 +850,7 @@ def execute_order_internal(
                 detail=f"Order rejected by risk engine: {risk.reason}",
             )
 
-    if (
+    if bool(risk_global.enabled) and (
         getattr(risk, "clamped", False)
         and not (bool(risk_global.manual_override_enabled) and _is_explicit_manual_order())
         and risk.final_qty != order.qty
@@ -876,6 +876,7 @@ def execute_order_internal(
             is_group_enforced(policy, "trade_frequency")
             or is_group_enforced(policy, "loss_controls")
         )
+        and bool(risk_global.enabled)
         and not bool(is_synthetic_gtt_arm or is_broker_gtt)
     )
     if execution_policy_apply:
@@ -1394,7 +1395,7 @@ def execute_order_internal(
         return order
 
     # Risk engine v2 broker-aware guards (MIS-only, entries only).
-    if risk_engine_v2_on and risk_v2_profile_id is not None:
+    if risk_engine_v2_on and risk_v2_profile_id is not None and bool(risk_global.enabled):
         from app.models import RiskProfile
 
         def _reject_v2(detail: str) -> None:
