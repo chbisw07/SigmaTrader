@@ -623,7 +623,6 @@ def execute_order_internal(
 
     now_utc = _now_utc()
     # Unified Risk Settings (in progress):
-    # - risk_engine_v2 remains feature-flagged today; legacy risk policy still runs.
     # - manual_override_enabled is global and applies only to explicitly
     #   user-created manual orders (no alert/strategy/deployment attached).
     from app.services.risk_engine_v2_flag_store import get_risk_engine_v2_enabled

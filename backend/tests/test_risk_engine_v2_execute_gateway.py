@@ -53,7 +53,7 @@ class _FakeZerodhaClient:
 
 def setup_module() -> None:  # type: ignore[override]
     os.environ["ST_TRADINGVIEW_WEBHOOK_SECRET"] = "v2-secret"
-    os.environ["ST_RISK_ENGINE_V2_ENABLED"] = "1"
+    os.environ.setdefault("ST_CRYPTO_KEY", "test-risk-engine-v2-exec-gateway-crypto-key")
     get_settings.cache_clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -67,6 +67,10 @@ def setup_module() -> None:  # type: ignore[override]
         )
         session.add(user)
         session.commit()
+
+    # Enable the profile engine for this module's v2 gateway tests.
+    put = client.put("/api/risk-engine/v2-enabled", json={"enabled": True})
+    assert put.status_code == 200
 
 
 def _seed_v2_config(
@@ -252,11 +256,28 @@ def _create_order_for_eval(
         )
         if created_at is not None:
             order.created_at = created_at
-        if alert is not None:
-            session.add(alert)
-            session.commit()
-            session.refresh(alert)
-            order.alert_id = alert.id
+        # Force a non-manual bucket for these v2 unit tests so sizing/caps
+        # run against the profile (explicit manual orders should behave
+        # differently and are tested elsewhere).
+        if alert is None:
+            alert = Alert(
+                user_id=user_id,
+                strategy_id=None,
+                symbol=symbol,
+                exchange=exchange,
+                interval="1",
+                action=side,
+                qty=float(qty),
+                price=float(price),
+                platform="SIGMATRADER",
+                source="SIGMATRADER",
+                raw_payload="{}",
+                reason=None,
+            )
+        session.add(alert)
+        session.commit()
+        session.refresh(alert)
+        order.alert_id = alert.id
         session.add(order)
         session.commit()
         session.refresh(order)

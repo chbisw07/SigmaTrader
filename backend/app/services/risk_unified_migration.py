@@ -32,9 +32,9 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
     except Exception:
         return False
 
-    # If policy was never customized, there's nothing meaningful to migrate.
-    if str(source or "").strip().lower() == "default":
-        return False
+    # Even when the legacy policy is the built-in default, we still ensure the
+    # unified tables are seeded so the profile-based engine can operate without
+    # blocking on missing rows.
 
     changed = False
 

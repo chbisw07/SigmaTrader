@@ -64,9 +64,8 @@ class Settings(BaseSettings):
     managed_risk_enabled: bool = True
     managed_risk_poll_interval_sec: float = 2.0
     managed_risk_max_per_cycle: int = 200
-    # Product-specific risk engine (v2): centralized enforcement for CNC/MIS
-    # profiles + drawdown thresholds.
-    risk_engine_v2_enabled: bool = False
+    # Product-specific risk engine: centralized enforcement for CNC/MIS profiles
+    # + drawdown thresholds (enabled via DB-backed Risk Globals).
     # Holdings Exit Automation (new): conservative by default, gated behind a flag.
     holdings_exit_enabled: bool = False
     # Engine poll interval for evaluating subscriptions (seconds).
@@ -128,16 +127,6 @@ def get_settings() -> Settings:
     raw_admin_pass = os.getenv("ST_ADMIN_PASSWORD")
     if raw_admin_pass is not None:
         settings.admin_password = str(raw_admin_pass).strip() or None
-
-    # feature flags usable in that mode.
-    raw_v2 = os.getenv("ST_RISK_ENGINE_V2_ENABLED")
-    if raw_v2 is not None:
-        settings.risk_engine_v2_enabled = str(raw_v2).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
 
     raw_holdings_exit = os.getenv("ST_HOLDINGS_EXIT_ENABLED")
     if raw_holdings_exit is not None:

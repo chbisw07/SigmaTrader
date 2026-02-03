@@ -10,12 +10,12 @@ from app.db.session import SessionLocal, engine
 from app.models import AnalyticsTrade, DrawdownThreshold, Order, RiskProfile, User
 from app.schemas.risk_policy import RiskPolicy
 from app.services.risk_compiler import compile_risk_policy
+from app.services.risk_engine_v2_flag_store import set_risk_engine_v2_enabled
 from app.services.risk_policy_store import set_risk_policy
 
 
 def setup_module() -> None:  # type: ignore[override]
     os.environ["ST_CRYPTO_KEY"] = "test-risk-compiler-crypto-key"
-    os.environ["ST_RISK_ENGINE_V2_ENABLED"] = "1"
     get_settings.cache_clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -35,6 +35,7 @@ def setup_module() -> None:  # type: ignore[override]
         settings = get_settings()
         policy = RiskPolicy(enabled=True)
         set_risk_policy(session, settings, policy)
+        set_risk_engine_v2_enabled(session, settings, True)
 
 
 def _seed_profile_and_thresholds(

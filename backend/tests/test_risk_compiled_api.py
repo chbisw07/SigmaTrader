@@ -18,7 +18,6 @@ client = TestClient(app)
 
 def setup_module() -> None:  # type: ignore[override]
     os.environ.setdefault("ST_CRYPTO_KEY", "test-risk-compiled-api-crypto-key")
-    os.environ["ST_RISK_ENGINE_V2_ENABLED"] = "1"
     get_settings.cache_clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -151,4 +150,3 @@ def test_compiled_endpoint_returns_blocking_reasons_when_thresholds_missing() ->
     assert r.status_code == 200
     data = r.json()
     assert data["effective"]["blocking_reasons"]
-

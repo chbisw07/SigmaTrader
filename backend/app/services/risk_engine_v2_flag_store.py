@@ -20,9 +20,7 @@ def get_risk_engine_v2_enabled(
 ) -> tuple[bool, RiskEngineV2FlagSource]:
     """Return (enabled, source).
 
-    Precedence:
-    - DB override (BrokerSecret broker=risk key=risk_engine_v2_enabled, user_id=None)
-    - Environment default (ST_RISK_ENGINE_V2_ENABLED) via Settings.risk_engine_v2_enabled
+    Backed by DB (BrokerSecret). If missing, defaults to False (safe).
     """
 
     row = (
@@ -35,7 +33,7 @@ def get_risk_engine_v2_enabled(
         .one_or_none()
     )
     if row is None:
-        return bool(getattr(settings, "risk_engine_v2_enabled", False)), "env_default"
+        return False, "env_default"
 
     try:
         raw = decrypt_token(settings, row.value_encrypted)
@@ -79,3 +77,4 @@ def set_risk_engine_v2_enabled(db: Session, settings: Settings, enabled: bool) -
 
 
 __all__ = ["get_risk_engine_v2_enabled", "set_risk_engine_v2_enabled"]
+

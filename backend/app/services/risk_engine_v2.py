@@ -178,7 +178,7 @@ def resolve_symbol_category(
     candidates = (
         db.query(SymbolRiskCategory)
         .filter(
-            SymbolRiskCategory.user_id.in_([user_id, None]),
+            or_(SymbolRiskCategory.user_id == user_id, SymbolRiskCategory.user_id.is_(None)),
             SymbolRiskCategory.symbol.in_([sym, "*"]),
             SymbolRiskCategory.broker_name.in_([broker, "*"]),
             SymbolRiskCategory.exchange.in_([ex, "*"]),
@@ -288,6 +288,18 @@ def _source_bucket_for_order(order: Order) -> str:
             src = (getattr(order.alert, "source", None) or "").strip().upper()
             if src == "TRADINGVIEW":
                 return "TRADINGVIEW"
+    except Exception:
+        pass
+    # Explicit manual orders (created by the user in the UI) are treated as a
+    # separate bucket. These should not be silently resized by the profile
+    # engine, and they may be subject to different override semantics.
+    try:
+        if (
+            getattr(order, "alert_id", None) is None
+            and getattr(order, "strategy_id", None) is None
+            and getattr(order, "portfolio_group_id", None) is None
+        ):
+            return "MANUAL"
     except Exception:
         pass
     return "SIGMATRADER"
@@ -405,8 +417,27 @@ def evaluate_order_risk_v2(
             final_price=_price_for_sizing(order),
         )
 
+    source_bucket = _source_bucket_for_order(order)
+
     profile = pick_risk_profile(db, product_hint=product_hint)
     if profile is None:
+        # Manual orders should remain operable even when risk settings are not
+        # configured yet (e.g., fresh installs / tests). Non-manual sources
+        # fail closed for safety.
+        if source_bucket == "MANUAL":
+            resolved_product = (getattr(order, "product", None) or "CNC").strip().upper() or "CNC"
+            return RiskDecisionV2(
+                blocked=False,
+                reasons=["Manual order: no RiskProfile configured; skipping profile-based checks."],
+                resolved_product=resolved_product,
+                risk_profile_id=None,
+                risk_category=None,
+                drawdown_state=None,
+                drawdown_pct=None,
+                final_qty=float(getattr(order, "qty", 0.0) or 0.0) or None,
+                final_order_type=(order.order_type or "MARKET").strip().upper(),
+                final_price=_price_for_sizing(order),
+            )
         return RiskDecisionV2(
             blocked=True,
             reasons=["Missing RiskProfile (create at least one enabled profile)."],
@@ -422,7 +453,6 @@ def evaluate_order_risk_v2(
 
     resolved_product = (profile.product or "").strip().upper()
 
-    source_bucket = _source_bucket_for_order(order)
     source_override = get_source_override(
         db,
         source_bucket=source_bucket,  # type: ignore[arg-type]
@@ -575,40 +605,50 @@ def evaluate_order_risk_v2(
         exchange=exchange,
     )
     if not category:
-        return RiskDecisionV2(
-            blocked=True,
-            reasons=[
-                (
-                    "Missing symbol risk category (set LC/MC/SC/ETF from Holdings/Universe, "
-                    "or configure a default category in Risk settings)."
-                )
-            ],
-            resolved_product=resolved_product,
-            risk_profile_id=profile.id,
-            risk_category=None,
-            drawdown_state=None,
-            drawdown_pct=None,
-            final_qty=None,
-            final_order_type=None,
-            final_price=None,
-        )
+        if source_bucket == "MANUAL":
+            category = "LC"
+            reasons.append("Manual order: symbol category missing; defaulted to LC.")
+        else:
+            return RiskDecisionV2(
+                blocked=True,
+                reasons=[
+                    (
+                        "Missing symbol risk category (set LC/MC/SC/ETF from Holdings/Universe, "
+                        "or configure a default category in Risk settings)."
+                    )
+                ],
+                resolved_product=resolved_product,
+                risk_profile_id=profile.id,
+                risk_category=None,
+                drawdown_state=None,
+                drawdown_pct=None,
+                final_qty=None,
+                final_order_type=None,
+                final_price=None,
+            )
 
     dd_cfg = resolve_drawdown_config(db, product=resolved_product, category=category)
     if dd_cfg is None:
-        return RiskDecisionV2(
-            blocked=True,
-            reasons=[
-                f"Missing drawdown thresholds for {resolved_product}+{category} (configure in Settings)."
-            ],
-            resolved_product=resolved_product,
-            risk_profile_id=profile.id,
-            risk_category=category,
-            drawdown_state=None,
-            drawdown_pct=None,
-            final_qty=None,
-            final_order_type=None,
-            final_price=None,
-        )
+        if source_bucket == "MANUAL":
+            dd_cfg = DrawdownConfig(caution_pct=0.0, defense_pct=0.0, hard_stop_pct=0.0)
+            reasons.append(
+                "Manual order: drawdown thresholds missing; skipping drawdown gating."
+            )
+        else:
+            return RiskDecisionV2(
+                blocked=True,
+                reasons=[
+                    f"Missing drawdown thresholds for {resolved_product}+{category} (configure in Settings)."
+                ],
+                resolved_product=resolved_product,
+                risk_profile_id=profile.id,
+                risk_category=category,
+                drawdown_state=None,
+                drawdown_pct=None,
+                final_qty=None,
+                final_order_type=None,
+                final_price=None,
+            )
 
     pnl_state = compute_portfolio_pnl_state(
         db,
@@ -997,51 +1037,65 @@ def evaluate_order_risk_v2(
                 final_price=None,
             )
 
-    # Quantity sizing (simple capital-based sizing).
+    # Quantity sizing:
+    # - Non-manual sources are sized from capital_per_trade (safe default).
+    # - Explicit manual orders (no alert/strategy/group) keep user-entered qty
+    #   and should not be blocked just because a MARKET price is unknown.
     price = _price_for_sizing(order)
-    if price is None:
-        return RiskDecisionV2(
-            blocked=True,
-            reasons=[*reasons, "Missing order price for sizing (provide trigger_price/price in alert)."],
-            resolved_product=resolved_product,
-            risk_profile_id=profile.id,
-            risk_category=category,
-            drawdown_state=dd_state,
-            drawdown_pct=pnl_state.drawdown_pct,
-            final_qty=None,
-            final_order_type=None,
-            final_price=None,
-        )
+    qty_from_order = float(getattr(order, "qty", 0.0) or 0.0)
 
-    cap_budget = float(cap_eff or 0.0)
-    if cap_budget <= 0:
-        return RiskDecisionV2(
-            blocked=True,
-            reasons=[*reasons, "Invalid capital_per_trade (must be > 0)."],
-            resolved_product=resolved_product,
-            risk_profile_id=profile.id,
-            risk_category=category,
-            drawdown_state=dd_state,
-            drawdown_pct=pnl_state.drawdown_pct,
-            final_qty=None,
-            final_order_type=None,
-            final_price=price,
-        )
+    if source_bucket == "MANUAL" and qty_from_order > 0:
+        qty = qty_from_order
+    else:
+        if price is None:
+            return RiskDecisionV2(
+                blocked=True,
+                reasons=[
+                    *reasons,
+                    "Missing order price for sizing (provide trigger_price/price in alert).",
+                ],
+                resolved_product=resolved_product,
+                risk_profile_id=profile.id,
+                risk_category=category,
+                drawdown_state=dd_state,
+                drawdown_pct=pnl_state.drawdown_pct,
+                final_qty=None,
+                final_order_type=None,
+                final_price=None,
+            )
 
-    qty = floor(cap_budget / float(price))
-    if qty <= 0:
-        return RiskDecisionV2(
-            blocked=True,
-            reasons=[*reasons, f"Capital per trade too small for price ({cap_budget} < {price})."],
-            resolved_product=resolved_product,
-            risk_profile_id=profile.id,
-            risk_category=category,
-            drawdown_state=dd_state,
-            drawdown_pct=pnl_state.drawdown_pct,
-            final_qty=None,
-            final_order_type=None,
-            final_price=price,
-        )
+        cap_budget = float(cap_eff or 0.0)
+        if cap_budget <= 0:
+            return RiskDecisionV2(
+                blocked=True,
+                reasons=[*reasons, "Invalid capital_per_trade (must be > 0)."],
+                resolved_product=resolved_product,
+                risk_profile_id=profile.id,
+                risk_category=category,
+                drawdown_state=dd_state,
+                drawdown_pct=pnl_state.drawdown_pct,
+                final_qty=None,
+                final_order_type=None,
+                final_price=price,
+            )
+
+        qty = float(floor(cap_budget / float(price)))
+        if qty <= 0:
+            return RiskDecisionV2(
+                blocked=True,
+                reasons=[
+                    *reasons,
+                    f"Capital per trade too small for price ({cap_budget} < {price}).",
+                ],
+                resolved_product=resolved_product,
+                risk_profile_id=profile.id,
+                risk_category=category,
+                drawdown_state=dd_state,
+                drawdown_pct=pnl_state.drawdown_pct,
+                final_qty=None,
+                final_order_type=None,
+                final_price=price,
+            )
 
     # Apply per-order caps to the resolved qty (whether provided or sized).
     if max_qty_per_order is not None and float(max_qty_per_order) > 0 and float(qty) > float(max_qty_per_order):

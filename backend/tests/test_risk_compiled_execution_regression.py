@@ -39,7 +39,7 @@ class _SpyBroker:
 
 def setup_module() -> None:  # type: ignore[override]
     os.environ["ST_TRADINGVIEW_WEBHOOK_SECRET"] = "compiled-secret"
-    os.environ["ST_RISK_ENGINE_V2_ENABLED"] = "1"
+    os.environ.setdefault("ST_CRYPTO_KEY", "test-risk-compiled-exec-reg-crypto-key")
     get_settings.cache_clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -54,6 +54,9 @@ def setup_module() -> None:  # type: ignore[override]
             )
         )
         session.commit()
+
+    put = client.put("/api/risk-engine/v2-enabled", json={"enabled": True})
+    assert put.status_code == 200
 
 
 def _seed_base_v2_config(*, hard_stop_pct: float) -> None:

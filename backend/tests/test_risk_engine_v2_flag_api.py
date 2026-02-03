@@ -11,8 +11,6 @@ from app.main import app
 
 client = TestClient(app)
 
-_ORIG_V2_ENV = os.environ.get("ST_RISK_ENGINE_V2_ENABLED")
-
 def setup_module() -> None:  # type: ignore[override]
     os.environ.setdefault("ST_CRYPTO_KEY", "test-risk-engine-v2-flag-crypto-key")
     get_settings.cache_clear()
@@ -20,16 +18,10 @@ def setup_module() -> None:  # type: ignore[override]
     Base.metadata.create_all(bind=engine)
 
 def teardown_module() -> None:  # type: ignore[override]
-    if _ORIG_V2_ENV is None:
-        os.environ.pop("ST_RISK_ENGINE_V2_ENABLED", None)
-    else:
-        os.environ["ST_RISK_ENGINE_V2_ENABLED"] = _ORIG_V2_ENV
     get_settings.cache_clear()
 
 
-def test_v2_flag_defaults_to_env_when_db_missing() -> None:
-    os.environ["ST_RISK_ENGINE_V2_ENABLED"] = "0"
-    get_settings.cache_clear()
+def test_v2_flag_defaults_to_unified_global_when_db_missing() -> None:
     res = client.get("/api/risk-engine/v2-enabled")
     assert res.status_code == 200
     data = res.json()
@@ -37,11 +29,7 @@ def test_v2_flag_defaults_to_env_when_db_missing() -> None:
     assert data["source"] == "env_default"
 
 
-def test_v2_flag_put_persists_and_overrides_env() -> None:
-    # Turn env ON, but keep the DB override OFF.
-    os.environ["ST_RISK_ENGINE_V2_ENABLED"] = "1"
-    get_settings.cache_clear()
-
+def test_v2_flag_put_persists_to_unified_global() -> None:
     put = client.put("/api/risk-engine/v2-enabled", json={"enabled": False})
     assert put.status_code == 200
     put_data = put.json()
