@@ -18,6 +18,7 @@ from app.schemas.holdings_exit import (
     validate_mvp_create,
     validate_mvp_patch,
 )
+from app.services.holdings_exit_config import get_holdings_exit_config_with_source
 from app.services.holdings_exit_store import (
     ensure_subscription_owned,
     utc_now,
@@ -29,16 +30,18 @@ from app.services.holdings_exit_store import (
 router = APIRouter()
 
 
-def _ensure_enabled(settings: Settings) -> None:
-    if not bool(getattr(settings, "holdings_exit_enabled", False)):
+def _ensure_enabled(db: Session, settings: Settings) -> None:
+    cfg, _source = get_holdings_exit_config_with_source(db, settings)
+    if not bool(cfg.enabled):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Holdings exit automation is disabled.",
         )
 
 
-def _allowlist_ok(settings: Settings, *, exchange: str, symbol: str) -> bool:
-    raw = str(getattr(settings, "holdings_exit_allowlist_symbols", "") or "").strip()
+def _allowlist_ok(db: Session, settings: Settings, *, exchange: str, symbol: str) -> bool:
+    cfg, _source = get_holdings_exit_config_with_source(db, settings)
+    raw = str(cfg.allowlist_symbols or "").strip()
     if not raw:
         return True
     allow = set()
@@ -68,7 +71,7 @@ def list_subscriptions(
     user: User | None = Depends(get_current_user_optional),
     settings: Settings = Depends(get_settings),
 ) -> list[HoldingExitSubscription]:
-    _ensure_enabled(settings)
+    _ensure_enabled(db, settings)
 
     q = db.query(HoldingExitSubscription)
     if user is not None:
@@ -103,7 +106,7 @@ def create_subscription(
     user: User | None = Depends(get_current_user_optional),
     settings: Settings = Depends(get_settings),
 ) -> HoldingExitSubscription:
-    _ensure_enabled(settings)
+    _ensure_enabled(db, settings)
 
     try:
         validate_mvp_create(payload)
@@ -122,7 +125,7 @@ def create_subscription(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="symbol is required.",
         )
-    if not _allowlist_ok(settings, exchange=exchange, symbol=symbol):
+    if not _allowlist_ok(db, settings, exchange=exchange, symbol=symbol):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Holdings exit automation is not enabled for this symbol.",
@@ -212,7 +215,7 @@ def patch_subscription(
     user: User | None = Depends(get_current_user_optional),
     settings: Settings = Depends(get_settings),
 ) -> HoldingExitSubscription:
-    _ensure_enabled(settings)
+    _ensure_enabled(db, settings)
 
     try:
         validate_mvp_patch(payload)
@@ -297,7 +300,7 @@ def pause_subscription(
     user: User | None = Depends(get_current_user_optional),
     settings: Settings = Depends(get_settings),
 ) -> HoldingExitSubscription:
-    _ensure_enabled(settings)
+    _ensure_enabled(db, settings)
     sub = _get_or_404(db, subscription_id)
     user_id = user.id if user is not None else None
     try:
@@ -336,7 +339,7 @@ def resume_subscription(
     user: User | None = Depends(get_current_user_optional),
     settings: Settings = Depends(get_settings),
 ) -> HoldingExitSubscription:
-    _ensure_enabled(settings)
+    _ensure_enabled(db, settings)
     sub = _get_or_404(db, subscription_id)
     user_id = user.id if user is not None else None
     try:
@@ -388,7 +391,7 @@ def delete_subscription(
     user: User | None = Depends(get_current_user_optional),
     settings: Settings = Depends(get_settings),
 ) -> None:
-    _ensure_enabled(settings)
+    _ensure_enabled(db, settings)
     sub = _get_or_404(db, subscription_id)
     user_id = user.id if user is not None else None
     try:
@@ -412,7 +415,7 @@ def list_events(
     user: User | None = Depends(get_current_user_optional),
     settings: Settings = Depends(get_settings),
 ) -> list[HoldingExitEventRead]:
-    _ensure_enabled(settings)
+    _ensure_enabled(db, settings)
     sub = _get_or_404(db, subscription_id)
     user_id = user.id if user is not None else None
     try:

@@ -98,6 +98,18 @@ export type HoldingExitEventRead = {
   created_at: string
 }
 
+export type HoldingsExitConfigRead = {
+  enabled: boolean
+  allowlist_symbols: string | null
+  source: string
+  updated_at: string | null
+}
+
+export type HoldingsExitConfigUpdate = {
+  enabled: boolean
+  allowlist_symbols?: string | null
+}
+
 function extractFastApiDetail(text: string): string {
   try {
     const parsed = JSON.parse(text) as { detail?: unknown }
@@ -198,3 +210,20 @@ export async function listHoldingsExitEvents(
   return (await res.json()) as HoldingExitEventRead[]
 }
 
+export async function fetchHoldingsExitConfig(): Promise<HoldingsExitConfigRead> {
+  const res = await fetch('/api/holdings-exit/config', { cache: 'no-store' })
+  await ensureOk(res, 'Failed to load holdings exit config')
+  return (await res.json()) as HoldingsExitConfigRead
+}
+
+export async function updateHoldingsExitConfig(
+  payload: HoldingsExitConfigUpdate,
+): Promise<HoldingsExitConfigRead> {
+  const res = await fetch('/api/holdings-exit/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  await ensureOk(res, 'Failed to update holdings exit config')
+  return (await res.json()) as HoldingsExitConfigRead
+}

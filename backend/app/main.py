@@ -22,6 +22,7 @@ from .services.managed_risk import schedule_managed_risk
 from .services.market_data import schedule_market_data_sync
 from .services.synthetic_gtt import schedule_synthetic_gtt
 from .services.users import ensure_default_admin
+from .services.risk_unified_migration import migrate_legacy_risk_policy_v1_to_unified
 
 settings = get_settings()
 
@@ -130,6 +131,13 @@ async def _lifespan(_app: FastAPI):
     _run_migrations_if_needed()
     _repair_schema_if_corrupted()
     _bootstrap_admin_user()
+    # Best-effort migration from legacy risk policy JSON into unified tables so
+    # switching enforcement does not break existing setups.
+    try:
+        with SessionLocal() as db:
+            migrate_legacy_risk_policy_v1_to_unified(db, settings=settings)
+    except Exception:
+        logger.exception("Failed to migrate legacy risk policy into unified settings.")
 
     # Startup: begin background market data sync when not under pytest.
     if "pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"):
@@ -142,8 +150,9 @@ async def _lifespan(_app: FastAPI):
         schedule_alerts_v3()
         schedule_synthetic_gtt()
         schedule_managed_risk()
-        if getattr(settings, "holdings_exit_enabled", False):
-            schedule_holdings_exit()
+        # Holdings Exit Automation can be enabled/disabled at runtime via the Settings page
+        # (DB-backed). Always start the loop; it no-ops when disabled.
+        schedule_holdings_exit()
 
     enable_deployments = (
         (os.getenv("ST_ENABLE_DEPLOYMENTS_RUNTIME") or "").strip().lower()

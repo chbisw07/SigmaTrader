@@ -78,6 +78,7 @@ import {
 } from '../services/webhookSettings'
 import { TradingViewAlertPayloadBuilder } from '../components/TradingViewAlertPayloadBuilder'
 import { RiskEngineV2Settings } from '../components/RiskEngineV2Settings'
+import { HoldingsExitAutomationSettings } from '../components/HoldingsExitAutomationSettings'
 import { EffectiveRiskSummaryPanel } from '../components/EffectiveRiskSummaryPanel'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
@@ -1549,6 +1550,7 @@ export function SettingsPage() {
           >
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
               <RiskEngineV2Settings />
+              <HoldingsExitAutomationSettings />
               <Paper sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>

@@ -30,6 +30,7 @@ from .risk_engine import (
     RiskProfile,
     SymbolRiskCategory,
 )
+from .risk_unified import RiskGlobalConfig, RiskSourceOverride
 from .risk_covariance_cache import RiskCovarianceCache
 from .screener_v3 import ScreenerRun
 from .signal_strategies import SignalStrategy, SignalStrategyVersion
@@ -100,6 +101,8 @@ __all__ = [
     "TradingViewAlertPayloadTemplate",
     "RiskProfile",
     "SymbolRiskCategory",
+    "RiskGlobalConfig",
+    "RiskSourceOverride",
     "DrawdownThreshold",
     "EquitySnapshot",
     "AlertDecisionLog",

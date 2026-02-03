@@ -17,6 +17,7 @@ from app.db.session import SessionLocal
 from app.holdings_exit.symbols import normalize_holding_symbol_exchange
 from app.models import BrokerConnection, Order, HoldingExitSubscription
 from app.services.broker_secrets import get_broker_secret
+from app.services.holdings_exit_config import get_holdings_exit_config_with_source
 from app.services.holdings_exit_store import utc_now, write_holding_exit_event
 
 logger = logging.getLogger(__name__)
@@ -548,26 +549,28 @@ def _evaluate_active_subscriptions(
 
 def process_holdings_exit_once() -> int:
     settings = get_settings()
-    if not bool(getattr(settings, "holdings_exit_enabled", False)):
-        return 0
 
     now = utc_now()
     poll_sec = float(getattr(settings, "holdings_exit_poll_interval_sec", 5.0) or 5.0)
 
     processed = 0
     with SessionLocal() as db:
+        # Always reconcile existing pending orders so the UI reflects terminal outcomes,
+        # even if the feature is currently disabled (no new triggers while disabled).
         processed += _reconcile_pending_orders(
             db,
             settings=settings,
             now=now,
             poll_sec=poll_sec,
         )
-        processed += _evaluate_active_subscriptions(
-            db,
-            settings=settings,
-            now=now,
-            poll_sec=poll_sec,
-        )
+        cfg, _source = get_holdings_exit_config_with_source(db, settings)
+        if bool(cfg.enabled):
+            processed += _evaluate_active_subscriptions(
+                db,
+                settings=settings,
+                now=now,
+                poll_sec=poll_sec,
+            )
     return processed
 
 

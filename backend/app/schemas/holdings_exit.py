@@ -36,6 +36,26 @@ HoldingExitExecutionTarget = Literal["LIVE", "PAPER"]
 HoldingExitPriceSource = Literal["LTP"]
 HoldingExitOrderType = Literal["MARKET"]
 
+HoldingsExitConfigSource = Literal["db", "env_default", "db_invalid"]
+
+
+class HoldingsExitConfigRead(BaseModel):
+    enabled: bool
+    allowlist_symbols: str | None = None
+    source: HoldingsExitConfigSource
+    updated_at: datetime | None = None
+
+    if PYDANTIC_V2:
+        model_config = ConfigDict(extra="forbid")
+
+
+class HoldingsExitConfigUpdate(BaseModel):
+    enabled: bool
+    allowlist_symbols: str | None = None
+
+    if PYDANTIC_V2:
+        model_config = ConfigDict(extra="forbid")
+
 
 class HoldingExitSubscriptionCreate(BaseModel):
     broker_name: str = "zerodha"
@@ -333,6 +353,9 @@ __all__ = [
     "HoldingExitExecutionTarget",
     "HoldingExitPriceSource",
     "HoldingExitOrderType",
+    "HoldingsExitConfigSource",
+    "HoldingsExitConfigRead",
+    "HoldingsExitConfigUpdate",
     "HoldingExitSubscriptionCreate",
     "HoldingExitSubscriptionPatch",
     "HoldingExitSubscriptionRead",

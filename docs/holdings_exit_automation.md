@@ -979,4 +979,176 @@ Integration tests:
 
 ---
 
+## 19. Active Trading Sleeve (Per‑Symbol Exposure Partitioning) — *Deferred, Designed*
+
+> **Intent**
+> Separate *protected capital* from *active trading risk* **within the same symbol**, so that tactical trading never contaminates long‑term holdings.
+
+This section intentionally **designs now** but **defers implementation** until the system has settled and the current Holdings Exit Automation has been exercised in real usage.
+
+---
+
+### 19.1 Conceptual Model
+
+For any holding, total exposure is logically partitioned into two sleeves:
+
+- **Core (Protected) Sleeve**
+  - Long‑term holding
+  - Governed by Holdings Exit Automation, risk exits, and manual decisions
+  - Goal: capital preservation + disciplined exits
+
+- **Active Trading Sleeve**
+  - Explicit risk budget for swing/positional trading
+  - Governed by TradingView / SigmaTrader alerts or deployments
+  - Goal: tactical alpha, experimentation
+
+> This is **exposure partitioning**, not position splitting.
+> Broker sees one holding; SigmaTrader applies logical rules on top.
+
+---
+
+### 19.2 Per‑Symbol Active Trading Cap
+
+Each symbol may optionally define an **Active Trading Cap**:
+
+Example:
+```
+Symbol: RELIANCE
+Total holding value: ₹100,000
+Active trading cap: ₹30,000
+Core protected value: ₹70,000
+```
+
+Rules:
+- Active trading cap is **opt‑in per symbol**
+- Default cap = 0 (pure long‑term holding)
+- Cap may be expressed as:
+  - absolute value (₹30,000), or
+  - percentage of current holding value (e.g. 30%)
+
+---
+
+### 19.3 Policy Integration (Control Plane)
+
+Extend **Trade Control Policy** with optional fields:
+
+- `active_trading_cap_value`
+- `active_trading_cap_type`: ABS_VALUE | PCT_VALUE
+- `active_trading_enabled`: boolean
+
+Behavior:
+- Entry systems (TV / ST alerts / deployments) may **only operate within the active sleeve**
+- If active sleeve is disabled or cap exhausted:
+  - BUY intents are suppressed
+  - SELL intents may only reduce active exposure, not core
+
+Holdings Exit Automation remains an **exit overlay** and is unaffected by cap existence.
+
+---
+
+### 19.4 Order Authorization Rules (Critical)
+
+When an **entry system** (e.g., TradingView) generates an order intent:
+
+1) Compute **current active exposure** for the symbol
+   - derived from historical orders attributed to active regimes
+2) Compute remaining headroom:
+   ```
+   remaining_active_budget = active_cap − active_exposure
+   ```
+3) Authorization rules:
+   - **BUY**:
+     - clamp order qty/notional to remaining_active_budget
+     - if remaining_active_budget ≤ 0 → suppress intent
+   - **SELL**:
+     - SELL only from active sleeve
+     - must not reduce holdings below core protected quantity
+
+All such decisions pass through `authorize_order_intent()` and are auditable.
+
+---
+
+### 19.5 Interaction with Holdings Exit Automation
+
+Holdings Exit Automation must be explicit about **which sleeve it applies to**:
+
+Subscription sizing modes (future‑ready, MVP default noted):
+- `CORE_ONLY` *(default)*
+- `ACTIVE_ONLY`
+- `TOTAL_POSITION`
+
+Default behavior:
+- Holdings Exit Automation operates on **core sleeve only**
+- Active sleeve positions are not auto‑liquidated by long‑term goals
+
+This prevents tactical trades from accidentally dismantling long‑term intent.
+
+---
+
+### 19.6 UX Representation (Boring & Explicit)
+
+On the Holdings row:
+```
+RELIANCE
+Total holding: ₹100,000
+Active trading cap: ₹30,000
+Core protected: ₹70,000
+```
+
+In the Control Drawer:
+```
+Active Trading
+[✔] Enable TradingView for this symbol
+Active trading cap: ₹30,000
+
+ℹ Trading alerts may operate only within this cap.
+  Remaining quantity is protected by goals.
+```
+
+No sliders, no auto‑rebalance, no hidden promotions.
+
+---
+
+### 19.7 Explicit Non‑Goals (To Avoid Future Risk)
+
+The system **must not**:
+- auto‑promote active profits into core
+- auto‑rebalance between sleeves
+- auto‑increase cap after wins
+- allow TV/ST alerts to liquidate core unless user explicitly overrides
+
+Promotion from Active → Core is **manual only**, intentional, and rare.
+
+---
+
+### 19.8 Failure Modes & Safeguards
+
+**Risk: Attribution drift**
+Active trades blur into core.
+
+Mitigation:
+- Track exposure attribution by order origin
+- Never infer sleeve ownership implicitly
+
+**Risk: Over‑complexity**
+System becomes harder to reason about.
+
+Mitigation:
+- Feature is opt‑in per symbol
+- Default cap = 0
+- Advanced UI hidden unless enabled
+
+---
+
+### 19.9 Implementation Status
+
+- **Designed:** Yes (this section)
+- **Implemented:** No
+- **Recommended timing:** Phase 3, after Holdings Exit Automation has stabilized
+
+This feature is intentionally deferred to avoid compounding risk during early adoption.
+
+
+---
+
 **Document status:** Merged master design with explicit risk analysis, safeguards, and build-grade blueprint

@@ -41,9 +41,10 @@ from app.services.instruments_sync import sync_smartapi_instrument_master
 from app.services.paper_trading import submit_paper_order
 from app.services.price_ticks import round_price_to_tick
 from app.services.risk import evaluate_order_risk
+from app.services.risk_unified_store import read_unified_risk_global
 from app.services.risk_policy import evaluate_execution_risk_policy
-from app.services.risk_policy_store import get_risk_policy
 from app.services.risk_policy_enforcement import is_group_enforced
+from app.services.risk_policy_store import get_risk_policy
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -621,9 +622,15 @@ def execute_order_internal(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     now_utc = _now_utc()
+    # Unified Risk Settings (in progress):
+    # - v2 remains feature-flagged today; legacy v1 enforcement still runs.
+    # - manual_override_enabled is global and applies only to explicitly
+    #   user-created manual orders (no alert/strategy/deployment attached).
     from app.services.risk_engine_v2_flag_store import get_risk_engine_v2_enabled
 
     risk_engine_v2_on, _v2_src = get_risk_engine_v2_enabled(db, settings)
+    risk_global = read_unified_risk_global(db)
+    policy, _src = get_risk_policy(db, settings)
     risk_v2_profile_id: int | None = None
     risk_v2_baseline_equity: float | None = None
     risk_v2_throttle_multiplier: float | None = None
@@ -657,10 +664,16 @@ def execute_order_internal(
     )
     is_broker_gtt = bool(order.gtt and not order.synthetic_gtt)
 
-    # Apply risk checks before contacting the broker (covers manual executes,
-    # webhook AUTO, and other internal flows). The policy is configured in
-    # Settings and uses MANUAL equity as the baseline.
-    policy, _src = get_risk_policy(db, settings)
+    def _is_explicit_manual_order() -> bool:
+        return bool(
+            getattr(order, "alert_id", None) is None
+            and getattr(order, "strategy_id", None) is None
+            and getattr(order, "portfolio_group_id", None) is None
+        )
+
+    # Apply unified risk checks before contacting the broker (covers manual executes,
+    # webhook AUTO, and other internal flows). When manual_override_enabled is ON,
+    # explicitly user-created manual orders can bypass risk blocks/clamps.
     if risk_engine_v2_on:
         try:
             from app.services.risk_engine_v2 import evaluate_order_risk_v2, record_decision_log
@@ -700,9 +713,11 @@ def execute_order_internal(
                 except Exception:
                     product_hint = None
 
-            baseline_equity = float(
-                getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0
-            )
+            baseline_equity = float(risk_global.baseline_equity_inr or 0.0)
+            if baseline_equity <= 0:
+                baseline_equity = float(
+                    getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0
+                )
             decision = evaluate_order_risk_v2(
                 db,
                 user=user_obj,
@@ -745,16 +760,24 @@ def execute_order_internal(
             )
 
             if decision.blocked:
-                reason = "; ".join([r for r in decision.reasons if r]) or "Blocked by risk engine v2."
-                order.status = "REJECTED_RISK"
-                order.error_message = reason
-                db.add(order)
-                db.commit()
-                db.refresh(order)
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Order rejected by risk engine v2: {reason}",
-                )
+                reason = "; ".join([r for r in decision.reasons if r]) or "Blocked by risk engine."
+                if bool(risk_global.manual_override_enabled) and _is_explicit_manual_order():
+                    # Presidential authority: allow execution, but annotate + audit (decision log already recorded).
+                    note = f"Manual override enabled: {reason}"
+                    order.error_message = f"{order.error_message}; {note}" if order.error_message else note
+                    db.add(order)
+                    db.commit()
+                    db.refresh(order)
+                else:
+                    order.status = "REJECTED_RISK"
+                    order.error_message = reason
+                    db.add(order)
+                    db.commit()
+                    db.refresh(order)
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Order rejected by risk engine: {reason}",
+                    )
 
             changed = False
             if decision.resolved_product and decision.resolved_product != order.product:
@@ -787,48 +810,54 @@ def execute_order_internal(
                 detail="Order rejected by risk engine v2 (internal error).",
             ) from exc
 
-    if order.qty is None or order.qty <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Order has invalid quantity.",
-        )
+    # Legacy risk policy enforcement (still active while the unified refactor is in progress).
     if getattr(policy, "enabled", False):
         risk = evaluate_execution_risk_policy(db, settings, order=order, policy=policy)
     else:
-        legacy = evaluate_order_risk(db, order)
-        risk = legacy  # type: ignore[assignment]
-    if risk.blocked:
-        order.status = "REJECTED_RISK"
-        order.error_message = risk.reason
-        db.add(order)
-        db.commit()
-        db.refresh(order)
-        logger.warning(
-            "Order rejected by risk engine",
-            extra={
-                "extra": {
-                    "correlation_id": correlation_id,
-                    "order_id": order.id,
-                    "reason": risk.reason,
-                }
-            },
-        )
-        record_system_event(
-            db,
-            level="WARNING",
-            category="risk",
-            message="Order rejected by risk engine",
-            correlation_id=correlation_id,
-            details={"order_id": order.id, "reason": risk.reason},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Order rejected by risk engine: {risk.reason}",
-        )
+        risk = evaluate_order_risk(db, order)
 
-    if risk.clamped and risk.final_qty != order.qty:
+    if getattr(risk, "blocked", False):
+        if bool(risk_global.manual_override_enabled) and _is_explicit_manual_order():
+            note = f"Manual override enabled: {risk.reason}"
+            order.error_message = f"{order.error_message}; {note}" if order.error_message else note
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+        else:
+            order.status = "REJECTED_RISK"
+            order.error_message = risk.reason
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            logger.warning(
+                "Order rejected by risk engine",
+                extra={
+                    "extra": {
+                        "correlation_id": correlation_id,
+                        "order_id": order.id,
+                        "reason": risk.reason,
+                    }
+                },
+            )
+            record_system_event(
+                db,
+                level="WARNING",
+                category="risk",
+                message="Order rejected by risk engine",
+                correlation_id=correlation_id,
+                details={"order_id": order.id, "reason": risk.reason},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Order rejected by risk engine: {risk.reason}",
+            )
+
+    if (
+        getattr(risk, "clamped", False)
+        and not (bool(risk_global.manual_override_enabled) and _is_explicit_manual_order())
+        and risk.final_qty != order.qty
+    ):
         order.qty = risk.final_qty
-        # Preserve any previous error message but append the clamp note.
         clamp_note = risk.reason or "Order quantity clamped by risk engine."
         if order.error_message:
             order.error_message = f"{order.error_message}; {clamp_note}"
@@ -837,6 +866,12 @@ def execute_order_internal(
         db.add(order)
         db.commit()
         db.refresh(order)
+
+    if order.qty is None or order.qty <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Order has invalid quantity.",
+        )
 
     execution_policy_apply = bool(
         (
@@ -1026,8 +1061,12 @@ def execute_order_internal(
                 now_utc=now_utc,
             )
             if not allowed and reason_code and message:
-                order.status = "REJECTED_RISK"
-                order.error_message = f"{reason_code}: {message}"
+                if bool(risk_global.manual_override_enabled) and _is_explicit_manual_order():
+                    note = f"Manual override enabled: {reason_code}: {message}"
+                    order.error_message = f"{order.error_message}; {note}" if order.error_message else note
+                else:
+                    order.status = "REJECTED_RISK"
+                    order.error_message = f"{reason_code}: {message}"
                 db.add(order)
                 db.add(state)
                 db.commit()
@@ -1054,14 +1093,15 @@ def execute_order_internal(
                         "product": key.product,
                     },
                 )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "status": "blocked",
-                        "reason_code": reason_code,
-                        "message": message,
-                    },
-                )
+                if order.status == "REJECTED_RISK":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "status": "blocked",
+                            "reason_code": reason_code,
+                            "message": message,
+                        },
+                    )
 
             # Reserve a short-lived inflight marker to make enforcement atomic
             # across concurrent executions for the same scope key.

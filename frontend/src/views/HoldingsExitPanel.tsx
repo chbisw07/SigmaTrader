@@ -370,7 +370,7 @@ export function HoldingsExitPanel({
             {error}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            If you just enabled this feature, set `ST_HOLDINGS_EXIT_ENABLED=1` in the backend.
+            Enable this feature in Settings / Risk settings / Holdings exit automation (MVP).
           </Typography>
         </Paper>
       )}

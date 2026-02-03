@@ -12,6 +12,7 @@ from . import (
     deployments,
     groups,
     holdings_goals,
+    holdings_exit_config,
     holdings_exit_subscriptions,
     instruments,
     market_calendar,
@@ -23,6 +24,7 @@ from . import (
     rebalance,
     risk_compiled,
     risk_policy,
+    risk_unified,
     risk_engine,
     risk_settings,
     screener_v3,
@@ -192,6 +194,13 @@ router.include_router(
 )
 
 router.include_router(
+    holdings_exit_config.router,
+    prefix="/api/holdings-exit",
+    dependencies=[Depends(require_admin)],
+    tags=["holdings-exit"],
+)
+
+router.include_router(
     backtests.router,
     prefix="/api/backtests",
     dependencies=[Depends(require_admin)],
@@ -237,6 +246,13 @@ router.include_router(
     prefix="/api/risk-policy",
     dependencies=[Depends(require_admin)],
     tags=["risk-policy"],
+)
+
+router.include_router(
+    risk_unified.router,
+    prefix="/api/risk",
+    dependencies=[Depends(require_admin)],
+    tags=["risk-unified"],
 )
 
 router.include_router(
