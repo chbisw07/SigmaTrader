@@ -99,6 +99,15 @@ def upsert_source_override(
     capital_per_trade: float | None = None,
     max_positions: int | None = None,
     max_exposure_pct: float | None = None,
+    risk_per_trade_pct: float | None = None,
+    hard_risk_pct: float | None = None,
+    stop_loss_mandatory: bool | None = None,
+    stop_reference: str | None = None,
+    atr_period: int | None = None,
+    atr_mult_initial_stop: float | None = None,
+    fallback_stop_pct: float | None = None,
+    min_stop_distance_pct: float | None = None,
+    max_stop_distance_pct: float | None = None,
     daily_loss_pct: float | None = None,
     hard_daily_loss_pct: float | None = None,
     max_consecutive_losses: int | None = None,
@@ -133,6 +142,16 @@ def upsert_source_override(
     row.capital_per_trade = capital_per_trade
     row.max_positions = max_positions
     row.max_exposure_pct = max_exposure_pct
+
+    row.risk_per_trade_pct = risk_per_trade_pct
+    row.hard_risk_pct = hard_risk_pct
+    row.stop_loss_mandatory = stop_loss_mandatory
+    row.stop_reference = stop_reference
+    row.atr_period = atr_period
+    row.atr_mult_initial_stop = atr_mult_initial_stop
+    row.fallback_stop_pct = fallback_stop_pct
+    row.min_stop_distance_pct = min_stop_distance_pct
+    row.max_stop_distance_pct = max_stop_distance_pct
 
     row.daily_loss_pct = daily_loss_pct
     row.hard_daily_loss_pct = hard_daily_loss_pct

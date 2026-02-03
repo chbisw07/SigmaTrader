@@ -94,6 +94,18 @@ class RiskSourceOverride(Base):
     max_positions: Mapped[Optional[int]] = mapped_column(Integer)
     max_exposure_pct: Mapped[Optional[float]] = mapped_column(Float)
 
+    risk_per_trade_pct: Mapped[Optional[float]] = mapped_column(Float)
+    hard_risk_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+    # Stop-distance model overrides (optional).
+    stop_loss_mandatory: Mapped[Optional[bool]] = mapped_column(Boolean)
+    stop_reference: Mapped[Optional[str]] = mapped_column(String(16))
+    atr_period: Mapped[Optional[int]] = mapped_column(Integer)
+    atr_mult_initial_stop: Mapped[Optional[float]] = mapped_column(Float)
+    fallback_stop_pct: Mapped[Optional[float]] = mapped_column(Float)
+    min_stop_distance_pct: Mapped[Optional[float]] = mapped_column(Float)
+    max_stop_distance_pct: Mapped[Optional[float]] = mapped_column(Float)
+
     daily_loss_pct: Mapped[Optional[float]] = mapped_column(Float)
     hard_daily_loss_pct: Mapped[Optional[float]] = mapped_column(Float)
     max_consecutive_losses: Mapped[Optional[int]] = mapped_column(Integer)
@@ -122,4 +134,3 @@ class RiskSourceOverride(Base):
 
 
 __all__ = ["RiskGlobalConfig", "RiskSourceOverride"]
-

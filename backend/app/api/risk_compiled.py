@@ -5,7 +5,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
-from app.schemas.risk_compiled import CompiledRiskResponse, DrawdownState, RiskCategory, RiskProduct
+from app.schemas.risk_compiled import (
+    CompiledRiskResponse,
+    DrawdownState,
+    RiskCategory,
+    RiskProduct,
+    RiskSourceBucket,
+)
 from app.services.risk_compiler import compile_risk_policy
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -17,6 +23,8 @@ router = APIRouter()
 def get_compiled_risk_policy(
     product: RiskProduct = Query(...),
     category: RiskCategory = Query(...),
+    source_bucket: RiskSourceBucket = Query(default="TRADINGVIEW"),
+    order_type: str | None = Query(default=None),
     scenario: DrawdownState | None = Query(default=None),
     symbol: str | None = Query(default=None),
     strategy_id: str | None = Query(default=None),
@@ -29,6 +37,8 @@ def get_compiled_risk_policy(
         user=None,
         product=product,
         category=category,
+        source_bucket=source_bucket,
+        order_type=order_type,
         scenario=scenario,
         symbol=symbol,
         strategy_id=strategy_id,

@@ -481,6 +481,7 @@ def test_v2_blocks_on_daily_loss_limit() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -505,6 +506,7 @@ def test_v2_blocks_on_consecutive_losses_limit() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -527,6 +529,7 @@ def test_v2_blocks_on_entry_cutoff_time() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -549,6 +552,7 @@ def test_v2_blocks_on_force_squareoff_time() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -582,6 +586,7 @@ def test_v2_blocks_on_max_positions() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -604,6 +609,7 @@ def test_v2_blocks_on_max_exposure_pct() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -642,6 +648,7 @@ def test_v2_blocks_on_max_trades_per_day() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -679,6 +686,7 @@ def test_v2_blocks_on_max_trades_per_symbol_per_day() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=1_000_000.0,
@@ -723,6 +731,7 @@ def test_v2_structural_exit_bypasses_missing_config() -> None:
         assert order is not None
         decision = evaluate_order_risk_v2(
             session,
+            get_settings(),
             user=user,
             order=order,
             baseline_equity=0.0,

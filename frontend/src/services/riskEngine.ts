@@ -13,6 +13,14 @@ export type RiskProfile = {
   risk_per_trade_pct: number
   hard_risk_pct: number
 
+  stop_loss_mandatory: boolean
+  stop_reference: 'ATR' | 'FIXED_PCT'
+  atr_period: number
+  atr_mult_initial_stop: number
+  fallback_stop_pct: number
+  min_stop_distance_pct: number
+  max_stop_distance_pct: number
+
   daily_loss_pct: number
   hard_daily_loss_pct: number
   max_consecutive_losses: number

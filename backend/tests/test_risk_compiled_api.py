@@ -128,8 +128,8 @@ def test_compiled_endpoint_returns_expected_shape_and_supports_scenario_override
     data1: Dict[str, Any] = r1.json()
     assert data1["context"]["product"] == "MIS"
     assert data1["context"]["category"] == "LC"
-    assert data1["effective"]["risk_engine_v2"]["drawdown_state"] in {"CAUTION", "DEFENSE", "HARD_STOP", "NORMAL"}
-    assert "risk_policy_by_source" in data1["effective"]
+    assert data1["effective"]["drawdown_state"] in {"CAUTION", "DEFENSE", "HARD_STOP", "NORMAL", None}
+    assert "allow_product" in data1["effective"]
 
     r2 = client.get(
         "/api/risk/compiled",
@@ -137,10 +137,10 @@ def test_compiled_endpoint_returns_expected_shape_and_supports_scenario_override
     )
     assert r2.status_code == 200
     data2: Dict[str, Any] = r2.json()
-    assert data2["effective"]["risk_engine_v2"]["drawdown_state"] == "NORMAL"
+    assert data2["effective"]["drawdown_state"] == "NORMAL"
 
 
-def test_compiled_endpoint_returns_blocking_reasons_when_thresholds_missing() -> None:
+def test_compiled_endpoint_bootstraps_thresholds_when_rows_missing() -> None:
     _seed_profile_thresholds_and_trade()
     with SessionLocal() as session:
         session.query(DrawdownThreshold).delete()
@@ -149,4 +149,5 @@ def test_compiled_endpoint_returns_blocking_reasons_when_thresholds_missing() ->
     r = client.get("/api/risk/compiled", params={"product": "MIS", "category": "LC"})
     assert r.status_code == 200
     data = r.json()
-    assert data["effective"]["blocking_reasons"]
+    # The unified compiler bootstraps missing threshold rows (safe defaults) so the UI remains operable.
+    assert data["effective"]["thresholds"] is not None

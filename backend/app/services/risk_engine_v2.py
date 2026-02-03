@@ -5,12 +5,13 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from math import floor
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from sqlalchemy import case, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings
 from app.models import (
     Alert,
     AlertDecisionLog,
@@ -23,11 +24,7 @@ from app.models import (
     SymbolRiskCategory,
     User,
 )
-from app.services.risk_compiler import (
-    compute_portfolio_pnl_state as _compute_portfolio_pnl_state,
-    drawdown_state as _drawdown_state,
-    resolve_drawdown_config as _resolve_drawdown_config,
-)
+from app.services.market_data import load_series
 from app.services.risk_policy import _normalized_symbol_exchange  # type: ignore[attr-defined]
 from app.services.risk_unified_store import get_source_override
 
@@ -40,6 +37,105 @@ _BOOTSTRAP_DEFAULT_MAX_EXPOSURE_PCT = 60.0
 DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HARD_STOP"]
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _atr(
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    period: int,
+) -> float | None:
+    if period <= 1:
+        return None
+    n = min(len(closes), len(highs), len(lows))
+    if n < period + 1:
+        return None
+    trs: list[float] = []
+    for i in range(1, n):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        trs.append(float(tr))
+    if len(trs) < period:
+        return None
+    atr_val = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr_val = (atr_val * (period - 1) + tr) / period
+    return float(atr_val)
+
+
+def _stop_distance_for_order(
+    db: Session,
+    settings: Settings,
+    *,
+    order: Order,
+    price: float,
+    stop_reference: str,
+    stop_loss_mandatory: bool,
+    atr_period: int,
+    atr_mult_initial_stop: float,
+    fallback_stop_pct: float,
+    min_stop_distance_pct: float,
+    max_stop_distance_pct: float,
+) -> tuple[float | None, str | None]:
+    """Best-effort stop-distance for per-trade risk sizing/caps (no network fetch)."""
+
+    min_abs = float(price) * float(min_stop_distance_pct) / 100.0
+    max_abs = float(price) * float(max_stop_distance_pct) / 100.0
+
+    ref = str(stop_reference or "ATR").strip().upper() or "ATR"
+    if ref == "FIXED_PCT":
+        dist = float(price) * float(fallback_stop_pct) / 100.0
+        dist = max(min_abs, min(dist, max_abs))
+        return float(dist), "fixed_pct"
+
+    symbol, exchange = _normalized_symbol_exchange(order)
+    now = datetime.now(UTC)
+    start = now - timedelta(days=60)
+    end = now
+    try:
+        candles = load_series(
+            db,
+            settings,
+            symbol=symbol,
+            exchange=(exchange or "NSE").strip().upper(),
+            timeframe="1d",
+            start=start,
+            end=end,
+            allow_fetch=False,
+        )
+    except Exception:
+        candles = []
+
+    highs: list[float] = []
+    lows: list[float] = []
+    closes: list[float] = []
+    for c in candles or []:
+        try:
+            h = float(c.get("high") or 0.0)
+            lo = float(c.get("low") or 0.0)
+            cl = float(c.get("close") or 0.0)
+        except Exception:
+            continue
+        if h <= 0 or lo <= 0 or cl <= 0:
+            continue
+        highs.append(h)
+        lows.append(lo)
+        closes.append(cl)
+
+    atr_val = _atr(highs, lows, closes, int(atr_period))
+    if atr_val is None or atr_val <= 0:
+        if not stop_loss_mandatory:
+            return None, "atr_unavailable"
+        dist = float(price) * float(fallback_stop_pct) / 100.0
+        dist = max(min_abs, min(dist, max_abs))
+        return float(dist), "fallback_fixed_pct"
+
+    dist = float(atr_val) * float(atr_mult_initial_stop)
+    dist = max(min_abs, min(dist, max_abs))
+    return float(dist), "atr"
 
 
 def _ensure_v2_bootstrap_rows(db: Session) -> None:
@@ -310,14 +406,23 @@ def resolve_drawdown_config(
     product: str,
     category: str,
 ) -> DrawdownConfig | None:
-    # Delegate to shared compiler logic so UI summaries match runtime behavior.
-    return cast(
-        DrawdownConfig | None,
-        _resolve_drawdown_config(
-            db,
-            product=(str(product or "").strip().upper() or "CNC"),  # type: ignore[arg-type]
-            category=(str(category or "").strip().upper() or "LC"),  # type: ignore[arg-type]
-        ),
+    prod = (str(product or "").strip().upper() or "CNC")
+    cat = (str(category or "").strip().upper() or "LC")
+    row = (
+        db.query(DrawdownThreshold)
+        .filter(
+            DrawdownThreshold.user_id.is_(None),
+            DrawdownThreshold.product == prod,
+            DrawdownThreshold.category == cat,
+        )
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    return DrawdownConfig(
+        caution_pct=float(row.caution_pct or 0.0),
+        defense_pct=float(row.defense_pct or 0.0),
+        hard_stop_pct=float(row.hard_stop_pct or 0.0),
     )
 
 
@@ -328,19 +433,70 @@ def compute_portfolio_pnl_state(
     baseline_equity: float,
     now_utc: datetime,
 ) -> PortfolioPnlState:
-    return cast(
-        PortfolioPnlState,
-        _compute_portfolio_pnl_state(
-            db,
-            user_id=user_id,
-            baseline_equity=baseline_equity,
-            now_utc=now_utc,
-        ),
+    base = float(baseline_equity or 0.0)
+    if base <= 0:
+        return PortfolioPnlState(
+            baseline_equity=base,
+            equity=base,
+            peak_equity=base,
+            drawdown_pct=0.0,
+            pnl_today=0.0,
+            consecutive_losses=0,
+        )
+
+    query = db.query(AnalyticsTrade).join(Order, AnalyticsTrade.entry_order_id == Order.id)
+    if user_id is not None:
+        query = query.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
+    trades = query.order_by(AnalyticsTrade.closed_at.asc()).all()
+
+    start_day, end_day = _day_bounds_ist(now_utc)
+    pnl_today = 0.0
+    cumulative = 0.0
+    peak_cum = 0.0
+
+    for t in trades:
+        pnl = float(t.pnl or 0.0)
+        cumulative += pnl
+        if cumulative > peak_cum:
+            peak_cum = cumulative
+        if t.closed_at >= start_day and t.closed_at < end_day:
+            pnl_today += pnl
+
+    streak = 0
+    for t in reversed(trades):
+        pnl = float(t.pnl or 0.0)
+        if pnl < 0:
+            streak += 1
+        else:
+            break
+
+    equity = base + cumulative
+    peak_equity = max(base, base + peak_cum)
+    dd = 0.0
+    if peak_equity > 0:
+        dd = ((peak_equity - equity) / peak_equity) * 100.0
+        if dd < 0:
+            dd = 0.0
+
+    return PortfolioPnlState(
+        baseline_equity=base,
+        equity=equity,
+        peak_equity=peak_equity,
+        drawdown_pct=dd,
+        pnl_today=pnl_today,
+        consecutive_losses=streak,
     )
 
 
 def drawdown_state(dd_pct: float, cfg: DrawdownConfig) -> DrawdownState:
-    return cast(DrawdownState, _drawdown_state(dd_pct, cfg))
+    dd = float(dd_pct or 0.0)
+    if float(cfg.hard_stop_pct or 0.0) > 0 and dd >= float(cfg.hard_stop_pct):
+        return "HARD_STOP"
+    if float(cfg.defense_pct or 0.0) > 0 and dd >= float(cfg.defense_pct):
+        return "DEFENSE"
+    if float(cfg.caution_pct or 0.0) > 0 and dd >= float(cfg.caution_pct):
+        return "CAUTION"
+    return "NORMAL"
 
 
 def _is_structural_exit(db: Session, order: Order) -> bool:
@@ -465,7 +621,7 @@ def _interval_minutes(raw: str | None) -> int | None:
     return None
 
 
-def _apply_drawdown_throttle(
+def apply_drawdown_throttle(
     *,
     capital_per_trade: float,
     max_positions: int,
@@ -501,6 +657,7 @@ def _apply_drawdown_throttle(
 
 def evaluate_order_risk_v2(
     db: Session,
+    settings: Settings,
     *,
     user: User | None,
     order: Order,
@@ -652,6 +809,51 @@ def evaluate_order_risk_v2(
         float(source_override.capital_per_trade)
         if source_override is not None and source_override.capital_per_trade is not None
         else float(getattr(profile, "capital_per_trade", 0.0) or 0.0)
+    )
+    risk_per_trade_pct_base = (
+        float(source_override.risk_per_trade_pct)
+        if source_override is not None and source_override.risk_per_trade_pct is not None
+        else float(getattr(profile, "risk_per_trade_pct", 0.0) or 0.0)
+    )
+    hard_risk_pct_base = (
+        float(source_override.hard_risk_pct)
+        if source_override is not None and source_override.hard_risk_pct is not None
+        else float(getattr(profile, "hard_risk_pct", 0.0) or 0.0)
+    )
+    stop_loss_mandatory_eff = (
+        bool(source_override.stop_loss_mandatory)
+        if source_override is not None and source_override.stop_loss_mandatory is not None
+        else bool(getattr(profile, "stop_loss_mandatory", True))
+    )
+    stop_reference_eff = (
+        str(source_override.stop_reference)
+        if source_override is not None and source_override.stop_reference is not None
+        else str(getattr(profile, "stop_reference", "ATR") or "ATR")
+    )
+    atr_period_eff = (
+        int(source_override.atr_period)
+        if source_override is not None and source_override.atr_period is not None
+        else int(getattr(profile, "atr_period", 14) or 14)
+    )
+    atr_mult_initial_stop_eff = (
+        float(source_override.atr_mult_initial_stop)
+        if source_override is not None and source_override.atr_mult_initial_stop is not None
+        else float(getattr(profile, "atr_mult_initial_stop", 2.0) or 2.0)
+    )
+    fallback_stop_pct_eff = (
+        float(source_override.fallback_stop_pct)
+        if source_override is not None and source_override.fallback_stop_pct is not None
+        else float(getattr(profile, "fallback_stop_pct", 1.0) or 1.0)
+    )
+    min_stop_distance_pct_eff = (
+        float(source_override.min_stop_distance_pct)
+        if source_override is not None and source_override.min_stop_distance_pct is not None
+        else float(getattr(profile, "min_stop_distance_pct", 0.5) or 0.5)
+    )
+    max_stop_distance_pct_eff = (
+        float(source_override.max_stop_distance_pct)
+        if source_override is not None and source_override.max_stop_distance_pct is not None
+        else float(getattr(profile, "max_stop_distance_pct", 3.0) or 3.0)
     )
     max_positions_base = (
         int(source_override.max_positions)
@@ -815,7 +1017,7 @@ def evaluate_order_risk_v2(
 
     dd_state = drawdown_state(pnl_state.drawdown_pct, dd_cfg)
 
-    cap_eff, max_pos_eff, dd_reasons = _apply_drawdown_throttle(
+    cap_eff, max_pos_eff, dd_reasons = apply_drawdown_throttle(
         capital_per_trade=cap_per_trade_base,
         max_positions=max_positions_base,
         state=dd_state,
@@ -1212,12 +1414,41 @@ def evaluate_order_risk_v2(
 
     # Apply per-order caps to the resolved qty (whether provided or sized).
     if max_qty_per_order is not None and float(max_qty_per_order) > 0 and float(qty) > float(max_qty_per_order):
+        qty = float(floor(float(max_qty_per_order)))
+        reasons.append(
+            f"qty clamped by max_quantity_per_order ({float(max_qty_per_order):.0f})."
+        )
+    if max_order_value_abs is not None and float(max_order_value_abs) > 0 and price is not None:
+        order_value = float(qty) * float(price)
+        if order_value > float(max_order_value_abs):
+            new_qty = float(floor(float(max_order_value_abs) / float(price)))
+            if new_qty < 1:
+                return RiskDecisionV2(
+                    blocked=True,
+                    reasons=[
+                        *reasons,
+                        "Order value cap results in qty < 1; rejected.",
+                    ],
+                    resolved_product=resolved_product,
+                    risk_profile_id=profile.id,
+                    risk_category=category,
+                    drawdown_state=dd_state,
+                    drawdown_pct=pnl_state.drawdown_pct,
+                    final_qty=None,
+                    final_order_type=None,
+                    final_price=price,
+                )
+            reasons.append(
+                f"qty clamped by max_order_value ({float(max_order_value_abs):.2f})."
+            )
+            qty = float(new_qty)
+
+    # Qty is submitted as an integer to brokers.
+    qty = float(floor(float(qty)))
+    if qty < 1:
         return RiskDecisionV2(
             blocked=True,
-            reasons=[
-                *reasons,
-                f"max_quantity_per_order exceeded ({float(qty):.0f} > {float(max_qty_per_order):.0f}).",
-            ],
+            reasons=[*reasons, "Final qty < 1 after integer rounding; rejected."],
             resolved_product=resolved_product,
             risk_profile_id=profile.id,
             risk_category=category,
@@ -1227,24 +1458,123 @@ def evaluate_order_risk_v2(
             final_order_type=None,
             final_price=price,
         )
-    if max_order_value_abs is not None and float(max_order_value_abs) > 0 and price is not None:
-        order_value = float(qty) * float(price)
-        if order_value > float(max_order_value_abs):
-            return RiskDecisionV2(
-                blocked=True,
-                reasons=[
-                    *reasons,
-                    f"max_order_value exceeded ({order_value:.2f} > {float(max_order_value_abs):.2f}).",
-                ],
-                resolved_product=resolved_product,
-                risk_profile_id=profile.id,
-                risk_category=category,
-                drawdown_state=dd_state,
-                drawdown_pct=pnl_state.drawdown_pct,
-                final_qty=None,
-                final_order_type=None,
-                final_price=price,
+
+    # Per-trade risk caps based on stop distance.
+    # This mirrors the legacy RiskPolicy behavior, but is sourced from the unified profile/overrides.
+    if not is_exit and (risk_per_trade_pct_base > 0 or hard_risk_pct_base > 0):
+        equity = float(baseline_equity or 0.0)
+        if equity <= 0:
+            if source_bucket == "MANUAL":
+                reasons.append("Manual order: baseline equity missing; skipping per-trade risk checks.")
+            else:
+                return RiskDecisionV2(
+                    blocked=True,
+                    reasons=[*reasons, "baseline_equity_inr must be set (> 0) to enforce per-trade risk caps."],
+                    resolved_product=resolved_product,
+                    risk_profile_id=profile.id,
+                    risk_category=category,
+                    drawdown_state=dd_state,
+                    drawdown_pct=pnl_state.drawdown_pct,
+                    final_qty=None,
+                    final_order_type=None,
+                    final_price=price,
+                )
+        elif price is None:
+            # Manual orders can be created without an explicit price; do not block.
+            if source_bucket == "MANUAL":
+                reasons.append("Manual order: missing price; skipping stop-distance based risk checks.")
+            else:
+                return RiskDecisionV2(
+                    blocked=True,
+                    reasons=[*reasons, "Missing order price for stop-distance risk checks."],
+                    resolved_product=resolved_product,
+                    risk_profile_id=profile.id,
+                    risk_category=category,
+                    drawdown_state=dd_state,
+                    drawdown_pct=pnl_state.drawdown_pct,
+                    final_qty=None,
+                    final_order_type=None,
+                    final_price=None,
+                )
+        else:
+            stop_dist, stop_src = _stop_distance_for_order(
+                db,
+                settings,
+                order=order,
+                price=float(price),
+                stop_reference=stop_reference_eff,
+                stop_loss_mandatory=bool(stop_loss_mandatory_eff),
+                atr_period=int(atr_period_eff),
+                atr_mult_initial_stop=float(atr_mult_initial_stop_eff),
+                fallback_stop_pct=float(fallback_stop_pct_eff),
+                min_stop_distance_pct=float(min_stop_distance_pct_eff),
+                max_stop_distance_pct=float(max_stop_distance_pct_eff),
             )
+            if stop_dist is None or float(stop_dist) <= 0:
+                if bool(stop_loss_mandatory_eff):
+                    return RiskDecisionV2(
+                        blocked=True,
+                        reasons=[*reasons, "Stop distance unavailable; stop_loss_mandatory is enabled."],
+                        resolved_product=resolved_product,
+                        risk_profile_id=profile.id,
+                        risk_category=category,
+                        drawdown_state=dd_state,
+                        drawdown_pct=pnl_state.drawdown_pct,
+                        final_qty=None,
+                        final_order_type=None,
+                        final_price=price,
+                    )
+            else:
+                stop_dist = float(stop_dist)
+                max_risk_money = equity * float(risk_per_trade_pct_base) / 100.0
+                hard_risk_money = equity * float(hard_risk_pct_base) / 100.0
+
+                def _clamp_by_risk(limit: float, *, label: str) -> None:
+                    nonlocal qty
+                    if limit <= 0:
+                        return
+                    risk_money = float(qty) * float(stop_dist)
+                    if risk_money <= limit:
+                        return
+                    allowed = float(floor(float(limit) / float(stop_dist)))
+                    if allowed < 1:
+                        raise ValueError(f"{label} cap results in qty < 1; rejected.")
+                    reasons.append(
+                        f"qty clamped by {label} ({risk_money:.2f} > {limit:.2f}; stop={stop_src or 'unknown'})."
+                    )
+                    qty = float(allowed)
+
+                try:
+                    _clamp_by_risk(hard_risk_money, label=f"hard_risk_pct={float(hard_risk_pct_base):.2f}%")
+                    _clamp_by_risk(max_risk_money, label=f"risk_per_trade_pct={float(risk_per_trade_pct_base):.2f}%")
+                except ValueError as exc:
+                    return RiskDecisionV2(
+                        blocked=True,
+                        reasons=[*reasons, str(exc)],
+                        resolved_product=resolved_product,
+                        risk_profile_id=profile.id,
+                        risk_category=category,
+                        drawdown_state=dd_state,
+                        drawdown_pct=pnl_state.drawdown_pct,
+                        final_qty=None,
+                        final_order_type=None,
+                        final_price=price,
+                    )
+
+                qty = float(floor(float(qty)))
+                if qty < 1:
+                    return RiskDecisionV2(
+                        blocked=True,
+                        reasons=[*reasons, "Final qty < 1 after per-trade risk clamping; rejected."],
+                        resolved_product=resolved_product,
+                        risk_profile_id=profile.id,
+                        risk_category=category,
+                        drawdown_state=dd_state,
+                        drawdown_pct=pnl_state.drawdown_pct,
+                        final_qty=None,
+                        final_order_type=None,
+                        final_price=price,
+                    )
 
     # Short-selling guard (MIS-only), applied to entries.
     if not allow_short_selling and _would_open_or_increase_short(
@@ -1406,6 +1736,7 @@ def record_decision_log(
 
 __all__ = [
     "RiskDecisionV2",
+    "apply_drawdown_throttle",
     "compute_portfolio_pnl_state",
     "drawdown_state",
     "evaluate_order_risk_v2",

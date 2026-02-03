@@ -44,6 +44,16 @@ class RiskProfile(Base):
     risk_per_trade_pct: Mapped[float] = mapped_column(nullable=False, default=0.0)
     hard_risk_pct: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
+    # Stop-distance model used for per-trade risk caps (risk_per_trade_pct/hard_risk_pct).
+    # These mirror legacy RiskPolicy stop settings so unified enforcement can remain stable.
+    stop_loss_mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    stop_reference: Mapped[str] = mapped_column(String(16), nullable=False, default="ATR")
+    atr_period: Mapped[int] = mapped_column(Integer, nullable=False, default=14)
+    atr_mult_initial_stop: Mapped[float] = mapped_column(nullable=False, default=2.0)
+    fallback_stop_pct: Mapped[float] = mapped_column(nullable=False, default=1.0)
+    min_stop_distance_pct: Mapped[float] = mapped_column(nullable=False, default=0.5)
+    max_stop_distance_pct: Mapped[float] = mapped_column(nullable=False, default=3.0)
+
     daily_loss_pct: Mapped[float] = mapped_column(nullable=False, default=0.0)
     hard_daily_loss_pct: Mapped[float] = mapped_column(nullable=False, default=0.0)
     max_consecutive_losses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

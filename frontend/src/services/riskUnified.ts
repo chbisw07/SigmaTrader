@@ -25,6 +25,16 @@ export type RiskSourceOverride = {
   max_positions?: number | null
   max_exposure_pct?: number | null
 
+  risk_per_trade_pct?: number | null
+  hard_risk_pct?: number | null
+  stop_loss_mandatory?: boolean | null
+  stop_reference?: 'ATR' | 'FIXED_PCT' | null
+  atr_period?: number | null
+  atr_mult_initial_stop?: number | null
+  fallback_stop_pct?: number | null
+  min_stop_distance_pct?: number | null
+  max_stop_distance_pct?: number | null
+
   daily_loss_pct?: number | null
   hard_daily_loss_pct?: number | null
   max_consecutive_losses?: number | null
@@ -113,4 +123,3 @@ export async function deleteRiskSourceOverride(params: {
   }
   return (await res.json()) as { deleted: boolean }
 }
-

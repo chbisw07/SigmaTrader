@@ -1,9 +1,7 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
-import DownloadIcon from '@mui/icons-material/Download'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
-import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import Divider from '@mui/material/Divider'
 import FormControl from '@mui/material/FormControl'
@@ -24,11 +22,13 @@ import {
   type DrawdownScenario,
   type RiskCategory,
   type RiskProduct,
+  type RiskSourceBucket,
 } from '../services/riskCompiled'
 
 const PRODUCTS: RiskProduct[] = ['CNC', 'MIS']
 const CATEGORIES: RiskCategory[] = ['LC', 'MC', 'SC', 'ETF']
-const SCENARIOS: DrawdownScenario[] = ['NORMAL', 'CAUTION', 'DEFENSE', 'HARD_STOP']
+const SOURCES: RiskSourceBucket[] = ['TRADINGVIEW', 'SIGMATRADER', 'MANUAL']
+const ORDER_TYPES = ['MARKET', 'LIMIT', 'SL', 'SL-M'] as const
 
 async function writeToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -53,51 +53,32 @@ function fmtNum(v: number | null | undefined, digits = 2): string {
 function renderSummaryText(data: CompiledRiskResponse): string {
   const lines: string[] = []
   lines.push('Effective Risk Summary')
-  lines.push(`Context: product=${data.context.product}, category=${data.context.category}`)
+  lines.push(
+    `Context: source=${data.context.source_bucket}, product=${data.context.product}, category=${data.context.category}, order_type=${data.context.order_type ?? '—'}`,
+  )
   if (data.context.scenario) lines.push(`Scenario override: ${data.context.scenario}`)
   if (data.context.symbol) lines.push(`Symbol: ${data.context.symbol}`)
   if (data.context.strategy_id) lines.push(`Strategy ID: ${data.context.strategy_id}`)
   lines.push('')
-  lines.push(`Profile engine enabled: ${data.inputs.risk_engine_v2_enabled ? 'YES' : 'NO'}`)
-  lines.push(
-    `Legacy defaults enabled: ${data.inputs.risk_policy_enabled ? 'YES' : 'NO'} (source=${data.inputs.risk_policy_source})`,
-  )
-  lines.push(`Manual equity (INR): ${fmtNum(data.inputs.manual_equity_inr, 0)}`)
+  lines.push(`Risk enabled: ${data.inputs.risk_enabled ? 'YES' : 'NO'}`)
+  lines.push(`Manual override enabled: ${data.inputs.manual_override_enabled ? 'YES' : 'NO'}`)
+  lines.push(`Baseline equity (INR): ${fmtNum(data.inputs.baseline_equity_inr, 0)}`)
   lines.push(`Drawdown%: ${fmtNum(data.inputs.drawdown_pct, 2)}`)
-  lines.push(`Drawdown state: ${data.effective.risk_engine_v2.drawdown_state ?? '—'}`)
+  lines.push(`Drawdown state: ${data.effective.drawdown_state ?? '—'}`)
   lines.push(`Allow new entries: ${data.effective.allow_new_entries ? 'YES' : 'NO'}`)
   if (data.effective.blocking_reasons?.length) {
     lines.push('')
     lines.push('Blocking reasons:')
     for (const r of data.effective.blocking_reasons) lines.push(`- ${r}`)
   }
-  lines.push('')
-  lines.push('Overrides:')
-  if (!data.overrides?.length) {
-    lines.push('- (none)')
-  } else {
+  if (data.overrides?.length) {
+    lines.push('')
+    lines.push('Resolved overrides:')
     for (const o of data.overrides) {
       lines.push(`- ${o.field}: ${String(o.from_value ?? '—')} -> ${String(o.to_value ?? '—')} (${o.source}) ${o.reason}`)
     }
   }
   return lines.join('\n')
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string
-  children: React.ReactNode
-}) {
-  return (
-    <Box sx={{ mb: 2 }}>
-      <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
-        {title}
-      </Typography>
-      <Box sx={{ display: 'grid', gap: 0.5 }}>{children}</Box>
-    </Box>
-  )
 }
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -111,9 +92,23 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
+        {title}
+      </Typography>
+      <Box sx={{ display: 'grid', gap: 0.5 }}>{children}</Box>
+    </Box>
+  )
+}
+
 export function EffectiveRiskSummaryPanel() {
   const [product, setProduct] = useState<RiskProduct>('CNC')
   const [category, setCategory] = useState<RiskCategory>('LC')
+  const [sourceBucket, setSourceBucket] = useState<RiskSourceBucket>('TRADINGVIEW')
+  const [orderType, setOrderType] = useState<string>('MARKET')
+
   const [scenarioMode, setScenarioMode] = useState<'AUTO' | 'MANUAL'>('AUTO')
   const [scenario, setScenario] = useState<DrawdownScenario>('NORMAL')
   const [symbol, setSymbol] = useState('')
@@ -122,7 +117,6 @@ export function EffectiveRiskSummaryPanel() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<CompiledRiskResponse | null>(null)
-
   const [snackbar, setSnackbar] = useState<{
     open: boolean
     message: string
@@ -133,11 +127,13 @@ export function EffectiveRiskSummaryPanel() {
     () => ({
       product,
       category,
+      source_bucket: sourceBucket,
+      order_type: orderType || null,
       scenario: scenarioMode === 'MANUAL' ? scenario : null,
       symbol: symbol.trim() || null,
       strategy_id: strategyId.trim() || null,
     }),
-    [product, category, scenarioMode, scenario, symbol, strategyId],
+    [product, category, sourceBucket, orderType, scenarioMode, scenario, symbol, strategyId],
   )
 
   const load = async () => {
@@ -146,6 +142,8 @@ export function EffectiveRiskSummaryPanel() {
       const res = await fetchCompiledRiskPolicy({
         product: query.product,
         category: query.category,
+        source_bucket: query.source_bucket,
+        order_type: query.order_type,
         scenario: query.scenario,
         symbol: query.symbol,
         strategy_id: query.strategy_id,
@@ -174,15 +172,42 @@ export function EffectiveRiskSummaryPanel() {
     }
   }, [data?.inputs?.compiled_at])
 
+  const copySummary = async () => {
+    if (!data) return
+    try {
+      await writeToClipboard(renderSummaryText(data))
+      setSnackbar({ open: true, message: 'Copied', severity: 'success' })
+    } catch {
+      setSnackbar({ open: true, message: 'Copy failed', severity: 'error' })
+    }
+  }
+
   return (
     <Paper sx={{ p: 2, position: { xs: 'static', lg: 'sticky' }, top: { lg: 88 } }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Typography variant="h6" sx={{ flex: 1, minWidth: 240 }}>
           Effective Risk Summary
         </Typography>
+        <Tooltip title="Copy summary" arrow placement="top">
+          <span>
+            <IconButton
+              size="small"
+              aria-label="copy-effective-risk-summary"
+              onClick={() => void copySummary()}
+              disabled={!data}
+            >
+              <ContentCopyIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
         <Tooltip title="Refresh" arrow placement="top">
           <span>
-            <IconButton size="small" onClick={() => void load()} disabled={busy}>
+            <IconButton
+              size="small"
+              aria-label="refresh-effective-risk-summary"
+              onClick={() => void load()}
+              disabled={busy}
+            >
               <RefreshIcon fontSize="small" />
             </IconButton>
           </span>
@@ -190,13 +215,45 @@ export function EffectiveRiskSummaryPanel() {
       </Box>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-        Updated: {updatedLabel} · Policy: {data?.inputs?.risk_policy_source ?? '—'} · Drawdown:{' '}
-        {scenarioMode === 'AUTO' ? 'auto' : 'what-if'}
+        Updated: {updatedLabel}
       </Typography>
 
       <Divider sx={{ my: 1.5 }} />
 
       <Box sx={{ display: 'grid', gap: 1.25 }}>
+        <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: '1fr 1fr' }}>
+          <FormControl size="small">
+            <InputLabel>Source</InputLabel>
+            <Select
+              value={sourceBucket}
+              label="Source"
+              onChange={(e) => setSourceBucket(e.target.value as RiskSourceBucket)}
+              inputProps={{ 'aria-label': 'effective-risk-source' }}
+            >
+              {SOURCES.map((s) => (
+                <MenuItem key={s} value={s}>
+                  {s}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <FormControl size="small">
+            <InputLabel>Order type</InputLabel>
+            <Select
+              value={orderType}
+              label="Order type"
+              onChange={(e) => setOrderType(String(e.target.value))}
+              inputProps={{ 'aria-label': 'effective-risk-order-type' }}
+            >
+              {ORDER_TYPES.map((t) => (
+                <MenuItem key={t} value={t}>
+                  {t}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
+
         <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: '1fr 1fr' }}>
           <FormControl size="small">
             <InputLabel>Product</InputLabel>
@@ -251,11 +308,10 @@ export function EffectiveRiskSummaryPanel() {
               onChange={(e) => setScenario(e.target.value as DrawdownScenario)}
               inputProps={{ 'aria-label': 'effective-risk-scenario-state' }}
             >
-              {SCENARIOS.map((s) => (
-                <MenuItem key={s} value={s}>
-                  {s}
-                </MenuItem>
-              ))}
+              <MenuItem value="NORMAL">NORMAL</MenuItem>
+              <MenuItem value="CAUTION">CAUTION</MenuItem>
+              <MenuItem value="DEFENSE">DEFENSE</MenuItem>
+              <MenuItem value="HARD_STOP">HARD_STOP</MenuItem>
             </Select>
           </FormControl>
         </Box>
@@ -265,218 +321,102 @@ export function EffectiveRiskSummaryPanel() {
           label="Symbol (optional)"
           value={symbol}
           onChange={(e) => setSymbol(e.target.value)}
-          placeholder="e.g., NSE:TCS"
+          inputProps={{ 'aria-label': 'effective-risk-symbol' }}
         />
         <TextField
           size="small"
           label="Strategy ID (optional)"
           value={strategyId}
           onChange={(e) => setStrategyId(e.target.value)}
-          placeholder="e.g., TrendSwing_v1"
+          inputProps={{ 'aria-label': 'effective-risk-strategy' }}
         />
       </Box>
 
       <Divider sx={{ my: 1.5 }} />
 
-      {error ? (
-        <Alert severity="error" sx={{ mb: 1.5 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 1 }}>
           {error}
         </Alert>
-      ) : null}
+      )}
 
-      {data?.effective?.blocking_reasons?.length ? (
-        <Alert severity="error" sx={{ mb: 1.5 }}>
-          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-            Effective decision: BLOCK NEW ENTRIES
-          </Typography>
-          <Box component="ul" sx={{ pl: 2.25, my: 0 }}>
-            {data.effective.blocking_reasons.map((r) => (
-              <li key={r}>
-                <Typography variant="caption">{r}</Typography>
-              </li>
-            ))}
-          </Box>
-        </Alert>
-      ) : null}
-
-      {data ? (
+      {data && (
         <>
-          <Section title="Gating">
-            <Row
-              label="Legacy defaults (enforcement)"
-              value={
-                <Chip
-                  size="small"
-                  label={data.inputs.risk_policy_enabled ? 'ENABLED' : 'DISABLED'}
-                  color={data.inputs.risk_policy_enabled ? 'success' : 'default'}
-                  variant="outlined"
-                />
-              }
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+            <Chip
+              label={data.inputs.risk_enabled ? 'ENFORCEMENT: ON' : 'ENFORCEMENT: OFF'}
+              color={data.inputs.risk_enabled ? 'success' : 'default'}
+              size="small"
             />
-            <Row
-              label="Profile engine"
-              value={
-                <Chip
-                  size="small"
-                  label={data.inputs.risk_engine_v2_enabled ? 'ENABLED' : 'DISABLED'}
-                  color={data.inputs.risk_engine_v2_enabled ? 'success' : 'default'}
-                  variant="outlined"
-                />
-              }
+            <Chip
+              label={data.effective.allow_new_entries ? 'ALLOW: YES' : 'ALLOW: NO'}
+              color={data.effective.allow_new_entries ? 'success' : 'error'}
+              size="small"
             />
-            <Row label="Drawdown%" value={fmtNum(data.inputs.drawdown_pct, 2)} />
-            <Row label="Resolved state" value={data.effective.risk_engine_v2.drawdown_state ?? '—'} />
-            <Row label="Allow new entries" value={data.effective.allow_new_entries ? 'YES' : 'NO'} />
-          </Section>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Section title="Account caps (legacy defaults)">
-            <Row label="Manual equity (INR)" value={fmtNum(data.inputs.manual_equity_inr, 0)} />
-            <Row label="Max daily loss %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.max_daily_loss_pct, 2)} />
-            <Row label="Max daily loss (INR)" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.max_daily_loss_abs, 0)} />
-            <Row label="Max exposure %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.max_exposure_pct, 2)} />
-            <Row label="Max open positions" value={data.effective.risk_policy_by_source.TRADINGVIEW.max_open_positions} />
-            <Row label="Max concurrent symbols" value={data.effective.risk_policy_by_source.TRADINGVIEW.max_concurrent_symbols} />
-          </Section>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Section title="Sizing (profile + drawdown throttle)">
-            <Row label="Throttle multiplier" value={fmtNum(data.effective.risk_engine_v2.throttle_multiplier, 2)} />
-            <Row label="Capital per trade (effective)" value={fmtNum(data.effective.risk_engine_v2.capital_per_trade, 0)} />
-            <Row label="Max positions (effective)" value={data.effective.risk_engine_v2.max_positions ?? '—'} />
-            <Row label="Max exposure % (profile)" value={fmtNum(data.effective.risk_engine_v2.max_exposure_pct, 2)} />
-          </Section>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Section title="Per-trade risk (legacy defaults)">
-            <Row label="Max risk per trade %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.max_risk_per_trade_pct, 2)} />
-            <Row label="Hard risk %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.hard_max_risk_pct, 2)} />
-            <Row label="Stop mandatory" value={data.effective.risk_policy_by_source.TRADINGVIEW.stop_loss_mandatory ? 'YES' : 'NO'} />
-          </Section>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Section title="Stops model (legacy defaults)">
-            <Row label="Stop basis" value={data.effective.risk_policy_by_source.TRADINGVIEW.stop_reference} />
-            <Row label="ATR period" value={data.effective.risk_policy_by_source.TRADINGVIEW.atr_period} />
-            <Row label="ATR mult (initial stop)" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.atr_mult_initial_stop, 2)} />
-            <Row label="Fallback stop %" value={fmtNum(data.effective.risk_policy_by_source.TRADINGVIEW.fallback_stop_pct, 2)} />
-            <Row label="Trailing enabled" value={data.effective.risk_policy_by_source.TRADINGVIEW.trailing_stop_enabled ? 'YES' : 'NO'} />
-          </Section>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Section title="Trade frequency & loss controls (legacy defaults)">
-            <Row label="Max trades/symbol/day" value={data.effective.risk_policy_by_source.TRADINGVIEW.max_trades_per_symbol_per_day} />
-            <Row label="Min bars between trades" value={data.effective.risk_policy_by_source.TRADINGVIEW.min_bars_between_trades} />
-            <Row label="Cooldown after loss (bars)" value={data.effective.risk_policy_by_source.TRADINGVIEW.cooldown_after_loss_bars} />
-            <Row label="Max consecutive losses" value={data.effective.risk_policy_by_source.TRADINGVIEW.max_consecutive_losses} />
-            <Row label="Pause after streak" value={data.effective.risk_policy_by_source.TRADINGVIEW.pause_after_loss_streak ? 'YES' : 'NO'} />
-            <Row label="Pause duration" value={data.effective.risk_policy_by_source.TRADINGVIEW.pause_duration || '—'} />
-          </Section>
-
-          {data.context.product === 'MIS' ? (
-            <>
-              <Divider sx={{ my: 1.5 }} />
-              <Section title="MIS-only (profile)">
-                <Row label="Entry cutoff time" value={data.effective.risk_engine_v2.entry_cutoff_time ?? '—'} />
-                <Row label="Force square-off time" value={data.effective.risk_engine_v2.force_squareoff_time ?? '—'} />
-                <Row label="Slippage guard (bps)" value={fmtNum(data.effective.risk_engine_v2.slippage_guard_bps, 1)} />
-                <Row label="Gap guard %" value={fmtNum(data.effective.risk_engine_v2.gap_guard_pct, 2)} />
-              </Section>
-            </>
-          ) : null}
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Section title="Overrides">
-            {data.overrides?.length ? (
-              <Box component="ul" sx={{ pl: 2.25, my: 0 }}>
-                {data.overrides.map((o, idx) => (
-                  <li key={`${o.field}-${idx}`}>
-                    <Typography variant="caption">
-                      {o.field}: {String(o.from_value ?? '—')} → {String(o.to_value ?? '—')} · {o.source}
-                    </Typography>
-                  </li>
-                ))}
-              </Box>
-            ) : (
-              <Typography variant="caption" color="text.secondary">
-                No overrides.
-              </Typography>
-            )}
-          </Section>
-
-          <Section title="Provenance (key fields)">
-            <Box component="ul" sx={{ pl: 2.25, my: 0 }}>
-              {['risk_engine_v2.profile', 'risk_engine_v2.thresholds', 'risk_engine_v2.drawdown_state'].map((k) => (
-                <li key={k}>
-                  <Typography variant="caption" color="text.secondary">
-                    {k}: {data.provenance?.[k]?.source ?? '—'}
-                    {data.provenance?.[k]?.detail ? ` (${data.provenance[k]?.detail})` : ''}
-                  </Typography>
-                </li>
-              ))}
-            </Box>
-          </Section>
-
-          <Divider sx={{ my: 1.5 }} />
-
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-            <Button
+            <Chip
+              label={`DD: ${data.effective.drawdown_state ?? '—'}`}
               size="small"
               variant="outlined"
-              startIcon={<ContentCopyIcon />}
-              onClick={async () => {
-                try {
-                  await writeToClipboard(renderSummaryText(data))
-                  setSnackbar({ open: true, message: 'Copied summary to clipboard.', severity: 'success' })
-                } catch (e) {
-                  setSnackbar({ open: true, message: e instanceof Error ? e.message : 'Copy failed', severity: 'error' })
-                }
-              }}
-            >
-              Copy summary
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<DownloadIcon />}
-              onClick={async () => {
-                try {
-                  await writeToClipboard(JSON.stringify(data, null, 2))
-                  setSnackbar({ open: true, message: 'Copied JSON to clipboard.', severity: 'success' })
-                } catch (e) {
-                  setSnackbar({ open: true, message: e instanceof Error ? e.message : 'Copy failed', severity: 'error' })
-                }
-              }}
-            >
-              Export JSON
-            </Button>
+            />
           </Box>
+
+          <Section title="Resolved (core)">
+            <Row label="Baseline equity (INR)" value={fmtNum(data.inputs.baseline_equity_inr, 0)} />
+            <Row label="Drawdown %" value={fmtNum(data.inputs.drawdown_pct, 2)} />
+            <Row label="Capital per trade" value={fmtNum(data.effective.capital_per_trade, 0)} />
+            <Row label="Max positions" value={data.effective.max_positions ?? '—'} />
+            <Row label="Max exposure %" value={fmtNum(data.effective.max_exposure_pct, 2)} />
+            <Row label="Daily loss %" value={fmtNum(data.effective.daily_loss_pct, 2)} />
+            <Row label="Hard daily loss %" value={fmtNum(data.effective.hard_daily_loss_pct, 2)} />
+            <Row label="Max consecutive losses" value={data.effective.max_consecutive_losses ?? '—'} />
+          </Section>
+
+          <Section title="Execution Safety (per order)">
+            <Row label="Allow product" value={data.effective.allow_product ? 'YES' : 'NO'} />
+            <Row label="Allow short selling" value={data.effective.allow_short_selling ? 'YES' : 'NO'} />
+            <Row label="Max order value %" value={fmtNum(data.effective.max_order_value_pct, 2)} />
+            <Row label="Max order value (abs)" value={fmtNum(data.effective.max_order_value_abs, 0)} />
+            <Row label="Max qty/order" value={fmtNum(data.effective.max_quantity_per_order, 0)} />
+            <Row label="Order type policy" value={data.effective.order_type_policy || '—'} />
+            <Row label="Slippage guard (bps)" value={fmtNum(data.effective.slippage_guard_bps, 1)} />
+            <Row label="Gap guard (%)" value={fmtNum(data.effective.gap_guard_pct, 2)} />
+          </Section>
+
+          <Section title="Per-Trade Risk (stop-distance)">
+            <Row label="Risk per trade %" value={fmtNum(data.effective.risk_per_trade_pct, 3)} />
+            <Row label="Hard risk %" value={fmtNum(data.effective.hard_risk_pct, 3)} />
+            <Row label="Stop mandatory" value={data.effective.stop_loss_mandatory ? 'YES' : 'NO'} />
+            <Row label="Stop reference" value={data.effective.stop_reference || '—'} />
+            <Row label="ATR period" value={data.effective.atr_period ?? '—'} />
+            <Row label="ATR mult (initial stop)" value={fmtNum(data.effective.atr_mult_initial_stop, 2)} />
+            <Row label="Fallback stop %" value={fmtNum(data.effective.fallback_stop_pct, 2)} />
+            <Row label="Min stop dist %" value={fmtNum(data.effective.min_stop_distance_pct, 2)} />
+            <Row label="Max stop dist %" value={fmtNum(data.effective.max_stop_distance_pct, 2)} />
+          </Section>
+
+          <Section title="Time + Frequency">
+            <Row label="Entry cutoff" value={data.effective.entry_cutoff_time || '—'} />
+            <Row label="Force squareoff" value={data.effective.force_squareoff_time || '—'} />
+            <Row label="Max trades/day" value={data.effective.max_trades_per_day ?? '—'} />
+            <Row label="Max trades/symbol/day" value={data.effective.max_trades_per_symbol_per_day ?? '—'} />
+            <Row label="Min bars between" value={data.effective.min_bars_between_trades ?? '—'} />
+            <Row label="Cooldown after loss (bars)" value={data.effective.cooldown_after_loss_bars ?? '—'} />
+          </Section>
+
+          {data.effective.blocking_reasons?.length ? (
+            <Alert severity="warning" sx={{ mt: 1 }}>
+              {data.effective.blocking_reasons.join(' • ')}
+            </Alert>
+          ) : null}
         </>
-      ) : (
-        <Typography variant="caption" color="text.secondary">
-          {busy ? 'Loading…' : 'No data.'}
-        </Typography>
       )}
 
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={2500}
-        onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
-      >
-        <Alert
-          onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
-          severity={snackbar.severity}
-          sx={{ width: '100%' }}
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+        autoHideDuration={1200}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        message={snackbar.message}
+      />
     </Paper>
   )
 }

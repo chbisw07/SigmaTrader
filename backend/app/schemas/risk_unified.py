@@ -44,6 +44,16 @@ class RiskSourceOverrideRead(BaseModel):
     max_positions: int | None = None
     max_exposure_pct: float | None = None
 
+    risk_per_trade_pct: float | None = None
+    hard_risk_pct: float | None = None
+    stop_loss_mandatory: bool | None = None
+    stop_reference: str | None = None
+    atr_period: int | None = None
+    atr_mult_initial_stop: float | None = None
+    fallback_stop_pct: float | None = None
+    min_stop_distance_pct: float | None = None
+    max_stop_distance_pct: float | None = None
+
     daily_loss_pct: float | None = None
     hard_daily_loss_pct: float | None = None
     max_consecutive_losses: int | None = None
@@ -79,6 +89,16 @@ class RiskSourceOverrideUpsert(BaseModel):
     capital_per_trade: float | None = None
     max_positions: int | None = None
     max_exposure_pct: float | None = None
+
+    risk_per_trade_pct: float | None = None
+    hard_risk_pct: float | None = None
+    stop_loss_mandatory: bool | None = None
+    stop_reference: str | None = None
+    atr_period: int | None = None
+    atr_mult_initial_stop: float | None = None
+    fallback_stop_pct: float | None = None
+    min_stop_distance_pct: float | None = None
+    max_stop_distance_pct: float | None = None
 
     daily_loss_pct: float | None = None
     hard_daily_loss_pct: float | None = None

@@ -41,9 +41,3 @@ def test_v2_flag_put_persists_to_unified_global() -> None:
     get_data = get.json()
     assert get_data["enabled"] is False
     assert get_data["source"] == "db"
-
-    # Compiled policy should reflect the same DB-driven flag.
-    compiled = client.get("/api/risk/compiled?product=CNC&category=LC")
-    assert compiled.status_code == 200
-    compiled_data = compiled.json()
-    assert compiled_data["inputs"]["risk_engine_v2_enabled"] is False

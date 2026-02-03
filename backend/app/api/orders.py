@@ -891,6 +891,7 @@ def execute_order_internal(
             baseline_equity = float(risk_global.baseline_equity_inr or 0.0)
             decision = evaluate_order_risk_v2(
                 db,
+                settings,
                 user=user_obj,
                 order=order,
                 baseline_equity=baseline_equity,

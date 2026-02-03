@@ -1,245 +1,88 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
-from math import floor
-from typing import Any, Literal, cast
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.models import AnalyticsTrade, DrawdownThreshold, Order, RiskProfile, User
-from app.schemas.risk_policy import OrderSourceBucket, ProductOverrides, ProductType
-from app.services.risk_engine_v2_flag_store import get_risk_engine_v2_enabled
-from app.services.risk_policy_enforcement import is_group_enforced
-from app.services.risk_policy_store import get_risk_policy
+from app.models import RiskProfile, User
+from app.schemas.risk_compiled import (
+    CompiledDrawdownThresholds,
+    CompiledRiskEffective,
+    CompiledRiskOverride,
+    CompiledRiskProfileRef,
+    CompiledRiskProvenance,
+    DrawdownState,
+    RiskCategory,
+    RiskProduct,
+    RiskSourceBucket,
+)
+from app.services.risk_engine_v2 import (
+    _ensure_v2_bootstrap_rows,  # type: ignore[attr-defined]
+    apply_drawdown_throttle,
+    compute_portfolio_pnl_state,
+    drawdown_state,
+    resolve_drawdown_config,
+)
+from app.services.risk_unified_store import get_source_override, read_unified_risk_global
 
-DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HARD_STOP"]
-RiskCategory = Literal["LC", "MC", "SC", "ETF"]
-RiskProduct = Literal["CNC", "MIS"]
-
-IST_OFFSET = timedelta(hours=5, minutes=30)
-
-
-def _as_of_date_ist(now_utc: datetime) -> date:
-    return (now_utc + IST_OFFSET).date()
-
-
-def _day_bounds_ist(now_utc: datetime) -> tuple[datetime, datetime]:
-    d = _as_of_date_ist(now_utc)
-    start_ist = datetime(d.year, d.month, d.day, tzinfo=UTC) - IST_OFFSET
-    end_ist = start_ist + timedelta(days=1)
-    return start_ist, end_ist
-
-
-@dataclass(frozen=True)
-class PortfolioPnlState:
-    baseline_equity: float
-    equity: float
-    peak_equity: float
-    drawdown_pct: float
-    pnl_today: float
-    consecutive_losses: int
+ProvSource = Literal["global", "profile", "source_override", "computed", "default", "unknown"]
 
 
 @dataclass(frozen=True)
-class DrawdownConfig:
-    caution_pct: float
-    defense_pct: float
-    hard_stop_pct: float
+class _ResolveResult:
+    value: Any
+    provenance: CompiledRiskProvenance
+    override: CompiledRiskOverride | None = None
 
 
-def select_risk_profile(db: Session, *, product: RiskProduct) -> RiskProfile | None:
-    prod = (product or "").strip().upper()
-    row = (
-        db.query(RiskProfile)
-        .filter(
-            RiskProfile.enabled.is_(True),
-            RiskProfile.is_default.is_(True),
-            RiskProfile.product == prod,
-        )
-        .one_or_none()
-    )
-    if row is not None:
-        return row
-    return (
-        db.query(RiskProfile)
-        .filter(RiskProfile.enabled.is_(True), RiskProfile.product == prod)
-        .order_by(RiskProfile.id)
-        .first()
+def _profile_ref(p: RiskProfile) -> CompiledRiskProfileRef:
+    return CompiledRiskProfileRef(
+        id=int(p.id),
+        name=str(p.name),
+        product=str(p.product),  # type: ignore[arg-type]
+        enabled=bool(p.enabled),
+        is_default=bool(p.is_default),
     )
 
 
-def resolve_drawdown_config(
-    db: Session,
+def _allow_entries(drawdown: DrawdownState | None, *, category: str) -> bool:
+    if drawdown == "HARD_STOP":
+        return False
+    if drawdown == "DEFENSE" and (category or "").strip().upper() not in {"ETF", "LC"}:
+        return False
+    return True
+
+
+def _resolve(
     *,
-    product: RiskProduct,
-    category: RiskCategory,
-) -> DrawdownConfig | None:
-    prod = (product or "").strip().upper()
-    cat = (category or "").strip().upper()
-    row = (
-        db.query(DrawdownThreshold)
-        .filter(
-            DrawdownThreshold.user_id.is_(None),
-            DrawdownThreshold.product == prod,
-            DrawdownThreshold.category == cat,
-        )
-        .one_or_none()
+    field: str,
+    profile_value: Any,
+    override_value: Any,
+    profile_name: str | None,
+    source_bucket: str,
+    product: str,
+) -> _ResolveResult:
+    if override_value is not None:
+        prov = CompiledRiskProvenance(source="source_override", detail=f"{source_bucket}/{product}")
+        ov = None
+        if profile_value != override_value:
+            ov = CompiledRiskOverride(
+                field=field,
+                from_value=profile_value,
+                to_value=override_value,
+                reason="Source override",
+                source="source_override",
+            )
+        return _ResolveResult(value=override_value, provenance=prov, override=ov)
+    prov_src: ProvSource = "profile" if profile_name is not None else "default"
+    return _ResolveResult(
+        value=profile_value,
+        provenance=CompiledRiskProvenance(source=prov_src, detail=profile_name),
+        override=None,
     )
-    if row is None:
-        return None
-    return DrawdownConfig(
-        caution_pct=float(row.caution_pct or 0.0),
-        defense_pct=float(row.defense_pct or 0.0),
-        hard_stop_pct=float(row.hard_stop_pct or 0.0),
-    )
-
-
-def compute_portfolio_pnl_state(
-    db: Session,
-    *,
-    user_id: int | None,
-    baseline_equity: float,
-    now_utc: datetime,
-) -> PortfolioPnlState:
-    base = float(baseline_equity or 0.0)
-    if base <= 0:
-        return PortfolioPnlState(
-            baseline_equity=base,
-            equity=base,
-            peak_equity=base,
-            drawdown_pct=0.0,
-            pnl_today=0.0,
-            consecutive_losses=0,
-        )
-
-    query = db.query(AnalyticsTrade).join(Order, AnalyticsTrade.entry_order_id == Order.id)
-    if user_id is not None:
-        query = query.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
-    trades = query.order_by(AnalyticsTrade.closed_at.asc()).all()
-
-    start_day, end_day = _day_bounds_ist(now_utc)
-    pnl_today = 0.0
-    cumulative = 0.0
-    peak_cum = 0.0
-
-    for t in trades:
-        pnl = float(t.pnl or 0.0)
-        cumulative += pnl
-        if cumulative > peak_cum:
-            peak_cum = cumulative
-        if t.closed_at >= start_day and t.closed_at < end_day:
-            pnl_today += pnl
-
-    streak = 0
-    for t in reversed(trades):
-        pnl = float(t.pnl or 0.0)
-        if pnl < 0:
-            streak += 1
-        else:
-            break
-
-    equity = base + cumulative
-    peak_equity = max(base, base + peak_cum)
-    dd = 0.0
-    if peak_equity > 0:
-        dd = ((peak_equity - equity) / peak_equity) * 100.0
-        if dd < 0:
-            dd = 0.0
-
-    return PortfolioPnlState(
-        baseline_equity=base,
-        equity=equity,
-        peak_equity=peak_equity,
-        drawdown_pct=dd,
-        pnl_today=pnl_today,
-        consecutive_losses=streak,
-    )
-
-
-def drawdown_state(
-    dd_pct: float,
-    cfg: DrawdownConfig,
-) -> DrawdownState:
-    dd = float(dd_pct or 0.0)
-    if float(cfg.hard_stop_pct or 0.0) > 0 and dd >= float(cfg.hard_stop_pct):
-        return "HARD_STOP"
-    if float(cfg.defense_pct or 0.0) > 0 and dd >= float(cfg.defense_pct):
-        return "DEFENSE"
-    if float(cfg.caution_pct or 0.0) > 0 and dd >= float(cfg.caution_pct):
-        return "CAUTION"
-    return "NORMAL"
-
-
-@dataclass(frozen=True)
-class V2ThrottleResult:
-    throttle_multiplier: float
-    effective_capital_per_trade: float
-    effective_max_positions: int
-    allow_new_entries: bool
-    reasons: list[str]
-
-
-def apply_drawdown_throttle_v2(
-    *,
-    profile: RiskProfile,
-    state: DrawdownState,
-    category: RiskCategory,
-) -> V2ThrottleResult:
-    reasons: list[str] = []
-    cap = float(profile.capital_per_trade or 0.0)
-    max_pos = int(profile.max_positions or 0)
-    multiplier = 1.0
-
-    if state == "CAUTION":
-        multiplier = 0.7
-        cap = cap * multiplier
-        max_pos = max(1, int(floor(max_pos * multiplier))) if max_pos > 0 else 0
-        reasons.append("Drawdown CAUTION: throttling capital_per_trade and max_positions.")
-        return V2ThrottleResult(
-            throttle_multiplier=multiplier,
-            effective_capital_per_trade=cap,
-            effective_max_positions=max_pos,
-            allow_new_entries=True,
-            reasons=reasons,
-        )
-
-    if state == "DEFENSE":
-        cat = (category or "").strip().upper()
-        allow = cat in {"ETF", "LC"}
-        if not allow:
-            reasons.append("Drawdown DEFENSE: new entries restricted to ETF/LC symbols.")
-        return V2ThrottleResult(
-            throttle_multiplier=multiplier,
-            effective_capital_per_trade=cap,
-            effective_max_positions=max_pos,
-            allow_new_entries=allow,
-            reasons=reasons,
-        )
-
-    if state == "HARD_STOP":
-        reasons.append("Drawdown HARD_STOP: new entries blocked.")
-        return V2ThrottleResult(
-            throttle_multiplier=multiplier,
-            effective_capital_per_trade=cap,
-            effective_max_positions=max_pos,
-            allow_new_entries=False,
-            reasons=reasons,
-        )
-
-    return V2ThrottleResult(
-        throttle_multiplier=multiplier,
-        effective_capital_per_trade=cap,
-        effective_max_positions=max_pos,
-        allow_new_entries=True,
-        reasons=reasons,
-    )
-
-
-def _normalize_product(product: RiskProduct) -> ProductType:
-    p = (product or "").strip().upper()
-    return cast(ProductType, "MIS" if p == "MIS" else "CNC")
 
 
 def compile_risk_policy(
@@ -249,364 +92,296 @@ def compile_risk_policy(
     user: User | None,
     product: RiskProduct,
     category: RiskCategory,
+    source_bucket: RiskSourceBucket = "TRADINGVIEW",
+    order_type: str | None = None,
     scenario: DrawdownState | None = None,
     symbol: str | None = None,
     strategy_id: str | None = None,
 ) -> dict[str, Any]:
-    now_utc = datetime.now(UTC)
-    policy, policy_source = get_risk_policy(db, settings)
+    """UI-facing "Effective Risk Summary" for the unified risk system."""
 
-    manual_equity = float(getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0)
-    user_id = user.id if user is not None else None
+    now_utc = datetime.now(UTC)
+    _ensure_v2_bootstrap_rows(db)
+
+    g = read_unified_risk_global(db)
+    baseline_equity = float(g.baseline_equity_inr or 0.0)
+
+    # Select the default enabled profile for this product.
+    prof = (
+        db.query(RiskProfile)
+        .filter(
+            RiskProfile.enabled.is_(True),
+            RiskProfile.is_default.is_(True),
+            RiskProfile.product == (product or "CNC"),
+        )
+        .one_or_none()
+    )
+    if prof is None:
+        prof = (
+            db.query(RiskProfile)
+            .filter(RiskProfile.enabled.is_(True), RiskProfile.product == (product or "CNC"))
+            .order_by(RiskProfile.id)
+            .first()
+        )
+
+    src = (source_bucket or "TRADINGVIEW").strip().upper()
+    if src not in {"TRADINGVIEW", "SIGMATRADER", "MANUAL"}:
+        src = "TRADINGVIEW"
+
+    src_override = None
+    if src != "MANUAL" and prof is not None:
+        src_override = get_source_override(
+            db,
+            source_bucket=src,  # type: ignore[arg-type]
+            product=str(prof.product).strip().upper(),  # type: ignore[arg-type]
+        )
+
+    profile_name = str(prof.name) if prof is not None else None
+
+    provenance: dict[str, CompiledRiskProvenance] = {
+        "risk_enabled": CompiledRiskProvenance(source="global"),
+        "manual_override_enabled": CompiledRiskProvenance(source="global"),
+        "baseline_equity_inr": CompiledRiskProvenance(source="global"),
+    }
+    overrides: list[CompiledRiskOverride] = []
+
+    # Drawdown state (live, with optional what-if override).
+    dd_cfg = resolve_drawdown_config(db, product=product, category=category)
+    thresholds = None
+    if dd_cfg is not None:
+        thresholds = CompiledDrawdownThresholds(
+            caution_pct=float(dd_cfg.caution_pct),
+            defense_pct=float(dd_cfg.defense_pct),
+            hard_stop_pct=float(dd_cfg.hard_stop_pct),
+        )
+
     pnl_state = compute_portfolio_pnl_state(
         db,
-        user_id=user_id,
-        baseline_equity=manual_equity,
+        user_id=(user.id if user is not None else None),
+        baseline_equity=baseline_equity,
         now_utc=now_utc,
     )
+    dd_pct = float(pnl_state.drawdown_pct)
 
-    prod_norm = cast(RiskProduct, (product or "").strip().upper() or "CNC")
-    cat_norm = cast(RiskCategory, (category or "").strip().upper() or "LC")
-
-    v2_profile = select_risk_profile(db, product=prod_norm)
-    dd_cfg = resolve_drawdown_config(db, product=prod_norm, category=cat_norm)
-
-    overrides: list[dict[str, Any]] = []
-    provenance: dict[str, dict[str, Any]] = {}
-    blocking_reasons: list[str] = []
-
-    computed_state: DrawdownState | None = None
+    dd_state: DrawdownState | None = None
+    missing_thresholds_reason: str | None = None
     if dd_cfg is not None:
-        computed_state = drawdown_state(pnl_state.drawdown_pct, dd_cfg)
-        provenance["risk_engine_v2.drawdown_state"] = {
-            "source": "computed",
-            "detail": "computed from drawdown_pct + thresholds",
-        }
-    effective_state = scenario or computed_state
-    if scenario is not None and computed_state is not None and scenario != computed_state:
-        overrides.append(
-            {
-                "field": "risk_engine_v2.drawdown_state",
-                "from_value": computed_state,
-                "to_value": scenario,
-                "reason": "Scenario override",
-                "source": "STATE_OVERRIDE",
-            }
-        )
-        provenance["risk_engine_v2.drawdown_state"] = {
-            "source": "state_override",
-            "detail": "forced by ?scenario=",
-        }
-
-    if v2_profile is None:
-        blocking_reasons.append("Missing RiskProfile (create at least one enabled profile for the selected product).")
-        provenance["risk_engine_v2.profile"] = {"source": "unknown", "detail": "missing"}
+        dd_state = drawdown_state(dd_pct, dd_cfg)
+    elif src != "MANUAL":
+        missing_thresholds_reason = f"Missing drawdown thresholds for {product}+{category} (configure in Settings)."
+    if scenario is not None:
+        dd_state = scenario
+        provenance["drawdown_state"] = CompiledRiskProvenance(source="computed", detail="what_if_override")
     else:
-        provenance["risk_engine_v2.profile"] = {
-            "source": "profile",
-            "detail": f"{v2_profile.name} (id={v2_profile.id})",
-        }
+        provenance["drawdown_state"] = CompiledRiskProvenance(source="computed", detail="live_dd_pct")
 
-    if dd_cfg is None:
-        blocking_reasons.append(
-            f"Missing drawdown thresholds for {prod_norm}+{cat_norm} (configure in Settings)."
+    # Resolve fields with precedence: source override -> profile.
+    def pv(attr: str, default: Any) -> Any:
+        return getattr(prof, attr, default) if prof is not None else default
+
+    def ov(attr: str) -> Any:
+        return getattr(src_override, attr, None) if src_override is not None else None
+
+    resolved: dict[str, Any] = {}
+    for field, attr, default in (
+        ("capital_per_trade", "capital_per_trade", 0.0),
+        ("max_positions", "max_positions", 0),
+        ("max_exposure_pct", "max_exposure_pct", 0.0),
+        ("daily_loss_pct", "daily_loss_pct", 0.0),
+        ("hard_daily_loss_pct", "hard_daily_loss_pct", 0.0),
+        ("max_consecutive_losses", "max_consecutive_losses", 0),
+        ("risk_per_trade_pct", "risk_per_trade_pct", 0.0),
+        ("hard_risk_pct", "hard_risk_pct", 0.0),
+        ("stop_loss_mandatory", "stop_loss_mandatory", True),
+        ("stop_reference", "stop_reference", "ATR"),
+        ("atr_period", "atr_period", 14),
+        ("atr_mult_initial_stop", "atr_mult_initial_stop", 2.0),
+        ("fallback_stop_pct", "fallback_stop_pct", 1.0),
+        ("min_stop_distance_pct", "min_stop_distance_pct", 0.5),
+        ("max_stop_distance_pct", "max_stop_distance_pct", 3.0),
+        ("entry_cutoff_time", "entry_cutoff_time", None),
+        ("force_squareoff_time", "force_squareoff_time", None),
+        ("max_trades_per_day", "max_trades_per_day", None),
+        ("max_trades_per_symbol_per_day", "max_trades_per_symbol_per_day", None),
+        ("min_bars_between_trades", "min_bars_between_trades", None),
+        ("cooldown_after_loss_bars", "cooldown_after_loss_bars", None),
+    ):
+        r = _resolve(
+            field=field,
+            profile_value=pv(attr, default),
+            override_value=ov(attr),
+            profile_name=profile_name,
+            source_bucket=src,
+            product=str(product),
         )
-        provenance["risk_engine_v2.thresholds"] = {"source": "unknown", "detail": "missing"}
-    else:
-        provenance["risk_engine_v2.thresholds"] = {"source": "drawdown_settings", "detail": f"{prod_norm}+{cat_norm}"}
+        resolved[field] = r.value
+        provenance[field] = r.provenance
+        if r.override is not None:
+            overrides.append(r.override)
 
-    throttle = None
-    allow_new_entries_v2 = True
-    if v2_profile is not None:
-        state_for_throttle: DrawdownState = effective_state or "NORMAL"
-        throttle = apply_drawdown_throttle_v2(profile=v2_profile, state=state_for_throttle, category=cat_norm)
-        if throttle.reasons:
-            for r in throttle.reasons:
-                overrides.append(
-                    {
-                        "field": "risk_engine_v2.drawdown_throttle",
-                        "from_value": None,
-                        "to_value": r,
-                        "reason": r,
-                        "source": "DD_THROTTLE",
-                    }
-                )
-        allow_new_entries_v2 = bool(throttle.allow_new_entries)
-        if not allow_new_entries_v2 and state_for_throttle in {"DEFENSE", "HARD_STOP"}:
-            blocking_reasons.append("Drawdown state blocks new entries for the selected product/category.")
-    else:
-        allow_new_entries_v2 = False
-
-    # Risk policy compilation (for both sources).
-    ovr_on = is_group_enforced(policy, "overrides")
-    exec_on = is_group_enforced(policy, "execution_safety")
-    prod_type = _normalize_product(prod_norm)
-
-    def _policy_effective(source: OrderSourceBucket) -> dict[str, Any]:
-        ovr: ProductOverrides = (
-            policy.product_overrides(source=source, product=prod_type)
-            if ovr_on
-            else ProductOverrides()
-        )
-
-        allow = ovr.allow if (ovr_on and ovr.allow is not None) else None
-        if allow is None:
-            allow = policy.execution_safety.allow_mis if prod_type == "MIS" else policy.execution_safety.allow_cnc
-
-        if exec_on:
-            provenance[f"risk_policy.{source}.{prod_type}.allow_product"] = {
-                "source": "risk_policy",
-                "detail": "execution_safety + overrides",
-            }
-        else:
-            provenance[f"risk_policy.{source}.{prod_type}.allow_product"] = {
-                "source": "risk_policy",
-                "detail": "execution_safety group disabled",
-            }
-
-        base_cap = float(policy.position_sizing.capital_per_trade or 0.0)
-        cap = float(ovr.capital_per_trade) if (ovr_on and ovr.capital_per_trade is not None) else base_cap
-        if ovr_on and ovr.capital_per_trade is not None and float(ovr.capital_per_trade) != base_cap:
-            overrides.append(
-                {
-                    "field": f"risk_policy.{source}.{prod_type}.capital_per_trade",
-                    "from_value": base_cap,
-                    "to_value": cap,
-                    "reason": "Product override capital_per_trade",
-                    "source": "RISK_POLICY_OVERRIDE",
-                }
-            )
-        provenance[f"risk_policy.{source}.{prod_type}.capital_per_trade"] = {
-            "source": "risk_policy",
-            "detail": "position_sizing + overrides",
-        }
-
-        base_risk = float(policy.trade_risk.max_risk_per_trade_pct or 0.0)
-        risk_pct = (
-            float(ovr.max_risk_per_trade_pct)
-            if (ovr_on and ovr.max_risk_per_trade_pct is not None)
-            else base_risk
-        )
-        if ovr_on and ovr.max_risk_per_trade_pct is not None and float(ovr.max_risk_per_trade_pct) != base_risk:
-            overrides.append(
-                {
-                    "field": f"risk_policy.{source}.{prod_type}.max_risk_per_trade_pct",
-                    "from_value": base_risk,
-                    "to_value": risk_pct,
-                    "reason": "Product override max_risk_per_trade_pct",
-                    "source": "RISK_POLICY_OVERRIDE",
-                }
-            )
-        provenance[f"risk_policy.{source}.{prod_type}.max_risk_per_trade_pct"] = {
-            "source": "risk_policy",
-            "detail": "trade_risk + overrides",
-        }
-
-        base_hard = float(policy.trade_risk.hard_max_risk_pct or 0.0)
-        hard_pct = float(ovr.hard_max_risk_pct) if (ovr_on and ovr.hard_max_risk_pct is not None) else base_hard
-        if ovr_on and ovr.hard_max_risk_pct is not None and float(ovr.hard_max_risk_pct) != base_hard:
-            overrides.append(
-                {
-                    "field": f"risk_policy.{source}.{prod_type}.hard_max_risk_pct",
-                    "from_value": base_hard,
-                    "to_value": hard_pct,
-                    "reason": "Product override hard_max_risk_pct",
-                    "source": "RISK_POLICY_OVERRIDE",
-                }
-            )
-        provenance[f"risk_policy.{source}.{prod_type}.hard_max_risk_pct"] = {
-            "source": "risk_policy",
-            "detail": "trade_risk + overrides",
-        }
-
-        max_order_pct = float(policy.execution_safety.max_order_value_pct or 0.0)
-        max_order_abs_from_pct = (
-            manual_equity * max_order_pct / 100.0 if (manual_equity > 0 and max_order_pct > 0) else None
-        )
-
-        max_order_abs_override = (
-            float(ovr.max_order_value_abs)
-            if (ovr_on and ovr.max_order_value_abs is not None)
-            else None
-        )
-        max_qty_override = (
-            float(ovr.max_quantity_per_order)
-            if (ovr_on and ovr.max_quantity_per_order is not None)
-            else None
-        )
-
-        max_daily_loss_abs = None
-        if policy.account_risk.max_daily_loss_abs is not None:
-            max_daily_loss_abs = float(policy.account_risk.max_daily_loss_abs)
-        elif manual_equity > 0:
-            max_daily_loss_abs = (
-                manual_equity
-                * float(policy.account_risk.max_daily_loss_pct or 0.0)
-                / 100.0
-            )
-
-        return {
-            "allow_product": bool(allow),
-            "allow_short_selling": bool(policy.execution_safety.allow_short_selling),
-            "manual_equity_inr": manual_equity,
-            "max_daily_loss_pct": float(policy.account_risk.max_daily_loss_pct or 0.0),
-            "max_daily_loss_abs": max_daily_loss_abs,
-            "max_exposure_pct": float(policy.account_risk.max_exposure_pct or 0.0),
-            "max_open_positions": int(policy.account_risk.max_open_positions or 0),
-            "max_concurrent_symbols": int(policy.account_risk.max_concurrent_symbols or 0),
-            "max_order_value_pct": max_order_pct,
-            "max_order_value_abs_from_pct": max_order_abs_from_pct,
-            "max_order_value_abs_override": max_order_abs_override,
-            "max_quantity_per_order": max_qty_override,
-            "max_risk_per_trade_pct": risk_pct,
-            "hard_max_risk_pct": hard_pct,
-            "stop_loss_mandatory": bool(policy.trade_risk.stop_loss_mandatory),
-            "capital_per_trade": cap,
-            "allow_scale_in": bool(policy.position_sizing.allow_scale_in),
-            "pyramiding": int(policy.position_sizing.pyramiding or 1),
-            "stop_reference": str(policy.trade_risk.stop_reference),
-            "atr_period": int(policy.stop_rules.atr_period or 14),
-            "atr_mult_initial_stop": float(policy.stop_rules.initial_stop_atr or 0.0),
-            "fallback_stop_pct": float(policy.stop_rules.fallback_stop_pct or 0.0),
-            "min_stop_distance_pct": float(policy.stop_rules.min_stop_distance_pct or 0.0),
-            "max_stop_distance_pct": float(policy.stop_rules.max_stop_distance_pct or 0.0),
-            "trailing_stop_enabled": bool(policy.stop_rules.trailing_stop_enabled),
-            "trail_activation_atr": float(policy.stop_rules.trail_activation_atr or 0.0),
-            "trail_activation_pct": float(policy.stop_rules.trail_activation_pct or 0.0),
-            "max_trades_per_symbol_per_day": int(policy.trade_frequency.max_trades_per_symbol_per_day or 0),
-            "min_bars_between_trades": int(policy.trade_frequency.min_bars_between_trades or 0),
-            "cooldown_after_loss_bars": int(policy.trade_frequency.cooldown_after_loss_bars or 0),
-            "max_consecutive_losses": int(policy.loss_controls.max_consecutive_losses or 0),
-            "pause_after_loss_streak": bool(policy.loss_controls.pause_after_loss_streak),
-            "pause_duration": str(policy.loss_controls.pause_duration or ""),
-        }
-
-    policy_by_source = {
-        "TRADINGVIEW": _policy_effective("TRADINGVIEW"),
-        "SIGMATRADER": _policy_effective("SIGMATRADER"),
-    }
-
-    risk_engine_v2_enabled, _v2_src = get_risk_engine_v2_enabled(db, settings)
-    allow_new_entries = True
-    if risk_engine_v2_enabled and blocking_reasons:
-        allow_new_entries = False
-    if risk_engine_v2_enabled and not allow_new_entries_v2:
-        allow_new_entries = False
-
-    throttle_multiplier = float(
-        getattr(throttle, "throttle_multiplier", 1.0) if throttle else 1.0
+    # Drawdown throttle applies to capital_per_trade and max_positions.
+    cap_before = float(resolved["capital_per_trade"] or 0.0)
+    max_pos_before = int(resolved["max_positions"] or 0)
+    cap_eff, max_pos_eff, dd_reasons = apply_drawdown_throttle(
+        capital_per_trade=cap_before,
+        max_positions=max_pos_before,
+        state=dd_state or "NORMAL",
+        category=str(category),
     )
-    v2_capital_per_trade = None
-    if throttle is not None:
-        v2_capital_per_trade = float(throttle.effective_capital_per_trade)
-    elif v2_profile is not None:
-        v2_capital_per_trade = float(v2_profile.capital_per_trade)
 
-    v2_max_positions = None
-    if throttle is not None:
-        v2_max_positions = int(throttle.effective_max_positions)
-    elif v2_profile is not None:
-        v2_max_positions = int(v2_profile.max_positions)
+    throttle_multiplier = 1.0
+    if cap_before > 0 and cap_eff > 0:
+        throttle_multiplier = float(cap_eff) / float(cap_before)
 
-    result = {
+    if float(cap_eff) != float(cap_before):
+        overrides.append(
+            CompiledRiskOverride(
+                field="capital_per_trade",
+                from_value=cap_before,
+                to_value=float(cap_eff),
+                reason="Drawdown throttle",
+                source="computed",
+            )
+        )
+        provenance["capital_per_trade"] = CompiledRiskProvenance(source="computed", detail="drawdown_throttle")
+    if int(max_pos_eff) != int(max_pos_before):
+        overrides.append(
+            CompiledRiskOverride(
+                field="max_positions",
+                from_value=max_pos_before,
+                to_value=int(max_pos_eff),
+                reason="Drawdown throttle",
+                source="computed",
+            )
+        )
+        provenance["max_positions"] = CompiledRiskProvenance(source="computed", detail="drawdown_throttle")
+
+    resolved["capital_per_trade"] = float(cap_eff)
+    resolved["max_positions"] = int(max_pos_eff)
+
+    allow_new_entries = _allow_entries(dd_state, category=str(category))
+    if missing_thresholds_reason is not None:
+        allow_new_entries = False
+
+    # Source gating + per-order caps.
+    allow_product = True
+    allow_short_selling = True
+    max_order_value_pct = None
+    max_order_value_abs = None
+    max_qty_per_order = None
+    order_type_policy = None
+    slippage_guard_bps = None
+    gap_guard_pct = None
+    if src != "MANUAL" and src_override is not None:
+        if getattr(src_override, "allow_product", None) is False:
+            allow_product = False
+        if src_override.allow_short_selling is not None:
+            allow_short_selling = bool(src_override.allow_short_selling)
+        if src_override.max_order_value_pct is not None:
+            max_order_value_pct = float(src_override.max_order_value_pct)
+        if src_override.max_order_value_abs is not None:
+            max_order_value_abs = float(src_override.max_order_value_abs)
+        if src_override.max_quantity_per_order is not None:
+            max_qty_per_order = float(src_override.max_quantity_per_order)
+        order_type_policy = src_override.order_type_policy
+        slippage_guard_bps = src_override.slippage_guard_bps
+        gap_guard_pct = src_override.gap_guard_pct
+
+    provenance["allow_product"] = CompiledRiskProvenance(
+        source="source_override" if src_override is not None else "default",
+        detail=(f"{src}/{product}" if src_override is not None else None),
+    )
+    provenance["allow_short_selling"] = CompiledRiskProvenance(
+        source="source_override" if src_override is not None else "default",
+        detail=(f"{src}/{product}" if src_override is not None else None),
+    )
+
+    blocking_reasons = list(dd_reasons)
+    if missing_thresholds_reason is not None:
+        blocking_reasons.append(missing_thresholds_reason)
+    if not allow_product:
+        blocking_reasons.append(f"{src} {product} disabled by Risk Settings.")
+
+    eff = CompiledRiskEffective(
+        allow_new_entries=bool(g.enabled) and bool(allow_new_entries and allow_product),
+        blocking_reasons=blocking_reasons,
+        drawdown_state=dd_state,
+        throttle_multiplier=float(throttle_multiplier),
+        profile=_profile_ref(prof) if prof is not None else None,
+        thresholds=thresholds,
+        allow_product=bool(allow_product),
+        allow_short_selling=bool(allow_short_selling),
+        max_order_value_pct=max_order_value_pct,
+        max_order_value_abs=max_order_value_abs,
+        max_quantity_per_order=max_qty_per_order,
+        order_type_policy=order_type_policy,
+        slippage_guard_bps=slippage_guard_bps,
+        gap_guard_pct=gap_guard_pct,
+        capital_per_trade=float(resolved["capital_per_trade"]),
+        max_positions=int(resolved["max_positions"]),
+        max_exposure_pct=float(resolved["max_exposure_pct"]),
+        daily_loss_pct=float(resolved["daily_loss_pct"]),
+        hard_daily_loss_pct=float(resolved["hard_daily_loss_pct"]),
+        max_consecutive_losses=int(resolved["max_consecutive_losses"]),
+        risk_per_trade_pct=float(resolved["risk_per_trade_pct"]),
+        hard_risk_pct=float(resolved["hard_risk_pct"]),
+        stop_loss_mandatory=bool(resolved["stop_loss_mandatory"]),
+        stop_reference=str(resolved["stop_reference"]),
+        atr_period=int(resolved["atr_period"]),
+        atr_mult_initial_stop=float(resolved["atr_mult_initial_stop"]),
+        fallback_stop_pct=float(resolved["fallback_stop_pct"]),
+        min_stop_distance_pct=float(resolved["min_stop_distance_pct"]),
+        max_stop_distance_pct=float(resolved["max_stop_distance_pct"]),
+        entry_cutoff_time=(str(resolved["entry_cutoff_time"]) if resolved["entry_cutoff_time"] else None),
+        force_squareoff_time=(str(resolved["force_squareoff_time"]) if resolved["force_squareoff_time"] else None),
+        max_trades_per_day=(
+            int(resolved["max_trades_per_day"])
+            if resolved["max_trades_per_day"] is not None
+            else None
+        ),
+        max_trades_per_symbol_per_day=(
+            int(resolved["max_trades_per_symbol_per_day"])
+            if resolved["max_trades_per_symbol_per_day"] is not None
+            else None
+        ),
+        min_bars_between_trades=(
+            int(resolved["min_bars_between_trades"])
+            if resolved["min_bars_between_trades"] is not None
+            else None
+        ),
+        cooldown_after_loss_bars=(
+            int(resolved["cooldown_after_loss_bars"])
+            if resolved["cooldown_after_loss_bars"] is not None
+            else None
+        ),
+    )
+
+    # Pydantic v1/v2 compatibility.
+    eff_payload = eff.model_dump() if hasattr(eff, "model_dump") else eff.dict()
+    overrides_payload = [o.model_dump() if hasattr(o, "model_dump") else o.dict() for o in overrides]
+    provenance_payload = {k: (v.model_dump() if hasattr(v, "model_dump") else v.dict()) for k, v in provenance.items()}
+
+    return {
         "context": {
-            "product": prod_norm,
-            "category": cat_norm,
+            "product": product,
+            "category": category,
+            "source_bucket": src,
+            "order_type": order_type,
             "scenario": scenario,
             "symbol": symbol,
             "strategy_id": strategy_id,
         },
         "inputs": {
             "compiled_at": now_utc,
-            "risk_policy_source": policy_source,
-            "risk_policy_enabled": bool(getattr(policy, "enabled", False)),
-            "risk_engine_v2_enabled": risk_engine_v2_enabled,
-            "manual_equity_inr": manual_equity,
-            "drawdown_pct": pnl_state.drawdown_pct,
+            "risk_enabled": bool(g.enabled),
+            "manual_override_enabled": bool(g.manual_override_enabled),
+            "baseline_equity_inr": float(baseline_equity),
+            "drawdown_pct": float(dd_pct) if baseline_equity > 0 else None,
         },
-        "effective": {
-            "allow_new_entries": bool(allow_new_entries),
-            "blocking_reasons": blocking_reasons,
-            "risk_policy_by_source": policy_by_source,
-            "risk_engine_v2": {
-                "drawdown_pct": pnl_state.drawdown_pct,
-                "drawdown_state": effective_state,
-                "allow_new_entries": bool(allow_new_entries_v2),
-                "throttle_multiplier": throttle_multiplier,
-                "profile": (
-                    {
-                        "id": int(v2_profile.id),
-                        "name": str(v2_profile.name),
-                        "product": str(v2_profile.product).upper(),
-                        "enabled": bool(v2_profile.enabled),
-                        "is_default": bool(v2_profile.is_default),
-                    }
-                    if v2_profile is not None
-                    else None
-                ),
-                "thresholds": (
-                    {
-                        "caution_pct": float(dd_cfg.caution_pct),
-                        "defense_pct": float(dd_cfg.defense_pct),
-                        "hard_stop_pct": float(dd_cfg.hard_stop_pct),
-                    }
-                    if dd_cfg is not None
-                    else None
-                ),
-                "capital_per_trade": v2_capital_per_trade,
-                "max_positions": v2_max_positions,
-                "max_exposure_pct": (
-                    float(v2_profile.max_exposure_pct) if v2_profile is not None else None
-                ),
-                "risk_per_trade_pct": (
-                    float(v2_profile.risk_per_trade_pct) if v2_profile is not None else None
-                ),
-                "hard_risk_pct": float(v2_profile.hard_risk_pct) if v2_profile is not None else None,
-                "daily_loss_pct": float(v2_profile.daily_loss_pct) if v2_profile is not None else None,
-                "hard_daily_loss_pct": (
-                    float(v2_profile.hard_daily_loss_pct) if v2_profile is not None else None
-                ),
-                "max_consecutive_losses": (
-                    int(v2_profile.max_consecutive_losses) if v2_profile is not None else None
-                ),
-                "entry_cutoff_time": v2_profile.entry_cutoff_time if v2_profile is not None else None,
-                "force_squareoff_time": (
-                    v2_profile.force_squareoff_time if v2_profile is not None else None
-                ),
-                "max_trades_per_day": v2_profile.max_trades_per_day if v2_profile is not None else None,
-                "max_trades_per_symbol_per_day": (
-                    v2_profile.max_trades_per_symbol_per_day if v2_profile is not None else None
-                ),
-                "min_bars_between_trades": (
-                    v2_profile.min_bars_between_trades if v2_profile is not None else None
-                ),
-                "cooldown_after_loss_bars": (
-                    v2_profile.cooldown_after_loss_bars if v2_profile is not None else None
-                ),
-                "slippage_guard_bps": (
-                    v2_profile.slippage_guard_bps if v2_profile is not None else None
-                ),
-                "gap_guard_pct": v2_profile.gap_guard_pct if v2_profile is not None else None,
-            },
-        },
-        "overrides": overrides,
-        "provenance": provenance,
+        "effective": eff_payload,
+        "overrides": overrides_payload,
+        "provenance": provenance_payload,
     }
 
-    return result
 
-
-__all__ = [
-    "DrawdownConfig",
-    "DrawdownState",
-    "PortfolioPnlState",
-    "RiskCategory",
-    "RiskProduct",
-    "V2ThrottleResult",
-    "apply_drawdown_throttle_v2",
-    "compile_risk_policy",
-    "compute_portfolio_pnl_state",
-    "drawdown_state",
-    "resolve_drawdown_config",
-    "select_risk_profile",
-]
+__all__ = ["compile_risk_policy"]

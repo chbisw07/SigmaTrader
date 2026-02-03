@@ -35,6 +35,14 @@ class RiskProfileBase(BaseModel):
     risk_per_trade_pct: float = 0.0
     hard_risk_pct: float = 0.0
 
+    stop_loss_mandatory: bool = True
+    stop_reference: Literal["ATR", "FIXED_PCT"] = "ATR"
+    atr_period: int = 14
+    atr_mult_initial_stop: float = 2.0
+    fallback_stop_pct: float = 1.0
+    min_stop_distance_pct: float = 0.5
+    max_stop_distance_pct: float = 3.0
+
     daily_loss_pct: float = 0.0
     hard_daily_loss_pct: float = 0.0
     max_consecutive_losses: int = 0
@@ -74,6 +82,14 @@ class RiskProfileUpdate(BaseModel):
 
     risk_per_trade_pct: Optional[float] = None
     hard_risk_pct: Optional[float] = None
+
+    stop_loss_mandatory: Optional[bool] = None
+    stop_reference: Optional[Literal["ATR", "FIXED_PCT"]] = None
+    atr_period: Optional[int] = None
+    atr_mult_initial_stop: Optional[float] = None
+    fallback_stop_pct: Optional[float] = None
+    min_stop_distance_pct: Optional[float] = None
+    max_stop_distance_pct: Optional[float] = None
 
     daily_loss_pct: Optional[float] = None
     hard_daily_loss_pct: Optional[float] = None
