@@ -84,16 +84,21 @@ export function PositionsPage() {
   const [activeTab, setActiveTab] = useState<PositionsTab>('snapshots')
   const [positions, setPositions] = useState<PositionSnapshot[]>([])
   const [loading, setLoading] = useState(true)
+  const [polling, setPolling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [live, setLive] = useState(true)
   const [analysis, setAnalysis] = useState<PositionsAnalysis | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisPolling, setAnalysisPolling] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
   const loadSeqRef = useRef(0)
   const analysisSeqRef = useRef(0)
+  const positionsKeyRef = useRef<string>('')
+  const analysisKeyRef = useRef<string>('')
+  const [lastLiveUpdateAt, setLastLiveUpdateAt] = useState<string | null>(null)
   const symbolApplyTimeoutRef = useRef<number | null>(null)
   const symbolAutoApplyMountedRef = useRef(false)
 
@@ -103,13 +108,25 @@ export function PositionsPage() {
   const [includeZero, setIncludeZero] = useState(true)
   const [startingCash, setStartingCash] = useState(0)
 
+  const _positionsKey = (rows: PositionSnapshot[]) => {
+    if (!rows.length) return '0:0'
+    let maxTs = 0
+    for (const r of rows) {
+      const ts = Date.parse(r.captured_at)
+      if (Number.isFinite(ts)) maxTs = Math.max(maxTs, ts)
+    }
+    return `${rows.length}:${maxTs}`
+  }
+
   const loadSnapshots = async (opts?: {
     preferLatest?: boolean
     includeZeroOverride?: boolean
+    silent?: boolean
   }) => {
     const seq = (loadSeqRef.current += 1)
     try {
-      setLoading(true)
+      if (opts?.silent) setPolling(true)
+      else setLoading(true)
       const params =
         opts?.preferLatest && !startDate && !endDate && !symbolQuery
           ? { broker_name: selectedBroker }
@@ -122,20 +139,33 @@ export function PositionsPage() {
             }
       const data = await fetchDailyPositions(params)
       if (seq !== loadSeqRef.current) return
-      setPositions(data)
-      setError(null)
+      const nextKey = _positionsKey(data)
+      if (nextKey !== positionsKeyRef.current) {
+        positionsKeyRef.current = nextKey
+        setPositions(data)
+        setLastLiveUpdateAt(new Date().toISOString())
+      }
+      if (!opts?.silent) setError(null)
     } catch (err) {
       if (seq !== loadSeqRef.current) return
-      setError(err instanceof Error ? err.message : 'Failed to load positions')
+      // Silent polling should not disrupt the table UX. The manual refresh button
+      // remains the source of truth for broker-side changes.
+      if (!opts?.silent) {
+        setError(err instanceof Error ? err.message : 'Failed to load positions')
+      }
     } finally {
-      if (seq === loadSeqRef.current) setLoading(false)
+      if (seq === loadSeqRef.current) {
+        if (opts?.silent) setPolling(false)
+        else setLoading(false)
+      }
     }
   }
 
-  const loadAnalysis = async () => {
+  const loadAnalysis = async (opts?: { silent?: boolean }) => {
     const seq = (analysisSeqRef.current += 1)
     try {
-      setAnalysisLoading(true)
+      if (opts?.silent) setAnalysisPolling(true)
+      else setAnalysisLoading(true)
       const data = await fetchPositionsAnalysis({
         broker_name: selectedBroker,
         start_date: startDate || undefined,
@@ -144,13 +174,23 @@ export function PositionsPage() {
         top_n: 10,
       })
       if (seq !== analysisSeqRef.current) return
-      setAnalysis(data)
-      setAnalysisError(null)
+      const key = JSON.stringify(data.summary ?? {})
+      if (key !== analysisKeyRef.current) {
+        analysisKeyRef.current = key
+        setAnalysis(data)
+        setLastLiveUpdateAt(new Date().toISOString())
+      }
+      if (!opts?.silent) setAnalysisError(null)
     } catch (err) {
       if (seq !== analysisSeqRef.current) return
-      setAnalysisError(err instanceof Error ? err.message : 'Failed to load analysis')
+      if (!opts?.silent) {
+        setAnalysisError(err instanceof Error ? err.message : 'Failed to load analysis')
+      }
     } finally {
-      if (seq === analysisSeqRef.current) setAnalysisLoading(false)
+      if (seq === analysisSeqRef.current) {
+        if (opts?.silent) setAnalysisPolling(false)
+        else setAnalysisLoading(false)
+      }
     }
   }
 
@@ -174,6 +214,8 @@ export function PositionsPage() {
     // When switching brokers, immediately clear the previous broker's rows so
     // the grid doesn't look "stuck" on the old broker while the request runs.
     setPositions([])
+    positionsKeyRef.current = ''
+    analysisKeyRef.current = ''
     setError(null)
     void loadSnapshots()
     if (activeTab === 'analysis') void loadAnalysis()
@@ -186,9 +228,10 @@ export function PositionsPage() {
     // Live mode only re-fetches cached rows from SigmaTrader DB; it does not
     // hit the broker. Broker changes still require "Refresh from <broker>".
     const id = window.setInterval(() => {
-      if (activeTab === 'snapshots') void loadSnapshots()
-      else if (activeTab === 'transactions') void loadSnapshots({ includeZeroOverride: true })
-      else if (activeTab === 'analysis') void loadAnalysis()
+      if (activeTab === 'snapshots') void loadSnapshots({ silent: true })
+      else if (activeTab === 'transactions') {
+        void loadSnapshots({ includeZeroOverride: true, silent: true })
+      } else if (activeTab === 'analysis') void loadAnalysis({ silent: true })
     }, 4000)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -848,6 +891,16 @@ export function PositionsPage() {
               label="Live"
               sx={{ mr: 0 }}
             />
+            {live ? (
+              <Stack direction="row" alignItems="center" spacing={0.75} sx={{ ml: 0.5 }}>
+                {polling || analysisPolling ? <CircularProgress size={14} /> : null}
+                <Typography variant="caption" color="text.secondary">
+                  {lastLiveUpdateAt
+                    ? `Updated ${formatInDisplayTimeZone(lastLiveUpdateAt, displayTimeZone)}`
+                    : '—'}
+                </Typography>
+              </Stack>
+            ) : null}
             {activeTab === 'transactions' && (
               <TextField
                 label="Starting cash (₹)"
