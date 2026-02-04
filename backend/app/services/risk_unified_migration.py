@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import json
 import logging
+from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.models import DrawdownThreshold, RiskGlobalConfig, RiskProfile, RiskSourceOverride, SymbolRiskCategory
-from app.services.risk_policy_store import get_risk_policy
+from app.core.crypto import decrypt_token
+from app.models import (
+    BrokerSecret,
+    DrawdownThreshold,
+    RiskGlobalConfig,
+    RiskProfile,
+    RiskSourceOverride,
+    SymbolRiskCategory,
+)
 from app.services.risk_unified_store import get_or_create_risk_global_config
 
 logger = logging.getLogger(__name__)
@@ -17,6 +26,46 @@ _CATEGORIES = ("LC", "MC", "SC", "ETF")
 _DEFAULT_CAPITAL_PER_TRADE = 20_000.0
 _DEFAULT_MAX_POSITIONS = 6
 _DEFAULT_MAX_EXPOSURE_PCT = 60.0
+
+_LEGACY_POLICY_BROKER = "risk"
+_LEGACY_POLICY_KEY = "risk_policy_v1"
+
+
+def _as_dict(obj: object) -> dict[str, Any]:
+    return obj if isinstance(obj, dict) else {}
+
+
+def _get_in(d: dict[str, Any], path: list[str], default: Any) -> Any:
+    cur: Any = d
+    for key in path:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(key)
+    return default if cur is None else cur
+
+
+def _read_legacy_policy_dict(db: Session, settings: Settings) -> tuple[dict[str, Any] | None, str]:
+    """Return (policy_dict, source) where source is db|missing|invalid."""
+
+    row = (
+        db.query(BrokerSecret)
+        .filter(
+            BrokerSecret.broker_name == _LEGACY_POLICY_BROKER,
+            BrokerSecret.key == _LEGACY_POLICY_KEY,
+            BrokerSecret.user_id.is_(None),
+        )
+        .one_or_none()
+    )
+    if row is None:
+        return None, "missing"
+    try:
+        raw = decrypt_token(settings, row.value_encrypted)
+        parsed = json.loads(raw) if raw else {}
+        if not isinstance(parsed, dict):
+            return None, "invalid"
+        return parsed, "db"
+    except Exception:
+        return None, "invalid"
 
 
 def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) -> bool:
@@ -34,12 +83,8 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
     )
     global_row = get_or_create_risk_global_config(db)
 
-    # Load v1 policy if present; if not, still seed the unified tables so the
-    # unified engine can run in fresh installs/tests (do not depend on legacy).
-    try:
-        policy, source = get_risk_policy(db, settings)
-    except Exception:
-        policy, source = None, "unavailable"
+    policy_raw, source = _read_legacy_policy_dict(db, settings)
+    policy = _as_dict(policy_raw)
 
     # Even when the legacy policy is the built-in default, we still ensure the
     # unified tables are seeded so the profile-based engine can operate without
@@ -49,22 +94,13 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
 
     # Align unified enforcement toggle with legacy v1, but only on first creation
     # to avoid overwriting explicit unified edits.
-    if existing_global is None and policy is not None:
-        try:
-            global_row.enabled = bool(getattr(policy, "enabled", True))
-            changed = True
-        except Exception:
-            pass
+    if existing_global is None and policy:
+        enabled = bool(_get_in(policy, ["enabled"], False))
+        global_row.enabled = bool(enabled)
+        changed = True
 
     # Baseline equity drives drawdown and daily loss checks; without it the unified engine blocks entries.
-    v1_equity = 0.0
-    try:
-        if policy is not None:
-            v1_equity = float(
-                getattr(getattr(policy, "equity", None), "manual_equity_inr", 0.0) or 0.0
-            )
-    except Exception:
-        v1_equity = 0.0
+    v1_equity = float(_get_in(policy, ["equity", "manual_equity_inr"], 0.0) or 0.0)
     if float(global_row.baseline_equity_inr or 0.0) <= 0:
         if v1_equity > 0:
             global_row.baseline_equity_inr = float(v1_equity)
@@ -73,86 +109,28 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
         changed = True
 
     # Map a few global caps into both product profiles (CNC/MIS) so behavior remains similar.
-    cap_per_trade = 0.0
-    try:
-        if policy is not None:
-            cap_per_trade = float(
-                getattr(getattr(policy, "position_sizing", None), "capital_per_trade", 0.0) or 0.0
-            )
-    except Exception:
-        cap_per_trade = 0.0
-    max_positions = 0
-    try:
-        if policy is not None:
-            max_positions = int(
-                getattr(getattr(policy, "account_risk", None), "max_open_positions", 0) or 0
-            )
-    except Exception:
-        max_positions = 0
-    max_exposure_pct = 0.0
-    try:
-        if policy is not None:
-            max_exposure_pct = float(
-                getattr(getattr(policy, "account_risk", None), "max_exposure_pct", 0.0) or 0.0
-            )
-    except Exception:
-        max_exposure_pct = 0.0
-    daily_loss_pct = 0.0
-    try:
-        if policy is not None:
-            daily_loss_pct = float(
-                getattr(getattr(policy, "account_risk", None), "max_daily_loss_pct", 0.0) or 0.0
-            )
-    except Exception:
-        daily_loss_pct = 0.0
-    max_losses = 0
-    try:
-        if policy is not None:
-            max_losses = int(
-                getattr(getattr(policy, "loss_controls", None), "max_consecutive_losses", 0) or 0
-            )
-    except Exception:
-        max_losses = 0
+    cap_per_trade = float(_get_in(policy, ["position_sizing", "capital_per_trade"], 0.0) or 0.0)
+    max_positions = int(_get_in(policy, ["account_risk", "max_open_positions"], 0) or 0)
+    max_exposure_pct = float(_get_in(policy, ["account_risk", "max_exposure_pct"], 0.0) or 0.0)
+    daily_loss_pct = float(_get_in(policy, ["account_risk", "max_daily_loss_pct"], 0.0) or 0.0)
+    max_losses = int(_get_in(policy, ["loss_controls", "max_consecutive_losses"], 0) or 0)
 
     # Per-trade + stop model settings (used for risk_per_trade enforcement).
-    risk_per_trade_pct = 0.0
-    hard_risk_pct = 0.0
-    stop_loss_mandatory = True
-    stop_reference = "ATR"
-    atr_period = 14
-    atr_mult_initial_stop = 2.0
-    fallback_stop_pct = 1.0
-    min_stop_distance_pct = 0.5
-    max_stop_distance_pct = 3.0
-    try:
-        if policy is not None:
-            risk_per_trade_pct = float(
-                getattr(getattr(policy, "trade_risk", None), "max_risk_per_trade_pct", 0.0) or 0.0
-            )
-            hard_risk_pct = float(
-                getattr(getattr(policy, "trade_risk", None), "hard_max_risk_pct", 0.0) or 0.0
-            )
-            stop_loss_mandatory = bool(
-                getattr(getattr(policy, "trade_risk", None), "stop_loss_mandatory", True)
-            )
-            stop_reference = str(
-                getattr(getattr(policy, "trade_risk", None), "stop_reference", "ATR") or "ATR"
-            ).strip().upper()
-            atr_period = int(getattr(getattr(policy, "stop_rules", None), "atr_period", 14) or 14)
-            atr_mult_initial_stop = float(
-                getattr(getattr(policy, "stop_rules", None), "initial_stop_atr", 2.0) or 2.0
-            )
-            fallback_stop_pct = float(
-                getattr(getattr(policy, "stop_rules", None), "fallback_stop_pct", 1.0) or 1.0
-            )
-            min_stop_distance_pct = float(
-                getattr(getattr(policy, "stop_rules", None), "min_stop_distance_pct", 0.5) or 0.5
-            )
-            max_stop_distance_pct = float(
-                getattr(getattr(policy, "stop_rules", None), "max_stop_distance_pct", 3.0) or 3.0
-            )
-    except Exception:
-        pass
+    risk_per_trade_pct = float(_get_in(policy, ["trade_risk", "max_risk_per_trade_pct"], 0.0) or 0.0)
+    hard_risk_pct = float(_get_in(policy, ["trade_risk", "hard_max_risk_pct"], 0.0) or 0.0)
+    stop_loss_mandatory = bool(_get_in(policy, ["trade_risk", "stop_loss_mandatory"], True))
+    stop_reference = str(_get_in(policy, ["trade_risk", "stop_reference"], "ATR") or "ATR").strip().upper()
+    atr_period = int(_get_in(policy, ["stop_rules", "atr_period"], 14) or 14)
+    atr_mult_initial_stop = float(_get_in(policy, ["stop_rules", "initial_stop_atr"], 2.0) or 2.0)
+    fallback_stop_pct = float(_get_in(policy, ["stop_rules", "fallback_stop_pct"], 1.0) or 1.0)
+    min_stop_distance_pct = float(_get_in(policy, ["stop_rules", "min_stop_distance_pct"], 0.5) or 0.5)
+    max_stop_distance_pct = float(_get_in(policy, ["stop_rules", "max_stop_distance_pct"], 3.0) or 3.0)
+    trailing_stop_enabled = bool(_get_in(policy, ["stop_rules", "trailing_stop_enabled"], True))
+    trail_activation_atr = float(_get_in(policy, ["stop_rules", "trail_activation_atr"], 2.5) or 2.5)
+    trail_activation_pct = float(_get_in(policy, ["stop_rules", "trail_activation_pct"], 3.0) or 3.0)
+    managed_risk_enabled = bool(_get_in(policy, ["enabled"], False)) and bool(
+        _get_in(policy, ["enforcement", "stop_rules"], True)
+    )
 
     for prod in ("CNC", "MIS"):
         prof = (
@@ -253,25 +231,31 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
         if float(getattr(prof, "max_stop_distance_pct", 3.0) or 3.0) == 3.0:
             prof.max_stop_distance_pct = float(max_stop_distance_pct or 3.0)
             changed = True
+        # Managed risk + trailing defaults (preserve behavior when v1 had stop rules enforced).
+        if bool(getattr(prof, "managed_risk_enabled", False)) is False and managed_risk_enabled is True:
+            prof.managed_risk_enabled = True
+            changed = True
+        if bool(getattr(prof, "trailing_stop_enabled", True)) is True and trailing_stop_enabled is False:
+            prof.trailing_stop_enabled = False
+            changed = True
+        if float(getattr(prof, "trail_activation_atr", 2.5) or 2.5) == 2.5:
+            prof.trail_activation_atr = float(trail_activation_atr or 2.5)
+            changed = True
+        if float(getattr(prof, "trail_activation_pct", 3.0) or 3.0) == 3.0:
+            prof.trail_activation_pct = float(trail_activation_pct or 3.0)
+            changed = True
         db.add(prof)
 
     # Source overrides: map legacy per-source/product overrides (best-effort, no overwrite).
-    if policy is not None:
-        exec_safety = getattr(policy, "execution_safety", None)
-        allow_short = bool(getattr(exec_safety, "allow_short_selling", True)) if exec_safety is not None else True
-        max_order_value_pct = (
-            float(getattr(exec_safety, "max_order_value_pct", 0.0) or 0.0)
-            if exec_safety is not None
-            else 0.0
-        )
+    if policy:
+        exec_safety = _as_dict(_get_in(policy, ["execution_safety"], {}))
+        allow_short = bool(exec_safety.get("allow_short_selling", True))
+        max_order_value_pct = float(exec_safety.get("max_order_value_pct", 0.0) or 0.0)
 
         for source in ("TRADINGVIEW", "SIGMATRADER"):
             for prod in ("CNC", "MIS"):
-                try:
-                    ovr = policy.product_overrides(source=source, product=prod)
-                except Exception:
-                    ovr = None
-                if ovr is None:
+                ovr = _as_dict(_get_in(policy, ["overrides", source, prod], {}))
+                if not ovr:
                     continue
 
                 row = (
@@ -287,7 +271,7 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
                     db.add(row)
                     changed = True
 
-                allow = getattr(ovr, "allow", None)
+                allow = ovr.get("allow", None)
                 if row.allow_product is None and allow is False:
                     row.allow_product = False
                     changed = True
@@ -308,7 +292,7 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
                     ("hard_max_risk_pct", "hard_risk_pct"),
                 ):
                     cur = getattr(row, k_dst, None)
-                    nxt = getattr(ovr, k_src, None)
+                    nxt = ovr.get(k_src, None)
                     if cur is None and nxt is not None:
                         setattr(row, k_dst, nxt)
                         changed = True

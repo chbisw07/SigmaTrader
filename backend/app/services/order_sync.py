@@ -10,12 +10,11 @@ from app.models import Order
 from app.services.managed_risk import (
     ensure_managed_risk_for_executed_order,
     mark_managed_risk_exit_executed,
+    resolve_managed_risk_profile,
 )
 from app.services.portfolio_allocations import (
     apply_portfolio_allocation_for_executed_order,
 )
-from app.services.risk_policy_store import get_risk_policy
-
 
 def _map_zerodha_status(status: str) -> Optional[str]:
     """Map Zerodha order status strings to internal Order.status values."""
@@ -126,15 +125,15 @@ def sync_order_statuses(
                 avg_price=avg_price,
             )
             settings = get_settings()
-            policy, _src = get_risk_policy(db, settings)
             try:
+                prof = resolve_managed_risk_profile(db, product=str(order.product or "MIS"))
                 ensure_managed_risk_for_executed_order(
                     db,
                     settings,
                     order=order,
                     filled_qty=float(filled_qty or 0.0),
                     avg_price=avg_price,
-                    policy=policy,
+                    risk_profile=prof,
                 )
             except Exception:
                 pass

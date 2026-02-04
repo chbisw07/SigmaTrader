@@ -79,7 +79,6 @@ function renderRiskSettings() {
 
 describe('SettingsPage Risk settings (unified)', () => {
   beforeEach(() => {
-    let v2Enabled = true
     let unifiedGlobal = {
       enabled: true,
       manual_override_enabled: false,
@@ -130,21 +129,6 @@ describe('SettingsPage Risk settings (unified)', () => {
         const body = init.body ? JSON.parse(String(init.body)) : null
         holdingsExitCfg = { ...holdingsExitCfg, ...(body ?? {}) }
         return { ok: true, json: async () => holdingsExitCfg } as unknown as Response
-      }
-
-      if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
-        return {
-          ok: true,
-          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/v2-enabled') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        v2Enabled = Boolean(body?.enabled)
-        return {
-          ok: true,
-          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
-        } as unknown as Response
       }
 
       if (url.includes('/api/risk/compiled')) {
@@ -205,70 +189,6 @@ describe('SettingsPage Risk settings (unified)', () => {
         (c: any[]) => String(c[0]).includes('/api/risk/global') && c[1]?.method === 'PUT',
       )
       expect(putCall).toBeTruthy()
-    })
-  })
-
-  it('disables product risk profiles when v2 is OFF', async () => {
-    const fetchMock = vi.fn()
-    let v2Enabled = false
-    const unifiedGlobal = {
-      enabled: true,
-      manual_override_enabled: false,
-      baseline_equity_inr: 1_000_000,
-      updated_at: null,
-    }
-
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input.toString()
-      if (url.includes('/api/risk/global')) {
-        return { ok: true, json: async () => unifiedGlobal } as unknown as Response
-      }
-      if (url.includes('/api/risk/source-overrides')) {
-        return { ok: true, json: async () => [] } as unknown as Response
-      }
-      if (url.includes('/api/holdings-exit/config')) {
-        return { ok: true, json: async () => ({ enabled: false, allowlist_symbols: null, source: 'db', updated_at: null }) } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/v2-enabled') && (!init || !init.method || init.method === 'GET')) {
-        return {
-          ok: true,
-          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/v2-enabled') && init?.method === 'PUT') {
-        const body = init.body ? JSON.parse(String(init.body)) : null
-        v2Enabled = Boolean(body?.enabled)
-        return {
-          ok: true,
-          json: async () => ({ enabled: v2Enabled, source: 'db', updated_at: null }),
-        } as unknown as Response
-      }
-      if (url.includes('/api/risk/compiled')) {
-        return { ok: true, json: async () => makeCompiledFixture() } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/risk-profiles')) {
-        return { ok: true, json: async () => [] } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/drawdown-thresholds')) {
-        return { ok: true, json: async () => [] } as unknown as Response
-      }
-      if (url.includes('/api/risk-engine/decision-log')) {
-        return { ok: true, json: async () => [] } as unknown as Response
-      }
-      return { ok: true, json: async () => ({}) } as unknown as Response
-    })
-
-    vi.stubGlobal('fetch', fetchMock)
-
-    renderRiskSettings()
-
-    await waitFor(() => {
-      expect(screen.getByText('Product risk profiles')).toBeInTheDocument()
-    })
-
-    const createBtn = screen.getByRole('button', { name: /create profile/i })
-    await waitFor(() => {
-      expect(createBtn).toBeDisabled()
     })
   })
 })

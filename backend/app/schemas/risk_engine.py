@@ -11,19 +11,6 @@ RiskCategory = Literal["LC", "MC", "SC", "ETF"]
 DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HALT"]
 
 
-RiskEngineV2FlagSource = Literal["db", "env_default", "db_invalid"]
-
-
-class RiskEngineV2FlagRead(BaseModel):
-    enabled: bool
-    source: RiskEngineV2FlagSource
-    updated_at: datetime | None = None
-
-
-class RiskEngineV2FlagUpdate(BaseModel):
-    enabled: bool
-
-
 class RiskProfileBase(BaseModel):
     name: str
     product: RiskProduct
@@ -42,6 +29,11 @@ class RiskProfileBase(BaseModel):
     fallback_stop_pct: float = 1.0
     min_stop_distance_pct: float = 0.5
     max_stop_distance_pct: float = 3.0
+
+    managed_risk_enabled: bool = False
+    trailing_stop_enabled: bool = True
+    trail_activation_atr: float = 2.5
+    trail_activation_pct: float = 3.0
 
     daily_loss_pct: float = 0.0
     hard_daily_loss_pct: float = 0.0
@@ -90,6 +82,10 @@ class RiskProfileUpdate(BaseModel):
     fallback_stop_pct: Optional[float] = None
     min_stop_distance_pct: Optional[float] = None
     max_stop_distance_pct: Optional[float] = None
+    managed_risk_enabled: Optional[bool] = None
+    trailing_stop_enabled: Optional[bool] = None
+    trail_activation_atr: Optional[float] = None
+    trail_activation_pct: Optional[float] = None
 
     daily_loss_pct: Optional[float] = None
     hard_daily_loss_pct: Optional[float] = None
@@ -194,8 +190,6 @@ __all__ = [
     "DrawdownThresholdRead",
     "DrawdownThresholdUpsert",
     "EquitySnapshotRead",
-    "RiskEngineV2FlagRead",
-    "RiskEngineV2FlagUpdate",
     "RiskCategory",
     "RiskProduct",
     "RiskProfileCreate",

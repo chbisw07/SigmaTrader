@@ -23,7 +23,6 @@ from . import (
     positions,
     rebalance,
     risk_compiled,
-    risk_policy,
     risk_unified,
     risk_engine,
     risk_settings,
@@ -239,13 +238,6 @@ router.include_router(
     prefix="/api/webhook-settings",
     dependencies=[Depends(require_admin)],
     tags=["webhook-settings"],
-)
-
-router.include_router(
-    risk_policy.router,
-    prefix="/api/risk-policy",
-    dependencies=[Depends(require_admin)],
-    tags=["risk-policy"],
 )
 
 router.include_router(

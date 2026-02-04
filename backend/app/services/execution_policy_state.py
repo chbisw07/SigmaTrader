@@ -11,8 +11,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models import ExecutionPolicyState, Order
-from app.schemas.risk_policy import RiskPolicy
-from app.services.risk_policy_enforcement import is_group_enforced
 
 
 @dataclass(frozen=True)
@@ -323,81 +321,14 @@ def is_paused(state: ExecutionPolicyState, *, now_utc: datetime) -> bool:
 
 
 def apply_pre_trade_checks(
-    policy: RiskPolicy,
+    params: ExecutionPolicyParams,
     state: ExecutionPolicyState,
     *,
     now_utc: datetime,
 ) -> tuple[bool, str | None, str | None]:
-    """Legacy API (used by existing execution flow/tests).
+    """Unified pre-trade checks (trade frequency + loss controls)."""
 
-    This remains while the unified risk refactor is in progress.
-    """
-
-    tf_on = is_group_enforced(policy, "trade_frequency")
-    lc_on = is_group_enforced(policy, "loss_controls")
-    if not (tf_on or lc_on):
-        return True, None, None
-
-    reset_daily_counters_if_new_day(state, now_utc=now_utc)
-
-    if lc_on and is_paused(state, now_utc=now_utc):
-        reason = state.paused_reason or "Paused by loss controls."
-        return False, "RISK_POLICY_PAUSED", f"loss_controls: {reason}"
-
-    tf = policy.trade_frequency
-    lc = policy.loss_controls
-    interval_min = int(state.interval_minutes or DEFAULT_INTERVAL_MINUTES)
-    start_day, _end_day = _day_bounds_ist(now_utc)
-    now_bar = _bar_index(now_utc, start_day_utc=start_day, interval_minutes=interval_min)
-
-    if tf_on:
-        max_trades = int(tf.max_trades_per_symbol_per_day or 0)
-        if max_trades > 0 and int(state.trades_today or 0) >= max_trades:
-            return (
-                False,
-                "RISK_POLICY_TRADE_FREQ_MAX_TRADES",
-                f"trade_frequency: max_trades_per_symbol_per_day={max_trades} reached.",
-            )
-
-        min_bars = int(tf.min_bars_between_trades or 0)
-        if min_bars > 0 and state.last_trade_bar_index is not None:
-            if now_bar - int(state.last_trade_bar_index) < min_bars:
-                return (
-                    False,
-                    "RISK_POLICY_TRADE_FREQ_MIN_BARS",
-                    f"trade_frequency: min_bars_between_trades={min_bars} not satisfied.",
-                )
-
-        cooldown = int(tf.cooldown_after_loss_bars or 0)
-        if (
-            cooldown > 0
-            and state.last_loss_bar_index is not None
-            and state.last_loss_time is not None
-        ):
-            if now_bar - int(state.last_loss_bar_index) < cooldown:
-                return (
-                    False,
-                    "RISK_POLICY_TRADE_FREQ_COOLDOWN_LOSS",
-                    f"trade_frequency: cooldown_after_loss_bars={cooldown} active.",
-                )
-
-    # Loss-streak pause is applied on trade close updates.
-    if (
-        lc_on
-        and bool(lc.pause_after_loss_streak)
-        and int(lc.max_consecutive_losses or 0) > 0
-        and int(state.consecutive_losses or 0) >= int(lc.max_consecutive_losses or 0)
-    ):
-        start_day, end_day = _day_bounds_ist(now_utc)
-        state.paused_until = end_day
-        state.paused_reason = "Paused after loss streak."
-        return (
-            False,
-            "RISK_POLICY_LOSS_STREAK_PAUSE",
-            f"loss_controls: {state.paused_reason}",
-        )
-
-    return True, None, None
+    return apply_pre_trade_checks_unified(params, state, now_utc=now_utc)
 
 
 def apply_pre_trade_checks_unified(
@@ -475,7 +406,7 @@ def apply_pre_trade_checks_unified(
 
 
 def apply_post_trade_updates_on_execution(
-    policy: RiskPolicy,
+    params: ExecutionPolicyParams,
     state: ExecutionPolicyState,
     *,
     now_utc: datetime,
@@ -483,126 +414,17 @@ def apply_post_trade_updates_on_execution(
     qty: float,
     exec_price: float | None,
 ) -> None:
-    """Legacy API (used by existing execution flow/tests)."""
+    """Unified post-trade state updates (trade frequency + loss controls)."""
 
-    tf_on = is_group_enforced(policy, "trade_frequency")
-    lc_on = is_group_enforced(policy, "loss_controls")
-    if not (tf_on or lc_on):
-        return
-
-    reset_daily_counters_if_new_day(state, now_utc=now_utc)
-
-    interval_min = int(state.interval_minutes or DEFAULT_INTERVAL_MINUTES)
-    start_day, end_day = _day_bounds_ist(now_utc)
-    now_bar = _bar_index(now_utc, start_day_utc=start_day, interval_minutes=interval_min)
-
-    qty_f = float(qty or 0.0)
-    if qty_f <= 0:
-        return
-
-    price_f = float(exec_price) if exec_price is not None else None
-    side_u = (side or "").strip().upper()
-    if side_u not in {"BUY", "SELL"}:
-        return
-
-    prev_abs, new_abs, is_entry, _is_exit_reduce = classify_position_delta(state, side=side_u, qty=qty_f)
-    if tf_on and is_entry:
-        state.trades_today = int(state.trades_today or 0) + 1
-        state.last_trade_time = now_utc
-        state.last_trade_bar_index = now_bar
-
-    prev_signed = _signed_position_qty(state)
-    delta_signed = qty_f if side_u == "BUY" else -qty_f
-    new_signed = prev_signed + delta_signed
-
-    prev_side = (state.open_side or "").strip().upper() if state.open_side else None
-    prev_qty = abs(prev_signed)
-    prev_avg = float(state.open_avg_price) if state.open_avg_price else None
-    prev_realized = float(state.open_realized_pnl or 0.0)
-
-    def _set_position(*, signed_qty: float, avg_price: float | None, realized_pnl: float) -> None:
-        if abs(signed_qty) <= 0:
-            state.open_side = None
-            state.open_qty = 0.0
-            state.open_avg_price = None
-            state.open_realized_pnl = 0.0
-            return
-        state.open_side = "BUY" if signed_qty > 0 else "SELL"
-        state.open_qty = float(abs(signed_qty))
-        state.open_avg_price = avg_price
-        state.open_realized_pnl = float(realized_pnl)
-
-    if price_f is None or price_f <= 0:
-        if abs(new_signed) <= 0:
-            _set_position(signed_qty=0.0, avg_price=None, realized_pnl=0.0)
-        else:
-            if prev_side and (
-                (prev_side == "BUY" and new_signed > 0)
-                or (prev_side == "SELL" and new_signed < 0)
-            ):
-                _set_position(
-                    signed_qty=new_signed,
-                    avg_price=state.open_avg_price,
-                    realized_pnl=state.open_realized_pnl or 0.0,
-                )
-            else:
-                _set_position(signed_qty=new_signed, avg_price=None, realized_pnl=0.0)
-        return
-
-    if prev_qty <= 0:
-        _set_position(signed_qty=new_signed, avg_price=float(price_f), realized_pnl=0.0)
-        return
-    if prev_side not in {"BUY", "SELL"}:
-        _set_position(signed_qty=new_signed, avg_price=None, realized_pnl=0.0)
-        return
-    if prev_avg is None or prev_avg <= 0:
-        _set_position(signed_qty=new_signed, avg_price=None, realized_pnl=0.0)
-        return
-
-    if prev_side == side_u:
-        new_qty = float(abs(new_signed))
-        new_avg = (prev_avg * prev_qty + price_f * qty_f) / new_qty if new_qty > 0 else prev_avg
-        _set_position(signed_qty=new_signed, avg_price=float(new_avg), realized_pnl=prev_realized)
-        return
-
-    close_qty = min(prev_qty, qty_f)
-    pnl = (price_f - prev_avg) * close_qty if prev_side == "BUY" else (prev_avg - price_f) * close_qty
-    realized = prev_realized + float(pnl)
-    remaining_open = prev_qty - close_qty
-    if remaining_open > 0:
-        _set_position(
-            signed_qty=(remaining_open if prev_side == "BUY" else -remaining_open),
-            avg_price=float(prev_avg),
-            realized_pnl=float(realized),
-        )
-        return
-
-    total_pnl = float(realized)
-    _set_position(signed_qty=0.0, avg_price=None, realized_pnl=0.0)
-
-    if total_pnl < 0:
-        state.last_loss_time = now_utc
-        state.last_loss_bar_index = now_bar
-        if lc_on:
-            state.consecutive_losses = int(state.consecutive_losses or 0) + 1
-    else:
-        state.last_loss_time = None
-        state.last_loss_bar_index = None
-        if lc_on:
-            state.consecutive_losses = 0
-
-    lc = policy.loss_controls
-    if (
-        lc_on
-        and bool(lc.pause_after_loss_streak)
-        and int(lc.max_consecutive_losses or 0) > 0
-        and int(state.consecutive_losses or 0) >= int(lc.max_consecutive_losses or 0)
-    ):
-        state.paused_until = end_day
-        state.paused_reason = "Paused after loss streak."
-
-    if abs(new_signed) > 0:
-        _set_position(signed_qty=new_signed, avg_price=float(price_f), realized_pnl=0.0)
+    apply_post_trade_updates_on_execution_unified(
+        params,
+        state,
+        now_utc=now_utc,
+        side=side,
+        qty=qty,
+        exec_price=exec_price,
+    )
+    return
 
 
 def apply_post_trade_updates_on_execution_unified(
@@ -757,35 +579,6 @@ def apply_post_trade_updates_on_execution_unified(
         _set_position(signed_qty=new_signed, avg_price=float(price_f), realized_pnl=0.0)
 
 
-def log_block(
-    *,
-    reason_code: str,
-    message: str,
-    key: ExecutionScopeKey,
-    policy: RiskPolicy,
-    extra: dict[str, Any] | None = None,
-) -> None:
-    payload: dict[str, Any] = {
-        "reason_code": reason_code,
-        "message": message,
-        "user_id": key.user_id,
-        "strategy_ref": key.strategy_ref,
-        "symbol": key.symbol,
-        "product": key.product,
-        "policy": {
-            "trade_frequency": getattr(policy, "trade_frequency", None).model_dump()  # type: ignore[attr-defined]
-            if hasattr(getattr(policy, "trade_frequency", None), "model_dump")
-            else getattr(policy, "trade_frequency", None).__dict__,
-            "loss_controls": getattr(policy, "loss_controls", None).model_dump()  # type: ignore[attr-defined]
-            if hasattr(getattr(policy, "loss_controls", None), "model_dump")
-            else getattr(policy, "loss_controls", None).__dict__,
-        },
-    }
-    if extra:
-        payload.update(extra)
-    logger.warning("Order blocked by execution policy", extra={"extra": payload})
-
-
 def log_block_unified(
     *,
     reason_code: str,
@@ -829,6 +622,5 @@ __all__ = [
     "apply_pre_trade_checks_unified",
     "apply_post_trade_updates_on_execution",
     "apply_post_trade_updates_on_execution_unified",
-    "log_block",
     "log_block_unified",
 ]

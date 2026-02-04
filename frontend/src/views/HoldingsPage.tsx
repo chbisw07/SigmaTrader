@@ -64,7 +64,6 @@ import { fetchAngeloneStatus } from '../services/angelone'
 import { fetchMarginsForBroker } from '../services/brokerRuntime'
 import {
   fetchSymbolCategories,
-  fetchRiskEngineV2Enabled,
   upsertSymbolCategory,
   type RiskCategory,
   type SymbolRiskCategory,
@@ -275,10 +274,6 @@ export function HoldingsPage() {
   const [tradeExecutionTarget, setTradeExecutionTarget] = useState<'LIVE' | 'PAPER'>(
     'LIVE',
   )
-  const [riskEngineV2Enabled, setRiskEngineV2Enabled] = useState(false)
-  const [riskEngineV2FlagError, setRiskEngineV2FlagError] = useState<string | null>(
-    null,
-  )
 
   useEffect(() => {
     let active = true
@@ -294,31 +289,6 @@ export function HoldingsPage() {
         setSymbolCategoryRows([])
       }
     }
-    void load()
-    return () => {
-      active = false
-    }
-  }, [])
-
-  useEffect(() => {
-    let active = true
-    const load = async () => {
-      try {
-        setRiskEngineV2FlagError(null)
-        const flag = await fetchRiskEngineV2Enabled()
-        if (!active) return
-        setRiskEngineV2Enabled(Boolean(flag.enabled))
-      } catch (err) {
-        if (!active) return
-        setRiskEngineV2Enabled(false)
-        setRiskEngineV2FlagError(
-          err instanceof Error
-            ? err.message
-            : 'Failed to load profile engine status.',
-        )
-      }
-    }
-
     void load()
     return () => {
       active = false
@@ -3139,56 +3109,7 @@ export function HoldingsPage() {
       return
     }
 
-    if (!isBulkTrade && riskEngineV2Enabled && primaryHolding) {
-      const sym = (primaryHolding.symbol || '').trim().toUpperCase()
-      const exch = (primaryHolding.exchange || 'NSE').trim().toUpperCase() || 'NSE'
-      const existing = sym
-        ? resolveSymbolRiskCategory(symbolCategoryRows, {
-            broker_name: tradeBrokerName,
-            exchange: exch,
-            symbol: sym,
-          })
-        : null
-      if (!existing) {
-        if (!tradeRiskCategoryDraft) {
-          setTradeError(
-            `${sym || 'Symbol'}: Missing symbol risk category. Select LC/MC/SC/ETF and save to trade with profile engine enabled.`,
-          )
-          return
-        }
-
-        const key = `${exch}:${sym}`
-        setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: true }))
-        try {
-          const saved = await upsertSymbolCategory({
-            broker_name: '*',
-            exchange: '*',
-            symbol: sym,
-            risk_category: tradeRiskCategoryDraft as RiskCategory,
-          })
-          setSymbolCategoryRows((prev) => {
-            const symKey = (saved.symbol || '').trim().toUpperCase()
-            const exchKey = (saved.exchange || '').trim().toUpperCase()
-            const brokerKey = (saved.broker_name || '').trim().toLowerCase()
-            const next = prev.filter(
-              (r) =>
-                (r.symbol || '').trim().toUpperCase() !== symKey ||
-                (r.exchange || '').trim().toUpperCase() !== exchKey ||
-                (r.broker_name || '').trim().toLowerCase() !== brokerKey,
-            )
-            return [...next, saved]
-          })
-          setSymbolCategoryError(null)
-        } catch (err) {
-          setTradeError(
-            err instanceof Error ? err.message : 'Failed to save symbol category.',
-          )
-          return
-        } finally {
-          setSymbolCategoryBusyByKey((prev) => ({ ...prev, [key]: false }))
-        }
-      }
-    }
+    // Unified risk is always active; do not block trades on missing symbol category.
     const priceNumRaw =
       tradeOrderType === 'MARKET' ||
       tradeOrderType === 'SL-M' ||
@@ -7604,12 +7525,7 @@ export function HoldingsPage() {
                     <MenuItem value="CNC">CNC (Delivery)</MenuItem>
                     <MenuItem value="MIS">MIS (Intraday)</MenuItem>
                   </TextField>
-                  {riskEngineV2FlagError ? (
-                    <Typography variant="caption" color="error" sx={{ mt: -0.5 }}>
-                      Profile engine status unavailable: {riskEngineV2FlagError}
-                    </Typography>
-                  ) : null}
-                  {riskEngineV2Enabled && !isBulkTrade && tradeHolding && (
+                  {!isBulkTrade && tradeHolding && (
                     <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
                       <TextField
                         label="Risk category"
@@ -7625,7 +7541,7 @@ export function HoldingsPage() {
                         helperText={
                           tradeSymbolCategoryResolved
                             ? `Saved: ${tradeSymbolCategoryResolved}`
-                            : 'Required for the profile engine (used for drawdown thresholds).'
+                            : 'Optional (used for drawdown thresholds and risk sizing).'
                         }
                       >
                         <MenuItem value="">

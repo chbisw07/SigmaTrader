@@ -25,7 +25,7 @@ from app.models import (
     User,
 )
 from app.services.market_data import load_series
-from app.services.risk_policy import _normalized_symbol_exchange  # type: ignore[attr-defined]
+from app.services.risk import _normalized_symbol_exchange
 from app.services.risk_unified_store import get_source_override
 
 logger = logging.getLogger(__name__)

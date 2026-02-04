@@ -13,13 +13,11 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
 from app.db.session import SessionLocal
-from app.models import BrokerConnection, ManagedRiskPosition, Order, Position
+from app.models import BrokerConnection, ManagedRiskPosition, Order, Position, RiskProfile
 from app.schemas.managed_risk import DistanceSpec, RiskSpec
-from app.schemas.risk_policy import RiskPolicy
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
 from app.services.market_data import load_series
-from app.services.risk_policy_enforcement import is_group_enforced
 from app.services.system_events import record_system_event
 
 logger = logging.getLogger(__name__)
@@ -367,30 +365,30 @@ def ensure_managed_risk_for_executed_order(
     order: Order,
     filled_qty: float,
     avg_price: float | None,
-    policy: RiskPolicy | None = None,
+    risk_profile: RiskProfile | None = None,
 ) -> ManagedRiskPosition | None:
     if getattr(order, "is_exit", False):
         return None
     raw_order_spec = RiskSpec.from_json(getattr(order, "risk_spec_json", None))
+    # Managed risk defaults are taken from the risk profile when enabled.
     stop_rules_enforced = bool(
-        policy is not None and is_group_enforced(policy, "stop_rules")
+        risk_profile is not None and bool(getattr(risk_profile, "managed_risk_enabled", False))
     )
 
     def _policy_spec() -> RiskSpec | None:
-        if not stop_rules_enforced or policy is None:
+        if not stop_rules_enforced or risk_profile is None:
             return None
-        sr = policy.stop_rules
-        tr = policy.trade_risk
-        stop_ref = (tr.stop_reference or "ATR").strip().upper()
+        stop_ref = (getattr(risk_profile, "stop_reference", None) or "ATR").strip().upper()
         if stop_ref == "FIXED_PCT":
-            stop_pct = float(sr.fallback_stop_pct)
+            stop_pct = float(getattr(risk_profile, "fallback_stop_pct", 0.0) or 0.0)
             # Apply percent clamp up-front so the stored spec matches the
             # resulting absolute distance.
             stop_pct = max(
-                float(sr.min_stop_distance_pct),
-                min(stop_pct, float(sr.max_stop_distance_pct)),
+                float(getattr(risk_profile, "min_stop_distance_pct", 0.0) or 0.0),
+                min(stop_pct, float(getattr(risk_profile, "max_stop_distance_pct", 0.0) or 0.0)),
             )
-            act_pct = float(getattr(sr, "trail_activation_pct", 0.0) or 0.0)
+            act_pct = float(getattr(risk_profile, "trail_activation_pct", 0.0) or 0.0)
+            trailing_enabled = bool(getattr(risk_profile, "trailing_stop_enabled", False))
             return RiskSpec(
                 stop_loss=DistanceSpec(
                     enabled=True,
@@ -398,39 +396,42 @@ def ensure_managed_risk_for_executed_order(
                     value=float(stop_pct),
                 ),
                 trailing_stop=DistanceSpec(
-                    enabled=bool(sr.trailing_stop_enabled),
+                    enabled=trailing_enabled,
                     mode="PCT",
                     value=float(stop_pct),
                 ),
                 trailing_activation=DistanceSpec(
-                    enabled=bool(sr.trailing_stop_enabled) and float(act_pct) > 0,
+                    enabled=trailing_enabled and float(act_pct) > 0,
                     mode="PCT",
                     value=float(act_pct),
                 ),
                 exit_order_type="MARKET",
             )
         # ATR basis (default).
-        act_atr = float(sr.trail_activation_atr)
+        act_atr = float(getattr(risk_profile, "trail_activation_atr", 0.0) or 0.0)
+        trailing_enabled = bool(getattr(risk_profile, "trailing_stop_enabled", False))
+        atr_period = int(getattr(risk_profile, "atr_period", 14) or 14)
+        stop_atr = float(getattr(risk_profile, "atr_mult_initial_stop", 2.0) or 2.0)
         return RiskSpec(
             stop_loss=DistanceSpec(
                 enabled=True,
                 mode="ATR",
-                value=float(sr.initial_stop_atr),
-                atr_period=int(sr.atr_period),
+                value=float(stop_atr),
+                atr_period=int(atr_period),
                 atr_tf="1d",
             ),
             trailing_stop=DistanceSpec(
-                enabled=bool(sr.trailing_stop_enabled),
+                enabled=trailing_enabled,
                 mode="ATR",
-                value=float(sr.initial_stop_atr),
-                atr_period=int(sr.atr_period),
+                value=float(stop_atr),
+                atr_period=int(atr_period),
                 atr_tf="1d",
             ),
             trailing_activation=DistanceSpec(
-                enabled=bool(sr.trailing_stop_enabled) and float(act_atr) > 0,
+                enabled=trailing_enabled and float(act_atr) > 0,
                 mode="ATR",
                 value=float(act_atr),
-                atr_period=int(sr.atr_period),
+                atr_period=int(atr_period),
                 atr_tf="1d",
             ),
             exit_order_type="MARKET",
@@ -479,26 +480,24 @@ def ensure_managed_risk_for_executed_order(
         spec=spec.stop_loss,
     )
     if stop_dist is None or stop_dist <= 0:
-        # If ATR computation fails, fall back to fixed percent when policy is
-        # enabled.
-        if stop_rules_enforced and policy is not None:
-            sr = policy.stop_rules
-            stop_pct = float(sr.fallback_stop_pct)
+        # If ATR computation fails, fall back to fixed percent when profile
+        # defaults are enabled.
+        if stop_rules_enforced and risk_profile is not None:
+            stop_pct = float(getattr(risk_profile, "fallback_stop_pct", 0.0) or 0.0)
             stop_pct = max(
-                float(sr.min_stop_distance_pct),
-                min(stop_pct, float(sr.max_stop_distance_pct)),
+                float(getattr(risk_profile, "min_stop_distance_pct", 0.0) or 0.0),
+                min(stop_pct, float(getattr(risk_profile, "max_stop_distance_pct", 0.0) or 0.0)),
             )
             stop_dist = float(avg_price) * stop_pct / 100.0
         else:
             return None
 
-    if stop_rules_enforced and policy is not None:
-        sr = policy.stop_rules
-        min_abs = float(avg_price) * float(sr.min_stop_distance_pct) / 100.0
-        max_abs = float(avg_price) * float(sr.max_stop_distance_pct) / 100.0
+    if stop_rules_enforced and risk_profile is not None:
+        min_abs = float(avg_price) * float(getattr(risk_profile, "min_stop_distance_pct", 0.0) or 0.0) / 100.0
+        max_abs = float(avg_price) * float(getattr(risk_profile, "max_stop_distance_pct", 0.0) or 0.0) / 100.0
         stop_dist = max(float(min_abs), min(float(stop_dist), float(max_abs)))
-        # Global policy is authoritative: per-order overrides may tighten but
-        # must not loosen the policy-derived stop distance.
+        # Profile is authoritative: per-order overrides may tighten but must
+        # not loosen the profile-derived stop distance.
         if base is not None:
             policy_stop = _distance_from_entry(
                 db,
@@ -509,10 +508,10 @@ def ensure_managed_risk_for_executed_order(
                 spec=base.stop_loss,
             )
             if policy_stop is None or float(policy_stop) <= 0:
-                stop_pct = float(sr.fallback_stop_pct)
+                stop_pct = float(getattr(risk_profile, "fallback_stop_pct", 0.0) or 0.0)
                 stop_pct = max(
-                    float(sr.min_stop_distance_pct),
-                    min(stop_pct, float(sr.max_stop_distance_pct)),
+                    float(getattr(risk_profile, "min_stop_distance_pct", 0.0) or 0.0),
+                    min(stop_pct, float(getattr(risk_profile, "max_stop_distance_pct", 0.0) or 0.0)),
                 )
                 policy_stop = float(avg_price) * stop_pct / 100.0
             policy_stop = max(float(min_abs), min(float(policy_stop), float(max_abs)))
@@ -541,13 +540,12 @@ def ensure_managed_risk_for_executed_order(
 
     if (
         stop_rules_enforced
-        and policy is not None
+        and risk_profile is not None
         and spec.trailing_stop.enabled
         and trail_dist is not None
     ):
-        sr = policy.stop_rules
-        min_abs = float(avg_price) * float(sr.min_stop_distance_pct) / 100.0
-        max_abs = float(avg_price) * float(sr.max_stop_distance_pct) / 100.0
+        min_abs = float(avg_price) * float(getattr(risk_profile, "min_stop_distance_pct", 0.0) or 0.0) / 100.0
+        max_abs = float(avg_price) * float(getattr(risk_profile, "max_stop_distance_pct", 0.0) or 0.0) / 100.0
         trail_dist = max(float(min_abs), min(float(trail_dist), float(max_abs)))
         if base is not None and base.trailing_stop.enabled:
             policy_trail = _distance_from_entry(
@@ -570,16 +568,16 @@ def ensure_managed_risk_for_executed_order(
         # missing: scale activation off the stop distance.
         if (
             stop_rules_enforced
-            and policy is not None
-            and policy.trade_risk.stop_reference == "ATR"
+            and risk_profile is not None
+            and (getattr(risk_profile, "stop_reference", None) or "ATR").strip().upper() == "ATR"
         ):
-            base_atr = float(policy.stop_rules.initial_stop_atr) or 1.0
-            act_atr = float(policy.stop_rules.trail_activation_atr) or 0.0
+            base_atr = float(getattr(risk_profile, "atr_mult_initial_stop", 0.0) or 0.0) or 1.0
+            act_atr = float(getattr(risk_profile, "trail_activation_atr", 0.0) or 0.0)
             if act_atr > 0 and base_atr > 0:
                 act_dist = float(stop_dist) * (act_atr / base_atr)
     if (
         stop_rules_enforced
-        and policy is not None
+        and risk_profile is not None
         and base is not None
         and base.trailing_activation.enabled
         and spec.trailing_activation.enabled
@@ -743,6 +741,33 @@ def ensure_managed_risk_for_executed_order(
         },
     )
     return mrp
+
+
+def resolve_managed_risk_profile(db: Session, *, product: str) -> RiskProfile | None:
+    """Return the default enabled risk profile for the given product (CNC/MIS).
+
+    Managed-risk auto creation is guarded by `RiskProfile.managed_risk_enabled`, so
+    returning a profile here does not imply managed risk is active.
+    """
+
+    prod = (product or "MIS").strip().upper() or "MIS"
+    row = (
+        db.query(RiskProfile)
+        .filter(
+            RiskProfile.enabled.is_(True),
+            RiskProfile.is_default.is_(True),
+            RiskProfile.product == prod,
+        )
+        .one_or_none()
+    )
+    if row is not None:
+        return row
+    return (
+        db.query(RiskProfile)
+        .filter(RiskProfile.enabled.is_(True), RiskProfile.product == prod)
+        .order_by(RiskProfile.id)
+        .first()
+    )
 
 
 def _mark_exit_executed(db: Session, *, exit_order_id: int) -> int:

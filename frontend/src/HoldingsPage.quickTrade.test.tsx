@@ -29,9 +29,6 @@ describe('HoldingsPage Quick trade', () => {
         return okJson({ available: 0, raw: {} })
       }
 
-      if (url.includes('/api/risk-engine/v2-enabled')) {
-        return okJson({ enabled: true, source: 'db', updated_at: null })
-      }
       if (url.includes('/api/risk-engine/symbol-categories') && init?.method === 'PUT') {
         return okJson({
           id: 1,

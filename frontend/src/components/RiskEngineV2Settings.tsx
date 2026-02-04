@@ -1,11 +1,9 @@
 import AddIcon from '@mui/icons-material/Add'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
-import CircularProgress from '@mui/material/CircularProgress'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
@@ -30,21 +28,18 @@ import { useNavigate } from 'react-router-dom'
 import {
   createRiskProfile,
   deleteRiskProfile,
-  fetchRiskEngineV2Enabled,
   fetchDrawdownThresholds,
   fetchRiskProfiles,
   fetchSymbolCategories,
   upsertSymbolCategory,
   deleteSymbolCategory,
   upsertDrawdownThresholds,
-  updateRiskEngineV2Enabled,
   updateRiskProfile,
   type DrawdownThresholdUpsert,
   type RiskCategory,
   type RiskProduct,
   type RiskProfile,
   type RiskProfileCreate,
-  type RiskEngineV2Enabled,
   type SymbolRiskCategory,
 } from '../services/riskEngine'
 
@@ -75,6 +70,10 @@ const DEFAULT_PROFILE: RiskProfileCreate = {
   fallback_stop_pct: 1.0,
   min_stop_distance_pct: 0.5,
   max_stop_distance_pct: 3.0,
+  managed_risk_enabled: false,
+  trailing_stop_enabled: true,
+  trail_activation_atr: 2.5,
+  trail_activation_pct: 3.0,
   daily_loss_pct: 0.75,
   hard_daily_loss_pct: 1.0,
   max_consecutive_losses: 3,
@@ -98,12 +97,6 @@ const DEFAULT_PROFILE: RiskProfileCreate = {
 
 export function RiskEngineV2Settings() {
   const navigate = useNavigate()
-  const [v2Flag, setV2Flag] = useState<RiskEngineV2Enabled | null>(null)
-  const [v2Busy, setV2Busy] = useState(false)
-  const [v2Error, setV2Error] = useState<string | null>(null)
-
-  const v2Enabled = Boolean(v2Flag?.enabled)
-  const v2ConfigDisabled = !v2Enabled
 
   const [profiles, setProfiles] = useState<RiskProfile[]>([])
   const [profilesBusy, setProfilesBusy] = useState(false)
@@ -142,19 +135,6 @@ export function RiskEngineV2Settings() {
       .slice()
       .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0]
   }, [symbolCategories])
-
-  const loadV2Flag = async () => {
-    setV2Busy(true)
-    try {
-      const res = await fetchRiskEngineV2Enabled()
-      setV2Flag(res)
-      setV2Error(null)
-    } catch (err) {
-      setV2Error(err instanceof Error ? err.message : 'Failed to load profile engine status')
-    } finally {
-      setV2Busy(false)
-    }
-  }
 
   const loadProfiles = async () => {
     setProfilesBusy(true)
@@ -228,7 +208,6 @@ export function RiskEngineV2Settings() {
   }, [profiles])
 
   useEffect(() => {
-    void loadV2Flag()
     void loadProfiles()
     void loadSymbolCategories()
     void loadThresholds()
@@ -236,14 +215,12 @@ export function RiskEngineV2Settings() {
   }, [])
 
   const openCreate = () => {
-    if (v2ConfigDisabled) return
     setEditingId(null)
     setDraft({ ...DEFAULT_PROFILE })
     setEditorOpen(true)
   }
 
   const openEdit = (p: RiskProfile) => {
-    if (v2ConfigDisabled) return
     setEditingId(p.id)
     setDraft({
       name: p.name,
@@ -260,6 +237,10 @@ export function RiskEngineV2Settings() {
       fallback_stop_pct: numberOrZero(p.fallback_stop_pct),
       min_stop_distance_pct: numberOrZero(p.min_stop_distance_pct),
       max_stop_distance_pct: numberOrZero(p.max_stop_distance_pct),
+      managed_risk_enabled: Boolean(p.managed_risk_enabled),
+      trailing_stop_enabled: Boolean(p.trailing_stop_enabled),
+      trail_activation_atr: numberOrZero(p.trail_activation_atr),
+      trail_activation_pct: numberOrZero(p.trail_activation_pct),
       daily_loss_pct: numberOrZero(p.daily_loss_pct),
       hard_daily_loss_pct: numberOrZero(p.hard_daily_loss_pct),
       max_consecutive_losses: Math.trunc(numberOrZero(p.max_consecutive_losses)),
@@ -284,7 +265,6 @@ export function RiskEngineV2Settings() {
   }
 
   const handleSaveProfile = async () => {
-    if (v2ConfigDisabled) return
     const name = draft.name.trim()
     if (!name) return
     setSaving(true)
@@ -356,7 +336,6 @@ export function RiskEngineV2Settings() {
   }
 
   const handleDeleteProfile = async (p: RiskProfile) => {
-    if (v2ConfigDisabled) return
     const ok = window.confirm(`Delete risk profile "${p.name}"?`)
     if (!ok) return
     setProfilesBusy(true)
@@ -371,7 +350,6 @@ export function RiskEngineV2Settings() {
   }
 
   const handleSaveThresholds = async () => {
-    if (v2ConfigDisabled) return
     setThresholdsBusy(true)
     try {
       const payload: DrawdownThresholdUpsert[] = []
@@ -405,70 +383,11 @@ export function RiskEngineV2Settings() {
           <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
             Product risk profiles
           </Typography>
-          {v2Flag?.source ? (
-            <Chip size="small" label={`Source: ${v2Flag.source}`} />
-          ) : null}
-          <Tooltip title="Refresh" arrow placement="top">
-            <span>
-              <IconButton size="small" onClick={() => void loadV2Flag()} disabled={v2Busy}>
-                <RefreshIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Configure product-specific profiles (CNC/MIS), drawdown thresholds, and execution safeguards
-          used by SigmaTrader during order dispatch/execute.
+          used by SigmaTrader during order dispatch/execute. Unified risk is always active.
         </Typography>
-
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center', mt: 1.25 }}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={v2Enabled}
-                disabled={v2Busy || v2Flag == null}
-                onChange={async (e) => {
-                  const next = Boolean(e.target.checked)
-                  setV2Busy(true)
-                  try {
-                    const updated = await updateRiskEngineV2Enabled(next)
-                    setV2Flag(updated)
-                    setV2Error(null)
-                    if (!updated.enabled) setEditorOpen(false)
-                  } catch (err) {
-                    setV2Error(
-                      err instanceof Error ? err.message : 'Failed to update profile engine status',
-                    )
-                  } finally {
-                    setV2Busy(false)
-                  }
-                }}
-              />
-            }
-            label="Enable profile-based risk engine"
-          />
-          {v2Busy && <CircularProgress size={18} />}
-        </Box>
-
-        {v2Error ? (
-          <Typography variant="caption" color="error" sx={{ mt: 0.75, display: 'block' }}>
-            {v2Error}
-          </Typography>
-        ) : null}
-
-        {v2Flag && !v2Enabled ? (
-          <Alert severity="info" sx={{ mt: 1.25 }}>
-            Profile-based engine is disabled. Profiles/thresholds below are not enforced at execution
-            time.
-          </Alert>
-        ) : null}
-
-        {v2Flag?.source === 'db_invalid' ? (
-          <Alert severity="warning" sx={{ mt: 1.25 }}>
-            Profile engine flag is present but unreadable. For safety, the engine is OFF. Toggle it
-            once to re-save a valid value.
-          </Alert>
-        ) : null}
       </Paper>
 
       <Paper sx={{ p: 2 }}>
@@ -490,9 +409,8 @@ export function RiskEngineV2Settings() {
           </Tooltip>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          When enabled, the profile engine will use this category for symbols that do not have an
-          explicit category mapping yet. If disabled, orders for new symbols are blocked until you
-          assign a category.
+          Used when a symbol does not have an explicit category mapping yet. Leaving this OFF falls
+          back to SigmaTrader defaults (does not block trading).
         </Typography>
 
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1.5 }}>
@@ -505,11 +423,11 @@ export function RiskEngineV2Settings() {
               setDefaultCategory((e.target.value as RiskCategory | '') ?? '')
             }
             sx={{ minWidth: 240 }}
-            disabled={defaultCategoryBusy || v2ConfigDisabled}
+            disabled={defaultCategoryBusy}
             helperText={defaultCategoryRow ? `Saved: ${defaultCategoryRow.risk_category}` : 'Saved: OFF'}
           >
             <MenuItem value="">
-              <em>OFF (block new symbols)</em>
+              <em>OFF (use defaults)</em>
             </MenuItem>
             {CATEGORIES.map((c) => (
               <MenuItem key={c} value={c}>
@@ -520,7 +438,7 @@ export function RiskEngineV2Settings() {
           <Button
             size="small"
             variant="contained"
-            disabled={defaultCategoryBusy || v2ConfigDisabled}
+            disabled={defaultCategoryBusy}
             aria-label="save default category"
             onClick={async () => {
               setDefaultCategoryBusy(true)
@@ -606,7 +524,7 @@ export function RiskEngineV2Settings() {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={openCreate}
-            disabled={profilesBusy || v2ConfigDisabled}
+            disabled={profilesBusy}
           >
             Create profile
           </Button>
@@ -640,7 +558,7 @@ export function RiskEngineV2Settings() {
                       size="small"
                       variant="outlined"
                       onClick={() => openEdit(p)}
-                      disabled={v2ConfigDisabled}
+                      disabled={false}
                     >
                       Edit
                     </Button>
@@ -649,7 +567,7 @@ export function RiskEngineV2Settings() {
                       variant="outlined"
                       color="error"
                       onClick={() => void handleDeleteProfile(p)}
-                      disabled={v2ConfigDisabled}
+                      disabled={false}
                     >
                       Delete
                     </Button>
@@ -689,7 +607,7 @@ export function RiskEngineV2Settings() {
             size="small"
             variant="contained"
             onClick={() => void handleSaveThresholds()}
-            disabled={thresholdsBusy || v2ConfigDisabled}
+            disabled={thresholdsBusy}
           >
             Save thresholds
           </Button>
@@ -723,7 +641,7 @@ export function RiskEngineV2Settings() {
                         size="small"
                         type="number"
                         value={row.caution_pct}
-                        disabled={v2ConfigDisabled}
+                        disabled={false}
                         onChange={(e) =>
                           setThresholdDrafts((prev) => ({
                             ...prev,
@@ -738,7 +656,7 @@ export function RiskEngineV2Settings() {
                         size="small"
                         type="number"
                         value={row.defense_pct}
-                        disabled={v2ConfigDisabled}
+                        disabled={false}
                         onChange={(e) =>
                           setThresholdDrafts((prev) => ({
                             ...prev,
@@ -753,7 +671,7 @@ export function RiskEngineV2Settings() {
                         size="small"
                         type="number"
                         value={row.hard_stop_pct}
-                        disabled={v2ConfigDisabled}
+                        disabled={false}
                         onChange={(e) =>
                           setThresholdDrafts((prev) => ({
                             ...prev,

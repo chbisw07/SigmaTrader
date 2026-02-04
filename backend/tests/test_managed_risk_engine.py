@@ -7,9 +7,8 @@ from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
-from app.models import ManagedRiskPosition, Order, User
+from app.models import ManagedRiskPosition, Order, RiskProfile, User
 from app.schemas.managed_risk import DistanceSpec, RiskSpec
-from app.schemas.risk_policy import RiskPolicy
 from app.services.managed_risk import (
     _update_stop_state,
     ensure_managed_risk_for_executed_order,
@@ -340,11 +339,19 @@ def test_policy_managed_risk_respects_stop_rules_group_toggle() -> None:
         db.commit()
         db.refresh(order1)
 
-        policy = RiskPolicy(enabled=True)
-        policy.enforcement.stop_rules = True
-        policy.trade_risk.stop_reference = "FIXED_PCT"
-        policy.stop_rules.fallback_stop_pct = 1.0
-        policy.stop_rules.trail_activation_pct = 3.0
+        prof = RiskProfile(
+            name="Test MIS",
+            product="MIS",
+            enabled=True,
+            is_default=False,
+            managed_risk_enabled=True,
+            stop_reference="FIXED_PCT",
+            fallback_stop_pct=1.0,
+            trail_activation_pct=3.0,
+            trailing_stop_enabled=True,
+            min_stop_distance_pct=0.5,
+            max_stop_distance_pct=3.0,
+        )
 
         mrp1 = ensure_managed_risk_for_executed_order(
             db,
@@ -352,7 +359,7 @@ def test_policy_managed_risk_respects_stop_rules_group_toggle() -> None:
             order=order1,
             filled_qty=1,
             avg_price=100.0,
-            policy=policy,
+            risk_profile=prof,
         )
         assert mrp1 is not None
 
@@ -378,13 +385,25 @@ def test_policy_managed_risk_respects_stop_rules_group_toggle() -> None:
         db.commit()
         db.refresh(order2)
 
-        policy.enforcement.stop_rules = False
+        prof2 = RiskProfile(
+            name="Test MIS (disabled)",
+            product="MIS",
+            enabled=True,
+            is_default=False,
+            managed_risk_enabled=False,
+            stop_reference="FIXED_PCT",
+            fallback_stop_pct=1.0,
+            trail_activation_pct=3.0,
+            trailing_stop_enabled=True,
+            min_stop_distance_pct=0.5,
+            max_stop_distance_pct=3.0,
+        )
         mrp2 = ensure_managed_risk_for_executed_order(
             db,
             settings,
             order=order2,
             filled_qty=1,
             avg_price=100.0,
-            policy=policy,
+            risk_profile=prof2,
         )
         assert mrp2 is None

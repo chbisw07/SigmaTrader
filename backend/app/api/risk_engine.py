@@ -6,11 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
-from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import (
     AlertDecisionLog,
-    BrokerSecret,
     DrawdownThreshold,
     RiskProfile,
     SymbolRiskCategory,
@@ -20,19 +18,11 @@ from app.schemas.risk_engine import (
     AlertDecisionLogRead,
     DrawdownThresholdRead,
     DrawdownThresholdUpsert,
-    RiskEngineV2FlagRead,
-    RiskEngineV2FlagUpdate,
     RiskProfileCreate,
     RiskProfileRead,
     RiskProfileUpdate,
     SymbolRiskCategoryRead,
     SymbolRiskCategoryUpsert,
-)
-from app.services.risk_engine_v2_flag_store import (
-    RISK_ENGINE_BROKER_NAME,
-    RISK_ENGINE_V2_FLAG_KEY,
-    get_risk_engine_v2_enabled,
-    set_risk_engine_v2_enabled,
 )
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -42,42 +32,6 @@ router = APIRouter()
 
 def _model_to_dict(obj: Any) -> dict[str, Any]:
     return {k: getattr(obj, k) for k in obj.__mapper__.columns.keys()}  # type: ignore[attr-defined]
-
-
-@router.get("/v2-enabled", response_model=RiskEngineV2FlagRead)
-def read_risk_engine_v2_enabled(
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> RiskEngineV2FlagRead:
-    enabled, source = get_risk_engine_v2_enabled(db, settings)
-    updated_at = None
-    if source in ("db", "db_invalid"):
-        row = (
-            db.query(BrokerSecret)
-            .filter(
-                BrokerSecret.broker_name == RISK_ENGINE_BROKER_NAME,
-                BrokerSecret.key == RISK_ENGINE_V2_FLAG_KEY,
-                BrokerSecret.user_id.is_(None),
-            )
-            .one_or_none()
-        )
-        updated_at = row.updated_at if row is not None else None
-    return RiskEngineV2FlagRead(enabled=bool(enabled), source=source, updated_at=updated_at)
-
-
-@router.put("/v2-enabled", response_model=RiskEngineV2FlagRead)
-def update_risk_engine_v2_enabled(
-    payload: RiskEngineV2FlagUpdate,
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> RiskEngineV2FlagRead:
-    row = set_risk_engine_v2_enabled(db, settings, bool(payload.enabled))
-    enabled, source = get_risk_engine_v2_enabled(db, settings)
-    return RiskEngineV2FlagRead(
-        enabled=bool(enabled),
-        source=source,
-        updated_at=row.updated_at if row is not None else None,
-    )
 
 
 @router.get("/risk-profiles", response_model=list[RiskProfileRead])

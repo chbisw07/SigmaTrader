@@ -54,6 +54,12 @@ class RiskProfile(Base):
     min_stop_distance_pct: Mapped[float] = mapped_column(nullable=False, default=0.5)
     max_stop_distance_pct: Mapped[float] = mapped_column(nullable=False, default=3.0)
 
+    # Managed risk (trailing stop) defaults.
+    managed_risk_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    trailing_stop_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    trail_activation_atr: Mapped[float] = mapped_column(nullable=False, default=2.5)
+    trail_activation_pct: Mapped[float] = mapped_column(nullable=False, default=3.0)
+
     daily_loss_pct: Mapped[float] = mapped_column(nullable=False, default=0.0)
     hard_daily_loss_pct: Mapped[float] = mapped_column(nullable=False, default=0.0)
     max_consecutive_losses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

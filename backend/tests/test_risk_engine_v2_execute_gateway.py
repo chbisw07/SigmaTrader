@@ -68,10 +68,6 @@ def setup_module() -> None:  # type: ignore[override]
         session.add(user)
         session.commit()
 
-    # Enable the profile engine for this module's v2 gateway tests.
-    put = client.put("/api/risk-engine/v2-enabled", json={"enabled": True})
-    assert put.status_code == 200
-
 
 def _seed_v2_config(
     *,

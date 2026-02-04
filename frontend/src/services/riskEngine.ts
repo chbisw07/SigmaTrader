@@ -21,6 +21,11 @@ export type RiskProfile = {
   min_stop_distance_pct: number
   max_stop_distance_pct: number
 
+  managed_risk_enabled: boolean
+  trailing_stop_enabled: boolean
+  trail_activation_atr: number
+  trail_activation_pct: number
+
   daily_loss_pct: number
   hard_daily_loss_pct: number
   max_consecutive_losses: number
@@ -111,44 +116,12 @@ export type AlertDecisionLogRow = {
   details_json: string
 }
 
-export type RiskEngineV2Enabled = {
-  enabled: boolean
-  source: 'db' | 'env_default' | 'db_invalid'
-  updated_at?: string | null
-}
-
 async function readTextSafe(res: Response): Promise<string> {
   try {
     return await res.text()
   } catch {
     return ''
   }
-}
-
-export async function fetchRiskEngineV2Enabled(): Promise<RiskEngineV2Enabled> {
-  const res = await fetch('/api/risk-engine/v2-enabled', { cache: 'no-store' })
-  if (!res.ok) {
-    const body = await readTextSafe(res)
-    throw new Error(
-      `Failed to load profile engine status (${res.status})${body ? `: ${body}` : ''}`,
-    )
-  }
-  return (await res.json()) as RiskEngineV2Enabled
-}
-
-export async function updateRiskEngineV2Enabled(enabled: boolean): Promise<RiskEngineV2Enabled> {
-  const res = await fetch('/api/risk-engine/v2-enabled', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ enabled: Boolean(enabled) }),
-  })
-  if (!res.ok) {
-    const body = await readTextSafe(res)
-    throw new Error(
-      `Failed to update profile engine status (${res.status})${body ? `: ${body}` : ''}`,
-    )
-  }
-  return (await res.json()) as RiskEngineV2Enabled
 }
 
 export async function fetchRiskProfiles(): Promise<RiskProfile[]> {
