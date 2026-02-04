@@ -62,6 +62,13 @@ function renderSummaryText(data: CompiledRiskResponse): string {
   lines.push('')
   lines.push(`Risk enabled: ${data.inputs.risk_enabled ? 'YES' : 'NO'}`)
   lines.push(`Manual override enabled: ${data.inputs.manual_override_enabled ? 'YES' : 'NO'}`)
+  if (data.inputs.manual_override_enabled) {
+    if (data.context.source_bucket === 'MANUAL') {
+      lines.push('NOTE: Manual override applies to MANUAL orders and bypasses risk blocks (advisory only).')
+    } else {
+      lines.push(`NOTE: Manual override does NOT apply to ${data.context.source_bucket} orders.`)
+    }
+  }
   lines.push(`Baseline equity (INR): ${fmtNum(data.inputs.baseline_equity_inr, 0)}`)
   lines.push(`Drawdown%: ${fmtNum(data.inputs.drawdown_pct, 2)}`)
   lines.push(`Drawdown state: ${data.effective.drawdown_state ?? '—'}`)
@@ -232,7 +239,7 @@ export function EffectiveRiskSummaryPanel() {
             >
               {SOURCES.map((s) => (
                 <MenuItem key={s} value={s}>
-                  {s}
+                  {s === 'MANUAL' ? 'MANUAL (manual orders)' : s}
                 </MenuItem>
               ))}
             </Select>
@@ -348,6 +355,14 @@ export function EffectiveRiskSummaryPanel() {
               color={data.inputs.risk_enabled ? 'success' : 'default'}
               size="small"
             />
+            {data.inputs.manual_override_enabled && data.context.source_bucket === 'MANUAL' ? (
+              <Chip
+                label="MANUAL OVERRIDE: ON (bypass)"
+                color="warning"
+                size="small"
+                variant="filled"
+              />
+            ) : null}
             <Chip
               label={data.effective.allow_new_entries ? 'ALLOW: YES' : 'ALLOW: NO'}
               color={data.effective.allow_new_entries ? 'success' : 'error'}
@@ -359,6 +374,19 @@ export function EffectiveRiskSummaryPanel() {
               variant="outlined"
             />
           </Box>
+
+          {data.inputs.manual_override_enabled ? (
+            data.context.source_bucket === 'MANUAL' ? (
+              <Alert severity="warning" sx={{ mb: 1 }}>
+                Manual override is ON. For MANUAL orders, SigmaTrader will warn but will not block on risk
+                thresholds. Values shown below are advisory only (structural validity checks still apply).
+              </Alert>
+            ) : (
+              <Alert severity="info" sx={{ mb: 1 }}>
+                Manual override is ON, but it applies only to MANUAL orders. {data.context.source_bucket} orders are still fully enforced.
+              </Alert>
+            )
+          ) : null}
 
           <Section title="Resolved (core)">
             <Row label="Baseline equity (INR)" value={fmtNum(data.inputs.baseline_equity_inr, 0)} />

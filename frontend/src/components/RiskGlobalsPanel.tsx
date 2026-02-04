@@ -63,11 +63,11 @@ export function RiskGlobalsPanel() {
             </IconButton>
           </span>
         </Tooltip>
-      <Button
-        size="small"
-        variant="contained"
-        disabled={!loaded || !draft || saving}
-        onClick={async () => {
+        <Button
+          size="small"
+          variant="contained"
+          disabled={!loaded || !draft || saving}
+          onClick={async () => {
             if (!draft) return
             setSaving(true)
             try {
@@ -82,14 +82,14 @@ export function RiskGlobalsPanel() {
               setError(e instanceof Error ? e.message : 'Failed to save risk settings')
             } finally {
               setSaving(false)
-          }
-        }}
-      >
-        {saving ? 'Saving…' : 'Save globals'}
-      </Button>
+            }
+          }}
+        >
+          {saving ? 'Saving…' : 'Save globals'}
+        </Button>
       </Box>
 
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
         System-wide toggles. Manual override applies only to explicit manual orders (not TradingView / deployments).
       </Typography>
 
@@ -118,13 +118,31 @@ export function RiskGlobalsPanel() {
                 checked={Boolean(draft.manual_override_enabled)}
                 onChange={(e) =>
                   setDraft((p) =>
-                    p ? { ...p, manual_override_enabled: e.target.checked } : p,
+                    p
+                      ? {
+                          ...p,
+                          manual_override_enabled: e.target.checked
+                            ? typeof window !== 'undefined' && typeof window.confirm === 'function'
+                              ? window.confirm(
+                                  'Enable MANUAL override?\n\nThis bypasses risk blocks for MANUAL orders only until you turn it OFF. TradingView/deployments remain enforced.\n\nStructural validity checks still apply.',
+                                )
+                              : false
+                              : false,
+                        }
+                      : p,
                   )
                 }
               />
             }
-            label="Manual override (manual orders only)"
+            label="Manual override (manual orders only; bypass risk blocks)"
           />
+
+          {draft.manual_override_enabled ? (
+            <Alert severity="warning">
+              Manual override is ON. MANUAL orders will not be blocked by risk thresholds; SigmaTrader will only warn.
+              Use this for rare, deliberate overrides and turn it OFF after.
+            </Alert>
+          ) : null}
 
           <TextField
             size="small"
