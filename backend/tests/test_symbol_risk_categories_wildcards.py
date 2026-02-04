@@ -8,7 +8,7 @@ from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
 from app.models import SymbolRiskCategory, User
-from app.services.risk_engine_v2 import resolve_symbol_category
+from app.services.risk_engine import resolve_symbol_category
 
 client = TestClient(app)
 

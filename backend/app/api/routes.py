@@ -25,7 +25,6 @@ from . import (
     risk_compiled,
     risk_unified,
     risk_engine,
-    risk_settings,
     screener_v3,
     signal_strategies,
     strategies,
@@ -68,13 +67,6 @@ router.include_router(
     prefix="/api/strategies",
     dependencies=[Depends(require_admin)],
     tags=["strategies"],
-)
-
-router.include_router(
-    risk_settings.router,
-    prefix="/api/risk-settings",
-    dependencies=[Depends(require_admin)],
-    tags=["risk-settings"],
 )
 
 router.include_router(

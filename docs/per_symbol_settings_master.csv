@@ -1,0 +1,5 @@
+record_type,user_id,broker_name,exchange,symbol,risk_category,goal_label,goal_review_date,goal_target_type,goal_target_value,goal_note,hex_product,hex_trigger_kind,hex_trigger_value,hex_price_source,hex_size_mode,hex_size_value,hex_min_qty,hex_order_type,hex_dispatch_mode,hex_execution_target,hex_cooldown_seconds,group_id,group_name,group_target_weight,group_notes,group_reference_qty,group_reference_price,group_frozen_price,group_weight_locked,group_allocation_amount,group_allocation_qty
+SYMBOL_RISK_CATEGORY,,zerodha,NSE,INFY,LC,,,,,,,,,,,,,,,,,,,,,,,,,
+HOLDING_GOAL,1,zerodha,NSE,INFY,,CORE,2026-07-30,PCT_FROM_AVG_BUY,5,"Long-term core holding",,,,,,,,,,,,,,,,,,,,,,,
+HOLDING_EXIT_SUBSCRIPTION,1,zerodha,NSE,INFY,,,,,,,,CNC,TARGET_PCT_FROM_AVG_BUY,5,LTP,PCT_OF_POSITION,20,1,MARKET,MANUAL,LIVE,300,,,,,,,,,,
+GROUP_MEMBER,1,,NSE,INFY,,,,,,,,,,,,,,,,,,,,,123,MyPortfolio,0.05,"Core allocation",,,,"",false,,

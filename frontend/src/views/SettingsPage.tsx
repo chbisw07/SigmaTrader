@@ -63,7 +63,7 @@ import {
   updateTradingViewWebhookConfig,
 } from '../services/webhookSettings'
 import { TradingViewAlertPayloadBuilder } from '../components/TradingViewAlertPayloadBuilder'
-import { RiskEngineV2Settings } from '../components/RiskEngineV2Settings'
+import { RiskProfilesSettings } from '../components/RiskProfilesSettings'
 import { HoldingsExitAutomationSettings } from '../components/HoldingsExitAutomationSettings'
 import { RiskGlobalsPanel } from '../components/RiskGlobalsPanel'
 import { RiskSourceOverridesPanel } from '../components/RiskSourceOverridesPanel'
@@ -1424,7 +1424,7 @@ export function SettingsPage() {
           >
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
               <RiskGlobalsPanel />
-              <RiskEngineV2Settings />
+              <RiskProfilesSettings />
               <RiskSourceOverridesPanel />
               <HoldingsExitAutomationSettings />
             </Box>

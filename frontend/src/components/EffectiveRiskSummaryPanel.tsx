@@ -64,7 +64,9 @@ function renderSummaryText(data: CompiledRiskResponse): string {
   lines.push(`Manual override enabled: ${data.inputs.manual_override_enabled ? 'YES' : 'NO'}`)
   if (data.inputs.manual_override_enabled) {
     if (data.context.source_bucket === 'MANUAL') {
-      lines.push('NOTE: Manual override applies to MANUAL orders and bypasses risk blocks (advisory only).')
+      lines.push(
+        'NOTE: Manual override applies to MANUAL orders and bypasses ALL risk blocks (advisory only; structural validity still applies).',
+      )
     } else {
       lines.push(`NOTE: Manual override does NOT apply to ${data.context.source_bucket} orders.`)
     }
@@ -379,7 +381,7 @@ export function EffectiveRiskSummaryPanel() {
             data.context.source_bucket === 'MANUAL' ? (
               <Alert severity="warning" sx={{ mb: 1 }}>
                 Manual override is ON. For MANUAL orders, SigmaTrader will warn but will not block on risk
-                thresholds. Values shown below are advisory only (structural validity checks still apply).
+                thresholds (including HARD_STOP). Values shown below are advisory only (structural validity checks still apply).
               </Alert>
             ) : (
               <Alert severity="info" sx={{ mb: 1 }}>

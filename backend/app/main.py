@@ -121,26 +121,37 @@ def _bootstrap_admin_user() -> None:
             return
 
 
-_bootstrap_admin_user()
+if "pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"):
+    _bootstrap_admin_user()
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """FastAPI lifespan handler for startup/shutdown tasks."""
 
+    is_pytest = "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST")
+
     _run_migrations_if_needed()
     _repair_schema_if_corrupted()
-    _bootstrap_admin_user()
+    if not is_pytest:
+        _bootstrap_admin_user()
     # Best-effort migration from legacy risk policy JSON into unified tables so
     # switching enforcement does not break existing setups.
-    try:
-        with SessionLocal() as db:
-            migrate_legacy_risk_policy_v1_to_unified(db, settings=settings)
-    except Exception:
-        logger.exception("Failed to migrate legacy risk policy into unified settings.")
+    #
+    # Under pytest, individual test modules commonly drop/create tables and seed
+    # fixtures using the same SQLite file. Running migrations during app startup
+    # can race with that setup and cause SQLite to block on schema locks.
+    if not is_pytest:
+        try:
+            with SessionLocal() as db:
+                migrate_legacy_risk_policy_v1_to_unified(db, settings=settings)
+        except Exception:
+            logger.exception(
+                "Failed to migrate legacy risk policy into unified settings.",
+            )
 
     # Startup: begin background market data sync when not under pytest.
-    if "pytest" not in sys.modules and not os.getenv("PYTEST_CURRENT_TEST"):
+    if not is_pytest:
         schedule_market_data_sync()
         schedule_instrument_master_sync()
         if settings.enable_legacy_alerts:

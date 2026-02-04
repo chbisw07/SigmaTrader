@@ -349,11 +349,11 @@ export const riskSettingsHelp: HelpContext = {
   ],
   sections: [
     {
-      id: 'risk-v2-profiles',
+      id: 'risk-profiles',
       title: 'Product-specific risk profiles (CNC/MIS)',
       qas: [
         {
-          id: 'risk-v2-profiles-what',
+          id: 'risk-profiles-what',
           question: 'What are product-specific risk profiles?',
           answer: [
             {
@@ -368,7 +368,7 @@ export const riskSettingsHelp: HelpContext = {
           ],
         },
         {
-          id: 'risk-v2-profiles-setup',
+          id: 'risk-profiles-setup',
           question: 'How should I set it up?',
           answer: [
             {
@@ -385,11 +385,11 @@ export const riskSettingsHelp: HelpContext = {
       ],
     },
     {
-      id: 'risk-v2-drawdown-thresholds',
+      id: 'risk-drawdown-thresholds',
       title: 'Drawdown thresholds (product × category)',
       qas: [
         {
-          id: 'risk-v2-drawdown-what',
+          id: 'risk-drawdown-what',
           question: 'What do these thresholds do?',
           answer: [
             {
@@ -407,7 +407,7 @@ export const riskSettingsHelp: HelpContext = {
           ],
         },
         {
-          id: 'risk-v2-drawdown-requires-categories',
+          id: 'risk-drawdown-requires-categories',
           question: 'Why do I need symbol categories (LC/MC/SC/ETF)?',
           answer: [
             {
@@ -419,11 +419,11 @@ export const riskSettingsHelp: HelpContext = {
       ],
     },
     {
-      id: 'risk-v2-decision-log',
+      id: 'risk-decision-log',
       title: 'Decision log',
       qas: [
         {
-          id: 'risk-v2-decision-log-what',
+          id: 'risk-decision-log-what',
           question: 'What is the Alert decision log?',
           answer: [
             {
@@ -689,11 +689,11 @@ export const riskManagementGuide: HelpContext = {
   ],
   sections: [
     {
-      id: 'product-specific-risk-profiles-v2',
+      id: 'product-specific-risk-profiles',
       title: 'Product-specific risk profiles (CNC/MIS)',
       qas: [
         {
-          id: 'v2-profiles-why',
+          id: 'profiles-why',
           question: 'Why separate CNC and MIS profiles?',
           answer: [
             {
@@ -703,7 +703,7 @@ export const riskManagementGuide: HelpContext = {
           ],
         },
         {
-          id: 'v2-profiles-authority',
+          id: 'profiles-authority',
           question: 'Does TradingView decide product/quantity?',
           answer: [
             {
@@ -715,16 +715,16 @@ export const riskManagementGuide: HelpContext = {
       ],
     },
     {
-      id: 'drawdown-thresholds-v2',
+      id: 'drawdown-thresholds',
       title: 'Drawdown thresholds (by product × category)',
       qas: [
         {
-          id: 'v2-drawdown-state-machine',
+          id: 'drawdown-state-machine',
           question: 'How does the drawdown state machine work?',
           answer: [
             {
               type: 'p',
-              text: 'SigmaTrader computes a portfolio drawdown % and maps it to NORMAL / CAUTION / DEFENSE / HALT based on thresholds configured per (product, category). The chosen RiskProfile product determines which threshold row is used.',
+              text: 'SigmaTrader computes a portfolio drawdown % and maps it to NORMAL / CAUTION / DEFENSE / HARD_STOP based on thresholds configured per (product, category). The chosen RiskProfile product determines which threshold row is used.',
             },
             {
               type: 'bullets',
@@ -732,7 +732,7 @@ export const riskManagementGuide: HelpContext = {
                 'NORMAL: full behavior',
                 'CAUTION: throttled entries (example: lower capital_per_trade)',
                 'DEFENSE: restricted entries (example: ETF/LC only)',
-                'HALT: block new entries (manual review)',
+                'HARD_STOP: block new entries (manual review)',
               ],
             },
           ],
@@ -740,11 +740,11 @@ export const riskManagementGuide: HelpContext = {
       ],
     },
     {
-      id: 'symbol-risk-categories-v2',
+      id: 'symbol-risk-categories',
       title: 'Symbol categories (LC/MC/SC/ETF)',
       qas: [
         {
-          id: 'v2-categories-required',
+          id: 'categories-required',
           question: 'Do I have to tag every symbol with a category?',
           answer: [
             {
@@ -763,11 +763,11 @@ export const riskManagementGuide: HelpContext = {
       ],
     },
     {
-      id: 'alert-decision-log-v2',
+      id: 'alert-decision-log',
       title: 'Alert decision log',
       qas: [
         {
-          id: 'v2-decision-log-why',
+          id: 'decision-log-why',
           question: 'Where do I see why something was blocked?',
           answer: [
             {

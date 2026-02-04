@@ -145,7 +145,7 @@ def migrate_legacy_risk_policy_v1_to_unified(db: Session, settings: Settings) ->
                 product=prod,
                 enabled=True,
                 is_default=True,
-                # Safe defaults so the v2 engine can size orders immediately in fresh installs/tests.
+                # Safe defaults so the engine can size orders immediately in fresh installs/tests.
                 capital_per_trade=float(_DEFAULT_CAPITAL_PER_TRADE),
                 max_positions=int(_DEFAULT_MAX_POSITIONS),
                 max_exposure_pct=float(_DEFAULT_MAX_EXPOSURE_PCT),

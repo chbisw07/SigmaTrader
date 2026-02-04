@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 
 import MainLayout from './layouts/MainLayout'
 import { AppRoutes } from './routes/AppRoutes'
@@ -12,7 +12,6 @@ function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
   const [authChecked, setAuthChecked] = useState(false)
   const location = useLocation()
-  const navigate = useNavigate()
   const { setThemeId } = useAppTheme()
 
   useEffect(() => {
@@ -52,8 +51,7 @@ function App() {
   }
 
   if (!currentUser && !isAuthRoute) {
-    navigate('/auth', { replace: true })
-    return null
+    return <Navigate to="/auth" replace />
   }
 
   if (!currentUser && isAuthRoute) {

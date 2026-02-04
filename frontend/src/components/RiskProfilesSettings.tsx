@@ -95,7 +95,7 @@ const DEFAULT_PROFILE: RiskProfileCreate = {
   is_default: false,
 }
 
-export function RiskEngineV2Settings() {
+export function RiskProfilesSettings() {
   const navigate = useNavigate()
 
   const [profiles, setProfiles] = useState<RiskProfile[]>([])
@@ -508,7 +508,7 @@ export function RiskEngineV2Settings() {
           <Tooltip title="Help" arrow placement="top">
             <IconButton
               size="small"
-              onClick={() => openGuide('product-specific-risk-profiles-v2')}
+              onClick={() => openGuide('product-specific-risk-profiles')}
               aria-label="risk profiles help"
             >
               <HelpOutlineIcon fontSize="small" />
@@ -592,7 +592,7 @@ export function RiskEngineV2Settings() {
           <Tooltip title="Help" arrow placement="top">
             <IconButton
               size="small"
-              onClick={() => openGuide('drawdown-thresholds-v2')}
+              onClick={() => openGuide('drawdown-thresholds')}
               aria-label="drawdown thresholds help"
             >
               <HelpOutlineIcon fontSize="small" />

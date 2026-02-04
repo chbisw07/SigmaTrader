@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -87,6 +88,7 @@ def submit_paper_order(
                 symbol = ts
             ltp = client.get_ltp(exchange=exchange, tradingsymbol=symbol)
             order.status = "EXECUTED"
+            order.sent_at = datetime.now(UTC)
             order.price = float(ltp)
             order.error_message = None
             db.add(order)
@@ -129,6 +131,7 @@ def submit_paper_order(
             pass
 
     order.status = "SENT"
+    order.sent_at = datetime.now(UTC)
     order.error_message = None
     db.add(order)
     db.commit()

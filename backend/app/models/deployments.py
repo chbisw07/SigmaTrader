@@ -154,7 +154,7 @@ class StrategyDeploymentState(Base):
     state_json: Mapped[Optional[str]] = mapped_column(Text())
     exposure_json: Mapped[Optional[str]] = mapped_column(Text())
 
-    # v2 legacy (kept for backwards compatibility with existing APIs/UI)
+    # Legacy fields (kept for backwards compatibility with existing APIs/UI).
     last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
     next_evaluate_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 

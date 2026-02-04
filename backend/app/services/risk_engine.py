@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from math import floor
 from typing import Any, Literal
 
-from sqlalchemy import case, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -25,7 +25,6 @@ from app.models import (
     User,
 )
 from app.services.market_data import load_series
-from app.services.risk import _normalized_symbol_exchange
 from app.services.risk_unified_store import get_source_override
 
 logger = logging.getLogger(__name__)
@@ -37,6 +36,22 @@ _BOOTSTRAP_DEFAULT_MAX_EXPOSURE_PCT = 60.0
 DrawdownState = Literal["NORMAL", "CAUTION", "DEFENSE", "HARD_STOP"]
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _normalized_symbol_exchange(order: Order) -> tuple[str, str]:
+    """Return (symbol, exchange) normalized for broker lookups.
+
+    Accepts both "NSE:INFY" and "INFY" style symbols.
+    """
+
+    symbol_raw = (order.symbol or "").strip()
+    exchange = (getattr(order, "exchange", None) or "NSE").strip().upper() or "NSE"
+    if ":" in symbol_raw:
+        ex, sym = symbol_raw.split(":", 1)
+        if ex.strip():
+            exchange = ex.strip().upper()
+        symbol_raw = sym
+    return symbol_raw.strip().upper(), exchange
 
 
 def _atr(
@@ -138,7 +153,7 @@ def _stop_distance_for_order(
     return float(dist), "atr"
 
 
-def _ensure_v2_bootstrap_rows(db: Session) -> None:
+def _ensure_bootstrap_rows(db: Session) -> None:
     """Seed minimum rows needed for the unified risk engine to operate.
 
     Tests frequently rebuild the DB after app startup, so we cannot rely only on the
@@ -302,7 +317,7 @@ class DrawdownConfig:
 
 
 @dataclass(frozen=True)
-class RiskDecisionV2:
+class RiskDecision:
     blocked: bool
     reasons: list[str]
     resolved_product: str | None
@@ -628,7 +643,7 @@ def apply_drawdown_throttle(
     state: DrawdownState,
     category: str,
 ) -> tuple[float, int, list[str]]:
-    # Keep this aligned with risk_compiler.apply_drawdown_throttle_v2 so runtime
+    # Keep this aligned with risk_compiler.apply_drawdown_throttle so runtime
     # behavior matches the "Effective Risk Summary" UI.
     reasons: list[str] = []
     cap = float(capital_per_trade or 0.0)
@@ -655,7 +670,7 @@ def apply_drawdown_throttle(
     return cap, max_pos, reasons
 
 
-def evaluate_order_risk_v2(
+def evaluate_order_risk(
     db: Session,
     settings: Settings,
     *,
@@ -664,8 +679,8 @@ def evaluate_order_risk_v2(
     baseline_equity: float,
     now_utc: datetime,
     product_hint: str | None,
-) -> RiskDecisionV2:
-    _ensure_v2_bootstrap_rows(db)
+) -> RiskDecision:
+    _ensure_bootstrap_rows(db)
 
     reasons: list[str] = []
     is_exit = _is_structural_exit(db, order)
@@ -674,7 +689,7 @@ def evaluate_order_risk_v2(
     # configuration is missing or incomplete.
     if is_exit:
         resolved_product = (getattr(order, "product", None) or "MIS").strip().upper()
-        return RiskDecisionV2(
+        return RiskDecision(
             blocked=False,
             reasons=["Structural exit: bypassing entry risk checks."],
             resolved_product=resolved_product,
@@ -696,7 +711,7 @@ def evaluate_order_risk_v2(
         # fail closed for safety.
         if source_bucket == "MANUAL":
             resolved_product = (getattr(order, "product", None) or "CNC").strip().upper() or "CNC"
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=False,
                 reasons=["Manual order: no RiskProfile configured; skipping profile-based checks."],
                 resolved_product=resolved_product,
@@ -708,7 +723,7 @@ def evaluate_order_risk_v2(
                 final_order_type=(order.order_type or "MARKET").strip().upper(),
                 final_price=_price_for_sizing(order),
             )
-        return RiskDecisionV2(
+        return RiskDecision(
             blocked=True,
             reasons=["Missing RiskProfile (create at least one enabled profile)."],
             resolved_product=None,
@@ -731,7 +746,7 @@ def evaluate_order_risk_v2(
 
     # Product gating at the source layer (entries only). Structural exits are already bypassed.
     if source_override is not None and source_override.allow_product is False:
-        return RiskDecisionV2(
+        return RiskDecision(
             blocked=True,
             reasons=[f"{source_bucket} {resolved_product} disabled by Risk Settings."],
             resolved_product=resolved_product,
@@ -754,7 +769,7 @@ def evaluate_order_risk_v2(
     if otp:
         allowed = {t.strip().upper() for t in otp.replace(";", ",").split(",") if t.strip()}
         if not allowed:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=["Invalid order_type_policy configuration (empty allowlist)."],
                 resolved_product=resolved_product,
@@ -768,7 +783,7 @@ def evaluate_order_risk_v2(
             )
         order_type = (order.order_type or "MARKET").strip().upper()
         if order_type not in allowed:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[f"Order type {order_type} blocked by order_type_policy ({sorted(allowed)})."],
                 resolved_product=resolved_product,
@@ -924,7 +939,7 @@ def evaluate_order_risk_v2(
             category = "LC"
             reasons.append("Manual order: symbol category missing; defaulted to LC.")
         else:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     (
@@ -950,7 +965,7 @@ def evaluate_order_risk_v2(
                 "Manual order: drawdown thresholds missing; skipping drawdown gating."
             )
         else:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     f"Missing drawdown thresholds for {resolved_product}+{category} (configure in Settings)."
@@ -972,7 +987,7 @@ def evaluate_order_risk_v2(
         now_utc=now_utc,
     )
     if pnl_state.baseline_equity <= 0:
-        return RiskDecisionV2(
+        return RiskDecision(
             blocked=True,
             reasons=["Missing/invalid baseline equity (set Baseline equity in Risk Settings)."],
             resolved_product=resolved_product,
@@ -1028,7 +1043,7 @@ def evaluate_order_risk_v2(
     # Drawdown gating applies to entries; exits are always allowed.
     if not is_exit:
         if dd_state == "HARD_STOP":
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=reasons,
                 resolved_product=resolved_product,
@@ -1041,7 +1056,7 @@ def evaluate_order_risk_v2(
                 final_price=None,
             )
         if dd_state == "DEFENSE" and (category or "").strip().upper() not in {"ETF", "LC"}:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=reasons,
                 resolved_product=resolved_product,
@@ -1061,7 +1076,7 @@ def evaluate_order_risk_v2(
         ) * 100.0
         hard_daily_loss_pct = float(hard_daily_loss_pct_base or 0.0)
         if hard_daily_loss_pct > 0 and daily_loss_pct >= hard_daily_loss_pct:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1077,7 +1092,7 @@ def evaluate_order_risk_v2(
                 final_price=None,
             )
         if daily_loss_pct >= float(daily_loss_pct_base):
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1097,7 +1112,7 @@ def evaluate_order_risk_v2(
     if not is_exit and max_consecutive_losses_base and max_consecutive_losses_base > 0:
         max_losses = int(max_consecutive_losses_base)
         if pnl_state.consecutive_losses >= max_losses:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1117,7 +1132,7 @@ def evaluate_order_risk_v2(
     if not is_exit and resolved_product == "MIS":
         cutoff = _parse_hhmm(entry_cutoff_time)
         if cutoff is not None and _now_time_ist(now_utc) >= cutoff:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[*reasons, f"MIS entry cutoff time reached ({entry_cutoff_time})."],
                 resolved_product=resolved_product,
@@ -1132,7 +1147,7 @@ def evaluate_order_risk_v2(
 
         squareoff = _parse_hhmm(force_squareoff_time)
         if squareoff is not None and _now_time_ist(now_utc) >= squareoff:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1151,6 +1166,7 @@ def evaluate_order_risk_v2(
         start_day, end_day = _day_bounds_ist(now_utc)
         broker = (getattr(order, "broker_name", None) or "zerodha").strip().lower()
         user_id = user.id if user is not None else None
+        sent_ts = func.coalesce(Order.sent_at, Order.created_at)
 
         def _symbol_match_clause() -> Any:
             # Best-effort: support orders storing either "SBIN" or "NSE:SBIN" in symbol.
@@ -1159,8 +1175,8 @@ def evaluate_order_risk_v2(
 
         if max_trades_per_day is not None and int(max_trades_per_day) > 0:
             q = db.query(Order).filter(
-                Order.created_at >= start_day,
-                Order.created_at < end_day,
+                sent_ts >= start_day,
+                sent_ts < end_day,
                 Order.broker_name == broker,
                 Order.product == resolved_product,
                 Order.is_exit.is_(False),
@@ -1170,7 +1186,7 @@ def evaluate_order_risk_v2(
                 q = q.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
             trades_today = q.count()
             if trades_today >= int(max_trades_per_day):
-                return RiskDecisionV2(
+                return RiskDecision(
                     blocked=True,
                     reasons=[
                         *reasons,
@@ -1192,8 +1208,8 @@ def evaluate_order_risk_v2(
         ):
             max_trades_sym = int(max_trades_per_symbol_per_day)
             q = db.query(Order).filter(
-                Order.created_at >= start_day,
-                Order.created_at < end_day,
+                sent_ts >= start_day,
+                sent_ts < end_day,
                 Order.broker_name == broker,
                 Order.product == resolved_product,
                 Order.is_exit.is_(False),
@@ -1205,7 +1221,7 @@ def evaluate_order_risk_v2(
                 q = q.filter((Order.user_id == user_id) | (Order.user_id.is_(None)))
             trades_sym = q.count()
             if trades_sym >= max_trades_sym:
-                return RiskDecisionV2(
+                return RiskDecision(
                     blocked=True,
                     reasons=[
                         *reasons,
@@ -1224,7 +1240,7 @@ def evaluate_order_risk_v2(
         # Min bars between trades (same symbol/product).
         if min_bars_between_trades is not None and int(min_bars_between_trades) > 0:
             if order.alert is None:
-                return RiskDecisionV2(
+                return RiskDecision(
                     blocked=True,
                     reasons=[*reasons, "Missing alert context for min_bars_between_trades."],
                     resolved_product=resolved_product,
@@ -1238,7 +1254,7 @@ def evaluate_order_risk_v2(
                 )
             interval_min = _interval_minutes(getattr(order.alert, "interval", None))
             if interval_min is None or interval_min <= 0:
-                return RiskDecisionV2(
+                return RiskDecision(
                     blocked=True,
                     reasons=[*reasons, "Unknown alert interval for min_bars_between_trades."],
                     resolved_product=resolved_product,
@@ -1273,7 +1289,7 @@ def evaluate_order_risk_v2(
                     mins = (now_bar - prev_t).total_seconds() / 60.0
                     required = float(interval_min) * float(int(min_bars_between_trades))
                     if mins < required:
-                        return RiskDecisionV2(
+                        return RiskDecision(
                             blocked=True,
                             reasons=[
                                 *reasons,
@@ -1307,7 +1323,7 @@ def evaluate_order_risk_v2(
                     mins = (now_bar - last_trade.closed_at).total_seconds() / 60.0
                     required = float(interval_min) * float(int(cooldown_after_loss_bars))
                     if mins < required:
-                        return RiskDecisionV2(
+                        return RiskDecision(
                             blocked=True,
                             reasons=[
                                 *reasons,
@@ -1336,7 +1352,7 @@ def evaluate_order_risk_v2(
             .count()
         )
         if int(open_positions) >= int(max_pos_eff):
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1363,7 +1379,7 @@ def evaluate_order_risk_v2(
         qty = qty_from_order
     else:
         if price is None:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1381,7 +1397,7 @@ def evaluate_order_risk_v2(
 
         cap_budget = float(cap_eff or 0.0)
         if cap_budget <= 0:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[*reasons, "Invalid capital_per_trade (must be > 0)."],
                 resolved_product=resolved_product,
@@ -1396,7 +1412,7 @@ def evaluate_order_risk_v2(
 
         qty = float(floor(cap_budget / float(price)))
         if qty <= 0:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1423,7 +1439,7 @@ def evaluate_order_risk_v2(
         if order_value > float(max_order_value_abs):
             new_qty = float(floor(float(max_order_value_abs) / float(price)))
             if new_qty < 1:
-                return RiskDecisionV2(
+                return RiskDecision(
                     blocked=True,
                     reasons=[
                         *reasons,
@@ -1446,7 +1462,7 @@ def evaluate_order_risk_v2(
     # Qty is submitted as an integer to brokers.
     qty = float(floor(float(qty)))
     if qty < 1:
-        return RiskDecisionV2(
+        return RiskDecision(
             blocked=True,
             reasons=[*reasons, "Final qty < 1 after integer rounding; rejected."],
             resolved_product=resolved_product,
@@ -1467,7 +1483,7 @@ def evaluate_order_risk_v2(
             if source_bucket == "MANUAL":
                 reasons.append("Manual order: baseline equity missing; skipping per-trade risk checks.")
             else:
-                return RiskDecisionV2(
+                return RiskDecision(
                     blocked=True,
                     reasons=[*reasons, "baseline_equity_inr must be set (> 0) to enforce per-trade risk caps."],
                     resolved_product=resolved_product,
@@ -1484,7 +1500,7 @@ def evaluate_order_risk_v2(
             if source_bucket == "MANUAL":
                 reasons.append("Manual order: missing price; skipping stop-distance based risk checks.")
             else:
-                return RiskDecisionV2(
+                return RiskDecision(
                     blocked=True,
                     reasons=[*reasons, "Missing order price for stop-distance risk checks."],
                     resolved_product=resolved_product,
@@ -1512,7 +1528,7 @@ def evaluate_order_risk_v2(
             )
             if stop_dist is None or float(stop_dist) <= 0:
                 if bool(stop_loss_mandatory_eff):
-                    return RiskDecisionV2(
+                    return RiskDecision(
                         blocked=True,
                         reasons=[*reasons, "Stop distance unavailable; stop_loss_mandatory is enabled."],
                         resolved_product=resolved_product,
@@ -1548,7 +1564,7 @@ def evaluate_order_risk_v2(
                     _clamp_by_risk(hard_risk_money, label=f"hard_risk_pct={float(hard_risk_pct_base):.2f}%")
                     _clamp_by_risk(max_risk_money, label=f"risk_per_trade_pct={float(risk_per_trade_pct_base):.2f}%")
                 except ValueError as exc:
-                    return RiskDecisionV2(
+                    return RiskDecision(
                         blocked=True,
                         reasons=[*reasons, str(exc)],
                         resolved_product=resolved_product,
@@ -1563,7 +1579,7 @@ def evaluate_order_risk_v2(
 
                 qty = float(floor(float(qty)))
                 if qty < 1:
-                    return RiskDecisionV2(
+                    return RiskDecision(
                         blocked=True,
                         reasons=[*reasons, "Final qty < 1 after per-trade risk clamping; rejected."],
                         resolved_product=resolved_product,
@@ -1580,7 +1596,7 @@ def evaluate_order_risk_v2(
     if not allow_short_selling and _would_open_or_increase_short(
         db, order, product=resolved_product, qty=float(qty)
     ):
-        return RiskDecisionV2(
+        return RiskDecision(
             blocked=True,
             reasons=[*reasons, "Short selling blocked by Risk Settings."],
             resolved_product=resolved_product,
@@ -1597,7 +1613,7 @@ def evaluate_order_risk_v2(
     if max_exposure_pct_base and float(max_exposure_pct_base) > 0:
         if price is None:
             reasons.append("max_exposure cap configured but price is unavailable; skipping exposure check.")
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=False,
                 reasons=reasons,
                 resolved_product=resolved_product,
@@ -1629,7 +1645,7 @@ def evaluate_order_risk_v2(
         max_exposure = float(pnl_state.equity) * float(max_exposure_pct_base) / 100.0
         order_value = float(qty) * float(price)
         if max_exposure > 0 and (existing_exposure + order_value) > max_exposure:
-            return RiskDecisionV2(
+            return RiskDecision(
                 blocked=True,
                 reasons=[
                     *reasons,
@@ -1645,7 +1661,7 @@ def evaluate_order_risk_v2(
                 final_price=price,
             )
 
-    return RiskDecisionV2(
+    return RiskDecision(
         blocked=False,
         reasons=reasons,
         resolved_product=resolved_product,
@@ -1665,7 +1681,7 @@ def record_decision_log(
     user_id: int | None,
     alert: Alert | None,
     order: Order | None,
-    decision: RiskDecisionV2,
+    decision: RiskDecision,
     product_hint: str | None,
 ) -> None:
     try:
@@ -1735,11 +1751,11 @@ def record_decision_log(
 
 
 __all__ = [
-    "RiskDecisionV2",
+    "RiskDecision",
     "apply_drawdown_throttle",
     "compute_portfolio_pnl_state",
     "drawdown_state",
-    "evaluate_order_risk_v2",
+    "evaluate_order_risk",
     "pick_risk_profile",
     "record_decision_log",
     "resolve_drawdown_config",

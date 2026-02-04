@@ -52,6 +52,17 @@ export async function listStrategyTemplates(
   return (await res.json()) as Strategy[]
 }
 
+export async function listStrategies(): Promise<Strategy[]> {
+  const res = await fetch('/api/strategies/')
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to load strategies (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as Strategy[]
+}
+
 export async function createStrategyTemplate(
   payload: StrategyCreate,
 ): Promise<Strategy> {

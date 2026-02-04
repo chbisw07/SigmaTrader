@@ -165,7 +165,7 @@ describe('HoldingsPage Quick trade', () => {
     expect(infyRow).not.toBeNull()
     expect(infyRow!).toHaveClass('st-row-highlight')
 
-    // Risk engine v2 requires a symbol category for enforcement.
+    // Risk engine requires a symbol category for enforcement.
     const category = screen.getByRole('combobox', { name: /risk category/i })
     await user.click(category)
     await user.click(await screen.findByRole('option', { name: /^LC$/i }))

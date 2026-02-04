@@ -19,8 +19,8 @@ from app.schemas.risk_compiled import (
     RiskProduct,
     RiskSourceBucket,
 )
-from app.services.risk_engine_v2 import (
-    _ensure_v2_bootstrap_rows,  # type: ignore[attr-defined]
+from app.services.risk_engine import (
+    _ensure_bootstrap_rows,  # type: ignore[attr-defined]
     apply_drawdown_throttle,
     compute_portfolio_pnl_state,
     drawdown_state,
@@ -101,7 +101,7 @@ def compile_risk_policy(
     """UI-facing "Effective Risk Summary" for the unified risk system."""
 
     now_utc = datetime.now(UTC)
-    _ensure_v2_bootstrap_rows(db)
+    _ensure_bootstrap_rows(db)
 
     g = read_unified_risk_global(db)
     baseline_equity = float(g.baseline_equity_inr or 0.0)

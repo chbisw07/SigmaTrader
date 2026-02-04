@@ -83,7 +83,29 @@ def _strategy_ref_for_order(order: Order) -> str:
             if raw:
                 parsed = json.loads(raw)
                 if isinstance(parsed, dict):
-                    name = str(parsed.get("strategy_name") or "").strip()
+                    # Support both legacy and canonical schemas.
+                    signal = parsed.get("signal")
+                    meta = parsed.get("meta")
+                    td = parsed.get("trade_details")
+                    signal = signal if isinstance(signal, dict) else {}
+                    meta = meta if isinstance(meta, dict) else {}
+                    td = td if isinstance(td, dict) else {}
+
+                    raw_name = (
+                        parsed.get("strategy_name")
+                        or signal.get("strategy_name")
+                        or meta.get("strategy_name")
+                        or parsed.get("strategy")
+                        or signal.get("strategy")
+                        or meta.get("strategy")
+                        or parsed.get("strategy_id")
+                        or signal.get("strategy_id")
+                        or meta.get("strategy_id")
+                        or td.get("strategy_name")
+                        or td.get("strategy")
+                        or td.get("strategy_id")
+                    )
+                    name = str(raw_name or "").strip()
                     if name:
                         # Keep it short for DB indexes / uniqueness.
                         return f"tv:{name[:120]}"

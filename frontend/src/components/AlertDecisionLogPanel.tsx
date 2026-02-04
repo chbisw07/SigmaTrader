@@ -20,7 +20,7 @@ import { fetchAlertDecisionLog, type AlertDecisionLogRow } from '../services/ris
 
 export function AlertDecisionLogPanel({
   title = 'Alert decision log',
-  helpHash = 'alert-decision-log-v2',
+  helpHash = 'alert-decision-log',
   limit = 200,
 }: {
   title?: string
@@ -150,4 +150,3 @@ export function AlertDecisionLogPanel({
     </Paper>
   )
 }
-

@@ -124,7 +124,7 @@ export function RiskGlobalsPanel() {
                           manual_override_enabled: e.target.checked
                             ? typeof window !== 'undefined' && typeof window.confirm === 'function'
                               ? window.confirm(
-                                  'Enable MANUAL override?\n\nThis bypasses risk blocks for MANUAL orders only until you turn it OFF. TradingView/deployments remain enforced.\n\nStructural validity checks still apply.',
+                                  'Enable MANUAL override?\n\nThis is a high-risk escape hatch.\n\nWhen ON:\n- MANUAL orders can bypass ALL risk blocks (including drawdown HARD_STOP and execution safety guards).\n- TradingView / deployments remain fully enforced.\n- Structural validity checks still apply.\n\nEnable only for rare, deliberate exceptions and turn it OFF immediately after.',
                                 )
                               : false
                               : false,
@@ -138,9 +138,9 @@ export function RiskGlobalsPanel() {
           />
 
           {draft.manual_override_enabled ? (
-            <Alert severity="warning">
-              Manual override is ON. MANUAL orders will not be blocked by risk thresholds; SigmaTrader will only warn.
-              Use this for rare, deliberate overrides and turn it OFF after.
+            <Alert severity="error">
+              Manual override is ON. For explicit MANUAL orders, SigmaTrader will warn but will not block on risk thresholds (including drawdown HARD_STOP and execution safety guards). TradingView / deployments remain enforced.
+              Use this only for rare, deliberate exceptions and turn it OFF immediately after.
             </Alert>
           ) : null}
 

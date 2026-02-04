@@ -44,7 +44,6 @@ from .trading import (
     Order,
     Position,
     PositionSnapshot,
-    RiskSettings,
     Strategy,
 )
 from .user import User
@@ -67,7 +66,6 @@ __all__ = [
     "Position",
     "PositionSnapshot",
     "ManagedRiskPosition",
-    "RiskSettings",
     "Strategy",
     "BrokerConnection",
     "SystemEvent",

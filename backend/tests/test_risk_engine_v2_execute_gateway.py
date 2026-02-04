@@ -470,12 +470,12 @@ def test_v2_blocks_on_daily_loss_limit() -> None:
             closed_at=now,
         )  # 1% daily loss vs 0.5% limit
 
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         order_id = _create_order_for_eval(user_id=user.id, side="BUY", qty=1, price=100.0)
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -495,12 +495,12 @@ def test_v2_blocks_on_consecutive_losses_limit() -> None:
         _create_analytics_trade(user_id=user.id, pnl=-100.0)
         _create_analytics_trade(user_id=user.id, pnl=-100.0)
 
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         order_id = _create_order_for_eval(user_id=user.id, side="BUY", qty=1, price=100.0)
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -517,13 +517,13 @@ def test_v2_blocks_on_entry_cutoff_time() -> None:
     _seed_v2_config(leverage_mode="OFF", entry_cutoff_time="15:00")
     with SessionLocal() as session:
         user = session.query(User).filter(User.username == "v2-user").one()
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         # 12:00 UTC == 17:30 IST, after 15:00 cutoff
         order_id = _create_order_for_eval(user_id=user.id, side="BUY", qty=1, price=100.0)
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -540,13 +540,13 @@ def test_v2_blocks_on_force_squareoff_time() -> None:
     _seed_v2_config(leverage_mode="OFF", force_squareoff_time="15:20")
     with SessionLocal() as session:
         user = session.query(User).filter(User.username == "v2-user").one()
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         # 12:00 UTC == 17:30 IST, after 15:20 square-off
         order_id = _create_order_for_eval(user_id=user.id, side="BUY", qty=1, price=100.0)
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -575,12 +575,12 @@ def test_v2_blocks_on_max_positions() -> None:
         )
         session.commit()
 
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         order_id = _create_order_for_eval(user_id=user.id, side="BUY", qty=1, price=100.0)
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -597,13 +597,13 @@ def test_v2_blocks_on_max_exposure_pct() -> None:
     _seed_v2_config(leverage_mode="OFF", max_exposure_pct=0.5)
     with SessionLocal() as session:
         user = session.query(User).filter(User.username == "v2-user").one()
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         # cap_per_trade=10k, price=100 => order value=10k; max_exposure=0.5% of 1m => 5k
         order_id = _create_order_for_eval(user_id=user.id, side="BUY", qty=1, price=100.0)
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -631,7 +631,7 @@ def test_v2_blocks_on_max_trades_per_day() -> None:
             status="SENT",
         )
 
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         order_id = _create_order_for_eval(
             user_id=user.id,
@@ -642,7 +642,7 @@ def test_v2_blocks_on_max_trades_per_day() -> None:
         )
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -669,7 +669,7 @@ def test_v2_blocks_on_max_trades_per_symbol_per_day() -> None:
             status="SENT",
         )
 
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         order_id = _create_order_for_eval(
             user_id=user.id,
@@ -680,7 +680,7 @@ def test_v2_blocks_on_max_trades_per_symbol_per_day() -> None:
         )
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,
@@ -715,7 +715,7 @@ def test_v2_structural_exit_bypasses_missing_config() -> None:
         )
         session.commit()
 
-        from app.services.risk_engine_v2 import evaluate_order_risk_v2
+        from app.services.risk_engine import evaluate_order_risk
 
         order_id = _create_order_for_eval(
             user_id=user.id,
@@ -725,7 +725,7 @@ def test_v2_structural_exit_bypasses_missing_config() -> None:
         )
         order = session.get(Order, order_id)
         assert order is not None
-        decision = evaluate_order_risk_v2(
+        decision = evaluate_order_risk(
             session,
             get_settings(),
             user=user,

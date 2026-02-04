@@ -84,60 +84,7 @@ class Strategy(Base):
     alerts: Mapped[List["Alert"]] = relationship(
         back_populates="strategy", cascade="all,delete-orphan"
     )
-    risk_settings: Mapped[List["RiskSettings"]] = relationship(
-        back_populates="strategy", cascade="all,delete-orphan"
-    )
     orders: Mapped[List["Order"]] = relationship(back_populates="strategy")
-
-
-class RiskSettings(Base):
-    __tablename__ = "risk_settings"
-
-    __table_args__ = (
-        UniqueConstraint(
-            "scope",
-            "strategy_id",
-            name="ux_risk_settings_scope_strategy",
-        ),
-        CheckConstraint(
-            "scope IN ('GLOBAL', 'STRATEGY')", name="ck_risk_settings_scope"
-        ),
-        CheckConstraint(
-            "(scope = 'GLOBAL' AND strategy_id IS NULL) OR "
-            "(scope = 'STRATEGY' AND strategy_id IS NOT NULL)",
-            name="ck_risk_settings_scope_strategy",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="STRATEGY")
-    strategy_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("strategies.id", ondelete="CASCADE"), nullable=True
-    )
-
-    max_order_value: Mapped[Optional[float]] = mapped_column(Float)
-    max_quantity_per_order: Mapped[Optional[float]] = mapped_column(Float)
-    max_daily_loss: Mapped[Optional[float]] = mapped_column(Float)
-    allow_short_selling: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True
-    )
-    max_open_positions: Mapped[Optional[int]] = mapped_column(Integer)
-    clamp_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="CLAMP")
-
-    symbol_whitelist: Mapped[Optional[str]] = mapped_column(Text())
-    symbol_blacklist: Mapped[Optional[str]] = mapped_column(Text())
-
-    created_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(),
-        nullable=False,
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-
-    strategy: Mapped[Optional[Strategy]] = relationship(back_populates="risk_settings")
 
 
 class Alert(Base):
@@ -214,6 +161,7 @@ class Order(Base):
             "broker_name",
             "broker_order_id",
         ),
+        Index("ix_orders_sent_at", "sent_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -275,6 +223,9 @@ class Order(Base):
         String(32), nullable=False, default="zerodha"
     )
     broker_order_id: Mapped[Optional[str]] = mapped_column(String(64))
+    # Timestamp when the order was actually dispatched to the broker (or submitted
+    # to paper engine). Used for trade-frequency/day-window risk controls.
+    sent_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
 
     zerodha_order_id: Mapped[Optional[str]] = mapped_column(String(64))
     broker_account_id: Mapped[Optional[str]] = mapped_column(String(64))
@@ -579,7 +530,6 @@ class AnalyticsTrade(Base):
 
 __all__ = [
     "Strategy",
-    "RiskSettings",
     "Alert",
     "Order",
     "Position",

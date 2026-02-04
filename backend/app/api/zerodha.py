@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 from typing import Any, Dict
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -12,9 +15,16 @@ from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
-from app.models import BrokerConnection, User
+from app.models import BrokerConnection, Order, User
 from app.services.broker_secrets import get_broker_secret
+from app.services.managed_risk import (
+    ensure_managed_risk_for_executed_order,
+    mark_managed_risk_exit_executed,
+    resolve_managed_risk_profile,
+)
 from app.services.order_sync import sync_order_statuses
+from app.services.portfolio_allocations import apply_portfolio_allocation_for_executed_order
+from app.services.positions_sync import sync_positions_from_zerodha
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -57,6 +67,234 @@ class OrderPreviewResponse(BaseModel):
 
 class LtpResponse(BaseModel):
     ltp: float
+
+
+def _as_float(v: object) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _map_postback_status(status_raw: str) -> str | None:
+    """Map Zerodha postback status strings to internal Order.status values."""
+
+    s = (status_raw or "").strip().upper()
+    if s == "COMPLETE":
+        return "EXECUTED"
+    if s in {"CANCELLED", "CANCELLED AMO"}:
+        return "CANCELLED"
+    if s == "REJECTED":
+        return "REJECTED"
+    if s in {"OPEN", "OPEN PENDING", "TRIGGER PENDING", "AMO REQ RECEIVED"}:
+        return "SENT"
+    return None
+
+
+def _verify_kite_postback_signature(*, api_secret: str, body: bytes, signature_header: str) -> bool:
+    expected = hmac.new(api_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    got = (signature_header or "").strip()
+    return bool(got) and hmac.compare_digest(expected, got)
+
+
+def _get_latest_zerodha_conn(db: Session) -> BrokerConnection | None:
+    return (
+        db.query(BrokerConnection)
+        .filter(BrokerConnection.broker_name == "zerodha")
+        .order_by(BrokerConnection.updated_at.desc())
+        .first()
+    )
+
+
+def _get_kite_for_conn(db: Session, settings: Settings, conn: BrokerConnection):
+    api_key = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_key",
+        user_id=conn.user_id,
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha API key is not configured. Please configure it in broker settings.",
+        )
+
+    try:
+        from kiteconnect import KiteConnect  # type: ignore[import]
+    except ImportError as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="kiteconnect library is not installed in the backend environment.",
+        ) from exc
+
+    access_token = decrypt_token(settings, conn.access_token_encrypted)
+    kite = KiteConnect(api_key=api_key.strip())
+    kite.set_access_token(access_token)
+    return kite
+
+
+def _sync_positions_after_postback(
+    db: Session,
+    settings: Settings,
+    *,
+    conn: BrokerConnection,
+) -> bool:
+    """Best-effort refresh of cached positions/snapshots after a postback."""
+
+    try:
+        kite = _get_kite_for_conn(db, settings, conn)
+        client = ZerodhaClient(kite)
+        sync_positions_from_zerodha(db, client)
+        return True
+    except Exception:
+        return False
+
+
+def _handle_zerodha_postback(
+    db: Session,
+    settings: Settings,
+    *,
+    body: bytes,
+    signature: str,
+) -> Dict[str, Any]:
+    """Core postback handler used by the HTTP endpoint (unit-testable)."""
+
+    conn = _get_latest_zerodha_conn(db)
+    if conn is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha is not connected.",
+        )
+
+    api_secret = get_broker_secret(
+        db,
+        settings,
+        broker_name="zerodha",
+        key="api_secret",
+        user_id=conn.user_id,
+    )
+    if not api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Zerodha API secret is not configured; cannot verify postback signature.",
+        )
+
+    if not _verify_kite_postback_signature(
+        api_secret=api_secret,
+        body=body,
+        signature_header=signature,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid postback signature.",
+        )
+
+    parsed_qs = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
+    payload: Dict[str, Any] = {
+        k: (v[0] if isinstance(v, list) and v else None) for k, v in parsed_qs.items()
+    }
+
+    order_id = str(payload.get("order_id") or payload.get("orderid") or "").strip()
+    status_raw = str(payload.get("status") or "").strip()
+    mapped = _map_postback_status(status_raw) if status_raw else None
+
+    updated_order = False
+    updated_positions = False
+
+    if order_id and mapped is not None:
+        order = (
+            db.query(Order)
+            .filter(
+                Order.broker_name == "zerodha",
+                (Order.broker_order_id == order_id)
+                | (Order.zerodha_order_id == order_id),
+            )
+            .order_by(Order.updated_at.desc())
+            .first()
+        )
+        if order is not None and mapped != order.status:
+            prev = str(order.status)
+            order.status = mapped
+            if mapped == "REJECTED":
+                msg = (
+                    payload.get("status_message")
+                    or payload.get("status_message_short")
+                    or payload.get("message")
+                )
+                if isinstance(msg, str) and msg.strip():
+                    order.error_message = msg.strip()
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            updated_order = True
+
+            if prev != "EXECUTED" and mapped == "EXECUTED":
+                filled_qty = (
+                    _as_float(payload.get("filled_quantity"))
+                    or _as_float(payload.get("quantity"))
+                    or float(order.qty or 0.0)
+                )
+                avg_price = (
+                    _as_float(payload.get("average_price"))
+                    or _as_float(payload.get("price"))
+                    or (float(order.price) if order.price else None)
+                )
+                try:
+                    apply_portfolio_allocation_for_executed_order(
+                        db,
+                        order=order,
+                        filled_qty=float(filled_qty or 0.0),
+                        avg_price=avg_price,
+                    )
+                except Exception:
+                    pass
+                try:
+                    prof = resolve_managed_risk_profile(
+                        db, product=str(order.product or "MIS")
+                    )
+                    ensure_managed_risk_for_executed_order(
+                        db,
+                        settings,
+                        order=order,
+                        filled_qty=float(filled_qty or 0.0),
+                        avg_price=avg_price,
+                        risk_profile=prof,
+                    )
+                except Exception:
+                    pass
+                try:
+                    mark_managed_risk_exit_executed(db, exit_order_id=int(order.id))
+                except Exception:
+                    pass
+
+        updated_positions = _sync_positions_after_postback(db, settings, conn=conn)
+
+    try:
+        record_system_event(
+            db,
+            level="INFO",
+            category="zerodha_postback",
+            message="Zerodha postback received",
+            details={
+                "order_id": order_id or None,
+                "status": status_raw or None,
+                "updated_order": updated_order,
+                "updated_positions": updated_positions,
+            },
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "order_id": order_id or None,
+        "status": status_raw or None,
+        "updated_order": updated_order,
+        "updated_positions": updated_positions,
+    }
 
 
 @router.get("/login-url")
@@ -349,6 +587,24 @@ def sync_orders(
     client = ZerodhaClient(kite)
     updated = sync_order_statuses(db, client, user_id=user.id)
     return {"updated": updated}
+
+
+@router.post("/postback", response_model=Dict[str, Any])
+async def zerodha_postback(
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Dict[str, Any]:
+    """Kite Connect postback handler (order updates for API-placed orders).
+
+    Zerodha sends postbacks for orders placed via the Kite Connect API app.
+    We use these to refresh SigmaTrader's cached orders/positions so the UI
+    can reflect the broker state without manual refresh.
+    """
+
+    body = await request.body()
+    sig = request.headers.get("X-Kite-Signature") or request.headers.get("x-kite-signature") or ""
+    return _handle_zerodha_postback(db, settings, body=body, signature=sig)
 
 
 @router.get("/margins", response_model=MarginsResponse)

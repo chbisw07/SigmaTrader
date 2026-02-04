@@ -25,7 +25,7 @@ import {
   type HoldingsCorrelationResult,
   type SymbolCorrelationStats,
 } from '../services/analytics'
-import { fetchStrategies, type Strategy } from '../services/admin'
+import { listStrategies, type Strategy } from '../services/strategies'
 import { recordAppLog } from '../services/logs'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
@@ -80,7 +80,7 @@ export function AnalyticsPage() {
     try {
       setLoading(true)
       if (opts?.withStrategies) {
-        const s = await fetchStrategies()
+        const s = await listStrategies()
         setStrategies(s)
       }
 

@@ -16,7 +16,7 @@ from app.config_files import load_app_config
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models import BrokerConnection, Group, Order, Position, Strategy, User
 from app.schemas.orders import (
     ManualOrderCreate,
@@ -29,7 +29,6 @@ from app.services.broker_secrets import get_broker_secret
 from app.services.execution_policy_state import (
     ExecutionPolicyParams,
     apply_post_trade_updates_on_execution_unified,
-    classify_position_delta,
     get_or_create_execution_state,
     interval_minutes_for_order,
     resolve_interval_for_order,
@@ -618,8 +617,8 @@ def execute_order_internal(
 
     now_utc = _now_utc()
     risk_global = read_unified_risk_global(db)
-    risk_v2_profile_id: int | None = None
-    risk_v2_baseline_equity: float | None = None
+    risk_profile_id: int | None = None
+    risk_baseline_equity: float | None = None
     execution_policy_key = None
     execution_policy_interval_min: int | None = None
     execution_policy_apply = False
@@ -657,6 +656,138 @@ def execute_order_internal(
     if execution_policy_apply:
         key = scope_key_for_order(order)
         interval_hint, interval_hint_source = resolve_interval_for_order(order, None)
+
+        # Conservative structural-exit detection: never block protective reductions.
+        treat_as_exit = bool(getattr(order, "is_exit", False))
+        if not treat_as_exit:
+            try:
+                sym = str(getattr(order, "symbol", "") or "").strip()
+                exch = str(getattr(order, "exchange", "") or "NSE").strip().upper()
+                if ":" in sym:
+                    ex2, ts2 = sym.split(":", 1)
+                    exch = (ex2 or exch).strip().upper()
+                    sym = (ts2 or sym).strip()
+                pos = (
+                    db.query(Position)
+                    .filter(
+                        Position.broker_name
+                        == str(getattr(order, "broker_name", "zerodha")).strip().lower(),
+                        Position.symbol == sym,
+                        Position.exchange == exch,
+                        Position.product
+                        == str(getattr(order, "product", "MIS")).strip().upper(),
+                    )
+                    .one_or_none()
+                )
+                if pos is not None:
+                    pos_qty = float(getattr(pos, "qty", 0.0) or 0.0)
+                    delta = (
+                        float(order.qty or 0.0)
+                        if str(order.side).strip().upper() == "BUY"
+                        else -float(order.qty or 0.0)
+                    )
+                    if abs(pos_qty + delta) < abs(pos_qty):
+                        treat_as_exit = True
+            except Exception:
+                pass
+
+        if not treat_as_exit:
+            # Use a short-lived session to acquire an inflight reservation in a fresh
+            # SQLite transaction (avoids snapshot/lost-update anomalies under threads).
+            from sqlalchemy import and_, or_, text
+
+            from app.models import ExecutionPolicyState
+
+            reason_code = "RISK_POLICY_CONCURRENT_EXECUTION"
+            message = "Another order execution is in progress for this scope key."
+
+            wait_deadline_mono = time.monotonic() + float(
+                DEFAULT_EXECUTION_POLICY_CONCURRENCY_WAIT_SECONDS
+            )
+            acquired = False
+            while time.monotonic() < wait_deadline_mono:
+                guard_now = _now_utc()
+                expires_at = guard_now + timedelta(seconds=int(DEFAULT_INFLIGHT_TTL_SECONDS))
+
+                try:
+                    with SessionLocal() as guard_db:
+                        if (
+                            guard_db.bind is not None
+                            and guard_db.bind.dialect.name == "sqlite"
+                        ):
+                            # Ensures the UPDATE sees the latest committed inflight flag.
+                            guard_db.execute(text("BEGIN IMMEDIATE"))
+                        state_guard = get_or_create_execution_state(
+                            guard_db,
+                            key=key,
+                            now_utc=guard_now,
+                            interval_minutes=interval_hint,
+                            interval_source=interval_hint_source,
+                            lock=True,
+                        )
+                        updated = (
+                            guard_db.query(ExecutionPolicyState)
+                            .filter(
+                                ExecutionPolicyState.id == int(state_guard.id),
+                                or_(
+                                    ExecutionPolicyState.inflight_order_id.is_(None),
+                                    ExecutionPolicyState.inflight_order_id
+                                    == int(order.id),
+                                    and_(
+                                        ExecutionPolicyState.inflight_expires_at.isnot(
+                                            None
+                                        ),
+                                        ExecutionPolicyState.inflight_expires_at
+                                        <= guard_now,
+                                    ),
+                                ),
+                            )
+                            .update(
+                                {
+                                    ExecutionPolicyState.inflight_order_id: int(
+                                        order.id
+                                    ),
+                                    ExecutionPolicyState.inflight_started_at: guard_now,
+                                    ExecutionPolicyState.inflight_expires_at: expires_at,
+                                },
+                                synchronize_session=False,
+                            )
+                        )
+                        guard_db.commit()
+
+                    if int(updated or 0) == 1:
+                        acquired = True
+                        break
+                except Exception:
+                    acquired = False
+
+                time.sleep(float(DEFAULT_EXECUTION_POLICY_CONCURRENCY_SLEEP_SECONDS))
+
+            if not acquired:
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="risk",
+                    message="Order deferred by risk engine (concurrent execution)",
+                    correlation_id=correlation_id,
+                    details={
+                        "order_id": int(order.id),
+                        "reason_code": reason_code,
+                        "message": message,
+                        "strategy_ref": key.strategy_ref,
+                        "symbol": key.symbol,
+                        "product": key.product,
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "status": "busy",
+                        "reason_code": reason_code,
+                        "message": message,
+                    },
+                )
+
         state = get_or_create_execution_state(
             db,
             key=key,
@@ -704,139 +835,6 @@ def execute_order_internal(
         except Exception:
             pass
 
-        _prev_abs, _new_abs, _is_entry, is_exit_reduce = classify_position_delta(
-            state, side=str(order.side), qty=float(order.qty or 0.0)
-        )
-        # Extra safety: if our per-scope execution state is new or stale, use the
-        # broker-level Position snapshot (when available) to detect exposure-reducing
-        # exits and avoid blocking protective reductions.
-        try:
-            sym = str(getattr(order, "symbol", "") or "").strip()
-            exch = str(getattr(order, "exchange", "") or "NSE").strip().upper()
-            if ":" in sym:
-                ex2, ts2 = sym.split(":", 1)
-                exch = (ex2 or exch).strip().upper()
-                sym = (ts2 or sym).strip()
-            pos = (
-                db.query(Position)
-                .filter(
-                    Position.broker_name
-                    == str(getattr(order, "broker_name", "zerodha")).strip().lower(),
-                    Position.symbol == sym,
-                    Position.exchange == exch,
-                    Position.product
-                    == str(getattr(order, "product", "MIS")).strip().upper(),
-                )
-                .one_or_none()
-            )
-            if pos is not None:
-                pos_qty = float(getattr(pos, "qty", 0.0) or 0.0)
-                delta = (
-                    float(order.qty or 0.0)
-                    if str(order.side).strip().upper() == "BUY"
-                    else -float(order.qty or 0.0)
-                )
-                if abs(pos_qty + delta) < abs(pos_qty):
-                    is_exit_reduce = True
-        except Exception:
-            pass
-        # Structural exit detection is authoritative; is_exit acts as a safety
-        # override when state is incomplete.
-        treat_as_exit = bool(is_exit_reduce) or bool(getattr(order, "is_exit", False))
-
-        if not treat_as_exit:
-            reason_code = "RISK_POLICY_CONCURRENT_EXECUTION"
-            message = "Another order execution is in progress for this scope key."
-
-            inflight_order_id = getattr(state, "inflight_order_id", None)
-            if inflight_order_id is not None and int(inflight_order_id) != int(order.id):
-                # Use monotonic time for the wait budget so tests (and some callers)
-                # can safely monkeypatch `_now_utc` without causing an infinite loop.
-                wait_deadline_mono = time.monotonic() + float(
-                    DEFAULT_EXECUTION_POLICY_CONCURRENCY_WAIT_SECONDS
-                )
-                # Best-effort: wait for inflight marker to clear. This prevents
-                # spurious permanent blocks when multiple alerts arrive together.
-                while (
-                    inflight_order_id is not None
-                    and int(inflight_order_id) != int(order.id)
-                    and time.monotonic() < wait_deadline_mono
-                ):
-                    # Release any row lock before sleeping.
-                    try:
-                        db.commit()
-                    except Exception:
-                        try:
-                            db.rollback()
-                        except Exception:
-                            pass
-
-                    time.sleep(float(DEFAULT_EXECUTION_POLICY_CONCURRENCY_SLEEP_SECONDS))
-                    now_utc = _now_utc()
-
-                    state = get_or_create_execution_state(
-                        db,
-                        key=key,
-                        now_utc=now_utc,
-                        interval_minutes=int(interval_min),
-                        interval_source=interval_source,
-                        lock=True,
-                    )
-                    # Clear stale inflight reservations (defensive for crashes/timeouts).
-                    try:
-                        inflight_expires = getattr(state, "inflight_expires_at", None)
-                        if inflight_expires is not None and now_utc >= inflight_expires:
-                            state.inflight_order_id = None
-                            state.inflight_started_at = None
-                            state.inflight_expires_at = None
-                            db.add(state)
-                            db.commit()
-                    except Exception:
-                        try:
-                            db.rollback()
-                        except Exception:
-                            pass
-
-                    inflight_order_id = getattr(state, "inflight_order_id", None)
-
-                inflight_order_id = getattr(state, "inflight_order_id", None)
-                if inflight_order_id is not None and int(inflight_order_id) != int(order.id):
-                    # Do not mark as REJECTED_RISK: this is a transient concurrency
-                    # guard and the order may still be eligible once the inflight
-                    # marker clears. Leave the order in WAITING and return a
-                    # retryable response.
-                    record_system_event(
-                        db,
-                        level="WARNING",
-                        category="risk",
-                        message="Order deferred by risk engine (concurrent execution)",
-                        correlation_id=correlation_id,
-                        details={
-                            "order_id": int(order.id),
-                            "reason_code": reason_code,
-                            "message": message,
-                            "strategy_ref": key.strategy_ref,
-                            "symbol": key.symbol,
-                            "product": key.product,
-                        },
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail={
-                            "status": "busy",
-                            "reason_code": reason_code,
-                            "message": message,
-                        },
-                    )
-
-            # Reserve a short-lived inflight marker to make enforcement atomic
-            # across concurrent executions for the same scope key.
-            state.inflight_order_id = int(order.id)
-            state.inflight_started_at = now_utc
-            state.inflight_expires_at = now_utc + timedelta(
-                seconds=int(DEFAULT_INFLIGHT_TTL_SECONDS)
-            )
-
         db.add(state)
         db.commit()
         execution_policy_key = key
@@ -851,7 +849,7 @@ def execute_order_internal(
     # source overrides).
     if bool(risk_global.enabled):
         try:
-            from app.services.risk_engine_v2 import evaluate_order_risk_v2, record_decision_log
+            from app.services.risk_engine import evaluate_order_risk, record_decision_log
 
             user_obj = db.get(User, order.user_id) if order.user_id is not None else None
 
@@ -881,7 +879,7 @@ def execute_order_internal(
                 product_hint = None
 
             # If the TradingView payload omitted product, fall back to the order's
-            # current product so risk engine v2 selects the corresponding profile.
+            # current product so the risk engine selects the corresponding profile.
             if not product_hint:
                 try:
                     product_hint = (getattr(order, "product", None) or "").strip().upper() or None
@@ -889,7 +887,7 @@ def execute_order_internal(
                     product_hint = None
 
             baseline_equity = float(risk_global.baseline_equity_inr or 0.0)
-            decision = evaluate_order_risk_v2(
+            decision = evaluate_order_risk(
                 db,
                 settings,
                 user=user_obj,
@@ -898,8 +896,8 @@ def execute_order_internal(
                 now_utc=now_utc,
                 product_hint=product_hint,
             )
-            risk_v2_profile_id = decision.risk_profile_id
-            risk_v2_baseline_equity = baseline_equity
+            risk_profile_id = decision.risk_profile_id
+            risk_baseline_equity = baseline_equity
             # Shared compiler output used by the UI "Effective Risk Summary" panel.
             # Keep the execution path aligned by invoking the same compiler logic
             # used by the UI "Effective Risk Summary" panel (tests assert this).
@@ -980,7 +978,7 @@ def execute_order_internal(
         except Exception as exc:
             # Fail closed: if risk is enabled but errors, block execution.
             order.status = "REJECTED_RISK"
-            order.error_message = f"Risk engine v2 error: {exc}"
+            order.error_message = f"Risk engine error: {exc}"
             db.add(order)
             db.commit()
             db.refresh(order)
@@ -1270,11 +1268,18 @@ def execute_order_internal(
         )
         return order
 
-    # Risk engine v2 broker-aware guards (MIS-only, entries only).
-    if risk_v2_profile_id is not None and bool(risk_global.enabled):
+    # Risk engine broker-aware guards (MIS-only, entries only).
+    #
+    # IMPORTANT: manual override (manual orders only) bypasses all risk enforcement,
+    # including broker-aware guards. Structural validation still applies.
+    if (
+        risk_profile_id is not None
+        and bool(risk_global.enabled)
+        and not (bool(risk_global.manual_override_enabled) and _is_explicit_manual_order())
+    ):
         from app.models import RiskProfile
 
-        def _reject_v2(detail: str) -> None:
+        def _reject_guard(detail: str) -> None:
             order.status = "REJECTED_RISK"
             order.error_message = detail
             db.add(order)
@@ -1284,18 +1289,18 @@ def execute_order_internal(
                 db,
                 level="WARNING",
                 category="risk",
-                message="Order rejected by risk engine v2 (broker-aware guards)",
+                message="Order rejected by risk engine (broker-aware guards)",
                 correlation_id=correlation_id,
                 details={"order_id": order.id, "reason": detail},
             )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Order rejected by risk engine v2: {detail}",
+                detail=f"Order rejected by risk engine: {detail}",
             )
 
-        profile_v2 = db.get(RiskProfile, int(risk_v2_profile_id))
-        if profile_v2 is None:
-            _reject_v2("RiskProfile is missing.")
+        profile = db.get(RiskProfile, int(risk_profile_id))
+        if profile is None:
+            _reject_guard("RiskProfile is missing.")
 
         is_exit_reduce = bool(getattr(order, "is_exit", False))
         if not is_exit_reduce:
@@ -1347,22 +1352,22 @@ def execute_order_internal(
                             client.get_ltp(exchange=exchange, tradingsymbol=tradingsymbol)  # type: ignore[call-arg]
                         )
             except Exception as exc:
-                _reject_v2(f"Failed to fetch LTP for risk checks: {exc}")
+                _reject_guard(f"Failed to fetch LTP for risk checks: {exc}")
 
             if last_price is None or last_price <= 0:
-                _reject_v2("Failed to fetch LTP for risk checks.")
+                _reject_guard("Failed to fetch LTP for risk checks.")
 
-            gap_guard_pct = float(getattr(profile_v2, "gap_guard_pct", 0.0) or 0.0)
+            gap_guard_pct = float(getattr(profile, "gap_guard_pct", 0.0) or 0.0)
             if gap_guard_pct > 0:
                 if prev_close is None or prev_close <= 0:
-                    _reject_v2("Gap guard enabled but previous close is unavailable.")
+                    _reject_guard("Gap guard enabled but previous close is unavailable.")
                 gap_pct = abs(last_price - float(prev_close)) / float(prev_close) * 100.0
                 if gap_pct > gap_guard_pct:
-                    _reject_v2(
+                    _reject_guard(
                         f"Gap guard triggered ({gap_pct:.2f}% > {gap_guard_pct:.2f}%)."
                     )
 
-            slippage_guard_bps = float(getattr(profile_v2, "slippage_guard_bps", 0.0) or 0.0)
+            slippage_guard_bps = float(getattr(profile, "slippage_guard_bps", 0.0) or 0.0)
             if slippage_guard_bps > 0:
                 ref = None
                 if getattr(order, "trigger_price", None) is not None and float(order.trigger_price or 0.0) > 0:
@@ -1370,27 +1375,27 @@ def execute_order_internal(
                 elif getattr(order, "price", None) is not None and float(order.price or 0.0) > 0:
                     ref = float(order.price)
                 if not ref or ref <= 0:
-                    _reject_v2("Slippage guard enabled but trigger/price is missing.")
+                    _reject_guard("Slippage guard enabled but trigger/price is missing.")
                 dev_bps = abs(last_price - ref) / ref * 10000.0
                 if dev_bps > slippage_guard_bps:
-                    _reject_v2(
+                    _reject_guard(
                         f"Slippage guard triggered ({dev_bps:.1f} bps > {slippage_guard_bps:.1f} bps)."
                     )
 
-            leverage_mode = str(getattr(profile_v2, "leverage_mode", "") or "AUTO").strip().upper()
+            leverage_mode = str(getattr(profile, "leverage_mode", "") or "AUTO").strip().upper()
             if leverage_mode not in {"AUTO", "STATIC", "OFF"}:
-                _reject_v2(f"Invalid leverage_mode: {leverage_mode}.")
+                _reject_guard(f"Invalid leverage_mode: {leverage_mode}.")
             if leverage_mode != "OFF":
-                max_lev = float(getattr(profile_v2, "max_effective_leverage", 0.0) or 0.0)
-                max_margin_pct = float(getattr(profile_v2, "max_margin_used_pct", 0.0) or 0.0)
-                baseline_equity = float(risk_v2_baseline_equity or 0.0)
+                max_lev = float(getattr(profile, "max_effective_leverage", 0.0) or 0.0)
+                max_margin_pct = float(getattr(profile, "max_margin_used_pct", 0.0) or 0.0)
+                baseline_equity = float(risk_baseline_equity or 0.0)
                 if max_lev <= 0 or max_margin_pct <= 0 or baseline_equity <= 0:
-                    _reject_v2(
+                    _reject_guard(
                         "MIS leverage settings missing/invalid (set leverage_mode, "
                         "max_effective_leverage, max_margin_used_pct, and manual equity)."
                     )
 
-                cap_trade = float(getattr(profile_v2, "capital_per_trade", 0.0) or 0.0)
+                cap_trade = float(getattr(profile, "capital_per_trade", 0.0) or 0.0)
                 cap_portfolio = baseline_equity * max_margin_pct / 100.0
 
                 order_type = str(getattr(order, "order_type", "MARKET") or "MARKET").strip().upper()
@@ -1398,7 +1403,7 @@ def execute_order_internal(
                 notional_px = order_price if order_type != "MARKET" and order_price > 0 else float(last_price)
                 qty_f = float(getattr(order, "qty", 0.0) or 0.0)
                 if qty_f <= 0:
-                    _reject_v2("Invalid quantity for MIS margin checks.")
+                    _reject_guard("Invalid quantity for MIS margin checks.")
                 notional = qty_f * notional_px
 
                 required_margin = None
@@ -1406,7 +1411,7 @@ def execute_order_internal(
                     required_margin = notional
                 else:
                     if broker_name != "zerodha" or not callable(getattr(client, "order_margins", None)):
-                        _reject_v2(
+                        _reject_guard(
                             "AUTO leverage mode requires Zerodha order_margins support."
                         )
                     preview_order: dict[str, Any] = {
@@ -1424,17 +1429,17 @@ def execute_order_internal(
                         preview_order["trigger_price"] = float(order.trigger_price)
                     preview_list = client.order_margins([preview_order])  # type: ignore[call-arg]
                     if not preview_list:
-                        _reject_v2("Broker did not return margin preview.")
+                        _reject_guard("Broker did not return margin preview.")
                     entry = preview_list[0]
                     required_raw = entry.get("total") or entry.get("margin") or 0.0
                     required_margin = float(required_raw or 0.0)
 
                 if required_margin is None or required_margin <= 0:
-                    _reject_v2("Invalid margin requirement from broker.")
+                    _reject_guard("Invalid margin requirement from broker.")
 
                 eff_lev = notional / required_margin if required_margin > 0 else 0.0
                 if eff_lev > max_lev:
-                    _reject_v2(
+                    _reject_guard(
                         f"Effective leverage exceeds cap ({eff_lev:.2f} > {max_lev:.2f})."
                     )
 
@@ -1444,7 +1449,7 @@ def execute_order_internal(
                     old_qty = float(qty_f)
                     new_qty = int(old_qty * factor)
                     if new_qty <= 0:
-                        _reject_v2(
+                        _reject_guard(
                             "MIS margin caps reduce quantity to 0; increase capital_per_trade or limits."
                         )
                     order.qty = float(new_qty)
@@ -1552,6 +1557,7 @@ def execute_order_internal(
             order.broker_order_id = trigger_id
             order.zerodha_order_id = trigger_id
         order.status = "SENT"
+        order.sent_at = now_utc
         order.error_message = None
         db.add(order)
         db.commit()
@@ -1720,6 +1726,7 @@ def execute_order_internal(
 
         order.broker_order_id = result.order_id
         order.status = "SENT"
+        order.sent_at = now_utc
         order.error_message = None
         db.add(order)
         db.commit()
@@ -1901,6 +1908,7 @@ def execute_order_internal(
     if broker_name == "zerodha":
         order.zerodha_order_id = result.order_id
     order.status = "SENT"
+    order.sent_at = now_utc
     order.error_message = None
     db.add(order)
     db.commit()

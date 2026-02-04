@@ -9,6 +9,7 @@ import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
+import Switch from '@mui/material/Switch'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import TextField from '@mui/material/TextField'
@@ -85,6 +86,7 @@ export function PositionsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [live, setLive] = useState(true)
   const [analysis, setAnalysis] = useState<PositionsAnalysis | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
@@ -177,6 +179,20 @@ export function PositionsPage() {
     if (activeTab === 'analysis') void loadAnalysis()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBroker])
+
+  useEffect(() => {
+    if (!live) return
+    if (activeTab === 'risk') return
+    // Live mode only re-fetches cached rows from SigmaTrader DB; it does not
+    // hit the broker. Broker changes still require "Refresh from <broker>".
+    const id = window.setInterval(() => {
+      if (activeTab === 'snapshots') void loadSnapshots()
+      else if (activeTab === 'transactions') void loadSnapshots({ includeZeroOverride: true })
+      else if (activeTab === 'analysis') void loadAnalysis()
+    }, 4000)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, activeTab, selectedBroker, startDate, endDate, symbolQuery, includeZero, startingCash])
 
   useEffect(() => {
     if (!symbolAutoApplyMountedRef.current) {
@@ -821,6 +837,17 @@ export function PositionsPage() {
               label="Include zero qty"
               sx={{ mr: 0 }}
             />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={live}
+                  onChange={(e) => setLive(e.target.checked)}
+                  disabled={refreshing}
+                />
+              }
+              label="Live"
+              sx={{ mr: 0 }}
+            />
             {activeTab === 'transactions' && (
               <TextField
                 label="Starting cash (₹)"
@@ -1012,7 +1039,7 @@ export function PositionsPage() {
         )
       ) : activeTab === 'risk' ? (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <AlertDecisionLogPanel title="Alert decision log (execution layer)" helpHash="alert-decision-log-v2" limit={200} />
+          <AlertDecisionLogPanel title="Alert decision log (execution layer)" helpHash="alert-decision-log" limit={200} />
         </Box>
       ) : analysisLoading ? (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
