@@ -24,11 +24,11 @@ import {
   type RiskProduct,
   type RiskSourceBucket,
 } from '../services/riskCompiled'
+import { ORDER_TYPE_OPTIONS } from '../utils/orderTypePolicy'
 
 const PRODUCTS: RiskProduct[] = ['CNC', 'MIS']
 const CATEGORIES: RiskCategory[] = ['LC', 'MC', 'SC', 'ETF']
 const SOURCES: RiskSourceBucket[] = ['TRADINGVIEW', 'SIGMATRADER', 'MANUAL']
-const ORDER_TYPES = ['MARKET', 'LIMIT', 'SL', 'SL-M'] as const
 
 async function writeToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -254,7 +254,7 @@ export function EffectiveRiskSummaryPanel() {
               onChange={(e) => setOrderType(String(e.target.value))}
               inputProps={{ 'aria-label': 'effective-risk-order-type' }}
             >
-              {ORDER_TYPES.map((t) => (
+              {ORDER_TYPE_OPTIONS.map((t) => (
                 <MenuItem key={t} value={t}>
                   {t}
                 </MenuItem>

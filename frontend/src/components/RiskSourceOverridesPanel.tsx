@@ -2,6 +2,7 @@ import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import Alert from '@mui/material/Alert'
+import Autocomplete from '@mui/material/Autocomplete'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Dialog from '@mui/material/Dialog'
@@ -24,6 +25,11 @@ import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { useEffect, useMemo, useState } from 'react'
 
+import {
+  formatOrderTypePolicyTokens,
+  ORDER_TYPE_OPTIONS,
+  parseOrderTypePolicyTokens,
+} from '../utils/orderTypePolicy'
 import {
   deleteRiskSourceOverride,
   fetchRiskSourceOverrides,
@@ -300,12 +306,22 @@ export function RiskSourceOverridesPanel() {
               }
               helperText="Optional."
             />
-            <TextField
-              size="small"
-              label="Order type policy"
-              value={draft.order_type_policy ?? ''}
-              onChange={(e) => setDraft((p) => ({ ...p, order_type_policy: e.target.value || null }))}
-              helperText='Comma-separated allowlist (e.g. "MARKET,LIMIT,SL,SL-M").'
+            <Autocomplete
+              multiple
+              freeSolo
+              options={[...ORDER_TYPE_OPTIONS]}
+              value={parseOrderTypePolicyTokens(draft.order_type_policy)}
+              onChange={(_e, next) =>
+                setDraft((p) => ({ ...p, order_type_policy: formatOrderTypePolicyTokens(next) }))
+              }
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  size="small"
+                  label="Order type policy"
+                  helperText='Optional allowlist (e.g. "MARKET,LIMIT,SL,SL-M"). Blank = allow all.'
+                />
+              )}
             />
           </Box>
 
@@ -382,4 +398,3 @@ export function RiskSourceOverridesPanel() {
     </Paper>
   )
 }
-

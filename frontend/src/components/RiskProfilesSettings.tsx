@@ -1,6 +1,7 @@
 import AddIcon from '@mui/icons-material/Add'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
+import Autocomplete from '@mui/material/Autocomplete'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
@@ -25,6 +26,11 @@ import Typography from '@mui/material/Typography'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import {
+  formatOrderTypePolicyTokens,
+  ORDER_TYPE_OPTIONS,
+  parseOrderTypePolicyTokens,
+} from '../utils/orderTypePolicy'
 import {
   createRiskProfile,
   deleteRiskProfile,
@@ -1011,14 +1017,26 @@ export function RiskProfilesSettings() {
                   }
                   sx={{ minWidth: 180 }}
                 />
-                <TextField
-                  size="small"
-                  label="Order type policy"
-                  value={draft.order_type_policy ?? ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({ ...prev, order_type_policy: e.target.value }))
+                <Autocomplete
+                  multiple
+                  freeSolo
+                  options={[...ORDER_TYPE_OPTIONS]}
+                  value={parseOrderTypePolicyTokens(draft.order_type_policy)}
+                  onChange={(_e, next) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      order_type_policy: formatOrderTypePolicyTokens(next),
+                    }))
                   }
-                  sx={{ minWidth: 220 }}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      size="small"
+                      label="Order type policy"
+                      helperText='Optional allowlist (e.g. "MARKET,LIMIT"). Blank = allow all.'
+                    />
+                  )}
+                  sx={{ minWidth: 280 }}
                 />
                 <TextField
                   size="small"
