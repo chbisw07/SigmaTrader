@@ -4,6 +4,9 @@ export type ZerodhaStatus = {
   user_id?: string
   user_name?: string
   error?: string
+  postback_path?: string
+  last_postback_at?: string | null
+  last_postback_details?: unknown
 }
 
 export type ZerodhaMargins = {

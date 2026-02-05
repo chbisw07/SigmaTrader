@@ -37,6 +37,7 @@ from app.services.execution_policy_state import (
 )
 from app.services.instruments_sync import sync_smartapi_instrument_master
 from app.services.paper_trading import submit_paper_order
+from app.services.positions_autosync import schedule_positions_autosync
 from app.services.price_ticks import round_price_to_tick
 from app.services.risk_unified_store import read_unified_risk_global
 from app.services.system_events import record_system_event
@@ -1928,6 +1929,16 @@ def execute_order_internal(
             "qty": order.qty,
         },
     )
+    if not getattr(order, "simulated", False):
+        try:
+            schedule_positions_autosync(
+                settings=settings,
+                broker_name=broker_name,
+                user_id=int(order.user_id),
+                reason="order_sent",
+            )
+        except Exception:
+            pass
     if execution_policy_apply and execution_policy_key is not None:
         key = execution_policy_key
         interval_min = int(

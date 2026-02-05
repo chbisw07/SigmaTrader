@@ -660,6 +660,14 @@ export function SettingsPage() {
     }
   }
 
+  const handleCopyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // Ignore; clipboard may be unavailable in some browser contexts.
+    }
+  }
+
   const handleConnectAngelone = async () => {
     if (!angeloneClientCode.trim()) {
       setAngeloneError('Please enter AngelOne client code.')
@@ -863,6 +871,66 @@ export function SettingsPage() {
             </Box>
 
             <BrokerSecretsTable brokerName="zerodha" />
+            {brokerStatus?.connected && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+                  Order updates (postback)
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  Configure the Kite Connect app postback URL to enable automatic refresh after trades.
+                </Typography>
+
+                {(() => {
+                  const path = brokerStatus?.postback_path || '/api/zerodha/postback'
+                  const base = `${window.location.origin}${path}`
+                  const withSlash = base.endsWith('/') ? base : `${base}/`
+                  const last = brokerStatus?.last_postback_at
+                  const lastPretty = last
+                    ? formatInTimeZone(last, displayTimeZone === 'LOCAL' ? undefined : displayTimeZone)
+                    : null
+
+                  return (
+                    <>
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', mb: 1 }}>
+                        <TextField
+                          size="small"
+                          label="Postback URL"
+                          value={base}
+                          sx={{ flex: 1, minWidth: 340 }}
+                          inputProps={{ readOnly: true }}
+                        />
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => void handleCopyToClipboard(base)}
+                        >
+                          Copy
+                        </Button>
+                      </Box>
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', mb: 1 }}>
+                        <TextField
+                          size="small"
+                          label="Postback URL (trailing slash)"
+                          value={withSlash}
+                          sx={{ flex: 1, minWidth: 340 }}
+                          inputProps={{ readOnly: true }}
+                        />
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={() => void handleCopyToClipboard(withSlash)}
+                        >
+                          Copy
+                        </Button>
+                      </Box>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {lastPretty ? `Last postback received: ${lastPretty}` : 'Last postback received: (none yet)'}
+                      </Typography>
+                    </>
+                  )
+                })()}
+              </Box>
+            )}
             {zerodhaError && (
               <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
                 {zerodhaError}

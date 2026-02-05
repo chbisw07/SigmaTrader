@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 from typing import Any, Dict
 from urllib.parse import parse_qs
@@ -15,7 +16,7 @@ from app.clients import ZerodhaClient
 from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
-from app.models import BrokerConnection, Order, User
+from app.models import BrokerConnection, Order, SystemEvent, User
 from app.services.broker_secrets import get_broker_secret
 from app.services.managed_risk import (
     ensure_managed_risk_for_executed_order,
@@ -529,9 +530,24 @@ def zerodha_status(
         .one_or_none()
     )
     if conn is None:
-        return {"connected": False}
+        return {"connected": False, "postback_path": "/api/zerodha/postback"}
 
     updated_at = conn.updated_at.isoformat() if conn.updated_at else None
+
+    last = (
+        db.query(SystemEvent)
+        .filter(SystemEvent.category == "zerodha_postback")
+        .order_by(SystemEvent.created_at.desc())  # type: ignore[arg-type]
+        .limit(1)
+        .first()
+    )
+    last_postback_at = last.created_at.isoformat() if last is not None else None
+    last_postback_details: dict[str, Any] | None = None
+    if last is not None and getattr(last, "details", None):
+        try:
+            last_postback_details = json.loads(last.details)  # type: ignore[arg-type]
+        except Exception:
+            last_postback_details = None
 
     try:
         kite = _get_kite_for_user(db, settings, user)
@@ -551,12 +567,18 @@ def zerodha_status(
             "updated_at": updated_at,
             "user_id": profile.get("user_id"),
             "user_name": profile.get("user_name"),
+            "postback_path": "/api/zerodha/postback",
+            "last_postback_at": last_postback_at,
+            "last_postback_details": last_postback_details,
         }
     except Exception as exc:  # pragma: no cover - defensive
         return {
             "connected": False,
             "updated_at": updated_at,
             "error": str(exc),
+            "postback_path": "/api/zerodha/postback",
+            "last_postback_at": last_postback_at,
+            "last_postback_details": last_postback_details,
         }
 
 
@@ -589,6 +611,36 @@ def sync_orders(
     return {"updated": updated}
 
 
+async def _zerodha_postback_impl(
+    request: Request,
+    *,
+    db: Session,
+    settings: Settings,
+) -> Dict[str, Any]:
+    """Shared implementation for the postback handler."""
+
+    body = await request.body()
+    sig = request.headers.get("X-Kite-Signature") or request.headers.get("x-kite-signature") or ""
+    try:
+        return _handle_zerodha_postback(db, settings, body=body, signature=sig)
+    except HTTPException as exc:
+        try:
+            record_system_event(
+                db,
+                level="WARNING" if int(exc.status_code) < 500 else "ERROR",
+                category="zerodha_postback_error",
+                message="Zerodha postback rejected",
+                details={
+                    "status_code": int(exc.status_code),
+                    "detail": getattr(exc, "detail", None),
+                    "has_signature": bool(sig),
+                },
+            )
+        except Exception:
+            pass
+        raise
+
+
 @router.post("/postback", response_model=Dict[str, Any])
 async def zerodha_postback(
     request: Request,
@@ -602,9 +654,18 @@ async def zerodha_postback(
     can reflect the broker state without manual refresh.
     """
 
-    body = await request.body()
-    sig = request.headers.get("X-Kite-Signature") or request.headers.get("x-kite-signature") or ""
-    return _handle_zerodha_postback(db, settings, body=body, signature=sig)
+    return await _zerodha_postback_impl(request, db=db, settings=settings)
+
+
+@router.post("/postback/", include_in_schema=False, response_model=Dict[str, Any])
+async def zerodha_postback_trailing_slash(
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Dict[str, Any]:
+    """Same as /postback (some providers send with a trailing slash)."""
+
+    return await _zerodha_postback_impl(request, db=db, settings=settings)
 
 
 @router.get("/margins", response_model=MarginsResponse)

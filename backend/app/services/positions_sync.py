@@ -40,9 +40,10 @@ def _as_of_date_ist(now_utc: datetime) -> date:
 def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
     """Fetch positions from Zerodha and cache them in the local positions table.
 
-    For now we use the `net` section of the Zerodha positions payload and
-    replace all existing rows in the `positions` table for the single-user
-    SigmaTrader instance.
+    We use:
+    - `net` for the current open positions table (`positions`)
+    - `day` for the daily snapshots (`position_snapshots`) so closed intraday
+      trades (net qty = 0) still appear in the UI when "include zero qty" is on.
     """
 
     payload: Dict[str, object] = client.list_positions()
@@ -51,11 +52,16 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
     if isinstance(net_raw, list):
         net = [entry for entry in net_raw if isinstance(entry, dict)]
 
+    day: List[Dict[str, object]] = []
+    day_raw = payload.get("day")
+    if isinstance(day_raw, list):
+        day = [entry for entry in day_raw if isinstance(entry, dict)]
+
     broker_name = "zerodha"
     # Clear existing positions for a simple cache refresh (scoped by broker).
     db.query(Position).filter(Position.broker_name == broker_name).delete()
 
-    updated = 0
+    updated = 0  # snapshot rows inserted
     now = datetime.now(UTC)
     as_of = _as_of_date_ist(now)
 
@@ -64,6 +70,8 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
         PositionSnapshot.broker_name == broker_name,
         PositionSnapshot.as_of_date == as_of,
     ).delete()
+
+    snapshot_rows = day if day else net
 
     # Best-effort: fetch holdings so we can attach cost-basis avg price for
     # delivery sells (CNC) where positions payload often lacks buy_price.
@@ -89,8 +97,9 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
                 instruments.append((exch_u, sym_u))
     except Exception:
         holdings_avg = {}
+        holdings_qty = {}
 
-    for entry in net:
+    for entry in snapshot_rows:
         sym = entry.get("tradingsymbol")
         exch = entry.get("exchange") or "NSE"
         if isinstance(sym, str) and isinstance(exch, str):
@@ -103,7 +112,43 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
     except Exception:
         ltp_map = {}
 
+    # Open positions cache (net only).
     for entry in net:
+        symbol = entry.get("tradingsymbol")
+        exchange = entry.get("exchange") or "NSE"
+        product = entry.get("product")
+        quantity = _as_float(entry.get("quantity", 0), 0.0)
+        avg_price = _as_float(entry.get("average_price", 0), 0.0)
+        pnl = _as_float(entry.get("pnl", 0), 0.0)
+
+        if (
+            not isinstance(symbol, str)
+            or not isinstance(exchange, str)
+            or not isinstance(product, str)
+        ):
+            continue
+
+        qty_f = float(quantity or 0.0)
+        avg_price_f = float(avg_price or 0.0)
+        pnl_f = float(pnl or 0.0)
+
+        exch_u = exchange.strip().upper()
+        symbol_u = symbol.strip().upper()
+
+        position = Position(
+            broker_name=broker_name,
+            symbol=symbol_u,
+            exchange=exch_u,
+            product=product,
+            qty=qty_f,
+            avg_price=avg_price_f,
+            pnl=pnl_f,
+            last_updated=now,
+        )
+        db.add(position)
+
+    # Daily snapshot rows (prefer `day`, fallback to `net`).
+    for entry in snapshot_rows:
         symbol = entry.get("tradingsymbol")
         exchange = entry.get("exchange") or "NSE"
         product = entry.get("product")
@@ -156,18 +201,6 @@ def sync_positions_from_zerodha(db: Session, client: ZerodhaClient) -> int:
         if close_price is None:
             qp = quote.get("prev_close")
             close_price = float(qp) if qp is not None else None
-
-        position = Position(
-            broker_name=broker_name,
-            symbol=symbol_u,
-            exchange=exch_u,
-            product=product,
-            qty=qty_f,
-            avg_price=avg_price_f,
-            pnl=pnl_f,
-            last_updated=now,
-        )
-        db.add(position)
 
         snap = PositionSnapshot(
             broker_name=broker_name,
