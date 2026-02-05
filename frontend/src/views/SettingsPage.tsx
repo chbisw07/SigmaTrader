@@ -66,6 +66,7 @@ import { TradingViewAlertPayloadBuilder } from '../components/TradingViewAlertPa
 import { RiskProfilesSettings } from '../components/RiskProfilesSettings'
 import { HoldingsExitAutomationSettings } from '../components/HoldingsExitAutomationSettings'
 import { RiskGlobalsPanel } from '../components/RiskGlobalsPanel'
+import { RiskSettingsBackupPanel } from '../components/RiskSettingsBackupPanel'
 import { RiskSourceOverridesPanel } from '../components/RiskSourceOverridesPanel'
 import { EffectiveRiskSummaryPanel } from '../components/EffectiveRiskSummaryPanel'
 import { useTimeSettings } from '../timeSettingsContext'
@@ -1423,6 +1424,7 @@ export function SettingsPage() {
             }}
           >
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+              <RiskSettingsBackupPanel />
               <RiskGlobalsPanel />
               <RiskProfilesSettings />
               <RiskSourceOverridesPanel />

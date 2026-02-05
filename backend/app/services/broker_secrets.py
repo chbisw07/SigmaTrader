@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -45,13 +46,14 @@ def get_broker_secret(
     for candidate in alias_keys:
         query = db.query(BrokerSecret).filter(
             BrokerSecret.broker_name == broker_name,
-            BrokerSecret.key == candidate,
+            func.lower(BrokerSecret.key) == candidate.lower(),
         )
         if user_id is not None:
             query = query.filter(BrokerSecret.user_id == user_id)
         else:
             query = query.filter(BrokerSecret.user_id.is_(None))
-        secret = query.one_or_none()
+        # If duplicates exist due to legacy case variations, pick the first.
+        secret = query.order_by(BrokerSecret.updated_at.desc()).first()
         if secret is not None:
             return decrypt_token(settings, secret.value_encrypted)
 

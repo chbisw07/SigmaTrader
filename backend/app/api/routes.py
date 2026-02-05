@@ -22,6 +22,7 @@ from . import (
     paper,
     positions,
     rebalance,
+    risk_backup,
     risk_compiled,
     risk_unified,
     risk_engine,
@@ -237,6 +238,13 @@ router.include_router(
     prefix="/api/risk",
     dependencies=[Depends(require_admin)],
     tags=["risk-unified"],
+)
+
+router.include_router(
+    risk_backup.router,
+    prefix="/api/risk-backup",
+    dependencies=[Depends(require_admin)],
+    tags=["risk-backup"],
 )
 
 router.include_router(
