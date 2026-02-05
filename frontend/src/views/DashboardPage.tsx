@@ -46,6 +46,7 @@ import {
 } from '../services/dashboard'
 import { PriceChart, type PriceChartType } from '../components/PriceChart'
 import { DslEditor } from '../components/DslEditor'
+import { HoldingsSummaryHistoryPanel } from '../components/HoldingsSummaryHistoryPanel'
 import { listCustomIndicators, type CustomIndicator } from '../services/alertsV3'
 import {
   listSignalStrategies,
@@ -1323,7 +1324,10 @@ export function DashboardPage() {
           gap: 2,
         }}
       >
-        <Paper variant="outlined" sx={{ p: 2, flex: 1, minWidth: 0 }}>
+        <Paper
+          variant="outlined"
+          sx={{ p: 2, flexGrow: { xs: 1, lg: 3 }, flexBasis: 0, minWidth: 0 }}
+        >
           <Stack spacing={1.5}>
 	            <Stack direction="row" spacing={2} alignItems="center" sx={{ flexWrap: 'wrap' }}>
 	              <Typography variant="h6">Basket indices (base 100)</Typography>
@@ -1539,7 +1543,10 @@ export function DashboardPage() {
           </Stack>
         </Paper>
 
-        <Paper variant="outlined" sx={{ p: 2, flex: 1, minWidth: 0 }}>
+        <Paper
+          variant="outlined"
+          sx={{ p: 2, flexGrow: { xs: 1, lg: 2 }, flexBasis: 0, minWidth: 0 }}
+        >
             <Stack spacing={1.5}>
               <Stack direction="row" spacing={2} alignItems="center">
                 <Typography variant="h6">Symbol explorer</Typography>
@@ -2070,199 +2077,203 @@ export function DashboardPage() {
               </Accordion>
             </Stack>
 	          </Paper>
-
-            <Dialog
-              open={strategyDialogOpen}
-              onClose={() => setStrategyDialogOpen(false)}
-              maxWidth="md"
-              fullWidth
-            >
-              <DialogTitle>Apply saved strategy</DialogTitle>
-              <DialogContent dividers>
-                <Stack spacing={2}>
-                  {strategyLoadError && (
-                    <Typography color="error">{strategyLoadError}</Typography>
-                  )}
-
-                  <FormControlLabel
-                    control={
-                      <Checkbox
-                        checked={strategyReplaceExisting}
-                        onChange={(e) => setStrategyReplaceExisting(e.target.checked)}
-                      />
-                    }
-                    label="Replace existing indicators/signals"
-                  />
-
-                  <Autocomplete
-                    options={strategyRows}
-                    loading={strategyLoading}
-                    value={strategyRows.find((s) => s.id === strategyId) ?? null}
-                    onChange={(_e, v) => {
-                      setStrategyId(v?.id ?? null)
-                      setStrategyVersionId(null)
-                      setStrategySignalOutput(null)
-                      setStrategyOverlayOutputs([])
-                      setStrategyParamDraft({})
-                    }}
-                    getOptionLabel={(s) => `${s.name} (v${s.latest_version})`}
-                    renderInput={(params) => (
-                      <TextField {...params} label="Strategy" />
-                    )}
-                  />
-
-                  <Stack direction="row" spacing={1} flexWrap="wrap">
-                    <TextField
-                      label="Version"
-                      select
-                      size="small"
-                      value={strategyVersionId ?? ''}
-                      onChange={(e) => {
-                        const n = Number(e.target.value || '')
-                        setStrategyVersionId(Number.isFinite(n) ? n : null)
-                        setStrategySignalOutput(null)
-                        setStrategyOverlayOutputs([])
-                        setStrategyParamDraft({})
-                      }}
-                      sx={{ minWidth: 120 }}
-                      disabled={strategyId == null || strategyVersions.length === 0}
-                    >
-                      {strategyVersions.map((v) => (
-                        <MenuItem key={v.id} value={v.id}>
-                          v{v.version}
-                        </MenuItem>
-                      ))}
-                    </TextField>
-
-                    <TextField
-                      label="Signal output"
-                      select
-                      size="small"
-                      value={strategySignalOutput ?? ''}
-                      onChange={(e) => setStrategySignalOutput(e.target.value || null)}
-                      sx={{ minWidth: 180 }}
-                      disabled={!activeSavedStrategyVersion}
-                    >
-                      {(activeSavedStrategyVersion?.outputs ?? [])
-                        .filter(
-                          (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
-                        )
-                        .map((o) => (
-                          <MenuItem key={o.name} value={o.name}>
-                            {o.name}
-                          </MenuItem>
-                        ))}
-                    </TextField>
-
-                    <TextField
-                      label="Overlay outputs"
-                      select
-                      size="small"
-                      SelectProps={{ multiple: true }}
-                      value={strategyOverlayOutputs}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        setStrategyOverlayOutputs(Array.isArray(v) ? (v as string[]) : [])
-                      }}
-                      sx={{ minWidth: 240, flex: 1 }}
-                      disabled={!activeSavedStrategyVersion}
-                    >
-                      {(activeSavedStrategyVersion?.outputs ?? [])
-                        .filter(
-                          (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
-                        )
-                        .map((o) => (
-                          <MenuItem key={o.name} value={o.name}>
-                            {o.name}
-                          </MenuItem>
-                        ))}
-                    </TextField>
-                  </Stack>
-
-                  {(activeSavedStrategyVersion?.inputs ?? []).length > 0 && (
-                    <Box>
-                      <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                        Parameters
-                      </Typography>
-                      <Stack spacing={1}>
-                        {(activeSavedStrategyVersion?.inputs ?? []).map((inp) => {
-                          const key = inp.name
-                          const raw = strategyParamDraft[key]
-                          const val = raw == null ? '' : String(raw)
-                          const typ = inp.type
-                          const enumValues = Array.isArray(inp.enum_values)
-                            ? inp.enum_values
-                            : []
-                          return (
-                            <Stack key={key} direction="row" spacing={1} alignItems="center">
-                              <TextField
-                                label={key}
-                                size="small"
-                                value={val}
-                                onChange={(e) => {
-                                  const nextRaw = e.target.value
-                                  const nextVal =
-                                    typ === 'number'
-                                      ? (Number.isFinite(Number(nextRaw)) ? Number(nextRaw) : nextRaw)
-                                      : typ === 'bool'
-                                        ? nextRaw === 'true'
-                                        : nextRaw
-                                  setStrategyParamDraft((prev) => ({ ...prev, [key]: nextVal }))
-                                }}
-                                select={
-                                  typ === 'bool' || (typ === 'enum' && enumValues.length > 0)
-                                }
-                                sx={{ minWidth: 220 }}
-                              >
-                                {typ === 'bool' ? (
-                                  [
-                                    <MenuItem key="true" value="true">
-                                      true
-                                    </MenuItem>,
-                                    <MenuItem key="false" value="false">
-                                      false
-                                    </MenuItem>,
-                                  ]
-                                ) : null}
-                                {typ === 'enum' && enumValues.length > 0
-                                  ? enumValues.map((ev) => (
-                                      <MenuItem key={ev} value={ev}>
-                                        {ev}
-                                      </MenuItem>
-                                    ))
-                                  : null}
-                              </TextField>
-                              {inp.default != null && (
-                                <Typography variant="caption" color="text.secondary">
-                                  default: {String(inp.default)}
-                                </Typography>
-                              )}
-                            </Stack>
-                          )
-                        })}
-                      </Stack>
-                    </Box>
-                  )}
-                </Stack>
-              </DialogContent>
-              <DialogActions>
-                <Button onClick={() => setStrategyDialogOpen(false)}>Cancel</Button>
-                <Button
-                  variant="contained"
-                  onClick={applySavedStrategy}
-                  disabled={!activeSavedStrategyVersion}
-                >
-                  Apply
-                </Button>
-              </DialogActions>
-            </Dialog>
-
-	          <DslHelpDialog
-	            open={dslHelpOpen}
-	            onClose={() => setDslHelpOpen(false)}
-	            context="dashboard"
-	          />
       </Box>
+
+      <Box sx={{ mt: 2 }}>
+        <HoldingsSummaryHistoryPanel />
+      </Box>
+
+      <Dialog
+        open={strategyDialogOpen}
+        onClose={() => setStrategyDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Apply saved strategy</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            {strategyLoadError && (
+              <Typography color="error">{strategyLoadError}</Typography>
+            )}
+
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={strategyReplaceExisting}
+                  onChange={(e) => setStrategyReplaceExisting(e.target.checked)}
+                />
+              }
+              label="Replace existing indicators/signals"
+            />
+
+            <Autocomplete
+              options={strategyRows}
+              loading={strategyLoading}
+              value={strategyRows.find((s) => s.id === strategyId) ?? null}
+              onChange={(_e, v) => {
+                setStrategyId(v?.id ?? null)
+                setStrategyVersionId(null)
+                setStrategySignalOutput(null)
+                setStrategyOverlayOutputs([])
+                setStrategyParamDraft({})
+              }}
+              getOptionLabel={(s) => `${s.name} (v${s.latest_version})`}
+              renderInput={(params) => (
+                <TextField {...params} label="Strategy" />
+              )}
+            />
+
+            <Stack direction="row" spacing={1} flexWrap="wrap">
+              <TextField
+                label="Version"
+                select
+                size="small"
+                value={strategyVersionId ?? ''}
+                onChange={(e) => {
+                  const n = Number(e.target.value || '')
+                  setStrategyVersionId(Number.isFinite(n) ? n : null)
+                  setStrategySignalOutput(null)
+                  setStrategyOverlayOutputs([])
+                  setStrategyParamDraft({})
+                }}
+                sx={{ minWidth: 120 }}
+                disabled={strategyId == null || strategyVersions.length === 0}
+              >
+                {strategyVersions.map((v) => (
+                  <MenuItem key={v.id} value={v.id}>
+                    v{v.version}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                label="Signal output"
+                select
+                size="small"
+                value={strategySignalOutput ?? ''}
+                onChange={(e) => setStrategySignalOutput(e.target.value || null)}
+                sx={{ minWidth: 180 }}
+                disabled={!activeSavedStrategyVersion}
+              >
+                {(activeSavedStrategyVersion?.outputs ?? [])
+                  .filter(
+                    (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
+                  )
+                  .map((o) => (
+                    <MenuItem key={o.name} value={o.name}>
+                      {o.name}
+                    </MenuItem>
+                  ))}
+              </TextField>
+
+              <TextField
+                label="Overlay outputs"
+                select
+                size="small"
+                SelectProps={{ multiple: true }}
+                value={strategyOverlayOutputs}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setStrategyOverlayOutputs(Array.isArray(v) ? (v as string[]) : [])
+                }}
+                sx={{ minWidth: 240, flex: 1 }}
+                disabled={!activeSavedStrategyVersion}
+              >
+                {(activeSavedStrategyVersion?.outputs ?? [])
+                  .filter(
+                    (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
+                  )
+                  .map((o) => (
+                    <MenuItem key={o.name} value={o.name}>
+                      {o.name}
+                    </MenuItem>
+                  ))}
+              </TextField>
+            </Stack>
+
+            {(activeSavedStrategyVersion?.inputs ?? []).length > 0 && (
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  Parameters
+                </Typography>
+                <Stack spacing={1}>
+                  {(activeSavedStrategyVersion?.inputs ?? []).map((inp) => {
+                    const key = inp.name
+                    const raw = strategyParamDraft[key]
+                    const val = raw == null ? '' : String(raw)
+                    const typ = inp.type
+                    const enumValues = Array.isArray(inp.enum_values)
+                      ? inp.enum_values
+                      : []
+                    return (
+                      <Stack key={key} direction="row" spacing={1} alignItems="center">
+                        <TextField
+                          label={key}
+                          size="small"
+                          value={val}
+                          onChange={(e) => {
+                            const nextRaw = e.target.value
+                            const nextVal =
+                              typ === 'number'
+                                ? (Number.isFinite(Number(nextRaw)) ? Number(nextRaw) : nextRaw)
+                                : typ === 'bool'
+                                  ? nextRaw === 'true'
+                                  : nextRaw
+                            setStrategyParamDraft((prev) => ({ ...prev, [key]: nextVal }))
+                          }}
+                          select={
+                            typ === 'bool' || (typ === 'enum' && enumValues.length > 0)
+                          }
+                          sx={{ minWidth: 220 }}
+                        >
+                          {typ === 'bool' ? (
+                            [
+                              <MenuItem key="true" value="true">
+                                true
+                              </MenuItem>,
+                              <MenuItem key="false" value="false">
+                                false
+                              </MenuItem>,
+                            ]
+                          ) : null}
+                          {typ === 'enum' && enumValues.length > 0
+                            ? enumValues.map((ev) => (
+                                <MenuItem key={ev} value={ev}>
+                                  {ev}
+                                </MenuItem>
+                              ))
+                            : null}
+                        </TextField>
+                        {inp.default != null && (
+                          <Typography variant="caption" color="text.secondary">
+                            default: {String(inp.default)}
+                          </Typography>
+                        )}
+                      </Stack>
+                    )
+                  })}
+                </Stack>
+              </Box>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStrategyDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={applySavedStrategy}
+            disabled={!activeSavedStrategyVersion}
+          >
+            Apply
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <DslHelpDialog
+        open={dslHelpOpen}
+        onClose={() => setDslHelpOpen(false)}
+        context="dashboard"
+      />
     </Box>
   )
 }
