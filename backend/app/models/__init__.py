@@ -14,6 +14,7 @@ from .group_imports import GroupImport, GroupImportValue
 from .groups import Group, GroupMember
 from .holdings import HoldingGoal, HoldingGoalImportPreset, HoldingGoalReview
 from .holdings_exit import HoldingExitEvent, HoldingExitSubscription
+from .holdings_summary import HoldingsSummarySnapshot
 from .instruments import BrokerInstrument, Listing, Security
 from .market_calendar import MarketCalendar
 from .market_data import Candle, MarketInstrument
@@ -87,6 +88,7 @@ __all__ = [
     "HoldingGoalReview",
     "HoldingExitSubscription",
     "HoldingExitEvent",
+    "HoldingsSummarySnapshot",
     "RebalancePolicy",
     "RebalanceSchedule",
     "RebalanceRun",

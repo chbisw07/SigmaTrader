@@ -14,6 +14,7 @@ from . import (
     holdings_goals,
     holdings_exit_config,
     holdings_exit_subscriptions,
+    holdings_summary,
     instruments,
     market_calendar,
     market_data,
@@ -190,6 +191,13 @@ router.include_router(
     prefix="/api/holdings-exit",
     dependencies=[Depends(require_admin)],
     tags=["holdings-exit"],
+)
+
+router.include_router(
+    holdings_summary.router,
+    prefix="/api/holdings-summary",
+    dependencies=[Depends(require_admin)],
+    tags=["holdings-summary"],
 )
 
 router.include_router(
