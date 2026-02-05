@@ -50,6 +50,10 @@ build/
 *.sqlite3
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
 
 # IDE / editor
 .vscode/
