@@ -720,6 +720,12 @@ def tradingview_webhook(
             resolved_product = getattr(sell_resolution, "resolved_product", None)
             if resolved_product:
                 normalized.product = str(resolved_product).strip().upper()
+            resolved_exchange = getattr(sell_resolution, "resolved_exchange", None)
+            if resolved_exchange:
+                normalized.broker_exchange = str(resolved_exchange).strip().upper()
+            resolved_symbol = getattr(sell_resolution, "resolved_symbol", None)
+            if resolved_symbol:
+                normalized.broker_symbol = str(resolved_symbol).strip().upper()
 
     client_order_id: str | None = None
     try:
@@ -778,10 +784,13 @@ def tradingview_webhook(
         elif bool(getattr(sell_resolution, "reject", False)) and bool(
             getattr(sell_resolution, "checked_live", False)
         ):
+            note = str(getattr(sell_resolution, "note", "") or "").strip()
             suffix = (
                 "ST: SELL could not be matched to holdings/positions; "
                 "created as WAITING for review."
             )
+            if note:
+                suffix = f"{suffix} ({note})"
             alert_reason = f"{(alert_reason or '').strip()} | {suffix}".strip(" |")
 
     alert = Alert(

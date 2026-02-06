@@ -161,6 +161,61 @@ def test_webhook_sell_qty_resolves_from_live_holdings(monkeypatch) -> None:
         assert bool(getattr(order, "is_exit", False)) is True
 
 
+def test_webhook_sell_qty_resolves_from_t1_holdings(monkeypatch) -> None:
+    """Zerodha holdings can be in t1_quantity; AUTO SELL should still resolve qty."""
+
+    import app.api.orders as orders_api
+
+    class _FakeClient:
+        def list_holdings(self):
+            return [
+                {
+                    "tradingsymbol": "INFY",
+                    "exchange": "NSE",
+                    "quantity": 0,
+                    "t1_quantity": 7,
+                }
+            ]
+
+        def list_positions(self):
+            return {"net": []}
+
+    def _fake_get_broker_client(db, settings, broker_name, user_id=None):
+        return _FakeClient()
+
+    monkeypatch.setattr(orders_api, "_get_broker_client", _fake_get_broker_client)
+
+    unique_strategy = f"webhook-test-strategy-sell-t1-holdings-{uuid4().hex}"
+    payload = {
+        "secret": "test-secret",
+        "platform": "TRADINGVIEW",
+        "st_user_id": "webhook-user",
+        "strategy_name": unique_strategy,
+        "symbol": "NSE:INFY",
+        "exchange": "NSE",
+        "interval": "5",
+        "trade_details": {"order_action": "SELL", "quantity": 1, "price": 1500.0},
+    }
+
+    response = client.post("/webhook/tradingview", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        alert = session.get(Alert, int(data["alert_id"]))
+        assert alert is not None
+        assert alert.action == "SELL"
+        assert float(alert.qty or 0.0) == 7.0
+
+        order = session.get(Order, int(data["order_id"]))
+        assert order is not None
+        assert order.side == "SELL"
+        assert float(order.qty or 0.0) == 7.0
+        assert str(order.product or "").upper() == "CNC"
+        assert bool(getattr(order, "is_exit", False)) is True
+
+
 def test_webhook_ignores_sell_when_no_holdings_or_positions(monkeypatch) -> None:
     """When we can confirm no position exists, create a WAITING order for review."""
 

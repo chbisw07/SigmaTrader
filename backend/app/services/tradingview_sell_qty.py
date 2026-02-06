@@ -24,6 +24,8 @@ class TradingViewSellQtyResolution:
     qty: float
     source: str  # holdings|positions|payload
     resolved_product: str | None = None
+    resolved_exchange: str | None = None
+    resolved_symbol: str | None = None
     is_exit: bool = False
     checked_live: bool = False
     reject: bool = False
@@ -41,6 +43,43 @@ def _as_float(v: object) -> float | None:
 
 def _canon(s: str) -> str:
     return (s or "").strip().upper()
+
+
+def _get_str(d: dict[str, Any], *keys: str) -> str | None:
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    return None
+
+
+def _holdings_total_qty(row: dict[str, Any]) -> float:
+    # Zerodha holdings provide:
+    # - quantity (T+1 settled)
+    # - t1_quantity (unsettled)
+    # Total sellable qty for CNC exits is typically quantity + t1_quantity.
+    q = _as_float(row.get("quantity") or row.get("qty") or row.get("netqty")) or 0.0
+    t1 = (
+        _as_float(
+            row.get("t1_quantity")
+            or row.get("t1_qty")
+            or row.get("t1Quantity")
+            or row.get("t1Qty")
+        )
+        or 0.0
+    )
+    return float(q + t1)
+
+
+def _position_net_qty(row: dict[str, Any]) -> float | None:
+    return _as_float(
+        row.get("quantity")
+        or row.get("net_quantity")
+        or row.get("netQuantity")
+        or row.get("netqty")
+        or row.get("netQty")
+        or row.get("qty")
+    )
 
 
 def _lookup_cached_position_qty(
@@ -143,37 +182,69 @@ def resolve_tradingview_sell_qty(
         )
 
     holdings_qty: float = 0.0
+    holdings_exch: str | None = None
     try:
         raw_holdings = client.list_holdings()
         for h in raw_holdings:
             if not isinstance(h, dict):
                 continue
-            hs = h.get("tradingsymbol") or h.get("symbol") or h.get("symbolname")
-            he = h.get("exchange") or exch_u
+            hs = _get_str(h, "tradingsymbol", "symbol", "symbolname")
+            he = _get_str(h, "exchange", "exch") or exch_u
             if not isinstance(hs, str) or not isinstance(he, str):
                 continue
             if _canon(he) != exch_u or _canon(hs) != sym_u:
                 continue
-            q = _as_float(h.get("quantity") or h.get("qty") or h.get("netqty"))
-            if q is not None:
-                holdings_qty = float(q or 0.0)
-                break
+            holdings_qty = _holdings_total_qty(h)
+            holdings_exch = _canon(he) or exch_u
+            break
     except Exception:
         holdings_qty = 0.0
 
+    # Fallback: symbol matches but exchange differs (or broker omits exchange).
+    # This helps when TradingView alerts are configured for NSE/BSE differently
+    # from the broker holdings record.
+    if holdings_qty <= 0:
+        try:
+            raw_holdings = client.list_holdings()
+            by_exch: dict[str, float] = {}
+            for h in raw_holdings:
+                if not isinstance(h, dict):
+                    continue
+                hs = _get_str(h, "tradingsymbol", "symbol", "symbolname")
+                if not isinstance(hs, str) or _canon(hs) != sym_u:
+                    continue
+                he = _get_str(h, "exchange", "exch")
+                he_u = _canon(str(he) if he is not None else "") or "UNKNOWN"
+                q = _holdings_total_qty(h)
+                if q > 0:
+                    by_exch[he_u] = max(by_exch.get(he_u, 0.0), float(q))
+
+            positive_exchs = [e for e, q in by_exch.items() if q > 0]
+            if len(positive_exchs) == 1:
+                holdings_exch = positive_exchs[0]
+                holdings_qty = float(by_exch[holdings_exch] or 0.0)
+        except Exception:
+            pass
+
     if holdings_qty > 0:
+        note = "Resolved from live broker holdings."
+        if holdings_exch and holdings_exch not in {"UNKNOWN", exch_u}:
+            note = f"{note} Matched holdings on {holdings_exch} while alert was {exch_u}."
         return TradingViewSellQtyResolution(
             qty=float(holdings_qty),
             source="holdings",
             resolved_product="CNC",
+            resolved_exchange=holdings_exch if holdings_exch and holdings_exch != "UNKNOWN" else exch_u,
+            resolved_symbol=sym_u,
             is_exit=True,
             checked_live=True,
             reject=False,
-            note="Resolved from live broker holdings.",
+            note=note,
         )
 
     # No holdings -> check positions.
     positions_qty_by_product: dict[str, float] = {}
+    positions_exch: str | None = None
     try:
         raw_positions = client.list_positions()
         if isinstance(raw_positions, dict):
@@ -189,29 +260,66 @@ def resolve_tradingview_sell_qty(
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            ps = row.get("tradingsymbol") or row.get("symbol") or row.get("symbolname")
-            pe = row.get("exchange") or exch_u
+            ps = _get_str(row, "tradingsymbol", "symbol", "symbolname")
+            pe = _get_str(row, "exchange", "exch") or exch_u
             if not isinstance(ps, str) or not isinstance(pe, str):
                 continue
             if _canon(pe) != exch_u or _canon(ps) != sym_u:
                 continue
+            positions_exch = _canon(pe) or exch_u
 
             prod = row.get("product") or row.get("producttype") or row.get("productType")
             prod_u = _canon(str(prod) if prod is not None else "")
             if not prod_u:
                 continue
 
-            q = _as_float(
-                row.get("quantity")
-                or row.get("netqty")
-                or row.get("netQty")
-                or row.get("qty")
-            )
+            q = _position_net_qty(row)
             if q is None:
                 continue
             positions_qty_by_product[prod_u] = float(q or 0.0)
     except Exception:
         positions_qty_by_product = {}
+
+    # Fallback: symbol matches but exchange differs.
+    if not any(float(v or 0.0) > 0 for v in positions_qty_by_product.values()):
+        try:
+            raw_positions = client.list_positions()
+            if isinstance(raw_positions, dict):
+                net = raw_positions.get("net")
+                rows = net if isinstance(net, list) else []
+            elif isinstance(raw_positions, list):
+                rows = raw_positions
+            else:
+                rows = []
+
+            by_exch: dict[str, dict[str, float]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                ps = _get_str(row, "tradingsymbol", "symbol", "symbolname")
+                if not isinstance(ps, str) or _canon(ps) != sym_u:
+                    continue
+                pe = _get_str(row, "exchange", "exch")
+                pe_u = _canon(str(pe) if pe is not None else "") or "UNKNOWN"
+                prod = row.get("product") or row.get("producttype") or row.get("productType")
+                prod_u = _canon(str(prod) if prod is not None else "")
+                if not prod_u:
+                    continue
+                q = _position_net_qty(row)
+                if q is None:
+                    continue
+                qf = float(q or 0.0)
+                if qf <= 0:
+                    continue
+                by_exch.setdefault(pe_u, {})
+                by_exch[pe_u][prod_u] = max(by_exch[pe_u].get(prod_u, 0.0), qf)
+
+            positive_exchs = [e for e, prods in by_exch.items() if any(v > 0 for v in prods.values())]
+            if len(positive_exchs) == 1:
+                positions_exch = positive_exchs[0]
+                positions_qty_by_product = by_exch[positions_exch]
+        except Exception:
+            pass
 
     # Preferred: desired product first, then fall back to any other positive qty.
     candidates = [product_u]
@@ -222,14 +330,21 @@ def resolve_tradingview_sell_qty(
     for prod in candidates:
         q = float(positions_qty_by_product.get(prod, 0.0) or 0.0)
         if q > 0:
+            note = "Resolved from live broker positions."
+            if positions_exch and positions_exch not in {"UNKNOWN", exch_u}:
+                note = f"{note} Matched positions on {positions_exch} while alert was {exch_u}."
             return TradingViewSellQtyResolution(
                 qty=q,
                 source="positions",
                 resolved_product=prod,
+                resolved_exchange=positions_exch
+                if positions_exch and positions_exch != "UNKNOWN"
+                else exch_u,
+                resolved_symbol=sym_u,
                 is_exit=True,
                 checked_live=True,
                 reject=False,
-                note="Resolved from live broker positions.",
+                note=note,
             )
 
     # Live check completed and we found no sellable quantity.
