@@ -7,6 +7,8 @@ import re
 from typing import Any, Dict
 from urllib.parse import parse_qs
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -18,6 +20,7 @@ from app.models import Alert, Order, Strategy, User
 from app.pydantic_compat import PYDANTIC_V2
 from app.schemas.webhook import TradingViewWebhookPayload
 from app.services import create_order_from_alert
+from app.services.risk_unified_store import read_unified_risk_global
 from app.services.system_events import record_system_event
 from app.services.tradingview_webhook_config import (
     get_tradingview_webhook_config_with_source,
@@ -38,6 +41,165 @@ router = APIRouter()
 
 _THOUSANDS_SEP_RE = re.compile(r"(?<=\d),(?=\d{3}(?:\D|$))")
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+
+
+def _maybe_autosize_waiting_order_qty(
+    *,
+    db: Session,
+    settings: Settings,
+    order: Order,
+    user: User | None,
+    product_hint: str | None,
+    correlation_id: str | None,
+) -> None:
+    """Best-effort: size queued TradingView orders so Qty isn't displayed as 0.
+
+    Execution still runs the full risk engine + broker margin checks; this is
+    only to provide a reasonable default Qty in the Waiting Queue when the
+    TradingView alert omitted qty.
+    """
+
+    try:
+        if order.qty is not None and float(order.qty or 0.0) > 0:
+            return
+    except Exception:
+        pass
+
+    try:
+        g = read_unified_risk_global(db)
+        if not bool(getattr(g, "enabled", False)):
+            return
+    except Exception:
+        return
+
+    sized_qty: float | None = None
+
+    # First attempt: ask the unified risk engine for its sized qty.
+    try:
+        from app.services.risk_engine import evaluate_order_risk
+
+        baseline_equity = float(getattr(g, "baseline_equity_inr", 0.0) or 0.0)
+        decision = evaluate_order_risk(
+            db,
+            settings,
+            user=user,
+            order=order,
+            baseline_equity=baseline_equity,
+            now_utc=datetime.now(UTC),
+            product_hint=product_hint,
+        )
+        if decision.final_qty is not None and float(decision.final_qty) > 0:
+            sized_qty = float(decision.final_qty)
+    except Exception:
+        sized_qty = None
+
+    # Fallback: if risk engine can't size (e.g., missing symbol category),
+    # size purely from capital_per_trade and price.
+    if sized_qty is None:
+        try:
+            from math import floor
+
+            from app.services.risk_engine import _price_for_sizing, pick_risk_profile
+            from app.services.risk_unified_store import get_source_override
+
+            price = _price_for_sizing(order)
+            if price is None or float(price) <= 0:
+                return
+
+            prof = pick_risk_profile(db, product_hint=product_hint)
+            if prof is None:
+                return
+
+            resolved_product = (getattr(prof, "product", None) or "").strip().upper()
+            if not resolved_product:
+                return
+
+            source_override = get_source_override(
+                db,
+                source_bucket="TRADINGVIEW",
+                product=resolved_product,  # type: ignore[arg-type]
+            )
+            cap = (
+                float(source_override.capital_per_trade)
+                if source_override is not None
+                and getattr(source_override, "capital_per_trade", None) is not None
+                else float(getattr(prof, "capital_per_trade", 0.0) or 0.0)
+            )
+            if cap <= 0:
+                return
+
+            qty = float(floor(cap / float(price)))
+            if qty <= 0:
+                return
+
+            # Apply safe per-order clamps when configured (does not require symbol category).
+            if source_override is not None:
+                max_qty = getattr(source_override, "max_quantity_per_order", None)
+                if max_qty is not None:
+                    try:
+                        max_qty_f = float(max_qty)
+                        if max_qty_f > 0 and qty > max_qty_f:
+                            qty = float(floor(max_qty_f))
+                    except Exception:
+                        pass
+
+                max_abs = getattr(source_override, "max_order_value_abs", None)
+                if max_abs is not None:
+                    try:
+                        max_abs_f = float(max_abs)
+                        if max_abs_f > 0 and qty * float(price) > max_abs_f:
+                            qty2 = float(floor(max_abs_f / float(price)))
+                            if qty2 > 0:
+                                qty = qty2
+                    except Exception:
+                        pass
+
+                max_pct = getattr(source_override, "max_order_value_pct", None)
+                if max_pct is not None:
+                    try:
+                        baseline = float(getattr(g, "baseline_equity_inr", 0.0) or 0.0)
+                        pct_f = float(max_pct)
+                        if baseline > 0 and pct_f > 0:
+                            cap2 = baseline * pct_f / 100.0
+                            if qty * float(price) > cap2:
+                                qty2 = float(floor(cap2 / float(price)))
+                                if qty2 > 0:
+                                    qty = qty2
+                    except Exception:
+                        pass
+
+            if qty > 0:
+                sized_qty = float(qty)
+        except Exception:
+            sized_qty = None
+
+    if sized_qty is None or sized_qty <= 0:
+        return
+
+    try:
+        order.qty = float(sized_qty)
+        note = "Auto-sized qty from risk profile (preview)."
+        if not (order.error_message or "").strip():
+            order.error_message = note
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        try:
+            record_system_event(
+                db,
+                level="INFO",
+                category="order",
+                message="Queued order auto-sized",
+                correlation_id=correlation_id,
+                details={"order_id": int(order.id), "qty": float(sized_qty)},
+            )
+        except Exception:
+            pass
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _strip_thousands_separators(raw: str) -> str:
@@ -671,6 +833,21 @@ def tradingview_webhook(
         if sell_resolution is not None and str(alert.action).strip().upper() == "SELL"
         else False,
     )
+
+    # If TradingView omitted qty (or templates didn't expand it), auto-size the
+    # queued order so the Waiting Queue isn't filled with qty=0 rows.
+    try:
+        user_obj = db.get(User, alert.user_id) if alert.user_id is not None else None
+        _maybe_autosize_waiting_order_qty(
+            db=db,
+            settings=settings,
+            order=order,
+            user=user_obj,
+            product_hint=str(normalized.product or "").strip().upper() or None,
+            correlation_id=correlation_id,
+        )
+    except Exception:
+        pass
 
     if sell_resolution is not None and str(order.side).strip().upper() == "SELL":
         if bool(getattr(sell_resolution, "reject", False)) and bool(
