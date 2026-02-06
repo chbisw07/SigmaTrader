@@ -793,10 +793,11 @@ def zerodha_margins(
         segment = data
 
     available_section = segment.get("available") or {}
-    # Prefer cash margin; fall back to any numeric value we can find.
+    # Prefer live balance (matches the Kite UI "Available cash" in most cases);
+    # fall back to cash/opening_balance.
     available_raw = (
-        available_section.get("cash")
-        or available_section.get("live_balance")
+        available_section.get("live_balance")
+        or available_section.get("cash")
         or available_section.get("opening_balance")
         or 0.0
     )
