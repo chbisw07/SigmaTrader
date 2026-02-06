@@ -92,4 +92,3 @@ export async function fetchHoldingsSummarySnapshotsMeta(params?: {
   }
   return (await res.json()) as HoldingsSummarySnapshotsMeta
 }
-

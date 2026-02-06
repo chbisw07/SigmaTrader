@@ -17,6 +17,19 @@ DEFAULT_ALPHA_BETA_BENCHMARK = ("NSE", "NIFTYBEES")
 DEFAULT_RISK_FREE_RATE_PCT = 6.5
 
 
+def prev_trading_day(d: date) -> date:
+    """Return the previous weekday (Mon–Fri), skipping weekends.
+
+    This is a pragmatic approximation for Indian markets. It does not account
+    for exchange holidays, but it avoids the most common weekend gaps.
+    """
+
+    out = d - timedelta(days=1)
+    while out.weekday() >= 5:  # Sat/Sun
+        out -= timedelta(days=1)
+    return out
+
+
 def _as_of_date_ist(now_utc: datetime) -> date:
     try:
         from zoneinfo import ZoneInfo
@@ -89,8 +102,8 @@ def compute_holdings_summary_metrics(
 
     invested = 0.0
     equity_value = 0.0
-    today_weighted_return = 0.0
-    today_return_weight = 0.0
+    today_prev_value = 0.0
+    today_curr_value = 0.0
 
     overall_winner = 0
     overall_comparable = 0
@@ -120,12 +133,19 @@ def compute_holdings_summary_metrics(
             if today_pnl_pct_row > 0:
                 today_winner += 1
             if current > 0:
-                today_weighted_return += (today_pnl_pct_row / 100.0) * current
-                today_return_weight += current
+                # Compute portfolio-level "today" return using value deltas
+                # (prev-close value vs current value) rather than a weighted
+                # average of per-holding % returns.
+                denom = 1.0 + today_pnl_pct_row / 100.0
+                if denom > 0:
+                    prev_value = current / denom
+                    if prev_value > 0:
+                        today_prev_value += prev_value
+                        today_curr_value += current
 
     holdings_count = len(active_rows)
     total_pnl_pct = ((equity_value - invested) / invested) * 100.0 if invested > 0 else None
-    today_pnl_pct = (today_weighted_return / today_return_weight) * 100.0 if today_return_weight > 0 else None
+    today_pnl_pct = ((today_curr_value - today_prev_value) / today_prev_value) * 100.0 if today_prev_value > 0 else None
     overall_win_rate = (overall_winner / overall_comparable) * 100.0 if overall_comparable > 0 else None
     today_win_rate = (today_winner / today_comparable) * 100.0 if today_comparable > 0 else None
 
@@ -504,4 +524,5 @@ __all__ = [
     "compute_holdings_summary_metrics",
     "upsert_holdings_summary_snapshot",
     "_as_of_date_ist",
+    "prev_trading_day",
 ]

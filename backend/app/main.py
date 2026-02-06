@@ -164,6 +164,13 @@ async def _lifespan(_app: FastAPI):
         # Holdings Exit Automation can be enabled/disabled at runtime via the Settings page
         # (DB-backed). Always start the loop; it no-ops when disabled.
         schedule_holdings_exit()
+        # Holdings summary daily finalization: captures a stable "previous trading day"
+        # snapshot during pre-open so intraday P&L can reference a consistent baseline.
+        from .services.holdings_summary_finalizer import (
+            schedule_holdings_summary_finalizer,
+        )
+
+        schedule_holdings_summary_finalizer()
 
     enable_deployments = (
         (os.getenv("ST_ENABLE_DEPLOYMENTS_RUNTIME") or "").strip().lower()

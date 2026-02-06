@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -19,6 +20,7 @@ from app.services.holdings_summary_snapshots import (
     upsert_holdings_summary_snapshot,
     _as_of_date_ist,
 )
+from app.core.market_hours import IST_OFFSET
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -29,6 +31,13 @@ router = APIRouter()
 def capture_holdings_summary_snapshot(
     broker_name: str = Query("zerodha", min_length=1),
     allow_fetch_market_data: bool = Query(False),
+    as_of_date: Optional[date] = Query(
+        None,
+        description=(
+            "Optional override for the snapshot's as_of_date. "
+            "Used internally to finalize the previous trading day during pre-open."
+        ),
+    ),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
@@ -40,6 +49,31 @@ def capture_holdings_summary_snapshot(
     """
 
     broker = (broker_name or "").strip().lower()
+
+    today_ist = _as_of_date_ist(datetime.now(UTC))
+    target_date = as_of_date or today_ist
+
+    if target_date > today_ist:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"as_of_date cannot be in the future (today IST: {today_ist.isoformat()}).",
+        )
+
+    # Correctness guard: capturing a "previous-day final" snapshot after market
+    # open will often be contaminated by today's trading activity. Only allow
+    # previous-day overrides during a safe pre-open window.
+    if target_date < today_ist:
+        now_ist_naive = (datetime.now(UTC) + IST_OFFSET).replace(tzinfo=None)
+        deadline = now_ist_naive.replace(hour=9, minute=15, second=0, microsecond=0)
+        if now_ist_naive >= deadline:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Too late to capture a previous-day snapshot after 09:15 IST. "
+                    "Please start SigmaTrader before market open so it can finalize "
+                    "yesterday's snapshot safely."
+                ),
+            )
 
     # Fetch live holdings via the existing API logic (keeps behavior consistent).
     from app.api import positions as positions_api
@@ -70,12 +104,11 @@ def capture_holdings_summary_snapshot(
         allow_fetch_market_data=bool(allow_fetch_market_data),
     )
 
-    as_of = _as_of_date_ist(datetime.now(UTC))
     row = upsert_holdings_summary_snapshot(
         db,
         user_id=int(user.id),
         broker_name=broker,
-        as_of_date=as_of,
+        as_of_date=target_date,
         metrics=metrics,
     )
     return row
@@ -104,6 +137,7 @@ def list_holdings_summary_snapshots(
         .limit(limit)
         .all()
     )
+
 
 
 @router.get("/snapshots/meta", response_model=HoldingsSummarySnapshotsMeta)
