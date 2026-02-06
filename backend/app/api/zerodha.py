@@ -33,6 +33,14 @@ from app.services.system_events import record_system_event
 router = APIRouter()
 
 _ZERODHA_API_KEY_RE = re.compile(r"^[A-Za-z0-9]{16}$")
+_KITE_SIGNATURE_HEADER_CANDIDATES = (
+    "X-Kite-Signature",
+    # Some integrations refer to this as a checksum.
+    "X-Kite-Checksum",
+    # Defensive aliases (proxy / legacy variants).
+    "X-Kite-Postback-Signature",
+    "X-Kite-Hmac-Sha256",
+)
 
 
 class ZerodhaConnectRequest(BaseModel):
@@ -181,6 +189,12 @@ def _handle_zerodha_postback(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Zerodha API secret is not configured; cannot verify postback signature.",
+        )
+
+    if not (signature or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing postback signature header.",
         )
 
     if not _verify_kite_postback_signature(
@@ -611,6 +625,41 @@ def sync_orders(
     return {"updated": updated}
 
 
+def _extract_kite_postback_signature(
+    request: Request,
+) -> tuple[str, str | None, list[str] | None]:
+    """Extract the Kite postback signature from request headers (best-effort).
+
+    Returns (signature, header_name_used, candidate_headers_present).
+    """
+
+    candidate_headers_present: list[str] = []
+    try:
+        for k, _v in request.headers.items():
+            kl = k.lower()
+            if "kite" in kl or "signature" in kl or "checksum" in kl:
+                candidate_headers_present.append(k)
+    except Exception:
+        candidate_headers_present = []
+
+    for name in _KITE_SIGNATURE_HEADER_CANDIDATES:
+        sig = request.headers.get(name) or ""
+        if sig.strip():
+            return sig, name, candidate_headers_present or None
+
+    # Last-resort fallback: allow signature via query string in case an edge
+    # proxy strips custom headers. This still requires a valid HMAC.
+    try:
+        qp = request.query_params
+        sig_q = (qp.get("signature") or qp.get("sig") or "").strip()
+        if sig_q:
+            return sig_q, "query", candidate_headers_present or None
+    except Exception:
+        pass
+
+    return "", None, candidate_headers_present or None
+
+
 async def _zerodha_postback_impl(
     request: Request,
     *,
@@ -620,20 +669,51 @@ async def _zerodha_postback_impl(
     """Shared implementation for the postback handler."""
 
     body = await request.body()
-    sig = request.headers.get("X-Kite-Signature") or request.headers.get("x-kite-signature") or ""
+    sig, sig_header_name, sig_headers_present = _extract_kite_postback_signature(request)
     try:
         return _handle_zerodha_postback(db, settings, body=body, signature=sig)
     except HTTPException as exc:
         try:
+            client_ip = getattr(getattr(request, "client", None), "host", None)
+            ua = request.headers.get("User-Agent") or request.headers.get("user-agent") or None
+            if isinstance(ua, str) and len(ua) > 200:
+                ua = ua[:200]
+
+            payload_keys: list[str] | None = None
+            try:
+                parsed_qs = parse_qs(
+                    body.decode("utf-8", errors="ignore"),
+                    keep_blank_values=True,
+                )
+                payload_keys = sorted(str(k) for k in parsed_qs.keys())
+            except Exception:
+                payload_keys = None
+
+            has_sig = bool((sig or "").strip())
+            if int(exc.status_code) == 401 and not has_sig:
+                level = "INFO"
+                category = "zerodha_postback_noise"
+                message = "Zerodha postback ignored (missing signature)"
+            else:
+                level = "WARNING" if int(exc.status_code) < 500 else "ERROR"
+                category = "zerodha_postback_error"
+                message = "Zerodha postback rejected"
+
             record_system_event(
                 db,
-                level="WARNING" if int(exc.status_code) < 500 else "ERROR",
-                category="zerodha_postback_error",
-                message="Zerodha postback rejected",
+                level=level,
+                category=category,
+                message=message,
                 details={
                     "status_code": int(exc.status_code),
                     "detail": getattr(exc, "detail", None),
-                    "has_signature": bool(sig),
+                    "has_signature": has_sig,
+                    "signature_header": sig_header_name,
+                    "candidate_headers_present": sig_headers_present,
+                    "client_ip": client_ip,
+                    "user_agent": ua,
+                    "body_len": int(len(body or b"")),
+                    "payload_keys": payload_keys,
                 },
             )
         except Exception:

@@ -119,6 +119,22 @@ def test_zerodha_postback_rejects_invalid_signature(monkeypatch) -> None:
         assert excinfo.value.status_code == 401
 
 
+def test_zerodha_postback_rejects_missing_signature(monkeypatch) -> None:
+    _seed_base()
+    settings = get_settings()
+
+    import app.api.zerodha as mod
+
+    monkeypatch.setattr(mod, "_sync_positions_after_postback", lambda *_a, **_k: False)
+
+    body = b"order_id=230101000001234&status=COMPLETE"
+    with SessionLocal() as db:
+        with pytest.raises(HTTPException) as excinfo:
+            mod._handle_zerodha_postback(db, settings, body=body, signature="")
+        assert excinfo.value.status_code == 401
+        assert "Missing postback signature" in str(excinfo.value.detail)
+
+
 def test_zerodha_postback_updates_order_and_triggers_positions_sync(monkeypatch) -> None:
     seed = _seed_base()
     settings = get_settings()
@@ -154,4 +170,3 @@ def test_zerodha_postback_updates_order_and_triggers_positions_sync(monkeypatch)
             .one()
         )
         assert order.status == "EXECUTED"
-
