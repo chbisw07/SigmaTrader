@@ -6,6 +6,7 @@ import {
   ColorType,
   CrosshairMode,
   createChart,
+  PriceScaleMode,
   type BusinessDay,
   type IChartApi,
   type LineData,
@@ -64,6 +65,7 @@ export function PriceChart({
   chartType,
   overlays = [],
   markers = [],
+  displayMode = 'value',
   height = 320,
   showLegend = false,
   baseSeriesName,
@@ -73,6 +75,7 @@ export function PriceChart({
   chartType: PriceChartType
   overlays?: PriceOverlay[]
   markers?: PriceSignalMarker[]
+  displayMode?: 'value' | 'pct'
   height?: number
   showLegend?: boolean
   baseSeriesName?: string
@@ -173,6 +176,16 @@ export function PriceChart({
       overlaySeriesRefs.current = []
     }
   }, [theme])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    chart.applyOptions({
+      rightPriceScale: {
+        mode: displayMode === 'pct' ? PriceScaleMode.Percentage : PriceScaleMode.Normal,
+      },
+    })
+  }, [displayMode])
 
   useEffect(() => {
     const chart = chartRef.current

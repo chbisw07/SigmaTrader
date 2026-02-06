@@ -121,6 +121,7 @@ type DashboardSettingsV1 = {
   range?: string
   symbolRange?: string
   chartType?: PriceChartType
+  chartDisplayMode?: 'value' | 'pct'
   selectedSymbol?: { symbol: string; exchange: string; label: string } | null
   indicatorRows?: Array<
     AlertVariableDef & {
@@ -158,6 +159,7 @@ function MultiLineChart({
   series,
   height = 280,
   base = 100,
+  displayMode = 'value',
 }: {
   series: Array<{
     label: string
@@ -167,6 +169,7 @@ function MultiLineChart({
   }>
   height?: number
   base?: number
+  displayMode?: 'value' | 'pct'
 }) {
   const theme = useTheme()
   const [hoverX, setHoverX] = useState<number | null>(null)
@@ -420,7 +423,11 @@ function MultiLineChart({
                     {it.label}
                   </Typography>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    {y == null ? '—' : y.toFixed(2)}
+                    {y == null
+                      ? '—'
+                      : displayMode === 'pct'
+                        ? formatPct(((y - base) / base) * 100)
+                        : y.toFixed(2)}
                   </Typography>
                   {pct != null && (
                     <Typography
@@ -519,6 +526,9 @@ export function DashboardPage() {
   )
   const [chartType, setChartType] = useState<PriceChartType>(
     () => initialSettings.chartType ?? 'line',
+  )
+  const [chartDisplayMode, setChartDisplayMode] = useState<'value' | 'pct'>(
+    () => initialSettings.chartDisplayMode ?? 'value',
   )
   const [symbolData, setSymbolData] = useState<SymbolSeriesResponse | null>(null)
   const [loadingSymbolData, setLoadingSymbolData] = useState(false)
@@ -917,6 +927,7 @@ export function DashboardPage() {
 	      range: String(range ?? ''),
 	      symbolRange: String(symbolRange ?? ''),
 	      chartType,
+        chartDisplayMode,
 	      selectedSymbol,
 	      indicatorRows,
 	      signalDsl,
@@ -924,6 +935,7 @@ export function DashboardPage() {
 	    })
 	  }, [
     chartType,
+    chartDisplayMode,
     includeHoldings,
     holdingsBrokers,
     indicatorRows,
@@ -1313,9 +1325,21 @@ export function DashboardPage() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Dashboard
-      </Typography>
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2, flexWrap: 'wrap' }}>
+        <Typography variant="h4">Dashboard</Typography>
+        <Box sx={{ flex: 1 }} />
+        <TextField
+          label="Chart display"
+          select
+          size="small"
+          value={chartDisplayMode}
+          onChange={(e) => setChartDisplayMode(e.target.value as 'value' | 'pct')}
+          sx={{ minWidth: 160 }}
+        >
+          <MenuItem value="value">Value</MenuItem>
+          <MenuItem value="pct">%</MenuItem>
+        </TextField>
+      </Stack>
 
       <Box
         sx={{
@@ -1326,7 +1350,7 @@ export function DashboardPage() {
       >
         <Paper
           variant="outlined"
-          sx={{ p: 2, flexGrow: { xs: 1, lg: 3 }, flexBasis: 0, minWidth: 0 }}
+          sx={{ p: 2, flexGrow: { xs: 1, lg: 1 }, flexBasis: 0, minWidth: 0 }}
         >
           <Stack spacing={1.5}>
 	            <Stack direction="row" spacing={2} alignItems="center" sx={{ flexWrap: 'wrap' }}>
@@ -1514,7 +1538,7 @@ export function DashboardPage() {
                 </Stack>
               )}
 
-              <MultiLineChart series={chartSeries} height={300} />
+              <MultiLineChart series={chartSeries} height={300} displayMode={chartDisplayMode} />
 
               {summary.length > 0 && (
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 1 }}>
@@ -1545,7 +1569,7 @@ export function DashboardPage() {
 
         <Paper
           variant="outlined"
-          sx={{ p: 2, flexGrow: { xs: 1, lg: 2 }, flexBasis: 0, minWidth: 0 }}
+          sx={{ p: 2, flexGrow: { xs: 1, lg: 1 }, flexBasis: 0, minWidth: 0 }}
         >
             <Stack spacing={1.5}>
               <Stack direction="row" spacing={2} alignItems="center">
@@ -1673,6 +1697,7 @@ export function DashboardPage() {
                 chartType={chartType}
                 overlays={chartOverlays}
                 markers={signalMarkers}
+                displayMode={chartDisplayMode}
                 height={340}
               />
 
@@ -2080,7 +2105,7 @@ export function DashboardPage() {
       </Box>
 
       <Box sx={{ mt: 2 }}>
-        <HoldingsSummaryHistoryPanel />
+        <HoldingsSummaryHistoryPanel chartDisplayMode={chartDisplayMode} />
       </Box>
 
       <Dialog

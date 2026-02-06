@@ -12,10 +12,18 @@ import TableHead from '@mui/material/TableHead'
 import TableRow from '@mui/material/TableRow'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
-import Autocomplete from '@mui/material/Autocomplete'
 import MenuItem from '@mui/material/MenuItem'
-import { alpha, useTheme } from '@mui/material/styles'
-import { useEffect, useMemo, useState } from 'react'
+import { useTheme } from '@mui/material/styles'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ColorType,
+  CrosshairMode,
+  PriceScaleMode,
+  createChart,
+  type BusinessDay,
+  type IChartApi,
+  type LineData,
+} from 'lightweight-charts'
 
 import {
   captureHoldingsSummarySnapshot,
@@ -23,12 +31,6 @@ import {
   fetchHoldingsSummarySnapshotsMeta,
   type HoldingsSummarySnapshot,
 } from '../services/holdingsSummarySnapshots'
-
-type ChartPoint = { x: number; y: number }
-
-function parseDateMs(dateIso: string): number {
-  return Date.parse(`${dateIso}T00:00:00Z`)
-}
 
 function formatCompactInr(value: number): string {
   if (!Number.isFinite(value)) return '—'
@@ -48,223 +50,112 @@ function formatPct(value: number | null | undefined, digits = 2): string {
   return `${Number(value).toFixed(digits)}%`
 }
 
-function ValueLineChart({
-  series,
-  height = 260,
-}: {
-  series: Array<{ label: string; color: string; points: ChartPoint[] }>
-  height?: number
-}) {
-  const theme = useTheme()
-  const [hoverX, setHoverX] = useState<number | null>(null)
-  const width = 980
-  const paddingLeft = 78
-  const paddingRight = 18
-  const paddingTop = 16
-  const paddingBottom = 34
-
-  const all = series.flatMap((s) => s.points)
-  if (all.length < 2) {
-    return (
-      <Typography variant="body2" color="text.secondary">
-        No chart data yet.
-      </Typography>
-    )
-  }
-
-  const xs = all.map((p) => p.x)
-  const ys = all.map((p) => p.y)
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs)
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys)
-  const spanX = maxX - minX || 1
-  const spanY = maxY - minY || 1
-
-  const scaleX = (x: number) =>
-    paddingLeft + ((x - minX) / spanX) * (width - paddingLeft - paddingRight)
-  const scaleY = (y: number) =>
-    height -
-    paddingBottom -
-    ((y - minY) / spanY) * (height - paddingTop - paddingBottom)
-
-  const paths = series
-    .map((s) => {
-      const d = s.points
-        .slice()
-        .sort((a, b) => a.x - b.x)
-        .map((p, i) => {
-          const x = scaleX(p.x)
-          const y = scaleY(p.y)
-          return `${i === 0 ? 'M' : 'L'} ${x} ${y}`
-        })
-        .join(' ')
-      return { ...s, d }
-    })
-    .filter((p) => p.d.length > 0)
-
-  const msPerDay = 24 * 60 * 60 * 1000
-  const spanDays = Math.max(1, Math.round((maxX - minX) / msPerDay))
-  const uniqX = Array.from(new Set(all.map((p) => p.x))).sort((a, b) => a - b)
-  const desiredXTicks = spanDays <= 7 ? 8 : spanDays <= 31 ? 6 : 6
-  const step = Math.max(1, Math.floor(uniqX.length / Math.max(2, desiredXTicks - 1)))
-  const xTicks: number[] = []
-  for (let i = 0; i < uniqX.length; i += step) xTicks.push(uniqX[i]!)
-  if (xTicks[0] !== uniqX[0]) xTicks.unshift(uniqX[0]!)
-  if (xTicks[xTicks.length - 1] !== uniqX[uniqX.length - 1]) xTicks.push(uniqX[uniqX.length - 1]!)
-
-  const formatDateLabel = (ms: number) => {
-    const d = new Date(ms)
-    if (spanDays <= 31) {
-      return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
-    }
-    return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
-  }
-
-  let hoverDateX: number | null = null
-  if (hoverX != null && uniqX.length > 0) {
-    let lo = 0
-    let hi = uniqX.length - 1
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi) / 2)
-      if (uniqX[mid]! < hoverX) lo = mid + 1
-      else hi = mid
-    }
-    const idx = lo
-    const prev = idx > 0 ? idx - 1 : idx
-    const a = uniqX[prev]!
-    const b = uniqX[idx]!
-    hoverDateX = Math.abs(a - hoverX) <= Math.abs(b - hoverX) ? a : b
-  }
-
-  const hoverSummary =
-    hoverDateX == null
-      ? null
-      : {
-          dateLabel: formatDateLabel(hoverDateX),
-          items: paths
-            .map((s) => {
-              const p = s.points.find((pt) => pt.x === hoverDateX)
-              return { label: s.label, color: s.color, y: p?.y ?? null }
-            })
-            .filter((x) => x.y != null),
-        }
-
-  const yTicks = 4
-  const grid = Array.from({ length: yTicks + 1 }).map((_, i) => {
-    const t = i / yTicks
-    const y = paddingTop + t * (height - paddingTop - paddingBottom)
-    const yValue = maxY - t * spanY
-    return { y, yValue }
-  })
-
-  return (
-    <Box sx={{ width: '100%', overflowX: 'auto' }}>
-      <svg
-        width={width}
-        height={height}
-        style={{ display: 'block' }}
-        onMouseMove={(e) => {
-          const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-          const x = e.clientX - rect.left
-          setHoverX(((x - paddingLeft) / (width - paddingLeft - paddingRight)) * spanX + minX)
-        }}
-        onMouseLeave={() => setHoverX(null)}
-      >
-        {grid.map((g) => (
-          <g key={g.y}>
-            <line
-              x1={paddingLeft}
-              x2={width - paddingRight}
-              y1={g.y}
-              y2={g.y}
-              stroke={alpha(theme.palette.text.primary, 0.08)}
-              strokeWidth={1}
-            />
-            <text
-              x={paddingLeft - 10}
-              y={g.y + 4}
-              textAnchor="end"
-              fontSize={11}
-              fill={alpha(theme.palette.text.primary, 0.7)}
-            >
-              {formatCompactInr(g.yValue)}
-            </text>
-          </g>
-        ))}
-
-        {xTicks.map((x, i) => (
-          <text
-            key={x}
-            x={scaleX(x)}
-            y={height - 10}
-            textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}
-            fontSize={11}
-            fill={alpha(theme.palette.text.primary, 0.7)}
-          >
-            {formatDateLabel(x)}
-          </text>
-        ))}
-
-        {paths.map((p) => (
-          <path
-            key={p.label}
-            d={p.d}
-            fill="none"
-            stroke={p.color}
-            strokeWidth={2.2}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        ))}
-
-        {hoverDateX != null && (
-          <line
-            x1={scaleX(hoverDateX)}
-            x2={scaleX(hoverDateX)}
-            y1={paddingTop}
-            y2={height - paddingBottom}
-            stroke={alpha(theme.palette.text.primary, 0.25)}
-            strokeWidth={1}
-          />
-        )}
-      </svg>
-
-      {hoverSummary && hoverSummary.items.length > 0 && (
-        <Box
-          sx={{
-            mt: 1,
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 1.2,
-            alignItems: 'center',
-          }}
-        >
-          <Typography variant="caption" color="text.secondary">
-            {hoverSummary.dateLabel}
-          </Typography>
-          {hoverSummary.items.map((it) => (
-            <Box key={it.label} sx={{ display: 'flex', gap: 0.6, alignItems: 'center' }}>
-              <Box sx={{ width: 10, height: 10, borderRadius: 10, bgcolor: it.color }} />
-              <Typography variant="caption" color="text.secondary">
-                {it.label}: {formatCompactInr(Number(it.y))}
-              </Typography>
-            </Box>
-          ))}
-        </Box>
-      )}
-    </Box>
-  )
+function toBusinessDay(dateIso: string): BusinessDay {
+  const [y, m, d] = String(dateIso || '').split('-').map((v) => Number(v))
+  return { year: y || 1970, month: m || 1, day: d || 1 }
 }
 
-const CHART_FIELDS: Array<{ key: keyof HoldingsSummarySnapshot; label: string }> = [
-  { key: 'equity_value', label: 'Equity value' },
-  { key: 'funds_available', label: 'Funds (cash)' },
-  { key: 'account_value', label: 'Account value (cash + equity)' },
-  { key: 'invested', label: 'Invested' },
-]
+function HoldingsLineChart({
+  series,
+  height = 260,
+  displayMode = 'value',
+  leftScaleVisible = false,
+}: {
+  series: Array<{ label: string; color: string; data: LineData[]; priceScaleId?: 'left' | 'right' }>
+  height?: number
+  displayMode?: 'value' | 'pct'
+  leftScaleVisible?: boolean
+}) {
+  const theme = useTheme()
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const seriesRefs = useRef<any[]>([])
 
-export function HoldingsSummaryHistoryPanel() {
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const chart = createChart(el, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: theme.palette.text.secondary,
+        fontFamily: theme.typography.fontFamily,
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: 'transparent' },
+        horzLines: {
+          color:
+            theme.palette.mode === 'dark'
+              ? 'rgba(255,255,255,0.08)'
+              : 'rgba(0,0,0,0.06)',
+        },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      leftPriceScale: { visible: leftScaleVisible, borderColor: 'transparent' },
+      rightPriceScale: { visible: true, borderColor: 'transparent' },
+      timeScale: { borderColor: 'transparent', timeVisible: true },
+    })
+
+    chartRef.current = chart
+    seriesRefs.current = []
+
+    const resizeObserver = new ResizeObserver(() => {
+      chart.timeScale().fitContent()
+    })
+    resizeObserver.observe(el)
+
+    return () => {
+      resizeObserver.disconnect()
+      chart.remove()
+      chartRef.current = null
+      seriesRefs.current = []
+    }
+  }, [leftScaleVisible, theme])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    const mode = displayMode === 'pct' ? PriceScaleMode.Percentage : PriceScaleMode.Normal
+    chart.applyOptions({
+      leftPriceScale: { mode },
+      rightPriceScale: { mode },
+    })
+  }, [displayMode])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+
+    for (const s of seriesRefs.current) chart.removeSeries(s)
+    seriesRefs.current = []
+
+    for (const s of series) {
+      const line = chart.addLineSeries({
+        color: s.color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        priceScaleId: s.priceScaleId || 'right',
+      })
+      seriesRefs.current.push(line)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      line.setData(s.data as any)
+    }
+    chart.timeScale().fitContent()
+  }, [series])
+
+  return <Box ref={containerRef} sx={{ width: '100%', height }} />
+}
+
+export function HoldingsSummaryHistoryPanel({
+  chartDisplayMode = 'value',
+}: {
+  chartDisplayMode?: 'value' | 'pct'
+}) {
   const theme = useTheme()
   const [brokerName, setBrokerName] = useState('zerodha')
   const [meta, setMeta] = useState<{ today: string; min_date?: string | null; max_date?: string | null } | null>(null)
@@ -276,12 +167,6 @@ export function HoldingsSummaryHistoryPanel() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [autoCapture, setAutoCapture] = useState(true)
-
-  const [selectedFields, setSelectedFields] = useState<(keyof HoldingsSummarySnapshot)[]>([
-    'equity_value',
-    'funds_available',
-    'account_value',
-  ])
 
   const loadMeta = async (): Promise<{ min: string; max: string }> => {
     const m = await fetchHoldingsSummarySnapshotsMeta({ broker_name: brokerName })
@@ -358,33 +243,40 @@ export function HoldingsSummaryHistoryPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brokerName])
 
-  const chartSeries = useMemo(() => {
-    const colorMap: Record<string, string> = {
-      equity_value: theme.palette.info.main,
-      funds_available: theme.palette.success.main,
-      account_value: theme.palette.warning.main,
-      invested: theme.palette.secondary.main,
+  const chartData = useMemo(() => {
+    const sorted = rows
+      .slice()
+      .sort((a, b) =>
+        String(a.as_of_date || '').localeCompare(String(b.as_of_date || '')),
+      )
+
+    const accountSeries: LineData[] = []
+    const equitySeries: LineData[] = []
+    const fundsSeries: LineData[] = []
+
+    for (const r of sorted) {
+      const date = String(r.as_of_date || '').trim()
+      if (!date) continue
+      const time = toBusinessDay(date)
+
+      const account = r.account_value != null ? Number(r.account_value) : NaN
+      if (Number.isFinite(account)) {
+        accountSeries.push({ time, value: account })
+      }
+
+      const equity = r.equity_value != null ? Number(r.equity_value) : NaN
+      if (Number.isFinite(equity)) {
+        equitySeries.push({ time, value: equity })
+      }
+
+      const funds = r.funds_available != null ? Number(r.funds_available) : NaN
+      if (Number.isFinite(funds)) {
+        fundsSeries.push({ time, value: funds })
+      }
     }
 
-    return selectedFields
-      .map((key) => {
-        const label = CHART_FIELDS.find((f) => f.key === key)?.label || String(key)
-        const points: ChartPoint[] = rows
-          .map((r) => {
-            const yRaw = (r as any)[key] as unknown
-            const y = yRaw != null ? Number(yRaw) : NaN
-            if (!Number.isFinite(y)) return null
-            return { x: parseDateMs(r.as_of_date), y }
-          })
-          .filter(Boolean) as ChartPoint[]
-        return {
-          label,
-          color: colorMap[String(key)] || theme.palette.primary.main,
-          points,
-        }
-      })
-      .filter((s) => s.points.length > 0)
-  }, [rows, selectedFields, theme.palette])
+    return { accountSeries, equitySeries, fundsSeries }
+  }, [rows])
 
   const minDate = meta?.min_date || meta?.today || ''
   const maxDate = meta?.today || ''
@@ -455,19 +347,56 @@ export function HoldingsSummaryHistoryPanel() {
         {loading && <CircularProgress size={18} />}
       </Box>
 
-      <Box sx={{ mb: 2 }}>
-        <Autocomplete
-          multiple
-          size="small"
-          options={CHART_FIELDS}
-          getOptionLabel={(opt) => opt.label}
-          value={CHART_FIELDS.filter((f) => selectedFields.includes(f.key))}
-          onChange={(_e, next) => setSelectedFields(next.map((x) => x.key))}
-          renderInput={(params) => <TextField {...params} label="Chart columns" />}
-        />
+      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', lg: 'row' }, gap: 2, mb: 2 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            Account value
+          </Typography>
+          <HoldingsLineChart
+            height={260}
+            displayMode={chartDisplayMode}
+            series={[
+              {
+                label: 'Account value (cash + equity)',
+                color: theme.palette.warning.main,
+                data: chartData.accountSeries,
+              },
+            ]}
+          />
+        </Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            Equity vs Funds (dual axis)
+          </Typography>
+          <HoldingsLineChart
+            height={260}
+            displayMode={chartDisplayMode}
+            leftScaleVisible
+            series={[
+              {
+                label: 'Equity value',
+                color: theme.palette.info.main,
+                data: chartData.equitySeries,
+                priceScaleId: 'left',
+              },
+              {
+                label: 'Funds (cash)',
+                color: theme.palette.success.main,
+                data: chartData.fundsSeries,
+                priceScaleId: 'right',
+              },
+            ]}
+          />
+          <Typography variant="caption" color="text.secondary">
+            Equity uses the left y-axis; Funds (cash) uses the right y-axis.
+          </Typography>
+          {chartDisplayMode === 'pct' && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              % mode is relative to the first visible value on each axis (Equity and Funds are scaled independently).
+            </Typography>
+          )}
+        </Box>
       </Box>
-
-      <ValueLineChart series={chartSeries} />
 
       <Box sx={{ mt: 2 }}>
         <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>
