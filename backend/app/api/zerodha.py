@@ -548,20 +548,38 @@ def zerodha_status(
 
     updated_at = conn.updated_at.isoformat() if conn.updated_at else None
 
-    last = (
-        db.query(SystemEvent)
-        .filter(SystemEvent.category == "zerodha_postback")
-        .order_by(SystemEvent.created_at.desc())  # type: ignore[arg-type]
-        .limit(1)
-        .first()
-    )
-    last_postback_at = last.created_at.isoformat() if last is not None else None
-    last_postback_details: dict[str, Any] | None = None
-    if last is not None and getattr(last, "details", None):
+    def _get_last_event(category: str) -> SystemEvent | None:
+        return (
+            db.query(SystemEvent)
+            .filter(SystemEvent.category == category)
+            .order_by(SystemEvent.created_at.desc())  # type: ignore[arg-type]
+            .limit(1)
+            .first()
+        )
+
+    def _parse_details(ev: SystemEvent | None) -> dict[str, Any] | None:
+        if ev is None or not getattr(ev, "details", None):
+            return None
         try:
-            last_postback_details = json.loads(last.details)  # type: ignore[arg-type]
+            return json.loads(ev.details)  # type: ignore[arg-type]
         except Exception:
-            last_postback_details = None
+            return None
+
+    last_ok = _get_last_event("zerodha_postback")
+    last_postback_at = last_ok.created_at.isoformat() if last_ok is not None else None
+    last_postback_details = _parse_details(last_ok)
+
+    last_reject = _get_last_event("zerodha_postback_error")
+    last_postback_reject_at = (
+        last_reject.created_at.isoformat() if last_reject is not None else None
+    )
+    last_postback_reject_details = _parse_details(last_reject)
+
+    last_noise = _get_last_event("zerodha_postback_noise")
+    last_postback_noise_at = (
+        last_noise.created_at.isoformat() if last_noise is not None else None
+    )
+    last_postback_noise_details = _parse_details(last_noise)
 
     try:
         kite = _get_kite_for_user(db, settings, user)
@@ -584,6 +602,10 @@ def zerodha_status(
             "postback_path": "/api/zerodha/postback",
             "last_postback_at": last_postback_at,
             "last_postback_details": last_postback_details,
+            "last_postback_reject_at": last_postback_reject_at,
+            "last_postback_reject_details": last_postback_reject_details,
+            "last_postback_noise_at": last_postback_noise_at,
+            "last_postback_noise_details": last_postback_noise_details,
         }
     except Exception as exc:  # pragma: no cover - defensive
         return {
@@ -593,6 +615,10 @@ def zerodha_status(
             "postback_path": "/api/zerodha/postback",
             "last_postback_at": last_postback_at,
             "last_postback_details": last_postback_details,
+            "last_postback_reject_at": last_postback_reject_at,
+            "last_postback_reject_details": last_postback_reject_details,
+            "last_postback_noise_at": last_postback_noise_at,
+            "last_postback_noise_details": last_postback_noise_details,
         }
 
 

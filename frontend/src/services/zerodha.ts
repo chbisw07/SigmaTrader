@@ -7,6 +7,10 @@ export type ZerodhaStatus = {
   postback_path?: string
   last_postback_at?: string | null
   last_postback_details?: unknown
+  last_postback_reject_at?: string | null
+  last_postback_reject_details?: unknown
+  last_postback_noise_at?: string | null
+  last_postback_noise_details?: unknown
 }
 
 export type ZerodhaMargins = {

@@ -888,6 +888,27 @@ export function SettingsPage() {
                   const lastPretty = last
                     ? formatInTimeZone(last, displayTimeZone === 'LOCAL' ? undefined : displayTimeZone)
                     : null
+                  const lastReject = brokerStatus?.last_postback_reject_at
+                  const lastRejectPretty = lastReject
+                    ? formatInTimeZone(
+                        lastReject,
+                        displayTimeZone === 'LOCAL' ? undefined : displayTimeZone,
+                      )
+                    : null
+                  const lastNoise = brokerStatus?.last_postback_noise_at
+                  const lastNoisePretty = lastNoise
+                    ? formatInTimeZone(
+                        lastNoise,
+                        displayTimeZone === 'LOCAL' ? undefined : displayTimeZone,
+                      )
+                    : null
+
+                  const rejectDetails = brokerStatus?.last_postback_reject_details
+                  const rejectDetailsText =
+                    rejectDetails != null ? JSON.stringify(rejectDetails, null, 2) : ''
+                  const noiseDetails = brokerStatus?.last_postback_noise_details
+                  const noiseDetailsText =
+                    noiseDetails != null ? JSON.stringify(noiseDetails, null, 2) : ''
 
                   return (
                     <>
@@ -926,6 +947,43 @@ export function SettingsPage() {
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                         {lastPretty ? `Last postback received: ${lastPretty}` : 'Last postback received: (none yet)'}
                       </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {lastRejectPretty
+                          ? `Last postback rejected: ${lastRejectPretty}`
+                          : 'Last postback rejected: (none)'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                        {lastNoisePretty
+                          ? `Last postback ignored (missing signature): ${lastNoisePretty}`
+                          : 'Last postback ignored (missing signature): (none)'}
+                      </Typography>
+
+                      {(rejectDetailsText || noiseDetailsText) && (
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start', mt: 1 }}>
+                          {rejectDetailsText && (
+                            <TextField
+                              size="small"
+                              label="Last rejection details"
+                              value={rejectDetailsText}
+                              sx={{ flex: 1, minWidth: 340 }}
+                              multiline
+                              minRows={4}
+                              inputProps={{ readOnly: true, style: { fontFamily: 'monospace' } }}
+                            />
+                          )}
+                          {noiseDetailsText && (
+                            <TextField
+                              size="small"
+                              label="Last ignored postback details"
+                              value={noiseDetailsText}
+                              sx={{ flex: 1, minWidth: 340 }}
+                              multiline
+                              minRows={4}
+                              inputProps={{ readOnly: true, style: { fontFamily: 'monospace' } }}
+                            />
+                          )}
+                        </Box>
+                      )}
                     </>
                   )
                 })()}
