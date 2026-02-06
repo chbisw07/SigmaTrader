@@ -1123,6 +1123,11 @@ def list_holdings(
         symbol = entry.get("tradingsymbol")
         exchange = (entry.get("exchange") or "NSE").upper()
         qty = entry.get("quantity", 0)
+        # Zerodha holdings may report unsettled T1 shares separately; those are
+        # part of the user's effective equity exposure and should be reflected
+        # in holdings summary and portfolio valuation intraday (matches how
+        # portfolio apps compute "current value" before T1 settles next day).
+        t1_qty = entry.get("t1_quantity", 0)
         avg = entry.get("average_price", 0)
 
         ltp_info = ltp_map.get((exchange, symbol), {})
@@ -1133,7 +1138,7 @@ def list_holdings(
             continue
 
         try:
-            qty_f = float(qty)
+            qty_f = float(qty) + float(t1_qty or 0)
             avg_f = float(avg)
             last_f = float(last) if last is not None else None
         except (TypeError, ValueError):
