@@ -1307,8 +1307,8 @@ export function HoldingsPage() {
 
     let invested = 0
     let currentValue = 0
-    let todayWeightedReturn = 0
-    let todayReturnWeight = 0
+    let todayComparablePrevValue = 0
+    let todayComparableCurrentValue = 0
 
     let overallWinner = 0
     let overallLoser = 0
@@ -1351,8 +1351,17 @@ export function HoldingsPage() {
         else if (todayPnlPct < 0) todayLoser += 1
 
         if (Number.isFinite(current) && current > 0) {
-          todayWeightedReturn += (todayPnlPct / 100) * current
-          todayReturnWeight += current
+          // Prefer computing the portfolio-level "today" return using value
+          // deltas (prev-close value vs current value), rather than a weighted
+          // average of per-holding % returns (which can skew when weights shift).
+          const denom = 1 + todayPnlPct / 100
+          if (Number.isFinite(denom) && denom > 0) {
+            const prevValue = current / denom
+            if (Number.isFinite(prevValue) && prevValue > 0) {
+              todayComparablePrevValue += prevValue
+              todayComparableCurrentValue += current
+            }
+          }
         }
       }
     }
@@ -1360,7 +1369,11 @@ export function HoldingsPage() {
     const totalPnlPct =
       invested > 0 ? ((currentValue - invested) / invested) * 100 : null
     const todayPnlPct =
-      todayReturnWeight > 0 ? (todayWeightedReturn / todayReturnWeight) * 100 : null
+      todayComparablePrevValue > 0
+        ? ((todayComparableCurrentValue - todayComparablePrevValue) /
+            todayComparablePrevValue) *
+          100
+        : null
 
     const overallWinRate =
       overallComparable > 0 ? (overallWinner / overallComparable) * 100 : null
@@ -1577,7 +1590,6 @@ export function HoldingsPage() {
       beta: alphaBeta.beta,
     }
   }, [benchmarkHistory, holdings, riskFreeRatePct])
-
 
   const formatInrCompact = useCallback((value: number | null) => {
     if (value == null || !Number.isFinite(value)) return '—'
