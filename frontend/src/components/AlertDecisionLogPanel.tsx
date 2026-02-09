@@ -18,6 +18,36 @@ import { useNavigate } from 'react-router-dom'
 
 import { fetchAlertDecisionLog, type AlertDecisionLogRow } from '../services/riskEngine'
 
+function formatReasons(raw: string | null | undefined): string {
+  const s = (raw ?? '').trim()
+  if (!s) return ''
+
+  try {
+    const parsed = JSON.parse(s) as unknown
+    if (Array.isArray(parsed)) {
+      const items = parsed
+        .map((v) => {
+          if (v == null) return ''
+          if (typeof v === 'string') return v.trim()
+          return JSON.stringify(v)
+        })
+        .filter(Boolean)
+      return items.length ? items.join('; ') : ''
+    }
+  } catch {
+    // best-effort: treat as plain text
+  }
+
+  // Fallback for strings like: ["a","b"]
+  if (s.startsWith('[') && s.endsWith(']')) {
+    const inner = s.slice(1, -1).trim()
+    if (!inner) return ''
+    return inner.replaceAll(/^"|"$/g, '').replaceAll('","', '; ')
+  }
+
+  return s
+}
+
 export function AlertDecisionLogPanel({
   title = 'Alert decision log',
   helpHash = 'alert-decision-log',
@@ -126,7 +156,7 @@ export function AlertDecisionLogPanel({
               </TableCell>
               <TableCell sx={{ maxWidth: 360 }}>
                 <Typography variant="caption" color="text.secondary">
-                  {r.reasons_json}
+                  {formatReasons(r.reasons_json)}
                 </Typography>
               </TableCell>
             </TableRow>
