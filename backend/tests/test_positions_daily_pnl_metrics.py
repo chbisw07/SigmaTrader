@@ -22,7 +22,7 @@ def setup_module() -> None:  # type: ignore[override]
     Base.metadata.create_all(bind=engine)
 
 
-def test_daily_positions_realised_pnl_is_only_for_closed_positions(
+def test_daily_positions_realised_pnl_is_derived_when_buy_and_sell_prices_exist(
     monkeypatch: Any,
 ) -> None:
     _ = monkeypatch  # keep signature consistent with other tests
@@ -82,6 +82,30 @@ def test_daily_positions_realised_pnl_is_only_for_closed_positions(
                 broker_name="zerodha",
                 as_of_date=as_of,
                 captured_at=datetime(2026, 1, 29, 9, 28, 0, tzinfo=UTC),
+                symbol="HDFCSILVER",
+                exchange="NSE",
+                product="CNC",
+                qty=-16.0,
+                avg_price=244.12,
+                pnl=0.0,
+                last_price=244.41,
+                close_price=244.0,
+                buy_qty=0.0,
+                buy_avg_price=315.06,
+                sell_qty=16.0,
+                sell_avg_price=244.12,
+                day_buy_qty=0.0,
+                day_buy_avg_price=None,
+                day_sell_qty=16.0,
+                day_sell_avg_price=244.12,
+                holding_qty=144.0,
+            )
+        )
+        session.add(
+            PositionSnapshot(
+                broker_name="zerodha",
+                as_of_date=as_of,
+                captured_at=datetime(2026, 1, 29, 9, 28, 0, tzinfo=UTC),
                 symbol="BSE",
                 exchange="NSE",
                 product="MIS",
@@ -114,7 +138,7 @@ def test_daily_positions_realised_pnl_is_only_for_closed_positions(
     )
     assert resp.status_code == 200
     rows = resp.json()
-    assert len(rows) == 3
+    assert len(rows) == 4
 
     amber = next(r for r in rows if r["symbol"] == "AMBER")
     assert amber["order_type"] == "BUY"
@@ -133,3 +157,10 @@ def test_daily_positions_realised_pnl_is_only_for_closed_positions(
     expected_pct = (expected_pnl / (2747.0 * 20.0)) * 100.0
     assert abs(bse["pnl_value"] - expected_pnl) < 1e-6
     assert abs(bse["pnl_pct"] - expected_pct) < 1e-6
+
+    hdfc = next(r for r in rows if r["symbol"] == "HDFCSILVER")
+    assert hdfc["order_type"] == "SELL"
+    expected_pnl = (244.12 - 315.06) * 16.0
+    expected_pct = (expected_pnl / (315.06 * 16.0)) * 100.0
+    assert abs(hdfc["pnl_value"] - expected_pnl) < 1e-6
+    assert abs(hdfc["pnl_pct"] - expected_pct) < 1e-6

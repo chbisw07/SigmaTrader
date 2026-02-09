@@ -368,15 +368,25 @@ def list_daily_positions(
         avg_price = float(r.avg_price or 0.0)
         close_price = float(r.close_price) if r.close_price is not None else None
 
-        # Realised P&L (trade-based): (avg_sell - avg_buy) * closed_qty.
-        # Show it whenever we have both averages and both buy/sell quantities.
+        # Realised P&L (trade-based): (avg_sell - avg_buy) * realised_qty.
+        #
+        # - Intraday / both-side trades: realised_qty = min(buy_qty, sell_qty).
+        # - Delivery sells against holdings: Zerodha can report sell details but
+        #   keep buy_qty at 0 even though we attach a holdings cost-basis via
+        #   `buy_avg_price`. In that case, treat the sell quantity as realised.
         if avg_buy is not None and avg_sell is not None:
             qty_buy = day_buy_qty if day_buy_qty > 0 else buy_qty
             qty_sell = day_sell_qty if day_sell_qty > 0 else sell_qty
-            closed_qty = min(qty_buy, qty_sell) if qty_buy > 0 and qty_sell > 0 else 0.0
-            if closed_qty > 0 and float(avg_buy) != 0.0:
-                pnl_value = (float(avg_sell) - float(avg_buy)) * float(closed_qty)
-                pnl_pct = (pnl_value / (float(avg_buy) * float(closed_qty))) * 100.0
+            realised_qty = (
+                min(qty_buy, qty_sell) if qty_buy > 0 and qty_sell > 0 else 0.0
+            )
+            if realised_qty <= 0 and qty_sell > 0:
+                holding_qty = float(r.holding_qty or 0.0) if r.holding_qty is not None else 0.0
+                if holding_qty > 0:
+                    realised_qty = float(qty_sell)
+            if realised_qty > 0 and float(avg_buy) != 0.0:
+                pnl_value = (float(avg_sell) - float(avg_buy)) * float(realised_qty)
+                pnl_pct = (pnl_value / (float(avg_buy) * float(realised_qty))) * 100.0
         pnl_qty = net_qty
         pnl_price_base = avg_price
 

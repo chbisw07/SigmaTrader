@@ -15,9 +15,11 @@ import Tabs from '@mui/material/Tabs'
 import TextField from '@mui/material/TextField'
 import MenuItem from '@mui/material/MenuItem'
 import Typography from '@mui/material/Typography'
+import Tooltip from '@mui/material/Tooltip'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mui/x-data-grid'
 import ClearIcon from '@mui/icons-material/Clear'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 
 import { AlertDecisionLogPanel } from '../components/AlertDecisionLogPanel'
 import {
@@ -75,6 +77,19 @@ const formatPct = (n: number | null | undefined) => {
 function PnlChip({ value }: { value: number }) {
   const color = value > 0 ? 'success' : value < 0 ? 'error' : 'default'
   return <Chip size="small" label={formatInr(value, { fractionDigits: 0 })} color={color as any} />
+}
+
+function HeaderWithTooltip({ label, tooltip }: { label: string; tooltip: string }) {
+  return (
+    <Stack direction="row" spacing={0.5} alignItems="center">
+      <span>{label}</span>
+      <Tooltip title={tooltip} arrow>
+        <span>
+          <InfoOutlinedIcon fontSize="small" sx={{ opacity: 0.7 }} />
+        </span>
+      </Tooltip>
+    </Stack>
+  )
 }
 
 export function PositionsPage() {
@@ -524,6 +539,12 @@ export function PositionsPage() {
       headerName: 'Traded Qty',
       width: 105,
       type: 'number',
+      renderHeader: () => (
+        <HeaderWithTooltip
+          label="Traded Qty"
+          tooltip="Total traded quantity (buy+sell) for the day. Realized P&L uses realized qty (typically min(buy_qty, sell_qty))."
+        />
+      ),
     },
     {
       field: 'avg_price',
@@ -548,9 +569,15 @@ export function PositionsPage() {
     },
     {
       field: 'pnl_value',
-      headerName: 'P&L',
-      width: 110,
+      headerName: 'Realized P&L',
+      width: 140,
       type: 'number',
+      renderHeader: () => (
+        <HeaderWithTooltip
+          label="Realized P&L"
+          tooltip="Realized P&L = (avg sell - avg buy) * realized qty. Realized qty is usually min(buy_qty, sell_qty); for delivery sells against holdings, it can be the sell qty."
+        />
+      ),
       valueGetter: (_value, row) => {
         const r = row as PositionSnapshot
         if (r.avg_buy_price == null || r.avg_sell_price == null) return null
@@ -562,9 +589,15 @@ export function PositionsPage() {
     },
     {
       field: 'pnl_pct',
-      headerName: 'P&L %',
-      width: 110,
+      headerName: 'Realized %',
+      width: 130,
       type: 'number',
+      renderHeader: () => (
+        <HeaderWithTooltip
+          label="Realized %"
+          tooltip="Realized % = Realized P&L / (avg buy * realized qty). Uses the same realized qty logic as Realized P&L."
+        />
+      ),
       valueGetter: (_value, row) => {
         const r = row as PositionSnapshot
         if (r.avg_buy_price == null || r.avg_sell_price == null) return null
