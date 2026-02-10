@@ -824,7 +824,7 @@ export function WaitingQueuePanel({
             <Button
               size="small"
               variant="outlined"
-              onClick={() => navigate('/queue?tab=risk')}
+              onClick={() => navigate('/queue?tab=managed_exits')}
             >
               Managed exits ({managedRiskCount})
             </Button>

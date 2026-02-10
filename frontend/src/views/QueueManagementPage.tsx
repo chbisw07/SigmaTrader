@@ -5,12 +5,13 @@ import Typography from '@mui/material/Typography'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { AlertDecisionLogPanel } from '../components/AlertDecisionLogPanel'
 import { ManagedExitsPanel } from './ManagedExitsPanel'
 import { OrdersPanel } from './OrdersPage'
 import { WaitingQueuePanel } from './QueuePage'
 import { TvAlertsPanel } from './TvAlertsPanel'
 
-type QueueTab = 'tv_alerts' | 'waiting' | 'orders' | 'risk'
+type QueueTab = 'tv_alerts' | 'waiting' | 'risk_mgmt' | 'orders' | 'managed_exits'
 
 function parseTab(value: string | null | undefined): QueueTab | null {
   const v = (value ?? '').trim().toLowerCase()
@@ -18,8 +19,29 @@ function parseTab(value: string | null | undefined): QueueTab | null {
     return 'tv_alerts'
   }
   if (v === 'waiting' || v === 'queue') return 'waiting'
+  if (
+    v === 'risk_mgmt' ||
+    v === 'risk-mgmt' ||
+    v === 'risk-management' ||
+    v === 'riskmanagement' ||
+    v === 'decision-log' ||
+    v === 'audit' ||
+    v === 'rm'
+  ) {
+    return 'risk_mgmt'
+  }
   if (v === 'orders') return 'orders'
-  if (v === 'risk' || v === 'managed' || v === 'managed-risk') return 'risk'
+  if (
+    v === 'managed' ||
+    v === 'managed_exits' ||
+    v === 'managed-exits' ||
+    v === 'exits' ||
+    v === 'managed-risk' ||
+    v === 'risk'
+  ) {
+    // `risk` kept for backward compatibility (historically mapped to "Managed exits")
+    return 'managed_exits'
+  }
   return null
 }
 
@@ -63,8 +85,9 @@ export function QueueManagementPage() {
       >
         <Tab value="tv_alerts" label="TV Alerts" />
         <Tab value="waiting" label="Waiting Queue" />
+        <Tab value="risk_mgmt" label="Risk management" />
         <Tab value="orders" label="Orders" />
-        <Tab value="risk" label="Managed exits" />
+        <Tab value="managed_exits" label="Managed exits" />
       </Tabs>
 
       <Box sx={{ display: tab === 'tv_alerts' ? 'block' : 'none' }}>
@@ -73,11 +96,20 @@ export function QueueManagementPage() {
       <Box sx={{ display: tab === 'waiting' ? 'block' : 'none' }}>
         <WaitingQueuePanel embedded active={tab === 'waiting'} />
       </Box>
+      <Box sx={{ display: tab === 'risk_mgmt' ? 'block' : 'none' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <AlertDecisionLogPanel
+            title="Alert decision log (execution layer)"
+            helpHash="alert-decision-log"
+            limit={200}
+          />
+        </Box>
+      </Box>
       <Box sx={{ display: tab === 'orders' ? 'block' : 'none' }}>
         <OrdersPanel embedded active={tab === 'orders'} />
       </Box>
-      <Box sx={{ display: tab === 'risk' ? 'block' : 'none' }}>
-        <ManagedExitsPanel embedded active={tab === 'risk'} />
+      <Box sx={{ display: tab === 'managed_exits' ? 'block' : 'none' }}>
+        <ManagedExitsPanel embedded active={tab === 'managed_exits'} />
       </Box>
     </Box>
   )

@@ -773,7 +773,7 @@ export const riskManagementGuide: HelpContext = {
             {
               type: 'bullets',
               items: [
-                'Positions → Risk management tab → Alert decision log (resolved product/profile/category + reasons)',
+                'Queue Management → Risk management tab → Alert decision log (resolved product/profile/category + reasons)',
                 'Orders page → Error column (REJECTED_RISK details)',
                 'System Events page → category=risk (structured details)',
               ],
