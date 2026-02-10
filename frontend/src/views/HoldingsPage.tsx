@@ -59,6 +59,7 @@ import { GoalImportDialog } from '../components/GoalImportDialog'
 
 import { createManualOrder, type DistanceMode, type RiskSpec } from '../services/orders'
 import { fetchMarketHistory, type CandlePoint } from '../services/marketData'
+import { fetchMarketQuotes } from '../services/marketQuotes'
 import { fetchDailyPositions, fetchHoldings, type Holding } from '../services/positions'
 import { fetchAngeloneStatus } from '../services/angelone'
 import { fetchMarginsForBroker } from '../services/brokerRuntime'
@@ -3185,15 +3186,76 @@ export function HoldingsPage() {
     const skippedHoldings: string[] = []
 
     for (const h of targets) {
-      const qty = computeQtyForHolding(h)
+      const needsPriceForSizing =
+        tradeSizeMode === 'AMOUNT' ||
+        tradeSizeMode === 'PCT_POSITION' ||
+        tradeSizeMode === 'PCT_PORTFOLIO'
+
+      let holdingForPlan = h
+      let qty = computeQtyForHolding(holdingForPlan)
+
+      if (
+        !isBulkTrade &&
+        needsPriceForSizing &&
+        (qty == null || qty <= 0)
+      ) {
+        const sizingPrice = getSizingPrice(holdingForPlan)
+        if (
+          sizingPrice == null ||
+          !Number.isFinite(sizingPrice) ||
+          sizingPrice <= 0
+        ) {
+        try {
+          const sym = (holdingForPlan.symbol || '').trim().toUpperCase()
+          const exch =
+            (holdingForPlan.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+          if (sym) {
+            const quotes = await fetchMarketQuotes([{ symbol: sym, exchange: exch }])
+            const q = quotes.find(
+              (it) =>
+                (it.symbol || '').trim().toUpperCase() === sym &&
+                ((it.exchange || 'NSE').trim().toUpperCase() || 'NSE') === exch,
+            )
+            const priceCandidate = q?.ltp ?? q?.prev_close ?? null
+            if (
+              priceCandidate != null &&
+              Number.isFinite(Number(priceCandidate)) &&
+              Number(priceCandidate) > 0
+            ) {
+              holdingForPlan = { ...holdingForPlan, last_price: Number(priceCandidate) }
+              qty = computeQtyForHolding(holdingForPlan)
+              setTradeHolding((prev) => {
+                if (!prev) return prev
+                const psym = (prev.symbol || '').trim().toUpperCase()
+                const pexch = (prev.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+                if (psym !== sym || pexch !== exch) return prev
+                const last = prev.last_price != null ? Number(prev.last_price) : null
+                if (last != null && Number.isFinite(last) && last > 0) return prev
+                return { ...prev, last_price: Number(priceCandidate) }
+              })
+            }
+          }
+        } catch {
+          // Ignore quote failures; we'll fall back to existing validation below.
+        }
+        }
+      }
+
       if (qty == null || qty <= 0) {
         if (isBulkTrade) {
           skippedHoldings.push(h.symbol)
           continue
         }
-        setTradeError(
-          `Could not compute a valid quantity for ${h.symbol}. Check sizing inputs.`,
-        )
+        if (needsPriceForSizing) {
+          const p = getSizingPrice(h)
+          if (p == null || !Number.isFinite(p) || p <= 0) {
+            setTradeError(
+              `Cannot compute quantity for ${h.symbol}: price is not available yet. Try again in a moment, switch sizing to Qty, or use a LIMIT order and enter a price.`,
+            )
+            return
+          }
+        }
+        setTradeError(`Could not compute a valid quantity for ${h.symbol}. Check sizing inputs.`)
         return
       }
 
@@ -3201,7 +3263,7 @@ export function HoldingsPage() {
         tradeOrderType === 'MARKET' || tradeOrderType === 'SL-M'
           ? null
           : isBulkTrade
-            ? getEffectivePrimaryPriceForHolding(h)
+            ? getEffectivePrimaryPriceForHolding(holdingForPlan)
             : priceNum
 
       if (
@@ -3220,7 +3282,7 @@ export function HoldingsPage() {
 
       let bracketPrice: number | null = null
       if (tradeBracketEnabled && mtpValue != null) {
-        const base = getEffectivePrimaryPriceForHolding(h)
+        const base = getEffectivePrimaryPriceForHolding(holdingForPlan)
         if (base == null || base <= 0) {
           if (isBulkTrade) {
             skippedHoldings.push(h.symbol)
@@ -3248,7 +3310,7 @@ export function HoldingsPage() {
         bracketPrice = Number(bracketPrice.toFixed(2))
       }
 
-      plans.push({ holding: h, qty, price: perHoldingPrice, bracketPrice })
+      plans.push({ holding: holdingForPlan, qty, price: perHoldingPrice, bracketPrice })
     }
 
     if (plans.length === 0) {
