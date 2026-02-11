@@ -7,7 +7,7 @@ import re
 from typing import Any, Dict
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -41,6 +41,10 @@ _KITE_SIGNATURE_HEADER_CANDIDATES = (
     "X-Kite-Postback-Signature",
     "X-Kite-Hmac-Sha256",
 )
+
+
+def _postback_corr_id(*, user_id: int) -> str:
+    return f"zerodha:{int(user_id)}"
 
 
 class ZerodhaConnectRequest(BaseModel):
@@ -374,9 +378,14 @@ def _handle_zerodha_postback(
             level="INFO",
             category="zerodha_postback",
             message="Zerodha postback received",
+            correlation_id=_postback_corr_id(user_id=int(conn.user_id)),
             details={
+                "user_id": int(conn.user_id),
+                "broker_user_id": broker_user_id,
                 "order_id": order_id or None,
                 "status": status_raw or None,
+                "order_timestamp": order_ts or None,
+                "has_checksum": bool(checksum),
                 "updated_order": updated_order,
                 "updated_positions": updated_positions,
             },
@@ -630,13 +639,17 @@ def zerodha_status(
     updated_at = conn.updated_at.isoformat() if conn.updated_at else None
 
     def _get_last_event(category: str) -> SystemEvent | None:
-        return (
+        corr_id = _postback_corr_id(user_id=int(user.id))
+        q = (
             db.query(SystemEvent)
             .filter(SystemEvent.category == category)
             .order_by(SystemEvent.created_at.desc())  # type: ignore[arg-type]
-            .limit(1)
-            .first()
         )
+        ev = q.filter(SystemEvent.correlation_id == corr_id).limit(1).first()
+        if ev is not None:
+            return ev
+        # Legacy fallback: older events were unscoped.
+        return q.filter(SystemEvent.correlation_id.is_(None)).limit(1).first()
 
     def _parse_details(ev: SystemEvent | None) -> dict[str, Any] | None:
         if ev is None or not getattr(ev, "details", None):
@@ -701,6 +714,107 @@ def zerodha_status(
             "last_postback_noise_at": last_postback_noise_at,
             "last_postback_noise_details": last_postback_noise_details,
         }
+
+
+class ZerodhaPostbackEventRead(BaseModel):
+    id: int
+    created_at: str
+    level: str
+    category: str
+    message: str
+    correlation_id: str | None = None
+    details: Dict[str, Any] | None = None
+    raw_details: str | None = None
+
+
+class ZerodhaPostbackClearResponse(BaseModel):
+    deleted: int
+
+
+def _parse_system_event_details(ev: SystemEvent) -> tuple[Dict[str, Any] | None, str | None]:
+    raw = getattr(ev, "details", None)
+    if not raw:
+        return None, None
+    try:
+        obj = json.loads(raw)  # type: ignore[arg-type]
+        return (obj if isinstance(obj, dict) else None), (None if isinstance(obj, dict) else str(raw))
+    except Exception:
+        return None, str(raw)
+
+
+@router.get("/postback/events", response_model=list[ZerodhaPostbackEventRead])
+def list_zerodha_postback_events(
+    limit: int = Query(50, ge=1, le=500),
+    include_ok: bool = Query(False),
+    include_error: bool = Query(True),
+    include_noise: bool = Query(True),
+    include_legacy: bool = Query(True),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ZerodhaPostbackEventRead]:
+    corr_id = _postback_corr_id(user_id=int(user.id))
+    cats: list[str] = []
+    if include_ok:
+        cats.append("zerodha_postback")
+    if include_error:
+        cats.append("zerodha_postback_error")
+    if include_noise:
+        cats.append("zerodha_postback_noise")
+
+    if not cats:
+        return []
+
+    q = db.query(SystemEvent).filter(SystemEvent.category.in_(cats))  # type: ignore[arg-type]
+    if include_legacy:
+        q = q.filter(
+            (SystemEvent.correlation_id == corr_id) | (SystemEvent.correlation_id.is_(None))
+        )
+    else:
+        q = q.filter(SystemEvent.correlation_id == corr_id)
+
+    rows = (
+        q.order_by(SystemEvent.created_at.desc())  # type: ignore[arg-type]
+        .limit(limit)
+        .all()
+    )
+
+    out: list[ZerodhaPostbackEventRead] = []
+    for ev in rows:
+        details, raw_details = _parse_system_event_details(ev)
+        out.append(
+            ZerodhaPostbackEventRead(
+                id=int(ev.id),
+                created_at=ev.created_at.isoformat(),
+                level=str(ev.level),
+                category=str(ev.category),
+                message=str(ev.message),
+                correlation_id=getattr(ev, "correlation_id", None),
+                details=details,
+                raw_details=raw_details,
+            )
+        )
+    return out
+
+
+@router.post("/postback/clear-failures", response_model=ZerodhaPostbackClearResponse)
+def clear_zerodha_postback_failures(
+    include_legacy: bool = Query(True),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ZerodhaPostbackClearResponse:
+    corr_id = _postback_corr_id(user_id=int(user.id))
+    cats = ["zerodha_postback_error", "zerodha_postback_noise"]
+    q = db.query(SystemEvent).filter(SystemEvent.category.in_(cats))  # type: ignore[arg-type]
+    if include_legacy:
+        q = q.filter(
+            (SystemEvent.correlation_id == corr_id) | (SystemEvent.correlation_id.is_(None))
+        )
+    else:
+        q = q.filter(SystemEvent.correlation_id == corr_id)
+
+    deleted = q.delete(synchronize_session=False)
+    db.commit()
+    return ZerodhaPostbackClearResponse(deleted=int(deleted or 0))
 
 
 @router.post("/sync-orders", response_model=SyncOrdersResponse)
@@ -797,6 +911,25 @@ async def _zerodha_postback_impl(
             if isinstance(ua, str) and len(ua) > 200:
                 ua = ua[:200]
 
+            corr_id: str | None = None
+            payload_user_id: str | None = None
+            try:
+                payload_user_id = str((payload or {}).get("user_id") or "").strip() or None
+                if payload_user_id:
+                    conn = (
+                        db.query(BrokerConnection)
+                        .filter(
+                            BrokerConnection.broker_name == "zerodha",
+                            BrokerConnection.broker_user_id == payload_user_id,
+                        )
+                        .order_by(BrokerConnection.updated_at.desc())
+                        .first()
+                    )
+                    if conn is not None:
+                        corr_id = _postback_corr_id(user_id=int(conn.user_id))
+            except Exception:
+                corr_id = None
+
             payload_keys: list[str] | None = None
             try:
                 if payload is not None:
@@ -820,6 +953,7 @@ async def _zerodha_postback_impl(
                 level=level,
                 category=category,
                 message=message,
+                correlation_id=corr_id,
                 details={
                     "status_code": int(exc.status_code),
                     "detail": getattr(exc, "detail", None),
@@ -831,6 +965,7 @@ async def _zerodha_postback_impl(
                     "user_agent": ua,
                     "body_len": int(len(body or b"")),
                     "content_type": request.headers.get("content-type") or None,
+                    "payload_user_id": payload_user_id,
                     "payload_keys": payload_keys,
                 },
             )

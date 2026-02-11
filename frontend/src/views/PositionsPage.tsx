@@ -1,4 +1,7 @@
 import Box from '@mui/material/Box'
+import Accordion from '@mui/material/Accordion'
+import AccordionDetails from '@mui/material/AccordionDetails'
+import AccordionSummary from '@mui/material/AccordionSummary'
 import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -19,6 +22,7 @@ import Tooltip from '@mui/material/Tooltip'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mui/x-data-grid'
 import ClearIcon from '@mui/icons-material/Clear'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 
 import {
@@ -35,6 +39,13 @@ import {
   type PositionSnapshot,
 } from '../services/positions'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
+import {
+  clearZerodhaPostbackFailures,
+  fetchZerodhaPostbackEvents,
+  fetchZerodhaStatus,
+  type ZerodhaPostbackEvent,
+  type ZerodhaStatus,
+} from '../services/zerodha'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 
@@ -71,6 +82,11 @@ const formatInr = (n: number | null | undefined, opts?: { fractionDigits?: numbe
 const formatPct = (n: number | null | undefined) => {
   if (n == null || !Number.isFinite(Number(n))) return '—'
   return `${(Number(n) * 100).toFixed(1)}%`
+}
+
+const asRecord = (v: unknown): Record<string, unknown> | null => {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  return v as Record<string, unknown>
 }
 
 function PnlChip({ value }: { value: number }) {
@@ -121,6 +137,14 @@ export function PositionsPage() {
   const [symbolQuery, setSymbolQuery] = useState<string>('')
   const [includeZero, setIncludeZero] = useState(true)
   const [startingCash, setStartingCash] = useState(0)
+
+  const [zerodhaStatus, setZerodhaStatus] = useState<ZerodhaStatus | null>(null)
+  const [postbackEvents, setPostbackEvents] = useState<ZerodhaPostbackEvent[]>([])
+  const [postbackLoading, setPostbackLoading] = useState(false)
+  const [postbackError, setPostbackError] = useState<string | null>(null)
+  const [postbackIncludeOk, setPostbackIncludeOk] = useState(false)
+  const [postbackSelectedId, setPostbackSelectedId] = useState<number | null>(null)
+  const [postbackClearing, setPostbackClearing] = useState(false)
 
   const _positionsKey = (rows: PositionSnapshot[]) => {
     if (!rows.length) return '0:0'
@@ -208,6 +232,44 @@ export function PositionsPage() {
     }
   }
 
+  const loadZerodhaPostbacks = async (opts?: { silent?: boolean }) => {
+    if (selectedBroker !== 'zerodha') return
+    if (!opts?.silent) setPostbackLoading(true)
+    setPostbackError(null)
+    try {
+      const [st, evs] = await Promise.all([
+        fetchZerodhaStatus(),
+        fetchZerodhaPostbackEvents({
+          limit: 100,
+          include_ok: postbackIncludeOk,
+          include_error: true,
+          include_noise: true,
+          include_legacy: true,
+        }),
+      ])
+      setZerodhaStatus(st)
+      setPostbackEvents(evs)
+      setPostbackSelectedId((prev) => (prev != null && evs.some((e) => e.id === prev) ? prev : null))
+    } catch (err) {
+      setPostbackError(err instanceof Error ? err.message : 'Failed to load Zerodha postback events')
+    } finally {
+      if (!opts?.silent) setPostbackLoading(false)
+    }
+  }
+
+  const handleClearPostbackFailures = async () => {
+    if (selectedBroker !== 'zerodha') return
+    setPostbackClearing(true)
+    try {
+      await clearZerodhaPostbackFailures({ include_legacy: true })
+      await loadZerodhaPostbacks()
+    } catch (err) {
+      setPostbackError(err instanceof Error ? err.message : 'Failed to clear postback failures')
+    } finally {
+      setPostbackClearing(false)
+    }
+  }
+
   useEffect(() => {
     void (async () => {
       try {
@@ -231,8 +293,13 @@ export function PositionsPage() {
     positionsKeyRef.current = ''
     analysisKeyRef.current = ''
     setError(null)
+    setZerodhaStatus(null)
+    setPostbackEvents([])
+    setPostbackError(null)
+    setPostbackSelectedId(null)
     void loadSnapshots()
     if (activeTab === 'analysis') void loadAnalysis()
+    if (selectedBroker === 'zerodha') void loadZerodhaPostbacks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBroker])
 
@@ -249,6 +316,21 @@ export function PositionsPage() {
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, activeTab, selectedBroker, startDate, endDate, symbolQuery, includeZero, startingCash])
+
+  useEffect(() => {
+    if (selectedBroker !== 'zerodha') return
+    const id = window.setInterval(() => {
+      void loadZerodhaPostbacks({ silent: true })
+    }, 10000)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBroker, postbackIncludeOk])
+
+  useEffect(() => {
+    if (selectedBroker !== 'zerodha') return
+    void loadZerodhaPostbacks({ silent: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [postbackIncludeOk])
 
   useEffect(() => {
     if (!symbolAutoApplyMountedRef.current) {
@@ -819,6 +901,83 @@ export function PositionsPage() {
     { field: 'tx_count', headerName: '# Tx', width: 90, type: 'number' },
   ]
 
+  const postbackRows = useMemo(() => {
+    return postbackEvents.map((e) => {
+      const details = asRecord(e.details)
+      const statusCode = details?.status_code
+      const detail = (details?.detail as string | undefined) || e.message
+      const kind =
+        e.category === 'zerodha_postback'
+          ? 'Received'
+          : e.category === 'zerodha_postback_error'
+            ? 'Rejected'
+            : e.category === 'zerodha_postback_noise'
+              ? 'Ignored'
+              : e.category
+      return {
+        id: e.id,
+        created_at: e.created_at,
+        kind,
+        level: e.level,
+        status_code: statusCode != null ? Number(statusCode) : null,
+        detail,
+      }
+    })
+  }, [postbackEvents])
+
+  const selectedPostbackEvent = useMemo(() => {
+    if (postbackSelectedId == null) return null
+    return postbackEvents.find((e) => e.id === postbackSelectedId) ?? null
+  }, [postbackEvents, postbackSelectedId])
+
+  const selectedPostbackDetailsText = useMemo(() => {
+    if (!selectedPostbackEvent) return ''
+    if (selectedPostbackEvent.details != null) {
+      return JSON.stringify(selectedPostbackEvent.details, null, 2)
+    }
+    if (selectedPostbackEvent.raw_details) {
+      return String(selectedPostbackEvent.raw_details)
+    }
+    return ''
+  }, [selectedPostbackEvent])
+
+  const postbackColumns: GridColDef[] = [
+    {
+      field: 'created_at',
+      headerName: 'Time',
+      width: 190,
+      valueFormatter: (v) => formatInDisplayTimeZone(String(v), displayTimeZone),
+    },
+    { field: 'kind', headerName: 'Type', width: 110 },
+    { field: 'status_code', headerName: 'Code', width: 90, type: 'number' },
+    { field: 'detail', headerName: 'Detail', flex: 1, minWidth: 260 },
+  ]
+
+  const postbackFailureCount = useMemo(() => {
+    let n = 0
+    for (const e of postbackEvents) {
+      if (e.category === 'zerodha_postback_error' || e.category === 'zerodha_postback_noise') n += 1
+    }
+    return n
+  }, [postbackEvents])
+
+  const postbackLastFailureAt = useMemo(() => {
+    const failures = postbackEvents.filter(
+      (e) => e.category === 'zerodha_postback_error' || e.category === 'zerodha_postback_noise',
+    )
+    if (failures.length === 0) return null
+    let maxTs = -1
+    let best: string | null = null
+    for (const e of failures) {
+      const ts = Date.parse(e.created_at)
+      if (Number.isFinite(ts) && ts > maxTs) {
+        maxTs = ts
+        best = e.created_at
+      }
+    }
+    return best ?? failures[0].created_at
+  }, [postbackEvents])
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -943,6 +1102,106 @@ export function PositionsPage() {
           </Button>
         </Stack>
       </Box>
+
+      {selectedBroker === 'zerodha' && (
+        <Accordion sx={{ mb: 2 }} defaultExpanded={false}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', flexWrap: 'wrap' }}>
+              <Typography variant="subtitle1" sx={{ flex: 1, minWidth: 220 }}>
+                Zerodha postback failures
+              </Typography>
+              <Chip
+                size="small"
+                label={`${postbackFailureCount} issue${postbackFailureCount === 1 ? '' : 's'}`}
+                color={postbackFailureCount > 0 ? 'warning' : 'default'}
+                variant={postbackFailureCount > 0 ? 'filled' : 'outlined'}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                {postbackLastFailureAt
+                  ? `Last: ${formatInDisplayTimeZone(postbackLastFailureAt, displayTimeZone)}`
+                  : 'Last: —'}
+              </Typography>
+            </Stack>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={postbackIncludeOk}
+                    onChange={(e) => setPostbackIncludeOk(e.target.checked)}
+                    disabled={postbackLoading || postbackClearing}
+                  />
+                }
+                label="Include received"
+                sx={{ mr: 0 }}
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => void loadZerodhaPostbacks()}
+                disabled={postbackLoading || postbackClearing}
+              >
+                {postbackLoading ? 'Loading…' : 'Refresh log'}
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                color="warning"
+                onClick={() => void handleClearPostbackFailures()}
+                disabled={postbackLoading || postbackClearing}
+              >
+                {postbackClearing ? 'Clearing…' : 'Clear failures'}
+              </Button>
+            </Box>
+
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+              {zerodhaStatus?.last_postback_at
+                ? `Last received: ${formatInDisplayTimeZone(zerodhaStatus.last_postback_at, displayTimeZone)}`
+                : 'Last received: (none yet)'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              {zerodhaStatus?.last_postback_reject_at
+                ? `Last rejected: ${formatInDisplayTimeZone(zerodhaStatus.last_postback_reject_at, displayTimeZone)}`
+                : 'Last rejected: (none)'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+              {zerodhaStatus?.last_postback_noise_at
+                ? `Last ignored (missing checksum/signature): ${formatInDisplayTimeZone(zerodhaStatus.last_postback_noise_at, displayTimeZone)}`
+                : 'Last ignored (missing checksum/signature): (none)'}
+            </Typography>
+
+            {postbackError && (
+              <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                {postbackError}
+              </Typography>
+            )}
+
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 1, alignItems: 'stretch' }}>
+              <Box sx={{ flex: 1, minWidth: 520, height: 260 }}>
+                <DataGrid
+                  rows={postbackRows}
+                  columns={postbackColumns}
+                  density="compact"
+                  disableRowSelectionOnClick
+                  hideFooter
+                  onRowClick={(params) => setPostbackSelectedId(Number(params.id))}
+                />
+              </Box>
+              <TextField
+                size="small"
+                label="Selected event details"
+                value={selectedPostbackDetailsText}
+                sx={{ flex: 1, minWidth: 340 }}
+                multiline
+                minRows={12}
+                inputProps={{ readOnly: true, style: { fontFamily: 'monospace' } }}
+                placeholder="Click an event row to view details"
+              />
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+      )}
 
       <Paper sx={{ mb: 2 }}>
         <Tabs

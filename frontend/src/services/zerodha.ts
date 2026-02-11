@@ -13,6 +13,17 @@ export type ZerodhaStatus = {
   last_postback_noise_details?: unknown
 }
 
+export type ZerodhaPostbackEvent = {
+  id: number
+  created_at: string
+  level: string
+  category: string
+  message: string
+  correlation_id?: string | null
+  details?: unknown
+  raw_details?: string | null
+}
+
 export type ZerodhaMargins = {
   available: number
   raw: unknown
@@ -55,6 +66,41 @@ export async function fetchZerodhaStatus(): Promise<ZerodhaStatus> {
     throw new Error(`Failed to fetch Zerodha status (${res.status})`)
   }
   return (await res.json()) as ZerodhaStatus
+}
+
+export async function fetchZerodhaPostbackEvents(params?: {
+  limit?: number
+  include_ok?: boolean
+  include_error?: boolean
+  include_noise?: boolean
+  include_legacy?: boolean
+}): Promise<ZerodhaPostbackEvent[]> {
+  const url = new URL('/api/zerodha/postback/events', window.location.origin)
+  if (params?.limit != null) url.searchParams.set('limit', String(params.limit))
+  if (params?.include_ok != null) url.searchParams.set('include_ok', params.include_ok ? 'true' : 'false')
+  if (params?.include_error != null) url.searchParams.set('include_error', params.include_error ? 'true' : 'false')
+  if (params?.include_noise != null) url.searchParams.set('include_noise', params.include_noise ? 'true' : 'false')
+  if (params?.include_legacy != null) url.searchParams.set('include_legacy', params.include_legacy ? 'true' : 'false')
+
+  const res = await fetch(url.toString(), { cache: 'no-store' })
+  if (!res.ok) {
+    throw new Error(`Failed to fetch Zerodha postback events (${res.status})`)
+  }
+  return (await res.json()) as ZerodhaPostbackEvent[]
+}
+
+export async function clearZerodhaPostbackFailures(params?: { include_legacy?: boolean }): Promise<{ deleted: number }> {
+  const url = new URL('/api/zerodha/postback/clear-failures', window.location.origin)
+  if (params?.include_legacy != null) url.searchParams.set('include_legacy', params.include_legacy ? 'true' : 'false')
+
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(
+      `Failed to clear Zerodha postback failures (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as { deleted: number }
 }
 
 export async function connectZerodha(requestToken: string): Promise<void> {

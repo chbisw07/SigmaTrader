@@ -28,6 +28,7 @@ import { RiskHelpDrawer } from '../components/RiskHelpDrawer'
 import { SETTINGS_HELP_BY_TAB } from '../help/risk/contexts'
 
 import {
+  clearZerodhaPostbackFailures,
   connectZerodha,
   fetchZerodhaLoginUrl,
   fetchZerodhaStatus,
@@ -386,6 +387,8 @@ export function SettingsPage() {
   const [marketStatus, setMarketStatus] = useState<MarketDataStatus | null>(null)
   const [requestToken, setRequestToken] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
+  const [clearingZerodhaPostbackFailures, setClearingZerodhaPostbackFailures] =
+    useState(false)
   const [angeloneClientCode, setAngeloneClientCode] = useState('')
   const [angelonePassword, setAngelonePassword] = useState('')
   const [angeloneTotp, setAngeloneTotp] = useState('')
@@ -668,6 +671,23 @@ export function SettingsPage() {
     }
   }
 
+  const handleClearZerodhaPostbackFailures = async () => {
+    setClearingZerodhaPostbackFailures(true)
+    try {
+      await clearZerodhaPostbackFailures({ include_legacy: true })
+      const status = await fetchZerodhaStatus()
+      setBrokerStatus(status)
+      setZerodhaError(null)
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to clear Zerodha postback failures'
+      setZerodhaError(msg)
+      recordAppLog('ERROR', msg)
+    } finally {
+      setClearingZerodhaPostbackFailures(false)
+    }
+  }
+
   const handleConnectAngelone = async () => {
     if (!angeloneClientCode.trim()) {
       setAngeloneError('Please enter AngelOne client code.')
@@ -943,6 +963,15 @@ export function SettingsPage() {
                         >
                           Copy
                         </Button>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          color="warning"
+                          onClick={() => void handleClearZerodhaPostbackFailures()}
+                          disabled={clearingZerodhaPostbackFailures}
+                        >
+                          {clearingZerodhaPostbackFailures ? 'Clearing…' : 'Clear failures'}
+                        </Button>
                       </Box>
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                         {lastPretty ? `Last postback received: ${lastPretty}` : 'Last postback received: (none yet)'}
@@ -954,8 +983,8 @@ export function SettingsPage() {
                       </Typography>
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
                         {lastNoisePretty
-                          ? `Last postback ignored (missing signature): ${lastNoisePretty}`
-                          : 'Last postback ignored (missing signature): (none)'}
+                          ? `Last postback ignored (missing checksum/signature): ${lastNoisePretty}`
+                          : 'Last postback ignored (missing checksum/signature): (none)'}
                       </Typography>
 
                       {(rejectDetailsText || noiseDetailsText) && (
