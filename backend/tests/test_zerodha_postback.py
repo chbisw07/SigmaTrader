@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
+import json
 import os
 from typing import Any
 from uuid import uuid4
@@ -17,8 +17,8 @@ from app.db.session import SessionLocal, engine
 from app.models import BrokerConnection, BrokerSecret, Order, User
 
 
-def _sign(body: bytes, secret: str) -> str:
-    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+def _checksum(*, order_id: str, order_timestamp: str, secret: str) -> str:
+    return hashlib.sha256((order_id + order_timestamp + secret).encode("utf-8")).hexdigest()
 
 
 def _seed_base() -> dict[str, Any]:
@@ -103,7 +103,7 @@ def _seed_base() -> dict[str, Any]:
         }
 
 
-def test_zerodha_postback_rejects_invalid_signature(monkeypatch) -> None:
+def test_zerodha_postback_rejects_invalid_checksum(monkeypatch) -> None:
     _seed_base()
     settings = get_settings()
 
@@ -112,14 +112,22 @@ def test_zerodha_postback_rejects_invalid_signature(monkeypatch) -> None:
     # Ensure we never hit the broker from this test.
     monkeypatch.setattr(mod, "_sync_positions_after_postback", lambda *_a, **_k: False)
 
-    body = b"order_id=230101000001234&status=COMPLETE"
+    payload = {
+        "user_id": "AB1234",
+        "order_id": "230101000001234",
+        "status": "COMPLETE",
+        "order_timestamp": "2026-02-10 14:38:28",
+        "checksum": "bad",
+    }
+    body = json.dumps(payload).encode("utf-8")
     with SessionLocal() as db:
         with pytest.raises(HTTPException) as excinfo:
-            mod._handle_zerodha_postback(db, settings, body=body, signature="bad")
+            mod._handle_zerodha_postback(db, settings, body=body, signature="", payload=payload)
         assert excinfo.value.status_code == 401
+        assert "Invalid postback checksum" in str(excinfo.value.detail)
 
 
-def test_zerodha_postback_rejects_missing_signature(monkeypatch) -> None:
+def test_zerodha_postback_rejects_missing_checksum(monkeypatch) -> None:
     _seed_base()
     settings = get_settings()
 
@@ -127,12 +135,18 @@ def test_zerodha_postback_rejects_missing_signature(monkeypatch) -> None:
 
     monkeypatch.setattr(mod, "_sync_positions_after_postback", lambda *_a, **_k: False)
 
-    body = b"order_id=230101000001234&status=COMPLETE"
+    payload = {
+        "user_id": "AB1234",
+        "order_id": "230101000001234",
+        "status": "COMPLETE",
+        "order_timestamp": "2026-02-10 14:38:28",
+    }
+    body = json.dumps(payload).encode("utf-8")
     with SessionLocal() as db:
         with pytest.raises(HTTPException) as excinfo:
-            mod._handle_zerodha_postback(db, settings, body=body, signature="")
+            mod._handle_zerodha_postback(db, settings, body=body, signature="", payload=payload)
         assert excinfo.value.status_code == 401
-        assert "Missing postback signature" in str(excinfo.value.detail)
+        assert "Missing postback checksum" in str(excinfo.value.detail)
 
 
 def test_zerodha_postback_updates_order_and_triggers_positions_sync(monkeypatch) -> None:
@@ -149,11 +163,24 @@ def test_zerodha_postback_updates_order_and_triggers_positions_sync(monkeypatch)
 
     monkeypatch.setattr(mod, "_sync_positions_after_postback", _fake_sync)
 
-    body = b"order_id=230101000001234&status=COMPLETE&filled_quantity=1&average_price=100"
-    sig = _sign(body, str(seed["api_secret"]))
+    order_ts = "2026-02-10 14:38:28"
+    payload = {
+        "user_id": "AB1234",
+        "order_id": "230101000001234",
+        "status": "COMPLETE",
+        "order_timestamp": order_ts,
+        "filled_quantity": 1,
+        "average_price": 100,
+    }
+    payload["checksum"] = _checksum(
+        order_id=str(payload["order_id"]),
+        order_timestamp=order_ts,
+        secret=str(seed["api_secret"]),
+    )
+    body = json.dumps(payload).encode("utf-8")
 
     with SessionLocal() as db:
-        res = mod._handle_zerodha_postback(db, settings, body=body, signature=sig)
+        res = mod._handle_zerodha_postback(db, settings, body=body, signature="", payload=payload)
 
     assert res["ok"] is True
     assert res["updated_order"] is True

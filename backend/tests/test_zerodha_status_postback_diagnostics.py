@@ -70,7 +70,7 @@ def test_zerodha_status_includes_postback_diagnostics(monkeypatch) -> None:
                 level="INFO",
                 category="zerodha_postback_noise",
                 message="Zerodha postback ignored (missing signature)",
-                details=json.dumps({"status_code": 401, "detail": "Missing postback signature header."}),
+                details=json.dumps({"status_code": 401, "detail": "Missing postback checksum."}),
             )
         )
         db.commit()
@@ -83,4 +83,3 @@ def test_zerodha_status_includes_postback_diagnostics(monkeypatch) -> None:
         assert "last_postback_reject_details" in status
         assert "last_postback_noise_at" in status
         assert "last_postback_noise_details" in status
-

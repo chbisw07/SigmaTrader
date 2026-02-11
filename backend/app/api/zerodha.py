@@ -93,11 +93,13 @@ def _map_postback_status(status_raw: str) -> str | None:
     s = (status_raw or "").strip().upper()
     if s == "COMPLETE":
         return "EXECUTED"
-    if s in {"CANCELLED", "CANCELLED AMO"}:
+    if s in {"CANCEL", "CANCELLED", "CANCELLED AMO"}:
         return "CANCELLED"
     if s == "REJECTED":
         return "REJECTED"
     if s in {"OPEN", "OPEN PENDING", "TRIGGER PENDING", "AMO REQ RECEIVED"}:
+        return "SENT"
+    if s in {"UPDATE", "MODIFY"}:
         return "SENT"
     return None
 
@@ -106,6 +108,58 @@ def _verify_kite_postback_signature(*, api_secret: str, body: bytes, signature_h
     expected = hmac.new(api_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     got = (signature_header or "").strip()
     return bool(got) and hmac.compare_digest(expected, got)
+
+
+def _verify_kite_postback_checksum(
+    *,
+    api_secret: str,
+    order_id: str,
+    order_timestamp: str,
+    checksum: str,
+) -> bool:
+    """Validate Zerodha postback checksum.
+
+    Kite Connect postbacks include `checksum` in the payload. As per docs, it is:
+    SHA-256(order_id + order_timestamp + api_secret)
+    """
+
+    oid = (order_id or "").strip()
+    ots = (order_timestamp or "").strip()
+    cs = (checksum or "").strip()
+    sec = (api_secret or "").strip()
+    if not (oid and ots and cs and sec):
+        return False
+    expected = hashlib.sha256((oid + ots + sec).encode("utf-8")).hexdigest()
+    return hmac.compare_digest(expected, cs)
+
+
+def _parse_kite_postback_payload(body: bytes) -> Dict[str, Any]:
+    """Parse Kite postback payload from JSON or query-string body."""
+
+    # Prefer JSON (Kite docs show JSON payloads for postbacks).
+    try:
+        obj = json.loads(body.decode("utf-8", errors="ignore"))
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    parsed_qs = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
+    payload: Dict[str, Any] = {
+        k: (v[0] if isinstance(v, list) and v else None) for k, v in parsed_qs.items()
+    }
+
+    # Some integrations wrap the JSON payload under a single `data` key.
+    raw_data = payload.get("data")
+    if isinstance(raw_data, str) and raw_data.strip().startswith("{"):
+        try:
+            obj2 = json.loads(raw_data)
+            if isinstance(obj2, dict):
+                payload = {**payload, **obj2}
+        except Exception:
+            pass
+
+    return payload
 
 
 def _get_latest_zerodha_conn(db: Session) -> BrokerConnection | None:
@@ -168,10 +222,27 @@ def _handle_zerodha_postback(
     *,
     body: bytes,
     signature: str,
+    payload: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Core postback handler used by the HTTP endpoint (unit-testable)."""
 
-    conn = _get_latest_zerodha_conn(db)
+    payload = payload or _parse_kite_postback_payload(body)
+
+    # Prefer routing to the correct connection when multiple accounts exist.
+    broker_user_id = str(payload.get("user_id") or "").strip() or None
+    conn: BrokerConnection | None = None
+    if broker_user_id:
+        conn = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.broker_name == "zerodha",
+                BrokerConnection.broker_user_id == broker_user_id,
+            )
+            .order_by(BrokerConnection.updated_at.desc())
+            .first()
+        )
+    if conn is None:
+        conn = _get_latest_zerodha_conn(db)
     if conn is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -188,31 +259,41 @@ def _handle_zerodha_postback(
     if not api_secret:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Zerodha API secret is not configured; cannot verify postback signature.",
+            detail="Zerodha API secret is not configured; cannot verify postback.",
         )
-
-    if not (signature or "").strip():
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing postback signature header.",
-        )
-
-    if not _verify_kite_postback_signature(
-        api_secret=api_secret,
-        body=body,
-        signature_header=signature,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid postback signature.",
-        )
-
-    parsed_qs = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
-    payload: Dict[str, Any] = {
-        k: (v[0] if isinstance(v, list) and v else None) for k, v in parsed_qs.items()
-    }
 
     order_id = str(payload.get("order_id") or payload.get("orderid") or "").strip()
+    order_ts = str(payload.get("order_timestamp") or "").strip()
+    checksum = str(payload.get("checksum") or "").strip()
+
+    # Preferred verification: checksum included in payload.
+    if checksum:
+        if not _verify_kite_postback_checksum(
+            api_secret=str(api_secret),
+            order_id=order_id,
+            order_timestamp=order_ts,
+            checksum=checksum,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid postback checksum.",
+            )
+    else:
+        # Legacy fallback: HMAC signature via custom header/query string.
+        if not (signature or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing postback checksum.",
+            )
+        if not _verify_kite_postback_signature(
+            api_secret=str(api_secret),
+            body=body,
+            signature_header=signature,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid postback signature.",
+            )
     status_raw = str(payload.get("status") or "").strip()
     mapped = _map_postback_status(status_raw) if status_raw else None
 
@@ -695,9 +776,20 @@ async def _zerodha_postback_impl(
     """Shared implementation for the postback handler."""
 
     body = await request.body()
+    payload: Dict[str, Any] | None = None
+    try:
+        payload = _parse_kite_postback_payload(body)
+    except Exception:
+        payload = None
     sig, sig_header_name, sig_headers_present = _extract_kite_postback_signature(request)
     try:
-        return _handle_zerodha_postback(db, settings, body=body, signature=sig)
+        return _handle_zerodha_postback(
+            db,
+            settings,
+            body=body,
+            signature=sig,
+            payload=payload,
+        )
     except HTTPException as exc:
         try:
             client_ip = getattr(getattr(request, "client", None), "host", None)
@@ -707,19 +799,17 @@ async def _zerodha_postback_impl(
 
             payload_keys: list[str] | None = None
             try:
-                parsed_qs = parse_qs(
-                    body.decode("utf-8", errors="ignore"),
-                    keep_blank_values=True,
-                )
-                payload_keys = sorted(str(k) for k in parsed_qs.keys())
+                if payload is not None:
+                    payload_keys = sorted(str(k) for k in payload.keys())
             except Exception:
                 payload_keys = None
 
             has_sig = bool((sig or "").strip())
-            if int(exc.status_code) == 401 and not has_sig:
+            has_checksum = bool(str((payload or {}).get("checksum") or "").strip())
+            if int(exc.status_code) == 401 and not has_sig and not has_checksum:
                 level = "INFO"
                 category = "zerodha_postback_noise"
-                message = "Zerodha postback ignored (missing signature)"
+                message = "Zerodha postback ignored (missing checksum/signature)"
             else:
                 level = "WARNING" if int(exc.status_code) < 500 else "ERROR"
                 category = "zerodha_postback_error"
@@ -734,11 +824,13 @@ async def _zerodha_postback_impl(
                     "status_code": int(exc.status_code),
                     "detail": getattr(exc, "detail", None),
                     "has_signature": has_sig,
+                    "has_checksum": has_checksum,
                     "signature_header": sig_header_name,
                     "candidate_headers_present": sig_headers_present,
                     "client_ip": client_ip,
                     "user_agent": ua,
                     "body_len": int(len(body or b"")),
+                    "content_type": request.headers.get("content-type") or None,
                     "payload_keys": payload_keys,
                 },
             )
