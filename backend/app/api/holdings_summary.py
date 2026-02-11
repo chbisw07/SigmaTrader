@@ -17,6 +17,7 @@ from app.schemas.holdings_summary import (
 )
 from app.services.holdings_summary_snapshots import (
     compute_holdings_summary_metrics,
+    default_snapshot_as_of_date,
     upsert_holdings_summary_snapshot,
     _as_of_date_ist,
 )
@@ -42,16 +43,20 @@ def capture_holdings_summary_snapshot(
     settings: Settings = Depends(get_settings),
     user: User = Depends(get_current_user),
 ) -> HoldingsSummarySnapshot:
-    """Capture today's holdings summary and persist as a daily snapshot.
+    """Capture holdings summary and persist as a daily snapshot.
 
     This hits the broker for live holdings (and funds, when available) and
     stores a compact daily row for dashboard trends.
+
+    By default, before 09:00 IST we finalize the previous trading day's snapshot
+    to avoid writing an intraday row that keeps drifting throughout the day.
     """
 
     broker = (broker_name or "").strip().lower()
 
-    today_ist = _as_of_date_ist(datetime.now(UTC))
-    target_date = as_of_date or today_ist
+    now_utc = datetime.now(UTC)
+    today_ist = _as_of_date_ist(now_utc)
+    target_date = as_of_date or default_snapshot_as_of_date(now_utc)
 
     if target_date > today_ist:
         raise HTTPException(
@@ -63,13 +68,13 @@ def capture_holdings_summary_snapshot(
     # open will often be contaminated by today's trading activity. Only allow
     # previous-day overrides during a safe pre-open window.
     if target_date < today_ist:
-        now_ist_naive = (datetime.now(UTC) + IST_OFFSET).replace(tzinfo=None)
-        deadline = now_ist_naive.replace(hour=9, minute=15, second=0, microsecond=0)
+        now_ist_naive = (now_utc + IST_OFFSET).replace(tzinfo=None)
+        deadline = now_ist_naive.replace(hour=9, minute=0, second=0, microsecond=0)
         if now_ist_naive >= deadline:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    "Too late to capture a previous-day snapshot after 09:15 IST. "
+                    "Too late to capture a previous-day snapshot after 09:00 IST. "
                     "Please start SigmaTrader before market open so it can finalize "
                     "yesterday's snapshot safely."
                 ),

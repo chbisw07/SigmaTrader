@@ -55,6 +55,47 @@ function toBusinessDay(dateIso: string): BusinessDay {
   return { year: y || 1970, month: m || 1, day: d || 1 }
 }
 
+function nowIstMinutesOfDay(): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date())
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0')
+    const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0')
+    return hour * 60 + minute
+  } catch {
+    return 0
+  }
+}
+
+function prevTradingDayIso(dateIso: string): string {
+  const [y, m, d] = String(dateIso || '').split('-').map((v) => Number(v))
+  let dt = new Date(Date.UTC(y || 1970, (m || 1) - 1, d || 1))
+  do {
+    dt = new Date(dt.getTime() - 24 * 60 * 60 * 1000)
+  } while (dt.getUTCDay() === 0 || dt.getUTCDay() === 6) // Sun/Sat
+
+  const yy = dt.getUTCFullYear()
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(dt.getUTCDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
+function preopenFinalizeAsOfDate(todayIso: string): string | null {
+  // Daily snapshot should represent a stable "previous trading day" baseline.
+  // Before 09:00 IST, finalize yesterday instead of capturing an intraday row.
+  const [y, m, d] = String(todayIso || '').split('-').map((v) => Number(v))
+  const today = new Date(Date.UTC(y || 1970, (m || 1) - 1, d || 1))
+  if (today.getUTCDay() === 0 || today.getUTCDay() === 6) return null // weekends
+
+  const mins = nowIstMinutesOfDay()
+  if (mins >= 9 * 60) return null
+  return prevTradingDayIso(todayIso)
+}
+
 function HoldingsLineChart({
   series,
   height = 260,
@@ -198,11 +239,16 @@ export function HoldingsSummaryHistoryPanel({
     setCaptureLoading(true)
     setError(null)
     try {
-      await captureHoldingsSummarySnapshot({ broker_name: brokerName })
+      const todayIso = meta?.today || ''
+      const asOf = todayIso ? preopenFinalizeAsOfDate(todayIso) : null
+      await captureHoldingsSummarySnapshot({
+        broker_name: brokerName,
+        ...(asOf ? { as_of_date: asOf } : {}),
+      })
       await loadMeta()
       await loadRows()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to capture today snapshot.')
+      setError(err instanceof Error ? err.message : 'Failed to capture snapshot.')
     } finally {
       setCaptureLoading(false)
     }
@@ -220,7 +266,11 @@ export function HoldingsSummaryHistoryPanel({
         setEndDate(range0.max)
         if (autoCapture) {
           try {
-            await captureHoldingsSummarySnapshot({ broker_name: brokerName })
+            const todayIso = range0.max || ''
+            const asOf = todayIso ? preopenFinalizeAsOfDate(todayIso) : null
+            if (asOf) {
+              await captureHoldingsSummarySnapshot({ broker_name: brokerName, as_of_date: asOf })
+            }
           } catch {
             // Ignore auto-capture errors; user can still view history.
           }
@@ -243,8 +293,14 @@ export function HoldingsSummaryHistoryPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brokerName])
 
+  const hideTodayRow = Boolean(meta?.today && nowIstMinutesOfDay() < 9 * 60)
+  const visibleRows = useMemo(() => {
+    if (!hideTodayRow || !meta?.today) return rows
+    return rows.filter((r) => String(r.as_of_date || '') !== meta.today)
+  }, [rows, hideTodayRow, meta?.today])
+
   const chartData = useMemo(() => {
-    const sorted = rows
+    const sorted = visibleRows
       .slice()
       .sort((a, b) =>
         String(a.as_of_date || '').localeCompare(String(b.as_of_date || '')),
@@ -276,10 +332,11 @@ export function HoldingsSummaryHistoryPanel({
     }
 
     return { accountSeries, equitySeries, fundsSeries }
-  }, [rows])
+  }, [visibleRows])
 
   const minDate = meta?.min_date || meta?.today || ''
   const maxDate = meta?.today || ''
+  const availableTo = hideTodayRow && meta?.today ? prevTradingDayIso(meta.today) : meta?.max_date || meta?.today || ''
 
   return (
     <Paper sx={{ p: 2 }}>
@@ -289,7 +346,7 @@ export function HoldingsSummaryHistoryPanel({
         </Typography>
         <FormControlLabel
           control={<Switch checked={autoCapture} onChange={(e) => setAutoCapture(e.target.checked)} />}
-          label="Auto-capture today"
+          label="Auto-finalize previous day (before 09:00 IST)"
         />
         <Button variant="outlined" size="small" onClick={() => void captureNow()} disabled={captureLoading}>
           {captureLoading ? 'Capturing…' : 'Capture now'}
@@ -422,7 +479,7 @@ export function HoldingsSummaryHistoryPanel({
               </TableRow>
             </TableHead>
             <TableBody>
-              {rows.map((r) => (
+              {visibleRows.map((r) => (
                 <TableRow key={r.id} hover>
                   <TableCell>{r.as_of_date}</TableCell>
                   <TableCell align="right">{r.holdings_count ?? 0}</TableCell>
@@ -471,7 +528,7 @@ export function HoldingsSummaryHistoryPanel({
                   <TableCell align="right">{formatPct(r.cagr_2y_pct, 1)}</TableCell>
                 </TableRow>
               ))}
-              {rows.length === 0 && (
+              {visibleRows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={13}>
                     <Typography variant="body2" color="text.secondary">
@@ -486,7 +543,7 @@ export function HoldingsSummaryHistoryPanel({
 
         {meta?.min_date && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-            Data available from {meta.min_date} to {meta.today}.
+            Data available from {meta.min_date} to {availableTo}.
           </Typography>
         )}
       </Box>

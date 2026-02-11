@@ -40,6 +40,7 @@ export type HoldingsSummarySnapshotsMeta = {
 export async function captureHoldingsSummarySnapshot(params?: {
   broker_name?: string
   allow_fetch_market_data?: boolean
+  as_of_date?: string // YYYY-MM-DD
 }): Promise<HoldingsSummarySnapshot> {
   const url = new URL('/api/holdings-summary/snapshots/capture', window.location.origin)
   if (params?.broker_name) url.searchParams.set('broker_name', params.broker_name)
@@ -49,6 +50,7 @@ export async function captureHoldingsSummarySnapshot(params?: {
       params.allow_fetch_market_data ? 'true' : 'false',
     )
   }
+  if (params?.as_of_date) url.searchParams.set('as_of_date', params.as_of_date)
   const res = await fetch(url.toString(), { method: 'POST' })
   if (!res.ok) {
     const body = await res.text().catch(() => '')

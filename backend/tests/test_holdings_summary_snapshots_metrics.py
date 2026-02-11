@@ -13,6 +13,7 @@ from app.models import User
 from app.schemas.positions import HoldingRead
 from app.services.holdings_summary_snapshots import (
     compute_holdings_summary_metrics,
+    default_snapshot_as_of_date,
     upsert_holdings_summary_snapshot,
 )
 
@@ -143,3 +144,21 @@ def test_compute_metrics_and_upsert_snapshot() -> None:
 
         assert int(row1.id) == int(row2.id)
         assert row2.funds_available == pytest.approx(600.0)
+
+
+def test_default_snapshot_as_of_date_before_0900_ist_uses_previous_trading_day() -> None:
+    # 2026-02-11 08:30 IST
+    now_utc = datetime(2026, 2, 11, 3, 0, 0, tzinfo=UTC)
+    assert default_snapshot_as_of_date(now_utc) == date(2026, 2, 10)
+
+
+def test_default_snapshot_as_of_date_after_0900_ist_uses_today() -> None:
+    # 2026-02-11 09:30 IST
+    now_utc = datetime(2026, 2, 11, 4, 0, 0, tzinfo=UTC)
+    assert default_snapshot_as_of_date(now_utc) == date(2026, 2, 11)
+
+
+def test_default_snapshot_as_of_date_monday_skips_weekend_gap() -> None:
+    # 2026-02-09 (Mon) 08:00 IST should finalize 2026-02-06 (Fri).
+    now_utc = datetime(2026, 2, 9, 2, 30, 0, tzinfo=UTC)
+    assert default_snapshot_as_of_date(now_utc) == date(2026, 2, 6)

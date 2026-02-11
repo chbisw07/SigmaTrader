@@ -30,6 +30,37 @@ def prev_trading_day(d: date) -> date:
     return out
 
 
+def default_snapshot_as_of_date(
+    now_utc: datetime,
+    *,
+    preopen_deadline_hhmm: tuple[int, int] = (9, 0),
+) -> date:
+    """Pick the default snapshot date for a capture call.
+
+    Snapshots are intended to represent a stable "previous trading day" baseline.
+    During the morning (before 09:00 IST), we default to the previous trading day
+    so the captured row does not drift intraday.
+    """
+
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=UTC)
+
+    today_ist = _as_of_date_ist(now_utc)
+    if today_ist.weekday() >= 5:
+        return today_ist
+
+    now_ist_naive = (now_utc + IST_OFFSET).replace(tzinfo=None)
+    deadline = now_ist_naive.replace(
+        hour=preopen_deadline_hhmm[0],
+        minute=preopen_deadline_hhmm[1],
+        second=0,
+        microsecond=0,
+    )
+    if now_ist_naive < deadline:
+        return prev_trading_day(today_ist)
+    return today_ist
+
+
 def _as_of_date_ist(now_utc: datetime) -> date:
     try:
         from zoneinfo import ZoneInfo
