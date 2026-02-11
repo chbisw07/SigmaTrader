@@ -6867,12 +6867,12 @@ export function HoldingsPage() {
         rows={filteredRows}
         columns={columns}
         getRowId={(row) => row.symbol}
+        height="calc(100vh - 260px)"
         loading={loading || refreshing}
         checkboxSelection
+        keepNonExistentRowsSelected
         rowSelectionModel={rowSelectionModel}
-        onRowSelectionModelChange={(newSelection) => {
-          setRowSelectionModel(newSelection)
-        }}
+        onRowSelectionModelChange={(newSelection) => setRowSelectionModel(newSelection)}
         density="compact"
         columnVisibilityModel={columnVisibilityModel}
         onColumnVisibilityModelChange={(model) => {
@@ -6954,7 +6954,7 @@ export function HoldingsPage() {
           },
         }}
         initialState={{
-          pagination: { paginationModel: { pageSize: 25 } },
+          pagination: { paginationModel: { pageSize: 100 } },
         }}
         pageSizeOptions={[25, 50, 100]}
         localeText={{

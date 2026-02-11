@@ -19,6 +19,7 @@ type UniverseGridProps<RowT extends GridValidRowModel> = {
   loading?: boolean
   rowSelectionModel: GridRowSelectionModel
   onRowSelectionModelChange: (next: GridRowSelectionModel) => void
+  keepNonExistentRowsSelected?: boolean
   columnVisibilityModel: GridColumnVisibilityModel
   onColumnVisibilityModelChange: (next: GridColumnVisibilityModel) => void
   height?: number | string
@@ -45,6 +46,7 @@ export function UniverseGrid<RowT extends GridValidRowModel>(
     loading = false,
     rowSelectionModel,
     onRowSelectionModelChange,
+    keepNonExistentRowsSelected = false,
     columnVisibilityModel,
     onColumnVisibilityModelChange,
     height = '70vh',
@@ -70,6 +72,7 @@ export function UniverseGrid<RowT extends GridValidRowModel>(
         checkboxSelection={checkboxSelection}
         rowSelectionModel={rowSelectionModel}
         onRowSelectionModelChange={onRowSelectionModelChange}
+        keepNonExistentRowsSelected={keepNonExistentRowsSelected}
         density={density}
         columnVisibilityModel={columnVisibilityModel}
         onColumnVisibilityModelChange={onColumnVisibilityModelChange}
