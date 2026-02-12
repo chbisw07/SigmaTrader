@@ -397,6 +397,23 @@ export function HoldingsPage() {
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
   const [viewId, setViewId] = useState<HoldingsViewId>('default')
+  const enrichmentConfig = useMemo(() => {
+    const computeIndicators =
+      viewId === 'indicators' ||
+      viewId === 'support_resistance' ||
+      viewId === 'performance' ||
+      viewId === 'risk' ||
+      viewId.startsWith('custom:')
+
+    return {
+      periodDays: computeIndicators ? ANALYTICS_LOOKBACK_DAYS : Math.max(chartPeriodDays, 60),
+      computeIndicators,
+    }
+  }, [chartPeriodDays, viewId])
+  const enrichmentRequestedRef = useRef<{ periodDays: number; computeIndicators: boolean }>({
+    periodDays: 0,
+    computeIndicators: false,
+  })
   const [customViews, setCustomViews] = useState<Array<{ id: string; name: string }>>(
     [],
   )
@@ -550,6 +567,17 @@ export function HoldingsPage() {
   const refreshRequestId = useRef(0)
   const refreshingRef = useRef(false)
   const holdingsRef = useRef<HoldingRow[]>([])
+  const enrichRequestId = useRef(0)
+  const enrichMetaBySymbolRef = useRef<Map<string, { periodDays: number; indicators: boolean }>>(
+    new Map(),
+  )
+  const enrichPendingBySymbolRef = useRef<
+    Map<
+      string,
+      { history: CandlePoint[]; indicators?: HoldingIndicators; lastPrice?: number | null }
+    >
+  >(new Map())
+  const enrichFlushTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     refreshingRef.current = refreshing
@@ -558,6 +586,107 @@ export function HoldingsPage() {
   useEffect(() => {
     holdingsRef.current = holdings
   }, [holdings])
+
+  const flushHoldingsEnrichment = useCallback(() => {
+    if (typeof window !== 'undefined' && enrichFlushTimerRef.current != null) {
+      window.clearTimeout(enrichFlushTimerRef.current)
+    }
+    enrichFlushTimerRef.current = null
+    const pending = enrichPendingBySymbolRef.current
+    if (pending.size === 0) return
+    const patch = new Map(pending)
+    pending.clear()
+    setHoldings((current) => {
+      let changed = false
+      const next = current.map((h) => {
+        const key = (h.symbol || '').trim().toUpperCase()
+        const update = patch.get(key)
+        if (!update) return h
+        changed = true
+        const out: HoldingRow = { ...h, history: update.history }
+        if (update.indicators != null) out.indicators = update.indicators
+        const lastCandidate = update.lastPrice
+        if (
+          (out.last_price == null || !Number.isFinite(Number(out.last_price)) || Number(out.last_price) <= 0) &&
+          lastCandidate != null &&
+          Number.isFinite(Number(lastCandidate)) &&
+          Number(lastCandidate) > 0
+        ) {
+          out.last_price = Number(lastCandidate)
+        }
+        return out
+      })
+      return changed ? next : current
+    })
+  }, [])
+
+  const enrichHoldingsWithHistory = useCallback(
+    async (
+      rows: HoldingRow[],
+      opts?: { periodDays?: number; computeIndicators?: boolean },
+    ) => {
+      const periodDays = opts?.periodDays ?? ANALYTICS_LOOKBACK_DAYS
+      const computeIndicators = opts?.computeIndicators ?? true
+      const requestId = (enrichRequestId.current += 1)
+
+      for (const row of rows) {
+        if (requestId !== enrichRequestId.current) return
+        const symbol = (row.symbol || '').trim()
+        if (!symbol) continue
+        const symbolKey = symbol.toUpperCase()
+
+        const metaPrev = enrichMetaBySymbolRef.current.get(symbolKey)
+        const metaHasHistory = (metaPrev?.periodDays ?? 0) >= periodDays
+        const metaHasIndicators = Boolean(metaPrev?.indicators)
+        const needsIndicators = computeIndicators && !metaHasIndicators
+        if (metaHasHistory && !needsIndicators) continue
+
+        try {
+          const history = await fetchMarketHistory({
+            symbol: row.symbol,
+            exchange: row.exchange ?? 'NSE',
+            timeframe: '1d',
+            periodDays,
+          })
+          if (requestId !== enrichRequestId.current) return
+
+          const nextIndicators = computeIndicators
+            ? computeHoldingIndicators(
+                history,
+                row.average_price != null ? Number(row.average_price) : undefined,
+              )
+            : undefined
+
+          const lastClose =
+            history.length > 0 ? Number(history[history.length - 1].close) : null
+          enrichPendingBySymbolRef.current.set(symbolKey, {
+            history,
+            ...(nextIndicators ? { indicators: nextIndicators } : {}),
+            lastPrice:
+              lastClose != null && Number.isFinite(lastClose) && lastClose > 0
+                ? lastClose
+                : null,
+          })
+          enrichMetaBySymbolRef.current.set(symbolKey, {
+            periodDays: metaPrev ? Math.max(metaPrev.periodDays, periodDays) : periodDays,
+            indicators: Boolean(metaPrev?.indicators) || Boolean(nextIndicators),
+          })
+
+          if (typeof window !== 'undefined' && enrichFlushTimerRef.current == null) {
+            enrichFlushTimerRef.current = window.setTimeout(() => {
+              flushHoldingsEnrichment()
+            }, 80)
+          }
+        } catch {
+          // Ignore per-symbol failures so that one bad instrument does not
+          // prevent the rest of the grid from being enriched.
+        }
+      }
+
+      flushHoldingsEnrichment()
+    },
+    [flushHoldingsEnrichment],
+  )
 
   const [, setCorrSummary] = useState<HoldingsCorrelationResult | null>(null)
   const [, setCorrLoading] = useState(false)
@@ -968,7 +1097,12 @@ export function HoldingsPage() {
       setError(null)
 
       // Kick off background enrichment with OHLCV history and indicators.
-      void enrichHoldingsWithHistory(baseRows)
+      enrichmentRequestedRef.current = {
+        periodDays: Math.max(enrichmentRequestedRef.current.periodDays, enrichmentConfig.periodDays),
+        computeIndicators:
+          enrichmentRequestedRef.current.computeIndicators || enrichmentConfig.computeIndicators,
+      }
+      void enrichHoldingsWithHistory(baseRows, enrichmentRequestedRef.current)
 
       void refreshGroupMemberships(baseRows.map((row) => row.symbol).filter(Boolean))
     } catch (err) {
@@ -1082,7 +1216,13 @@ export function HoldingsPage() {
           holdingsRows.map((row) => row.symbol).filter(Boolean),
         )
         if (mode === 'manual') {
-          void enrichHoldingsWithHistory(holdingsRows)
+          enrichmentRequestedRef.current = {
+            periodDays: Math.max(enrichmentRequestedRef.current.periodDays, enrichmentConfig.periodDays),
+            computeIndicators:
+              enrichmentRequestedRef.current.computeIndicators ||
+              enrichmentConfig.computeIndicators,
+          }
+          void enrichHoldingsWithHistory(holdingsRows, enrichmentRequestedRef.current)
         }
       } else {
         // Group/universe views: keep the row set stable and only patch values in-place.
@@ -1093,7 +1233,13 @@ export function HoldingsPage() {
           }),
         )
         if (mode === 'manual') {
-          void enrichHoldingsWithHistory(holdingsRef.current)
+          enrichmentRequestedRef.current = {
+            periodDays: Math.max(enrichmentRequestedRef.current.periodDays, enrichmentConfig.periodDays),
+            computeIndicators:
+              enrichmentRequestedRef.current.computeIndicators ||
+              enrichmentConfig.computeIndicators,
+          }
+          void enrichHoldingsWithHistory(holdingsRef.current, enrichmentRequestedRef.current)
         }
       }
 
@@ -1110,6 +1256,25 @@ export function HoldingsPage() {
   useEffect(() => {
     void load()
   }, [universeId])
+
+  useEffect(() => {
+    if (!hasLoadedOnce) return
+    const prev = enrichmentRequestedRef.current
+    const next = {
+      periodDays: Math.max(prev.periodDays, enrichmentConfig.periodDays),
+      computeIndicators: prev.computeIndicators || enrichmentConfig.computeIndicators,
+    }
+    if (next.periodDays === prev.periodDays && next.computeIndicators === prev.computeIndicators) {
+      return
+    }
+    enrichmentRequestedRef.current = next
+    void enrichHoldingsWithHistory(holdingsRef.current, next)
+  }, [
+    enrichHoldingsWithHistory,
+    enrichmentConfig.computeIndicators,
+    enrichmentConfig.periodDays,
+    hasLoadedOnce,
+  ])
 
   // Load a lightweight correlation summary so that each holding can be
   // tagged with its high-level correlation cluster and approximate
@@ -1758,7 +1923,7 @@ export function HoldingsPage() {
     setTradeSizeMode('QTY')
   }, [isBulkTrade, tradeSizeMode])
 
-  const getDisplayPrice = (holding: HoldingRow): number | null => {
+  const getDisplayPrice = useCallback((holding: HoldingRow): number | null => {
     if (holding.last_price != null && Number.isFinite(Number(holding.last_price))) {
       const v = Number(holding.last_price)
       return v > 0 ? v : null
@@ -1771,9 +1936,9 @@ export function HoldingsPage() {
       return v > 0 ? v : null
     }
     return null
-  }
+  }, [])
 
-  const normalizeSymbolExchange = (
+  const normalizeSymbolExchange = useCallback((
     symbol: string,
     exchange?: string | null,
   ): { symbol: string; exchange: string } => {
@@ -1792,7 +1957,7 @@ export function HoldingsPage() {
       rawExchange = 'BSE'
     }
     return { symbol: rawSymbol, exchange: rawExchange || 'NSE' }
-  }
+  }, [])
 
   const goalMaps = useMemo(() => {
     const map = new Map<string, HoldingGoal>()
@@ -1834,7 +1999,7 @@ export function HoldingsPage() {
     [goalMaps, normalizeSymbolExchange],
   )
 
-  const getGoalDaysRemaining = (goal: HoldingGoal | null): number | null => {
+  const getGoalDaysRemaining = useCallback((goal: HoldingGoal | null): number | null => {
     if (!goal?.review_date) return null
     const review = new Date(goal.review_date)
     if (Number.isNaN(review.getTime())) return null
@@ -1843,9 +2008,9 @@ export function HoldingsPage() {
     review.setHours(0, 0, 0, 0)
     const diffMs = review.getTime() - today.getTime()
     return Math.round(diffMs / (1000 * 60 * 60 * 24))
-  }
+  }, [])
 
-  const getGoalTarget = (
+  const getGoalTarget = useCallback((
     row: HoldingRow,
     goal: HoldingGoal | null,
   ): { targetPrice: number | null; awayPct: number | null; label: string } => {
@@ -1881,7 +2046,7 @@ export function HoldingsPage() {
       awayPct = ((ltp - targetPrice) / targetPrice) * 100
     }
     return { targetPrice, awayPct, label }
-  }
+  }, [getDisplayPrice])
 
   const getGoalStatus = (
     goal: HoldingGoal | null,
@@ -2162,44 +2327,7 @@ export function HoldingsPage() {
     ? bulkTradeHoldings.map((h) => formatPriceForHolding(h)).join(', ')
     : ''
 
-  const enrichHoldingsWithHistory = async (rows: HoldingRow[]) => {
-    for (const row of rows) {
-      try {
-        const history = await fetchMarketHistory({
-          symbol: row.symbol,
-          exchange: row.exchange ?? 'NSE',
-          timeframe: '1d',
-          periodDays: ANALYTICS_LOOKBACK_DAYS,
-        })
-        const indicators = computeHoldingIndicators(
-          history,
-          row.average_price != null ? Number(row.average_price) : undefined,
-        )
-        setHoldings((current) =>
-          current.map((h) =>
-            h.symbol === row.symbol
-              ? {
-                  ...h,
-                  history,
-                  indicators,
-                  last_price:
-                    h.last_price != null && Number(h.last_price) > 0
-                      ? h.last_price
-                      : history.length > 0
-                        ? history[history.length - 1].close
-                        : h.last_price,
-                }
-              : h,
-          ),
-        )
-      } catch {
-        // Ignore per-symbol failures so that one bad instrument does not
-        // prevent the rest of the grid from being enriched.
-      }
-    }
-  }
-
-  const openAlertDialogForHolding = (holding: HoldingRow) => {
+  const openAlertDialogForHolding = useCallback((holding: HoldingRow) => {
     const symbol = (holding.symbol || '').trim()
     if (!symbol) return
     const exchange =
@@ -2211,7 +2339,7 @@ export function HoldingsPage() {
       exchange,
     })
     navigate(`/alerts?${params.toString()}`)
-  }
+  }, [navigate])
 
   const openGoalEditor = useCallback(
     (holding: HoldingRow) => {
@@ -2779,7 +2907,7 @@ export function HoldingsPage() {
     setTradeOpen(true)
   }
 
-  const openTradeDialog = (holding: HoldingRow, side: 'BUY' | 'SELL') => {
+  const openTradeDialog = useCallback((holding: HoldingRow, side: 'BUY' | 'SELL') => {
     setTradeHolding(holding)
     setTradeSide(side)
     setTradeSymbol(holding.symbol)
@@ -2813,7 +2941,29 @@ export function HoldingsPage() {
     setTradeSizeMode('QTY')
     // Seed derived fields based on a single-share (or capped) quantity.
     if (defaultQty > 0) {
-      recalcFromQty(String(defaultQty))
+      const qty = defaultQty
+      const priceCandidate =
+        holding.last_price != null && Number.isFinite(Number(holding.last_price)) && Number(holding.last_price) > 0
+          ? Number(holding.last_price)
+          : holding.average_price != null && Number.isFinite(Number(holding.average_price)) && Number(holding.average_price) > 0
+            ? Number(holding.average_price)
+            : null
+      if (priceCandidate != null) {
+        const notional = qty * priceCandidate
+        setTradeAmount(notional.toFixed(2))
+        const holdingQty = holding.quantity != null ? Number(holding.quantity) : 0
+        const positionValue =
+          Number.isFinite(holdingQty) && holdingQty > 0 ? holdingQty * priceCandidate : null
+        if (positionValue != null && positionValue > 0) {
+          const pct = (notional / positionValue) * 100
+          setTradePctEquity(Number.isFinite(pct) ? pct.toFixed(2) : '')
+        } else {
+          setTradePctEquity('')
+        }
+      } else {
+        setTradeAmount('')
+        setTradePctEquity('')
+      }
     } else {
       setTradeAmount('')
       setTradePctEquity('')
@@ -2873,7 +3023,7 @@ export function HoldingsPage() {
     })()
     setTradeError(null)
     setTradeOpen(true)
-  }
+  }, [activeGroup?.id, activeGroup?.kind, symbolCategoryRows, tradeBrokerName, universeId])
 
   const openQuickTradeDialog = (inst: InstrumentSearchResult) => {
     // If the symbol already exists in the current holdings grid, reuse the
@@ -3652,15 +3802,15 @@ export function HoldingsPage() {
     return Number.isFinite(pct) ? Number(pct.toFixed(2)) : null
   }
 
-  const getUniverseReferencePrice = (row: HoldingRow): number | null => {
+  const getUniverseReferencePrice = useCallback((row: HoldingRow): number | null => {
     const v = row.reference_price
     return v != null && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null
-  }
+  }, [])
 
-  const getUniverseReferenceQty = (row: HoldingRow): number | null => {
+  const getUniverseReferenceQty = useCallback((row: HoldingRow): number | null => {
     const v = row.reference_qty
     return v != null && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : null
-  }
+  }, [])
 
   const getSinceCreationPnl = (row: HoldingRow): number | null => {
     const refPrice = getUniverseReferencePrice(row)
@@ -3896,7 +4046,7 @@ export function HoldingsPage() {
     return total > 0 && Number.isFinite(total) ? total : null
   }, [activeGroup?.kind, holdings, getUniverseReferencePrice, getUniverseReferenceQty])
 
-  const baseColumns: GridColDef[] = [
+  const baseColumns: GridColDef[] = useMemo(() => [
     {
       field: 'index',
       headerName: '#',
@@ -4852,47 +5002,69 @@ export function HoldingsPage() {
         )
       },
     },
-  ]
+  ], [
+    activeGroup,
+    chartPeriodDays,
+    formatInrCompact,
+    formatPct,
+    getDisplayPrice,
+    getGoalDaysRemaining,
+    getGoalForRow,
+    getGoalTarget,
+    goalBrokerName,
+    navigate,
+    openAlertDialogForHolding,
+    openGoalActionMenu,
+    openGoalEditor,
+    openTradeDialog,
+    portfolioBaselineTotalValue,
+    portfolioValue,
+    symbolCategoryBusyByKey,
+    symbolCategoryRows,
+    symbolColumnFlex,
+    symbolColumnMinWidth,
+    universeId,
+  ])
 
-  const importColumns: GridColDef[] = activeGroupDataset?.columns?.length
-    ? activeGroupDataset.columns.map((c) => {
-        const field = `import_${c.key}`
-        return {
-          field,
-          headerName: c.label,
-          headerClassName: 'st-imported-column-header',
-          type: c.type === 'number' ? 'number' : 'string',
-          minWidth: 140,
-          flex: 1,
-          valueGetter: (_value, row) =>
-            (row as unknown as Record<string, unknown>)[field] ?? null,
-          valueFormatter: (value: unknown) => {
-            if (value == null) return '—'
-            const n = Number(value)
-            return Number.isFinite(n) ? n.toFixed(2) : String(value)
-          },
-          cellClassName: (params: GridCellParams) => {
-            const n = Number(params.value)
-            return Number.isFinite(n) && n < 0 ? 'st-imported-negative' : ''
-          },
-        } satisfies GridColDef
-      })
-    : []
+  const importColumns: GridColDef[] = useMemo(() => {
+    if (!activeGroupDataset?.columns?.length) return []
+    return activeGroupDataset.columns.map((c) => {
+      const field = `import_${c.key}`
+      return {
+        field,
+        headerName: c.label,
+        headerClassName: 'st-imported-column-header',
+        type: c.type === 'number' ? 'number' : 'string',
+        minWidth: 140,
+        flex: 1,
+        valueGetter: (_value, row) =>
+          (row as unknown as Record<string, unknown>)[field] ?? null,
+        valueFormatter: (value: unknown) => {
+          if (value == null) return '—'
+          const n = Number(value)
+          return Number.isFinite(n) ? n.toFixed(2) : String(value)
+        },
+        cellClassName: (params: GridCellParams) => {
+          const n = Number(params.value)
+          return Number.isFinite(n) && n < 0 ? 'st-imported-negative' : ''
+        },
+      } satisfies GridColDef
+    })
+  }, [activeGroupDataset?.columns])
 
-  const columns: GridColDef[] =
-    importColumns.length > 0
-      ? (() => {
-          const symbolIndex = baseColumns.findIndex((c) => c.field === 'symbol')
-          const insertAt = symbolIndex >= 0 ? symbolIndex + 1 : 2
-          return [
-            ...baseColumns.slice(0, insertAt),
-            ...importColumns,
-            ...baseColumns.slice(insertAt),
-          ]
-        })()
-      : baseColumns
+  const columns: GridColDef[] = useMemo(() => {
+    if (importColumns.length === 0) return baseColumns
+    const symbolIndex = baseColumns.findIndex((c) => c.field === 'symbol')
+    const insertAt = symbolIndex >= 0 ? symbolIndex + 1 : 2
+    return [
+      ...baseColumns.slice(0, insertAt),
+      ...importColumns,
+      ...baseColumns.slice(insertAt),
+    ]
+  }, [baseColumns, importColumns])
 
-  columnsFieldRef.current = columns.map((c) => String(c.field))
+  const columnFields = useMemo(() => columns.map((c) => String(c.field)), [columns])
+  columnsFieldRef.current = columnFields
 
   useEffect(() => {
     if (typeof window === 'undefined') return

@@ -9,6 +9,7 @@ import {
   type GridValidRowModel,
   type DataGridProps,
 } from '@mui/x-data-grid'
+import { memo } from 'react'
 
 type UniverseGridProps<RowT extends GridValidRowModel> = {
   rows: RowT[]
@@ -34,7 +35,7 @@ type UniverseGridProps<RowT extends GridValidRowModel> = {
   localeText?: DataGridProps<RowT>['localeText']
 }
 
-export function UniverseGrid<RowT extends GridValidRowModel>(
+function UniverseGridInner<RowT extends GridValidRowModel>(
   props: UniverseGridProps<RowT>,
 ) {
   const {
@@ -99,3 +100,5 @@ export function UniverseGrid<RowT extends GridValidRowModel>(
     </Paper>
   )
 }
+
+export const UniverseGrid = memo(UniverseGridInner) as typeof UniverseGridInner
