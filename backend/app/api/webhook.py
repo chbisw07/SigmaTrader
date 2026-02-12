@@ -845,18 +845,22 @@ def tradingview_webhook(
 
     # If TradingView omitted qty (or templates didn't expand it), auto-size the
     # queued order so the Waiting Queue isn't filled with qty=0 rows.
-    try:
-        user_obj = db.get(User, alert.user_id) if alert.user_id is not None else None
-        _maybe_autosize_waiting_order_qty(
-            db=db,
-            settings=settings,
-            order=order,
-            user=user_obj,
-            product_hint=str(normalized.product or "").strip().upper() or None,
-            correlation_id=correlation_id,
-        )
-    except Exception:
-        pass
+    #
+    # Exception: Builder-v1 payloads intentionally default to qty=0 so the user
+    # can review/override sizing in the UI before dispatching.
+    if payload.payload_format != "TRADINGVIEW_META_SIGNAL_HINTS_V1":
+        try:
+            user_obj = db.get(User, alert.user_id) if alert.user_id is not None else None
+            _maybe_autosize_waiting_order_qty(
+                db=db,
+                settings=settings,
+                order=order,
+                user=user_obj,
+                product_hint=str(normalized.product or "").strip().upper() or None,
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            pass
 
     if sell_resolution is not None and str(order.side).strip().upper() == "SELL":
         if bool(getattr(sell_resolution, "reject", False)) and bool(
