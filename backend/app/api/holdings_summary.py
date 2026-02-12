@@ -109,12 +109,27 @@ def capture_holdings_summary_snapshot(
         allow_fetch_market_data=bool(allow_fetch_market_data),
     )
 
+    update_performance_fields = True
+    if target_date < today_ist:
+        existing_id = (
+            db.query(HoldingsSummarySnapshot.id)
+            .filter(
+                HoldingsSummarySnapshot.user_id == int(user.id),
+                HoldingsSummarySnapshot.broker_name == broker,
+                HoldingsSummarySnapshot.as_of_date == target_date,
+            )
+            .limit(1)
+            .scalar()
+        )
+        update_performance_fields = existing_id is None
+
     row = upsert_holdings_summary_snapshot(
         db,
         user_id=int(user.id),
         broker_name=broker,
         as_of_date=target_date,
         metrics=metrics,
+        update_performance_fields=bool(update_performance_fields),
     )
     return row
 

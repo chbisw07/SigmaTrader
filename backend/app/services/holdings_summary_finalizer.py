@@ -56,6 +56,7 @@ def _capture_snapshot_for_user(
     broker: str,
     as_of_date: date,
     allow_fetch_market_data: bool,
+    update_performance_fields: bool = True,
 ) -> HoldingsSummarySnapshot:
     # Fetch live holdings via the existing API logic (keeps behavior consistent).
     from app.api import positions as positions_api
@@ -91,6 +92,7 @@ def _capture_snapshot_for_user(
         broker_name=broker,
         as_of_date=as_of_date,
         metrics=metrics,
+        update_performance_fields=bool(update_performance_fields),
     )
 
 
@@ -139,6 +141,7 @@ def _finalize_prev_trading_day(
                     broker="zerodha",
                     as_of_date=target_date,
                     allow_fetch_market_data=False,
+                    update_performance_fields=existing is None,
                 )
                 record_system_event(
                     db,

@@ -475,7 +475,6 @@ export function HoldingsSummaryHistoryPanel({
                 <TableCell align="right">α (annual)</TableCell>
                 <TableCell align="right">β</TableCell>
                 <TableCell align="right">CAGR 1Y</TableCell>
-                <TableCell align="right">CAGR 2Y</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -525,12 +524,11 @@ export function HoldingsSummaryHistoryPanel({
                     {r.beta != null && Number.isFinite(Number(r.beta)) ? Number(r.beta).toFixed(2) : '—'}
                   </TableCell>
                   <TableCell align="right">{formatPct(r.cagr_1y_pct, 1)}</TableCell>
-                  <TableCell align="right">{formatPct(r.cagr_2y_pct, 1)}</TableCell>
                 </TableRow>
               ))}
               {visibleRows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={13}>
+                  <TableCell colSpan={12}>
                     <Typography variant="body2" color="text.secondary">
                       No snapshots yet. Click “Capture now” after connecting your broker.
                     </Typography>

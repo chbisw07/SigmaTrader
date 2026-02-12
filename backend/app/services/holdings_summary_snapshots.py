@@ -240,6 +240,7 @@ def upsert_holdings_summary_snapshot(
     broker_name: str,
     as_of_date: date,
     metrics: HoldingsSummaryMetrics,
+    update_performance_fields: bool = True,
 ) -> HoldingsSummarySnapshot:
     broker = (broker_name or "").strip().lower() or "zerodha"
     row: HoldingsSummarySnapshot | None = (
@@ -265,18 +266,24 @@ def upsert_holdings_summary_snapshot(
     row.equity_value = metrics.equity_value
     row.account_value = metrics.account_value
     row.total_pnl_pct = metrics.total_pnl_pct
-    row.today_pnl_pct = metrics.today_pnl_pct
-    row.overall_win_rate = metrics.overall_win_rate
-    row.today_win_rate = metrics.today_win_rate
-    row.alpha_annual_pct = metrics.alpha_annual_pct
-    row.beta = metrics.beta
-    row.cagr_1y_pct = metrics.cagr_1y_pct
-    row.cagr_2y_pct = metrics.cagr_2y_pct
-    row.cagr_1y_coverage_pct = metrics.cagr_1y_coverage_pct
-    row.cagr_2y_coverage_pct = metrics.cagr_2y_coverage_pct
-    row.benchmark_exchange = metrics.benchmark_exchange
-    row.benchmark_symbol = metrics.benchmark_symbol
-    row.risk_free_rate_pct = metrics.risk_free_rate_pct
+
+    # Important: performance/derived metrics (daily P&L, win rates, alpha/beta,
+    # CAGR, etc.) should be stable per as_of_date. During the pre-open
+    # "finalize yesterday" flow, broker-provided "today" fields often reset to
+    # 0.0 for the new session, so we avoid overwriting historical values.
+    if update_performance_fields:
+        row.today_pnl_pct = metrics.today_pnl_pct
+        row.overall_win_rate = metrics.overall_win_rate
+        row.today_win_rate = metrics.today_win_rate
+        row.alpha_annual_pct = metrics.alpha_annual_pct
+        row.beta = metrics.beta
+        row.cagr_1y_pct = metrics.cagr_1y_pct
+        row.cagr_2y_pct = metrics.cagr_2y_pct
+        row.cagr_1y_coverage_pct = metrics.cagr_1y_coverage_pct
+        row.cagr_2y_coverage_pct = metrics.cagr_2y_coverage_pct
+        row.benchmark_exchange = metrics.benchmark_exchange
+        row.benchmark_symbol = metrics.benchmark_symbol
+        row.risk_free_rate_pct = metrics.risk_free_rate_pct
 
     db.add(row)
     db.commit()

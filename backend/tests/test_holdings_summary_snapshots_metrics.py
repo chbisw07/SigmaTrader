@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from datetime import UTC, date, datetime, timedelta
 
@@ -144,6 +145,102 @@ def test_compute_metrics_and_upsert_snapshot() -> None:
 
         assert int(row1.id) == int(row2.id)
         assert row2.funds_available == pytest.approx(600.0)
+
+
+def test_upsert_preserves_performance_fields_when_disabled() -> None:
+    settings = get_settings()
+
+    now = (datetime.now(UTC) + timedelta(hours=5, minutes=30)).replace(tzinfo=None)
+    start = now - timedelta(days=270)
+
+    with SessionLocal() as db:
+        if db.query(User).filter(User.id == 2).count() == 0:
+            db.add(User(id=2, username="test2", password_hash="x", role="ADMIN"))
+            db.commit()
+
+        # Seed enough daily candles to compute 1Y CAGR and alpha/beta.
+        _seed_daily_candles(
+            db=db,
+            symbol="XYZ",
+            exchange="NSE",
+            start=start,
+            days=260,
+            base_close=50.0,
+            step=0.2,
+        )
+        _seed_daily_candles(
+            db=db,
+            symbol="NIFTYBEES",
+            exchange="NSE",
+            start=start,
+            days=260,
+            base_close=100.0,
+            step=0.05,
+        )
+
+        holding = HoldingRead(
+            symbol="XYZ",
+            exchange="NSE",
+            quantity=10,
+            average_price=40.0,
+            last_price=60.0,
+            pnl=200.0,
+            total_pnl_percent=50.0,
+            today_pnl_percent=2.0,
+        )
+
+        metrics1 = compute_holdings_summary_metrics(
+            holdings=[holding],
+            funds_available=500.0,
+            settings=settings,
+            db=db,
+            allow_fetch_market_data=False,
+        )
+        as_of = date.today()
+        row1 = upsert_holdings_summary_snapshot(
+            db,
+            user_id=2,
+            broker_name="zerodha",
+            as_of_date=as_of,
+            metrics=metrics1,
+        )
+
+        prev_today_pnl = row1.today_pnl_pct
+        prev_overall_win = row1.overall_win_rate
+        prev_today_win = row1.today_win_rate
+        prev_alpha = row1.alpha_annual_pct
+        prev_beta = row1.beta
+        prev_cagr_1y = row1.cagr_1y_pct
+
+        metrics2 = replace(
+            metrics1,
+            funds_available=700.0,
+            equity_value=(metrics1.equity_value or 0.0) + 100.0,
+            account_value=(metrics1.account_value or 0.0) + 100.0,
+            total_pnl_pct=(metrics1.total_pnl_pct or 0.0) + 1.0,
+            today_pnl_pct=0.0,
+            overall_win_rate=0.0,
+            today_win_rate=0.0,
+            alpha_annual_pct=0.0,
+            beta=0.0,
+            cagr_1y_pct=0.0,
+        )
+        row2 = upsert_holdings_summary_snapshot(
+            db,
+            user_id=2,
+            broker_name="zerodha",
+            as_of_date=as_of,
+            metrics=metrics2,
+            update_performance_fields=False,
+        )
+
+        assert row2.funds_available == pytest.approx(700.0)
+        assert row2.today_pnl_pct == prev_today_pnl
+        assert row2.overall_win_rate == prev_overall_win
+        assert row2.today_win_rate == prev_today_win
+        assert row2.alpha_annual_pct == prev_alpha
+        assert row2.beta == prev_beta
+        assert row2.cagr_1y_pct == prev_cagr_1y
 
 
 def test_default_snapshot_as_of_date_before_0900_ist_uses_previous_trading_day() -> None:
