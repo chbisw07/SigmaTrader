@@ -297,7 +297,7 @@ function MultiLineChart({
             fontSize={11}
             fill={alpha(theme.palette.text.secondary, 0.95)}
           >
-            {formatAxisPct(g.pct)}
+            {displayMode === 'pct' ? formatAxisPct(g.pct) : formatCompact(g.yValue)}
           </text>
         ))}
         {paths.map((p) => (
@@ -532,7 +532,7 @@ export function DashboardPage() {
     () => initialSettings.chartDisplayMode ?? 'value',
   )
   const { visible: showMoneyValues } = useSensitiveVisibility('privacy.show_money', false)
-  const effectiveChartDisplayMode: 'value' | 'pct' = showMoneyValues ? chartDisplayMode : 'pct'
+  const holdingsHistoryDisplayMode: 'value' | 'pct' = showMoneyValues ? chartDisplayMode : 'pct'
   const [symbolData, setSymbolData] = useState<SymbolSeriesResponse | null>(null)
   const [loadingSymbolData, setLoadingSymbolData] = useState(false)
   const [symbolDataError, setSymbolDataError] = useState<string | null>(null)
@@ -1541,7 +1541,7 @@ export function DashboardPage() {
                 </Stack>
               )}
 
-              <MultiLineChart series={chartSeries} height={300} displayMode={effectiveChartDisplayMode} />
+              <MultiLineChart series={chartSeries} height={300} displayMode={chartDisplayMode} />
 
               {summary.length > 0 && (
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 1 }}>
@@ -1549,11 +1549,11 @@ export function DashboardPage() {
                     <Paper key={s.key} variant="outlined" sx={{ p: 1.5, minWidth: 220 }}>
                       <Typography variant="subtitle2">{s.label}</Typography>
                       <Typography variant="h6" sx={{ mt: 0.5 }}>
-                        {effectiveChartDisplayMode === 'pct'
+                        {chartDisplayMode === 'pct'
                           ? formatPct(s.ret)
                           : formatCompact(s.last)}
                       </Typography>
-                      {effectiveChartDisplayMode === 'value' && (
+                      {chartDisplayMode === 'value' && (
                         <Typography
                           variant="body2"
                           color={s.ret >= 0 ? 'success.main' : 'error.main'}
@@ -1704,7 +1704,7 @@ export function DashboardPage() {
                 chartType={chartType}
                 overlays={chartOverlays}
                 markers={signalMarkers}
-                displayMode={effectiveChartDisplayMode}
+                displayMode={chartDisplayMode}
                 height={340}
               />
 
@@ -2112,7 +2112,7 @@ export function DashboardPage() {
       </Box>
 
       <Box sx={{ mt: 2 }}>
-        <HoldingsSummaryHistoryPanel chartDisplayMode={effectiveChartDisplayMode} />
+        <HoldingsSummaryHistoryPanel chartDisplayMode={holdingsHistoryDisplayMode} />
       </Box>
 
       <Dialog
