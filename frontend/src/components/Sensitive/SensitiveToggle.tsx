@@ -4,6 +4,7 @@ import Typography from '@mui/material/Typography'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import type { ReactNode } from 'react'
+import type { MouseEvent } from 'react'
 
 export function SensitiveToggle({
   label,
@@ -16,15 +17,30 @@ export function SensitiveToggle({
   onToggle: () => void
   ariaLabel: string
 }) {
+  const handleMouseDown = (e: MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const handleClick = (e: MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    onToggle()
+  }
+
   return (
     <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
       <Typography component="span" sx={{ minWidth: 0 }}>
         {label}
       </Typography>
-      <IconButton size="small" onClick={onToggle} aria-label={ariaLabel}>
+      <IconButton
+        size="small"
+        onMouseDown={handleMouseDown}
+        onClick={handleClick}
+        aria-label={ariaLabel}
+      >
         {visible ? <VisibilityIcon fontSize="small" /> : <VisibilityOffIcon fontSize="small" />}
       </IconButton>
     </Box>
   )
 }
-

@@ -5772,7 +5772,15 @@ export function HoldingsPage() {
                   {universeId !== 'holdings:angelone' && (
                     <IconButton
                       size="small"
-                      onClick={toggleShowMoneyValues}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        toggleShowMoneyValues()
+                      }}
                       aria-label={showMoneyValues ? 'Hide money values' : 'Show money values'}
                     >
                       {showMoneyValues ? (
@@ -5796,7 +5804,15 @@ export function HoldingsPage() {
                 </Typography>
                 <IconButton
                   size="small"
-                  onClick={toggleShowMoneyValues}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    toggleShowMoneyValues()
+                  }}
                   aria-label={showMoneyValues ? 'Hide money values' : 'Show money values'}
                 >
                   {showMoneyValues ? (
