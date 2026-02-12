@@ -48,7 +48,6 @@ import { PriceChart, type PriceChartType } from '../components/PriceChart'
 import { DslEditor } from '../components/DslEditor'
 import { HoldingsSummaryHistoryPanel } from '../components/HoldingsSummaryHistoryPanel'
 import { listCustomIndicators, type CustomIndicator } from '../services/alertsV3'
-import { useSensitiveVisibility } from '../utils/sensitiveVisibility'
 import {
   listSignalStrategies,
   listSignalStrategyVersions,
@@ -122,7 +121,12 @@ type DashboardSettingsV1 = {
   range?: string
   symbolRange?: string
   chartType?: PriceChartType
+  // Legacy global display mode (kept for backwards compatibility/migration).
   chartDisplayMode?: 'value' | 'pct'
+  // Per-chart display modes.
+  indicesChartDisplayMode?: 'value' | 'pct'
+  symbolChartDisplayMode?: 'value' | 'pct'
+  holdingsHistoryChartDisplayMode?: 'value' | 'pct'
   selectedSymbol?: { symbol: string; exchange: string; label: string } | null
   indicatorRows?: Array<
     AlertVariableDef & {
@@ -528,11 +532,16 @@ export function DashboardPage() {
   const [chartType, setChartType] = useState<PriceChartType>(
     () => initialSettings.chartType ?? 'line',
   )
-  const [chartDisplayMode, setChartDisplayMode] = useState<'value' | 'pct'>(
-    () => initialSettings.chartDisplayMode ?? 'value',
+  const initialDisplayMode: 'value' | 'pct' = initialSettings.chartDisplayMode ?? 'value'
+  const [indicesChartDisplayMode, setIndicesChartDisplayMode] = useState<'value' | 'pct'>(
+    () => initialSettings.indicesChartDisplayMode ?? initialDisplayMode,
   )
-  const { visible: showMoneyValues } = useSensitiveVisibility('privacy.show_money', false)
-  const holdingsHistoryDisplayMode: 'value' | 'pct' = showMoneyValues ? chartDisplayMode : 'pct'
+  const [symbolChartDisplayMode, setSymbolChartDisplayMode] = useState<'value' | 'pct'>(
+    () => initialSettings.symbolChartDisplayMode ?? initialDisplayMode,
+  )
+  const [holdingsHistoryChartDisplayMode, setHoldingsHistoryChartDisplayMode] = useState<
+    'value' | 'pct'
+  >(() => initialSettings.holdingsHistoryChartDisplayMode ?? initialDisplayMode)
   const [symbolData, setSymbolData] = useState<SymbolSeriesResponse | null>(null)
   const [loadingSymbolData, setLoadingSymbolData] = useState(false)
   const [symbolDataError, setSymbolDataError] = useState<string | null>(null)
@@ -930,7 +939,9 @@ export function DashboardPage() {
 	      range: String(range ?? ''),
 	      symbolRange: String(symbolRange ?? ''),
 	      chartType,
-        chartDisplayMode,
+        indicesChartDisplayMode,
+        symbolChartDisplayMode,
+        holdingsHistoryChartDisplayMode,
 	      selectedSymbol,
 	      indicatorRows,
 	      signalDsl,
@@ -938,13 +949,15 @@ export function DashboardPage() {
 	    })
 	  }, [
     chartType,
-    chartDisplayMode,
     includeHoldings,
+    indicesChartDisplayMode,
+    holdingsHistoryChartDisplayMode,
     holdingsBrokers,
     indicatorRows,
     range,
     selectedGroups,
     selectedSymbol,
+    symbolChartDisplayMode,
     settingsHydrated,
 	    signalDsl,
 	    signalParams,
@@ -1331,17 +1344,6 @@ export function DashboardPage() {
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2, flexWrap: 'wrap' }}>
         <Typography variant="h4">Dashboard</Typography>
         <Box sx={{ flex: 1 }} />
-        <TextField
-          label="Chart display"
-          select
-          size="small"
-          value={chartDisplayMode}
-          onChange={(e) => setChartDisplayMode(e.target.value as 'value' | 'pct')}
-          sx={{ minWidth: 160 }}
-        >
-          <MenuItem value="value">Value</MenuItem>
-          <MenuItem value="pct">%</MenuItem>
-        </TextField>
       </Stack>
 
       <Box
@@ -1466,6 +1468,19 @@ export function DashboardPage() {
                     </MenuItem>
                   ))}
                 </TextField>
+                <TextField
+                  label="Display"
+                  select
+                  size="small"
+                  value={indicesChartDisplayMode}
+                  onChange={(e) =>
+                    setIndicesChartDisplayMode(e.target.value === 'pct' ? 'pct' : 'value')
+                  }
+                  sx={{ minWidth: 120 }}
+                >
+                  <MenuItem value="value">Value</MenuItem>
+                  <MenuItem value="pct">%</MenuItem>
+                </TextField>
                 <Button
                   variant="contained"
                   onClick={handleRefresh}
@@ -1541,7 +1556,11 @@ export function DashboardPage() {
                 </Stack>
               )}
 
-              <MultiLineChart series={chartSeries} height={300} displayMode={chartDisplayMode} />
+              <MultiLineChart
+                series={chartSeries}
+                height={300}
+                displayMode={indicesChartDisplayMode}
+              />
 
               {summary.length > 0 && (
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 1 }}>
@@ -1549,11 +1568,11 @@ export function DashboardPage() {
                     <Paper key={s.key} variant="outlined" sx={{ p: 1.5, minWidth: 220 }}>
                       <Typography variant="subtitle2">{s.label}</Typography>
                       <Typography variant="h6" sx={{ mt: 0.5 }}>
-                        {chartDisplayMode === 'pct'
+                        {indicesChartDisplayMode === 'pct'
                           ? formatPct(s.ret)
                           : formatCompact(s.last)}
                       </Typography>
-                      {chartDisplayMode === 'value' && (
+                      {indicesChartDisplayMode === 'value' && (
                         <Typography
                           variant="body2"
                           color={s.ret >= 0 ? 'success.main' : 'error.main'}
@@ -1619,6 +1638,19 @@ export function DashboardPage() {
                         {o.label}
                       </MenuItem>
                     ))}
+                  </TextField>
+                  <TextField
+                    label="Display"
+                    select
+                    size="small"
+                    value={symbolChartDisplayMode}
+                    onChange={(e) =>
+                      setSymbolChartDisplayMode(e.target.value === 'pct' ? 'pct' : 'value')
+                    }
+                    sx={{ minWidth: 120 }}
+                  >
+                    <MenuItem value="value">Value</MenuItem>
+                    <MenuItem value="pct">%</MenuItem>
                   </TextField>
                   <TextField
                     label="Chart"
@@ -1704,7 +1736,7 @@ export function DashboardPage() {
                 chartType={chartType}
                 overlays={chartOverlays}
                 markers={signalMarkers}
-                displayMode={chartDisplayMode}
+                displayMode={symbolChartDisplayMode}
                 height={340}
               />
 
@@ -2112,7 +2144,10 @@ export function DashboardPage() {
       </Box>
 
       <Box sx={{ mt: 2 }}>
-        <HoldingsSummaryHistoryPanel chartDisplayMode={holdingsHistoryDisplayMode} />
+        <HoldingsSummaryHistoryPanel
+          chartDisplayMode={holdingsHistoryChartDisplayMode}
+          onChartDisplayModeChange={setHoldingsHistoryChartDisplayMode}
+        />
       </Box>
 
       <Dialog

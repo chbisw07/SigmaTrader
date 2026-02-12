@@ -196,8 +196,10 @@ function HoldingsLineChart({
 
 export function HoldingsSummaryHistoryPanel({
   chartDisplayMode = 'value',
+  onChartDisplayModeChange,
 }: {
   chartDisplayMode?: 'value' | 'pct'
+  onChartDisplayModeChange?: (next: 'value' | 'pct') => void
 }) {
   const theme = useTheme()
   const [brokerName, setBrokerName] = useState('zerodha')
@@ -214,6 +216,7 @@ export function HoldingsSummaryHistoryPanel({
     'privacy.show_money',
     false,
   )
+  const effectiveChartDisplayMode: 'value' | 'pct' = showMoneyValues ? chartDisplayMode : 'pct'
 
   const loadMeta = async (): Promise<{ min: string; max: string }> => {
     const m = await fetchHoldingsSummarySnapshotsMeta({ broker_name: brokerName })
@@ -350,6 +353,22 @@ export function HoldingsSummaryHistoryPanel({
         <Typography variant="h6" sx={{ flex: 1, minWidth: 240 }}>
           Holdings summary history
         </Typography>
+        {onChartDisplayModeChange && (
+          <TextField
+            label="Display"
+            select
+            size="small"
+            value={effectiveChartDisplayMode}
+            disabled={!showMoneyValues}
+            onChange={(e) =>
+              onChartDisplayModeChange(e.target.value === 'pct' ? 'pct' : 'value')
+            }
+            sx={{ minWidth: 120 }}
+          >
+            <MenuItem value="value">Value</MenuItem>
+            <MenuItem value="pct">%</MenuItem>
+          </TextField>
+        )}
         <FormControlLabel
           control={<Switch checked={autoCapture} onChange={(e) => setAutoCapture(e.target.checked)} />}
           label="Auto-finalize previous day (before 09:00 IST)"
@@ -417,7 +436,7 @@ export function HoldingsSummaryHistoryPanel({
           </Typography>
           <HoldingsLineChart
             height={260}
-            displayMode={chartDisplayMode}
+            displayMode={effectiveChartDisplayMode}
             series={[
               {
                 label: 'Account value (cash + equity)',
@@ -433,7 +452,7 @@ export function HoldingsSummaryHistoryPanel({
           </Typography>
           <HoldingsLineChart
             height={260}
-            displayMode={chartDisplayMode}
+            displayMode={effectiveChartDisplayMode}
             leftScaleVisible
             series={[
               {
@@ -453,7 +472,7 @@ export function HoldingsSummaryHistoryPanel({
           <Typography variant="caption" color="text.secondary">
             Equity uses the left y-axis; Funds (cash) uses the right y-axis.
           </Typography>
-          {chartDisplayMode === 'pct' && (
+          {effectiveChartDisplayMode === 'pct' && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
               % mode is relative to the first visible value on each axis (Equity and Funds are scaled independently).
             </Typography>
