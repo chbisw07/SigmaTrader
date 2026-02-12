@@ -5716,6 +5716,303 @@ export function HoldingsPage() {
               <Button onClick={() => setGoalReviewHistoryOpen(false)}>Close</Button>
             </DialogActions>
           </Dialog>
+
+          <Box
+            sx={{
+              mt: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-start',
+              flexWrap: 'wrap',
+              gap: 2,
+            }}
+          >
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                gap: 0.5,
+                flex: '1 1 auto',
+              }}
+            >
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  flexWrap: 'wrap',
+                  justifyContent: 'flex-start',
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    Universe:
+                  </Typography>
+                  <Select
+                    size="small"
+                    value={universeId}
+                    onChange={(e) => {
+                      const next = String(e.target.value || 'holdings')
+                      setRowSelectionModel([])
+                      setUniverseId(next)
+                      if (next === 'holdings') {
+                        navigate('/holdings', { replace: true })
+                      } else {
+                        navigate(
+                          `/holdings?${new URLSearchParams({ universe: next }).toString()}`,
+                          { replace: true },
+                        )
+                      }
+                    }}
+                    sx={{ minWidth: 240 }}
+                  >
+                    <MenuItem value="holdings">Holdings (Zerodha)</MenuItem>
+                    {angeloneConnected && (
+                      <MenuItem value="holdings:angelone">
+                        Holdings (AngelOne)
+                      </MenuItem>
+                    )}
+                    {availableGroups.map((g) => {
+                      const kindLabel =
+                        g.kind === 'WATCHLIST'
+                          ? 'Watchlist'
+                          : g.kind === 'MODEL_PORTFOLIO'
+                            ? 'Basket'
+                            : g.kind === 'PORTFOLIO'
+                              ? 'Portfolio'
+                              : g.kind === 'HOLDINGS_VIEW'
+                                ? 'Holdings view'
+                                : g.kind
+                      return (
+                        <MenuItem key={g.id} value={`group:${g.id}`}>
+                          {g.name} ({kindLabel})
+                        </MenuItem>
+                      )
+                    })}
+                  </Select>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    View:
+                  </Typography>
+                  <Select
+                    size="small"
+                    value={viewId}
+                    onChange={(e) => {
+                      const next = String(
+                        e.target.value || 'default',
+                      ) as HoldingsViewId
+                      setViewId(next)
+                      if (typeof window !== 'undefined') {
+                        try {
+                          window.localStorage.setItem(
+                            HOLDINGS_SELECTED_VIEW_STORAGE_KEY,
+                            next,
+                          )
+                        } catch {
+                          // Ignore persistence errors.
+                        }
+                      }
+                    }}
+                    sx={{ minWidth: 160 }}
+                  >
+                    <MenuItem value="default">Default</MenuItem>
+                    {goalViewSupported && (
+                      <MenuItem value="goal">Goal View</MenuItem>
+                    )}
+                    <MenuItem value="performance">Performance</MenuItem>
+                    <MenuItem value="indicators">Indicators</MenuItem>
+                    <MenuItem value="support_resistance">
+                      Support/Resistance
+                    </MenuItem>
+                    <MenuItem value="risk">Risk</MenuItem>
+                    {customViews.length > 0 && (
+                      <MenuItem disabled>— Custom —</MenuItem>
+                    )}
+                    {customViews.map((v) => (
+                      <MenuItem key={v.id} value={v.id as HoldingsViewId}>
+                        {v.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setViewsDialogOpen(true)}
+                  >
+                    Views…
+                  </Button>
+                </Box>
+                {viewId === 'goal' && goalViewSupported && (
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      Filters:
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label="All"
+                      color={goalFilter === 'all' ? 'primary' : 'default'}
+                      onClick={() => setGoalFilter('all')}
+                    />
+                    <Chip
+                      size="small"
+                      label="Overdue"
+                      color={goalFilter === 'overdue' ? 'primary' : 'default'}
+                      onClick={() => setGoalFilter('overdue')}
+                    />
+                    <Chip
+                      size="small"
+                      label={`Due Soon (≤${GOAL_DUE_SOON_DAYS}d)`}
+                      color={goalFilter === 'due_soon' ? 'primary' : 'default'}
+                      onClick={() => setGoalFilter('due_soon')}
+                    />
+                    <Chip
+                      size="small"
+                      label={`Near Target (±${GOAL_NEAR_TARGET_PCT}%)`}
+                      color={goalFilter === 'near_target' ? 'primary' : 'default'}
+                      onClick={() => setGoalFilter('near_target')}
+                    />
+                    <Chip
+                      size="small"
+                      label="Missing"
+                      color={goalFilter === 'missing' ? 'primary' : 'default'}
+                      onClick={() => setGoalFilter('missing')}
+                    />
+                    {missingGoalCount > 0 && (
+                      <Button
+                        size="small"
+                        variant="contained"
+                        onClick={() => openGoalEditor(missingGoalRows[0])}
+                      >
+                        Set missing goals ({missingGoalCount})
+                      </Button>
+                    )}
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => setGoalImportOpen(true)}
+                    >
+                      Import CSV
+                    </Button>
+                  </Box>
+                )}
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={() => {
+                    const selected = holdings.filter((h) =>
+                      rowSelectionModel.includes(h.symbol),
+                    )
+                    if (!selected.length) return
+                    setBulkTradeHoldings(selected)
+                    setBulkPriceOverrides({})
+                    setBulkAmountOverrides({})
+                    setBulkQtyOverrides({})
+                    setBulkAmountManual(false)
+                    setBulkAmountBudget('')
+                    openBulkTradeDialog(selected, 'BUY')
+                  }}
+                  disabled={rowSelectionModel.length === 0}
+                >
+                  Bulk buy
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  color="error"
+                  onClick={() => {
+                    const selected = holdings.filter((h) =>
+                      rowSelectionModel.includes(h.symbol),
+                    )
+                    if (!selected.length) return
+                    setBulkTradeHoldings(selected)
+                    setBulkPriceOverrides({})
+                    setBulkAmountOverrides({})
+                    setBulkQtyOverrides({})
+                    setBulkAmountManual(false)
+                    setBulkAmountBudget('')
+                    openBulkTradeDialog(selected, 'SELL')
+                  }}
+                  disabled={rowSelectionModel.length === 0}
+                >
+                  Bulk sell
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    setGroupCreateError(null)
+                    setGroupCreateInfo(null)
+                    setGroupSelectionMode('create')
+                    setGroupTargetId('')
+                    setGroupCreateOpen(true)
+                  }}
+                  disabled={rowSelectionModel.length === 0}
+                >
+                  Group
+                </Button>
+                {rebalanceConfig.show && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<AutorenewIcon />}
+                    onClick={() => setRebalanceOpen(true)}
+                  >
+                    Rebalance
+                  </Button>
+                )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => setSettingsOpen(true)}
+                >
+                  View settings
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => {
+                    if (!hasLoadedOnce) {
+                      void load()
+                      return
+                    }
+                    void refreshHoldingsInPlace('manual')
+                  }}
+                >
+                  Refresh now
+                </Button>
+                <Box
+                  sx={{
+                    flex: '1 1 240px',
+                    minWidth: 260,
+                    maxWidth: 420,
+                    ml: { xs: 0, md: 'auto' },
+                  }}
+                >
+                  <InstrumentSearch
+                    label="Quick trade"
+                    brokerName={
+                      universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'
+                    }
+                    onSelect={handleQuickTradeSelect}
+                  />
+                </Box>
+              </Box>
+              {totalActiveAlerts > 0 && (
+                <Typography variant="caption" color="text.secondary">
+                  Active alerts (approx.): {totalActiveAlerts}
+                </Typography>
+              )}
+            </Box>
+          </Box>
         </Box>
 
         <Paper
@@ -6202,284 +6499,6 @@ export function HoldingsPage() {
         brokerLocked={rebalanceConfig.brokerLocked}
         scheduleSupported={rebalanceConfig.scheduleSupported}
       />
-
-      <Box
-        sx={{
-          mb: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-start',
-          flexWrap: 'wrap',
-          gap: 2,
-        }}
-      >
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-start',
-            gap: 0.5,
-            flex: '1 1 auto',
-          }}
-        >
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              flexWrap: 'wrap',
-              justifyContent: 'flex-start',
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="caption" color="text.secondary">
-                Universe:
-              </Typography>
-              <Select
-                size="small"
-                value={universeId}
-                onChange={(e) => {
-                  const next = String(e.target.value || 'holdings')
-                  setRowSelectionModel([])
-                  setUniverseId(next)
-                  if (next === 'holdings') {
-                    navigate('/holdings', { replace: true })
-                  } else {
-                    navigate(
-                      `/holdings?${new URLSearchParams({ universe: next }).toString()}`,
-                      { replace: true },
-                    )
-                  }
-                }}
-                sx={{ minWidth: 240 }}
-              >
-                <MenuItem value="holdings">Holdings (Zerodha)</MenuItem>
-                {angeloneConnected && (
-                  <MenuItem value="holdings:angelone">Holdings (AngelOne)</MenuItem>
-                )}
-                {availableGroups.map((g) => {
-                  const kindLabel =
-                    g.kind === 'WATCHLIST'
-                      ? 'Watchlist'
-                      : g.kind === 'MODEL_PORTFOLIO'
-                        ? 'Basket'
-                        : g.kind === 'PORTFOLIO'
-                          ? 'Portfolio'
-                          : g.kind === 'HOLDINGS_VIEW'
-                            ? 'Holdings view'
-                            : g.kind
-                  return (
-                    <MenuItem key={g.id} value={`group:${g.id}`}>
-                      {g.name} ({kindLabel})
-                    </MenuItem>
-                  )
-                })}
-              </Select>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="caption" color="text.secondary">
-                View:
-              </Typography>
-              <Select
-                size="small"
-                value={viewId}
-                onChange={(e) => {
-                  const next = String(e.target.value || 'default') as HoldingsViewId
-                  setViewId(next)
-                  if (typeof window !== 'undefined') {
-                    try {
-                      window.localStorage.setItem(
-                        HOLDINGS_SELECTED_VIEW_STORAGE_KEY,
-                        next,
-                      )
-                    } catch {
-                      // Ignore persistence errors.
-                    }
-                  }
-                }}
-                sx={{ minWidth: 160 }}
-              >
-                <MenuItem value="default">Default</MenuItem>
-                {goalViewSupported && <MenuItem value="goal">Goal View</MenuItem>}
-                <MenuItem value="performance">Performance</MenuItem>
-                <MenuItem value="indicators">Indicators</MenuItem>
-                <MenuItem value="support_resistance">Support/Resistance</MenuItem>
-                <MenuItem value="risk">Risk</MenuItem>
-                {customViews.length > 0 && <MenuItem disabled>— Custom —</MenuItem>}
-                {customViews.map((v) => (
-                  <MenuItem key={v.id} value={v.id as HoldingsViewId}>
-                    {v.name}
-                  </MenuItem>
-                ))}
-              </Select>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setViewsDialogOpen(true)}
-              >
-                Views…
-              </Button>
-            </Box>
-            {viewId === 'goal' && goalViewSupported && (
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <Typography variant="caption" color="text.secondary">
-                  Filters:
-                </Typography>
-                <Chip
-                  size="small"
-                  label="All"
-                  color={goalFilter === 'all' ? 'primary' : 'default'}
-                  onClick={() => setGoalFilter('all')}
-                />
-                <Chip
-                  size="small"
-                  label="Overdue"
-                  color={goalFilter === 'overdue' ? 'primary' : 'default'}
-                  onClick={() => setGoalFilter('overdue')}
-                />
-                <Chip
-                  size="small"
-                  label={`Due Soon (≤${GOAL_DUE_SOON_DAYS}d)`}
-                  color={goalFilter === 'due_soon' ? 'primary' : 'default'}
-                  onClick={() => setGoalFilter('due_soon')}
-                />
-                <Chip
-                  size="small"
-                  label={`Near Target (±${GOAL_NEAR_TARGET_PCT}%)`}
-                  color={goalFilter === 'near_target' ? 'primary' : 'default'}
-                  onClick={() => setGoalFilter('near_target')}
-                />
-                <Chip
-                  size="small"
-                  label="Missing"
-                  color={goalFilter === 'missing' ? 'primary' : 'default'}
-                  onClick={() => setGoalFilter('missing')}
-                />
-                {missingGoalCount > 0 && (
-                  <Button
-                    size="small"
-                    variant="contained"
-                    onClick={() => openGoalEditor(missingGoalRows[0])}
-                  >
-                    Set missing goals ({missingGoalCount})
-                  </Button>
-                )}
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => setGoalImportOpen(true)}
-                >
-                  Import CSV
-                </Button>
-              </Box>
-            )}
-            <Button
-              size="small"
-              variant="contained"
-              onClick={() => {
-                const selected = holdings.filter((h) =>
-                  rowSelectionModel.includes(h.symbol),
-                )
-                if (!selected.length) return
-                setBulkTradeHoldings(selected)
-                setBulkPriceOverrides({})
-                setBulkAmountOverrides({})
-                setBulkQtyOverrides({})
-                setBulkAmountManual(false)
-                setBulkAmountBudget('')
-                openBulkTradeDialog(selected, 'BUY')
-              }}
-              disabled={rowSelectionModel.length === 0}
-            >
-              Bulk buy
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              color="error"
-              onClick={() => {
-                const selected = holdings.filter((h) =>
-                  rowSelectionModel.includes(h.symbol),
-                )
-                if (!selected.length) return
-                setBulkTradeHoldings(selected)
-                setBulkPriceOverrides({})
-                setBulkAmountOverrides({})
-                setBulkQtyOverrides({})
-                setBulkAmountManual(false)
-                setBulkAmountBudget('')
-                openBulkTradeDialog(selected, 'SELL')
-              }}
-              disabled={rowSelectionModel.length === 0}
-            >
-              Bulk sell
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => {
-                setGroupCreateError(null)
-                setGroupCreateInfo(null)
-                setGroupSelectionMode('create')
-                setGroupTargetId('')
-                setGroupCreateOpen(true)
-              }}
-              disabled={rowSelectionModel.length === 0}
-            >
-              Group
-            </Button>
-            {rebalanceConfig.show && (
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<AutorenewIcon />}
-                onClick={() => setRebalanceOpen(true)}
-              >
-                Rebalance
-              </Button>
-            )}
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => setSettingsOpen(true)}
-            >
-              View settings
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => {
-                if (!hasLoadedOnce) {
-                  void load()
-                  return
-                }
-                void refreshHoldingsInPlace('manual')
-              }}
-            >
-              Refresh now
-            </Button>
-            <Box sx={{ flex: '1 1 240px', minWidth: 260, maxWidth: 420, ml: { xs: 0, md: 'auto' } }}>
-              <InstrumentSearch
-                label="Quick trade"
-                brokerName={universeId === 'holdings:angelone' ? 'angelone' : 'zerodha'}
-                onSelect={handleQuickTradeSelect}
-              />
-            </Box>
-          </Box>
-          {totalActiveAlerts > 0 && (
-            <Typography variant="caption" color="text.secondary">
-              Active alerts (approx.): {totalActiveAlerts}
-            </Typography>
-          )}
-        </Box>
-      </Box>
 
       {/*
       {advancedFiltersOpen && screenerMode === 'builder' && (
