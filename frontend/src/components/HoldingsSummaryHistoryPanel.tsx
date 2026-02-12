@@ -31,6 +31,8 @@ import {
   fetchHoldingsSummarySnapshotsMeta,
   type HoldingsSummarySnapshot,
 } from '../services/holdingsSummarySnapshots'
+import { useSensitiveVisibility } from '../utils/sensitiveVisibility'
+import { SensitiveToggle } from './Sensitive/SensitiveToggle'
 
 function formatCompactInr(value: number): string {
   if (!Number.isFinite(value)) return '—'
@@ -208,6 +210,10 @@ export function HoldingsSummaryHistoryPanel({
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [autoCapture, setAutoCapture] = useState(true)
+  const { visible: showMoneyValues, toggle: toggleShowMoneyValues } = useSensitiveVisibility(
+    'privacy.show_money',
+    false,
+  )
 
   const loadMeta = async (): Promise<{ min: string; max: string }> => {
     const m = await fetchHoldingsSummarySnapshotsMeta({ broker_name: brokerName })
@@ -465,9 +471,30 @@ export function HoldingsSummaryHistoryPanel({
               <TableRow>
                 <TableCell>Date</TableCell>
                 <TableCell align="right">Positions</TableCell>
-                <TableCell align="right">Funds</TableCell>
-                <TableCell align="right">Equity</TableCell>
-                <TableCell align="right">Account</TableCell>
+                <TableCell align="right">
+                  <SensitiveToggle
+                    label="Funds"
+                    visible={showMoneyValues}
+                    onToggle={toggleShowMoneyValues}
+                    ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+                  />
+                </TableCell>
+                <TableCell align="right">
+                  <SensitiveToggle
+                    label="Equity"
+                    visible={showMoneyValues}
+                    onToggle={toggleShowMoneyValues}
+                    ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+                  />
+                </TableCell>
+                <TableCell align="right">
+                  <SensitiveToggle
+                    label="Account"
+                    visible={showMoneyValues}
+                    onToggle={toggleShowMoneyValues}
+                    ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+                  />
+                </TableCell>
                 <TableCell align="right">P&amp;L (total)</TableCell>
                 <TableCell align="right">P&amp;L (today)</TableCell>
                 <TableCell align="right">Win rate</TableCell>
@@ -483,13 +510,25 @@ export function HoldingsSummaryHistoryPanel({
                   <TableCell>{r.as_of_date}</TableCell>
                   <TableCell align="right">{r.holdings_count ?? 0}</TableCell>
                   <TableCell align="right">
-                    {r.funds_available != null ? formatCompactInr(Number(r.funds_available)) : '—'}
+                    {showMoneyValues
+                      ? r.funds_available != null
+                        ? formatCompactInr(Number(r.funds_available))
+                        : '—'
+                      : '₹••••'}
                   </TableCell>
                   <TableCell align="right">
-                    {r.equity_value != null ? formatCompactInr(Number(r.equity_value)) : '—'}
+                    {showMoneyValues
+                      ? r.equity_value != null
+                        ? formatCompactInr(Number(r.equity_value))
+                        : '—'
+                      : '₹••••'}
                   </TableCell>
                   <TableCell align="right">
-                    {r.account_value != null ? formatCompactInr(Number(r.account_value)) : '—'}
+                    {showMoneyValues
+                      ? r.account_value != null
+                        ? formatCompactInr(Number(r.account_value))
+                        : '—'
+                      : '₹••••'}
                   </TableCell>
                   <TableCell
                     align="right"

@@ -48,6 +48,7 @@ import { PriceChart, type PriceChartType } from '../components/PriceChart'
 import { DslEditor } from '../components/DslEditor'
 import { HoldingsSummaryHistoryPanel } from '../components/HoldingsSummaryHistoryPanel'
 import { listCustomIndicators, type CustomIndicator } from '../services/alertsV3'
+import { useSensitiveVisibility } from '../utils/sensitiveVisibility'
 import {
   listSignalStrategies,
   listSignalStrategyVersions,
@@ -530,6 +531,8 @@ export function DashboardPage() {
   const [chartDisplayMode, setChartDisplayMode] = useState<'value' | 'pct'>(
     () => initialSettings.chartDisplayMode ?? 'value',
   )
+  const { visible: showMoneyValues } = useSensitiveVisibility('privacy.show_money', false)
+  const effectiveChartDisplayMode: 'value' | 'pct' = showMoneyValues ? chartDisplayMode : 'pct'
   const [symbolData, setSymbolData] = useState<SymbolSeriesResponse | null>(null)
   const [loadingSymbolData, setLoadingSymbolData] = useState(false)
   const [symbolDataError, setSymbolDataError] = useState<string | null>(null)
@@ -1538,7 +1541,7 @@ export function DashboardPage() {
                 </Stack>
               )}
 
-              <MultiLineChart series={chartSeries} height={300} displayMode={chartDisplayMode} />
+              <MultiLineChart series={chartSeries} height={300} displayMode={effectiveChartDisplayMode} />
 
               {summary.length > 0 && (
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 1 }}>
@@ -1546,14 +1549,18 @@ export function DashboardPage() {
                     <Paper key={s.key} variant="outlined" sx={{ p: 1.5, minWidth: 220 }}>
                       <Typography variant="subtitle2">{s.label}</Typography>
                       <Typography variant="h6" sx={{ mt: 0.5 }}>
-                        {formatCompact(s.last)}
+                        {effectiveChartDisplayMode === 'pct'
+                          ? formatPct(s.ret)
+                          : formatCompact(s.last)}
                       </Typography>
-                      <Typography
-                        variant="body2"
-                        color={s.ret >= 0 ? 'success.main' : 'error.main'}
-                      >
-                        {formatPct(s.ret)} (range)
-                      </Typography>
+                      {effectiveChartDisplayMode === 'value' && (
+                        <Typography
+                          variant="body2"
+                          color={s.ret >= 0 ? 'success.main' : 'error.main'}
+                        >
+                          {formatPct(s.ret)} (range)
+                        </Typography>
+                      )}
                       {s.missing > 0 && (
                         <Typography variant="caption" color="text.secondary">
                           Missing symbols: {s.missing}
@@ -1697,7 +1704,7 @@ export function DashboardPage() {
                 chartType={chartType}
                 overlays={chartOverlays}
                 markers={signalMarkers}
-                displayMode={chartDisplayMode}
+                displayMode={effectiveChartDisplayMode}
                 height={340}
               />
 
@@ -2105,7 +2112,7 @@ export function DashboardPage() {
       </Box>
 
       <Box sx={{ mt: 2 }}>
-        <HoldingsSummaryHistoryPanel chartDisplayMode={chartDisplayMode} />
+        <HoldingsSummaryHistoryPanel chartDisplayMode={effectiveChartDisplayMode} />
       </Box>
 
       <Dialog

@@ -28,13 +28,12 @@ import Divider from '@mui/material/Divider'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import {
   DataGrid,
-  GridToolbar,
   type GridColDef,
   type GridRenderCellParams,
   type GridCellParams,
   type GridColumnVisibilityModel,
-  GridLogicOperator,
   type GridRowSelectionModel,
+  type GridRowClassNameParams,
   useGridApiRef,
 } from '@mui/x-data-grid'
 import {
@@ -46,9 +45,14 @@ import {
   type MouseEvent,
 } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import type { Theme } from '@mui/material/styles'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
 import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
+import { useSensitiveVisibility } from '../utils/sensitiveVisibility'
+import VisibilityIcon from '@mui/icons-material/Visibility'
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
+import IconButton from '@mui/material/IconButton'
 import {
   clampQtyToMax,
   shouldClampSellToHoldingsQty,
@@ -104,6 +108,7 @@ import {
 import { InstrumentSearch } from '../components/InstrumentSearch'
 import type { InstrumentSearchResult } from '../services/instruments'
 import { createHoldingsExitSubscription } from '../services/holdingsExit'
+import { SensitiveToggle } from '../components/Sensitive/SensitiveToggle'
 
 type HoldingIndicators = {
   rsi14?: number
@@ -397,6 +402,14 @@ export function HoldingsPage() {
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
   const [viewId, setViewId] = useState<HoldingsViewId>('default')
+  const { visible: showMoneyValues, toggle: toggleShowMoneyValues } = useSensitiveVisibility(
+    'privacy.show_money',
+    false,
+  )
+  const { visible: showQtyValues, toggle: toggleShowQtyValues } = useSensitiveVisibility(
+    'privacy.show_qty',
+    false,
+  )
   const enrichmentConfig = useMemo(() => {
     const computeIndicators =
       viewId === 'indicators' ||
@@ -1758,6 +1771,7 @@ export function HoldingsPage() {
   }, [benchmarkHistory, holdings, riskFreeRatePct])
 
   const formatInrCompact = useCallback((value: number | null) => {
+    if (!showMoneyValues) return '₹••••'
     if (value == null || !Number.isFinite(value)) return '—'
     const abs = Math.abs(value)
     if (abs >= 1e7) return `₹${(value / 1e7).toFixed(2)}Cr`
@@ -1768,7 +1782,7 @@ export function HoldingsPage() {
       currency: 'INR',
       maximumFractionDigits: 0,
     })
-  }, [])
+  }, [showMoneyValues])
 
   const formatPct = useCallback((value: number | null, digits = 2) => {
     if (value == null || !Number.isFinite(value)) return '—'
@@ -4071,7 +4085,13 @@ export function HoldingsPage() {
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5 }}>
             <span>{symbol}</span>
             {showHoldingsChip && (
-              <Tooltip title={`In Holdings (Zerodha): qty ${Math.floor(qty)}`}>
+              <Tooltip
+                title={
+                  showQtyValues
+                    ? `In Holdings (Zerodha): qty ${Math.floor(qty)}`
+                    : 'In Holdings (Zerodha): qty •••'
+                }
+              >
                 <Chip
                   size="small"
                   variant="outlined"
@@ -4330,7 +4350,16 @@ export function HoldingsPage() {
       headerName: 'Qty',
       type: 'number',
       width: 100,
+      renderHeader: () => (
+        <SensitiveToggle
+          label="Qty"
+          visible={showQtyValues}
+          onToggle={toggleShowQtyValues}
+          ariaLabel={showQtyValues ? 'Hide quantities' : 'Show quantities'}
+        />
+      ),
       renderCell: (params) => {
+        if (!showQtyValues) return <span>•••</span>
         const row = params.row as HoldingRow
         if (activeGroup?.kind !== 'PORTFOLIO') return <span>{row.quantity}</span>
 
@@ -4359,7 +4388,16 @@ export function HoldingsPage() {
       type: 'number',
       width: 110,
       valueGetter: (_value, row) => (row as HoldingRow).reference_qty ?? null,
+      renderHeader: () => (
+        <SensitiveToggle
+          label="Ref Qty"
+          visible={showQtyValues}
+          onToggle={toggleShowQtyValues}
+          ariaLabel={showQtyValues ? 'Hide quantities' : 'Show quantities'}
+        />
+      ),
       renderCell: (params) => {
+        if (!showQtyValues) return <span>•••</span>
         const row = params.row as HoldingRow
         const ref = row.reference_qty
         if (ref == null || !Number.isFinite(Number(ref))) return <span>—</span>
@@ -4458,11 +4496,29 @@ export function HoldingsPage() {
       headerName: 'P&L (Since)',
       type: 'number',
       width: 150,
+      renderHeader: () => (
+        <SensitiveToggle
+          label="P&L (Since)"
+          visible={showMoneyValues}
+          onToggle={toggleShowMoneyValues}
+          ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+        />
+      ),
       valueGetter: (_value, row) => getSinceCreationPnl(row as HoldingRow),
       valueFormatter: (value) =>
         value != null && Number.isFinite(Number(value))
           ? Number(value).toFixed(2)
           : '—',
+      renderCell: (params) =>
+        showMoneyValues ? (
+          <span>
+            {params.value != null && Number.isFinite(Number(params.value))
+              ? Number(params.value).toFixed(2)
+              : '—'}
+          </span>
+        ) : (
+          <span>₹••••</span>
+        ),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -4491,24 +4547,60 @@ export function HoldingsPage() {
       headerName: 'Invested',
       type: 'number',
       width: 140,
+      renderHeader: () => (
+        <SensitiveToggle
+          label="Invested"
+          visible={showMoneyValues}
+          onToggle={toggleShowMoneyValues}
+          ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+        />
+      ),
       valueGetter: (_value, row) => {
         const h = row as HoldingRow
         if (h.quantity == null || h.average_price == null) return null
         return Number(h.quantity) * Number(h.average_price)
       },
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+      renderCell: (params) =>
+        showMoneyValues ? (
+          <span>
+            {params.value != null && Number.isFinite(Number(params.value))
+              ? Number(params.value).toFixed(2)
+              : '-'}
+          </span>
+        ) : (
+          <span>₹••••</span>
+        ),
     },
     {
       field: 'current_value',
       headerName: 'Current Value',
       type: 'number',
       width: 150,
+      renderHeader: () => (
+        <SensitiveToggle
+          label="Current Value"
+          visible={showMoneyValues}
+          onToggle={toggleShowMoneyValues}
+          ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+        />
+      ),
       valueGetter: (_value, row) => {
         const h = row as HoldingRow
         if (h.quantity == null || h.last_price == null) return null
         return Number(h.quantity) * Number(h.last_price)
       },
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+      renderCell: (params) =>
+        showMoneyValues ? (
+          <span>
+            {params.value != null && Number.isFinite(Number(params.value))
+              ? Number(params.value).toFixed(2)
+              : '-'}
+          </span>
+        ) : (
+          <span>₹••••</span>
+        ),
     },
     {
       field: 'weight',
@@ -4890,7 +4982,21 @@ export function HoldingsPage() {
       headerName: 'Unrealized P&L',
       type: 'number',
       width: 150,
+      renderHeader: () => (
+        <SensitiveToggle
+          label="Unrealized P&L"
+          visible={showMoneyValues}
+          onToggle={toggleShowMoneyValues}
+          ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+        />
+      ),
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+      renderCell: (params) =>
+        showMoneyValues ? (
+          <span>{params.value != null ? Number(params.value).toFixed(2) : '-'}</span>
+        ) : (
+          <span>₹••••</span>
+        ),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -4899,6 +5005,14 @@ export function HoldingsPage() {
       headerName: 'PnL Shares',
       type: 'number',
       width: 120,
+      renderHeader: () => (
+        <SensitiveToggle
+          label="PnL Shares"
+          visible={showMoneyValues}
+          onToggle={toggleShowMoneyValues}
+          ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
+        />
+      ),
       valueGetter: (_value, row) => {
         const r = row as HoldingRow
         const pnl = r.pnl
@@ -4913,6 +5027,12 @@ export function HoldingsPage() {
       },
       valueFormatter: (value) =>
         value != null ? String(Math.trunc(Number(value))) : '-',
+      renderCell: (params) =>
+        showMoneyValues ? (
+          <span>{params.value != null ? String(Math.trunc(Number(params.value))) : '-'}</span>
+        ) : (
+          <span>•••</span>
+        ),
       cellClassName: (params: GridCellParams) =>
         params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
     },
@@ -5019,10 +5139,14 @@ export function HoldingsPage() {
     openTradeDialog,
     portfolioBaselineTotalValue,
     portfolioValue,
+    showMoneyValues,
+    showQtyValues,
     symbolCategoryBusyByKey,
     symbolCategoryRows,
     symbolColumnFlex,
     symbolColumnMinWidth,
+    toggleShowMoneyValues,
+    toggleShowQtyValues,
     universeId,
   ])
 
@@ -5273,6 +5397,101 @@ export function HoldingsPage() {
     }
   }, [customViews, universeId, viewId])
 
+  const gridGetRowId = useCallback((row: HoldingRow) => row.symbol, [])
+
+  const handleRowSelectionModelChange = useCallback((newSelection: GridRowSelectionModel) => {
+    setRowSelectionModel(newSelection)
+  }, [])
+
+  const handleColumnVisibilityModelChange = useCallback(
+    (model: GridColumnVisibilityModel) => {
+      setColumnVisibilityModel(model)
+      try {
+        const universeKey = encodeURIComponent(universeId)
+        const viewKey = encodeURIComponent(viewId)
+        const visibilityKeyVersion = viewId === 'default' ? 'v3' : 'v2'
+        const perUniverseKey = `st_holdings_column_visibility_${viewKey}_${universeKey}_${visibilityKeyVersion}`
+        const globalKey = `st_holdings_column_visibility_${viewKey}_${visibilityKeyVersion}`
+        window.localStorage.setItem(perUniverseKey, JSON.stringify(model))
+        window.localStorage.setItem(globalKey, JSON.stringify(model))
+
+        // Keep the legacy keys updated for backwards-compatible defaults
+        // (these are used only as fallbacks).
+        if (viewId === 'default' || viewId === 'risk') {
+          const legacyKey =
+            viewId === 'risk'
+              ? 'st_holdings_column_visibility_risk_v1'
+              : 'st_holdings_column_visibility_default_v1'
+          if (universeId === 'holdings' || universeId === 'holdings:angelone') {
+            window.localStorage.setItem(legacyKey, JSON.stringify(model))
+          }
+        }
+      } catch {
+        // Ignore persistence errors.
+      }
+    },
+    [universeId, viewId],
+  )
+
+  const gridGetRowClassName = useCallback((params: GridRowClassNameParams<HoldingRow>) => {
+    const id = String(params.id || '').toUpperCase()
+    return highlightSymbol && id === highlightSymbol ? 'st-row-highlight' : ''
+  }, [highlightSymbol])
+
+  const gridSx = useMemo(
+    () => ({
+      '& .pnl-negative': {
+        color: 'error.main',
+      },
+      '& .MuiDataGrid-row.st-row-highlight': {
+        backgroundColor: (theme: Theme) =>
+          theme.palette.mode === 'dark'
+            ? 'rgba(255, 193, 7, 0.22)'
+            : 'rgba(255, 193, 7, 0.16)',
+      },
+      '& .goal-overdue': {
+        color: 'error.main',
+        fontWeight: 600,
+      },
+      '& .goal-due-soon': {
+        color: 'warning.main',
+        fontWeight: 600,
+      },
+      '& .goal-near-target': {
+        color: 'success.main',
+        fontWeight: 600,
+      },
+      '& .MuiDataGrid-columnHeader.st-imported-column-header': {
+        backgroundColor: (theme: Theme) =>
+          theme.palette.mode === 'dark'
+            ? 'rgba(144, 202, 249, 0.18)'
+            : 'rgba(25, 118, 210, 0.08)',
+      },
+      '& .MuiDataGrid-columnHeader.st-imported-column-header .MuiDataGrid-columnHeaderTitle':
+        {
+          fontWeight: 600,
+        },
+      '& .st-imported-negative': {
+        color: 'error.main',
+      },
+    }),
+    [],
+  )
+
+  const gridInitialState = useMemo(
+    () => ({
+      pagination: { paginationModel: { pageSize: 100 } },
+    }),
+    [],
+  )
+
+  const gridLocaleText = useMemo(
+    () => ({
+      noRowsLabel: 'No holdings found.',
+    }),
+    [],
+  )
+
   return (
     <Box>
       <Box
@@ -5438,21 +5657,48 @@ export function HoldingsPage() {
                       headerName: 'Holdings',
                       width: 120,
                       type: 'number',
-                      valueFormatter: (v) => Math.trunc(Number(v ?? 0)),
+                      renderHeader: () => (
+                        <SensitiveToggle
+                          label="Holdings"
+                          visible={showQtyValues}
+                          onToggle={toggleShowQtyValues}
+                          ariaLabel={showQtyValues ? 'Hide quantities' : 'Show quantities'}
+                        />
+                      ),
+                      valueFormatter: (v) =>
+                        showQtyValues ? Math.trunc(Number(v ?? 0)) : '•••',
                     },
                     {
                       field: 'allocated',
                       headerName: 'Allocated (Σ)',
                       width: 140,
                       type: 'number',
-                      valueFormatter: (v) => Math.trunc(Number(v ?? 0)),
+                      renderHeader: () => (
+                        <SensitiveToggle
+                          label="Allocated (Σ)"
+                          visible={showQtyValues}
+                          onToggle={toggleShowQtyValues}
+                          ariaLabel={showQtyValues ? 'Hide quantities' : 'Show quantities'}
+                        />
+                      ),
+                      valueFormatter: (v) =>
+                        showQtyValues ? Math.trunc(Number(v ?? 0)) : '•••',
                     },
                     {
                       field: 'excess',
                       headerName: 'Excess',
                       width: 110,
                       type: 'number',
-                      valueFormatter: (v) => Math.trunc(Number(v ?? 0)),
+                      renderHeader: () => (
+                        <SensitiveToggle
+                          label="Excess"
+                          visible={showQtyValues}
+                          onToggle={toggleShowQtyValues}
+                          ariaLabel={showQtyValues ? 'Hide quantities' : 'Show quantities'}
+                        />
+                      ),
+                      valueFormatter: (v) =>
+                        showQtyValues ? Math.trunc(Number(v ?? 0)) : '•••',
                     },
                     {
                       field: 'groups',
@@ -5473,7 +5719,7 @@ export function HoldingsPage() {
                               <Chip
                                 key={g.group_id}
                                 size="small"
-                                label={`${g.group_name} (${Math.trunc(g.allocated)})`}
+                                label={`${g.group_name} (${showQtyValues ? Math.trunc(g.allocated) : '•••'})`}
                                 clickable
                                 onClick={() =>
                                   navigate(
@@ -5787,13 +6033,28 @@ export function HoldingsPage() {
                 title={availableFundsError ?? ''}
                 disableHoverListener={!availableFundsError}
               >
-                <Typography variant="subtitle2" sx={{ whiteSpace: 'nowrap' }}>
-                  {universeId === 'holdings:angelone'
-                    ? 'N/A'
-                    : availableFundsLoading
-                      ? 'Loading…'
-                      : formatInrCompact(availableFunds)}
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography variant="subtitle2" sx={{ whiteSpace: 'nowrap' }}>
+                    {universeId === 'holdings:angelone'
+                      ? 'N/A'
+                      : availableFundsLoading
+                        ? 'Loading…'
+                        : formatInrCompact(availableFunds)}
+                  </Typography>
+                  {universeId !== 'holdings:angelone' && (
+                    <IconButton
+                      size="small"
+                      onClick={toggleShowMoneyValues}
+                      aria-label={showMoneyValues ? 'Hide money values' : 'Show money values'}
+                    >
+                      {showMoneyValues ? (
+                        <VisibilityIcon fontSize="small" />
+                      ) : (
+                        <VisibilityOffIcon fontSize="small" />
+                      )}
+                    </IconButton>
+                  )}
+                </Box>
               </Tooltip>
             </Box>
 
@@ -5834,7 +6095,20 @@ export function HoldingsPage() {
                 </Typography>
               </Box>
               <Typography variant="caption" color="text.secondary">
-                Value: {formatInrCompact(holdingsSummary.currentValue)}
+                <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                  <span>Value: {formatInrCompact(holdingsSummary.currentValue)}</span>
+                  <IconButton
+                    size="small"
+                    onClick={toggleShowMoneyValues}
+                    aria-label={showMoneyValues ? 'Hide money values' : 'Show money values'}
+                  >
+                    {showMoneyValues ? (
+                      <VisibilityIcon fontSize="small" />
+                    ) : (
+                      <VisibilityOffIcon fontSize="small" />
+                    )}
+                  </IconButton>
+                </Box>
               </Typography>
             </Box>
 
@@ -7038,100 +7312,22 @@ export function HoldingsPage() {
         apiRef={gridApiRef}
         rows={filteredRows}
         columns={columns}
-        getRowId={(row) => row.symbol}
+        getRowId={gridGetRowId}
         height="calc(100vh - 260px)"
         loading={loading || refreshing}
         checkboxSelection
         keepNonExistentRowsSelected
         rowSelectionModel={rowSelectionModel}
-        onRowSelectionModelChange={(newSelection) => setRowSelectionModel(newSelection)}
+        onRowSelectionModelChange={handleRowSelectionModelChange}
         density="compact"
         columnVisibilityModel={columnVisibilityModel}
-        onColumnVisibilityModelChange={(model) => {
-          setColumnVisibilityModel(model)
-          try {
-            const universeKey = encodeURIComponent(universeId)
-            const viewKey = encodeURIComponent(viewId)
-            const visibilityKeyVersion = viewId === 'default' ? 'v3' : 'v2'
-            const perUniverseKey = `st_holdings_column_visibility_${viewKey}_${universeKey}_${visibilityKeyVersion}`
-            const globalKey = `st_holdings_column_visibility_${viewKey}_${visibilityKeyVersion}`
-            window.localStorage.setItem(perUniverseKey, JSON.stringify(model))
-            window.localStorage.setItem(globalKey, JSON.stringify(model))
-
-            // Keep the legacy keys updated for backwards-compatible defaults
-            // (these are used only as fallbacks).
-            if (viewId === 'default' || viewId === 'risk') {
-              const legacyKey =
-                viewId === 'risk'
-                  ? 'st_holdings_column_visibility_risk_v1'
-                  : 'st_holdings_column_visibility_default_v1'
-              if (universeId === 'holdings' || universeId === 'holdings:angelone') {
-                window.localStorage.setItem(legacyKey, JSON.stringify(model))
-              }
-            }
-          } catch {
-            // Ignore persistence errors.
-          }
-        }}
+        onColumnVisibilityModelChange={handleColumnVisibilityModelChange}
         disableRowSelectionOnClick
-        getRowClassName={(params) => {
-          const id = String(params.id || '').toUpperCase()
-          return highlightSymbol && id === highlightSymbol ? 'st-row-highlight' : ''
-        }}
-        sx={{
-          '& .pnl-negative': {
-            color: 'error.main',
-          },
-          '& .MuiDataGrid-row.st-row-highlight': {
-            backgroundColor: (theme) =>
-              theme.palette.mode === 'dark'
-                ? 'rgba(255, 193, 7, 0.22)'
-                : 'rgba(255, 193, 7, 0.16)',
-          },
-          '& .goal-overdue': {
-            color: 'error.main',
-            fontWeight: 600,
-          },
-          '& .goal-due-soon': {
-            color: 'warning.main',
-            fontWeight: 600,
-          },
-          '& .goal-near-target': {
-            color: 'success.main',
-            fontWeight: 600,
-          },
-          '& .MuiDataGrid-columnHeader.st-imported-column-header': {
-            backgroundColor: (theme) =>
-              theme.palette.mode === 'dark'
-                ? 'rgba(144, 202, 249, 0.18)'
-                : 'rgba(25, 118, 210, 0.08)',
-          },
-          '& .MuiDataGrid-columnHeader.st-imported-column-header .MuiDataGrid-columnHeaderTitle':
-            {
-              fontWeight: 600,
-            },
-          '& .st-imported-negative': {
-            color: 'error.main',
-          },
-        }}
-        slots={{ toolbar: GridToolbar }}
-        slotProps={{
-          toolbar: {
-            showQuickFilter: true,
-            quickFilterProps: { debounceMs: 300 },
-          },
-          filterPanel: {
-            // Combine multiple filter rows using AND semantics.
-            logicOperators: [GridLogicOperator.And],
-          },
-        }}
-        initialState={{
-          pagination: { paginationModel: { pageSize: 100 } },
-        }}
+        getRowClassName={gridGetRowClassName}
+        sx={gridSx}
+        initialState={gridInitialState}
         pageSizeOptions={[25, 50, 100]}
-        localeText={{
-          noRowsLabel: 'No holdings found.',
-        }}
+        localeText={gridLocaleText}
       />
 
       <Dialog open={tradeOpen} onClose={closeTradeDialog} fullWidth maxWidth="lg">
