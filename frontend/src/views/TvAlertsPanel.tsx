@@ -143,15 +143,20 @@ export function TvAlertsPanel({
   const [payloadRows, setPayloadRows] = useState<PayloadRow[]>([])
   const [payloadJsonPretty, setPayloadJsonPretty] = useState<string>('')
   const [payloadParseError, setPayloadParseError] = useState<string | null>(null)
-  const [todayOnly, setTodayOnly] = useState(true)
+  const [rangeDraft, setRangeDraft] = useState<{ from: string; to: string }>({
+    from: today,
+    to: today,
+  })
+  const [rangeApplied, setRangeApplied] = useState<{ from: string; to: string }>({
+    from: today,
+    to: today,
+  })
 
   const refresh = async (options: { silent?: boolean } = {}) => {
     const { silent = false } = options
     try {
       if (!silent) setLoading(true)
-      const { fromIso, toIso } = todayOnly
-        ? dateRangeToIso({ from: today, to: today })
-        : {}
+      const { fromIso, toIso } = dateRangeToIso(rangeApplied)
       const data = await listTvAlerts({
         receivedFrom: fromIso,
         receivedTo: toIso,
@@ -185,7 +190,7 @@ export function TvAlertsPanel({
     if (!active || !loadedOnce) return
     void refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayOnly])
+  }, [rangeApplied])
 
   useEffect(() => {
     if (!active) return
@@ -194,7 +199,7 @@ export function TvAlertsPanel({
     }, 5000)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, todayOnly])
+  }, [active, rangeApplied])
 
   useEffect(() => {
     if (!openPayload) return
@@ -312,16 +317,66 @@ export function TvAlertsPanel({
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={todayOnly}
-                onChange={(e) => setTodayOnly(e.target.checked)}
-                size="small"
-              />
-            }
-            label="Today only"
+          <TextField
+            size="small"
+            label="From"
+            type="date"
+            value={rangeDraft.from}
+            onChange={(e) => setRangeDraft((prev) => ({ ...prev, from: e.target.value }))}
+            InputLabelProps={{ shrink: true }}
+            sx={{ width: 150 }}
           />
+          <TextField
+            size="small"
+            label="To"
+            type="date"
+            value={rangeDraft.to}
+            onChange={(e) => setRangeDraft((prev) => ({ ...prev, to: e.target.value }))}
+            InputLabelProps={{ shrink: true }}
+            sx={{ width: 150 }}
+          />
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              const a = (rangeDraft.from || '').trim()
+              const b = (rangeDraft.to || '').trim()
+              if (a && b && a > b) {
+                setError('Invalid date range: From must be <= To.')
+                return
+              }
+              if (a && b) {
+                const days =
+                  Math.floor(
+                    (new Date(`${b}T00:00:00`).getTime() -
+                      new Date(`${a}T00:00:00`).getTime()) /
+                      (24 * 60 * 60 * 1000),
+                  ) + 1
+                if (days > 15) {
+                  setError('Date range too large; max allowed is 15 days.')
+                  return
+                }
+              }
+              setError(null)
+              setRangeApplied(rangeDraft)
+            }}
+            disabled={loading}
+          >
+            Apply
+          </Button>
+          <Button
+            variant="text"
+            size="small"
+            onClick={() => {
+              const t = formatDateLocal(new Date())
+              setError(null)
+              setRangeDraft({ from: t, to: t })
+              setRangeApplied({ from: t, to: t })
+            }}
+            disabled={loading}
+          >
+            Today
+          </Button>
           <Button
             variant="outlined"
             size="small"
@@ -414,7 +469,7 @@ export function TvAlertsPanel({
                   control={
                     <Switch
                       checked={showRawJson}
-                      onChange={(e) => setShowRawJson(e.target.checked)}
+                      onChange={(_e, checked) => setShowRawJson(checked)}
                       size="small"
                     />
                   }
