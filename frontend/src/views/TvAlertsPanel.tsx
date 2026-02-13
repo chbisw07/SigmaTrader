@@ -194,7 +194,7 @@ export function TvAlertsPanel({
     {
       field: 'strategy_display',
       headerName: 'Strategy',
-      width: 170,
+      width: 220,
       valueGetter: (_value, row) => {
         const alert = row as TvAlertRow
         return alert.strategy_display || '—'
