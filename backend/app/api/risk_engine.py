@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -300,16 +301,48 @@ def delete_symbol_category(
 @router.get("/decision-log", response_model=list[AlertDecisionLogRead])
 def list_alert_decision_log(
     limit: int = Query(default=100, ge=1, le=1000),
+    created_from: str | None = Query(default=None),
+    created_to: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[AlertDecisionLogRead]:
-    rows = (
-        db.query(AlertDecisionLog)
-        .filter((AlertDecisionLog.user_id == user.id) | (AlertDecisionLog.user_id.is_(None)))
-        .order_by(AlertDecisionLog.created_at.desc())
-        .limit(limit)
-        .all()
+    def _parse_iso_dt(raw: str | None) -> datetime | None:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        try:
+            # Support JS `toISOString()` which uses a trailing 'Z'.
+            s2 = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s2)
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid created_from/created_to; expected ISO datetime.",
+            ) from exc
+
+    dt_from = _parse_iso_dt(created_from)
+    dt_to = _parse_iso_dt(created_to)
+    if dt_from is not None and dt_to is not None:
+        if dt_to < dt_from:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="created_to must be >= created_from.",
+            )
+        if (dt_to - dt_from) > timedelta(days=15):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Date range too large; max allowed is 15 days.",
+            )
+
+    q = db.query(AlertDecisionLog).filter(
+        (AlertDecisionLog.user_id == user.id) | (AlertDecisionLog.user_id.is_(None))
     )
+    if dt_from is not None:
+        q = q.filter(AlertDecisionLog.created_at >= dt_from)
+    if dt_to is not None:
+        q = q.filter(AlertDecisionLog.created_at <= dt_to)
+    rows = q.order_by(AlertDecisionLog.created_at.desc()).limit(limit).all()
     # Keep JSON fields as raw strings (UI can render).
     return [AlertDecisionLogRead(**_model_to_dict(r)) for r in rows]
 

@@ -271,3 +271,20 @@ export async function fetchAlertDecisionLog(limit = 100): Promise<AlertDecisionL
   }
   return (await res.json()) as AlertDecisionLogRow[]
 }
+
+export async function fetchAlertDecisionLogFiltered(options?: {
+  limit?: number
+  createdFrom?: string
+  createdTo?: string
+}): Promise<AlertDecisionLogRow[]> {
+  const url = new URL('/api/risk-engine/decision-log', window.location.origin)
+  url.searchParams.set('limit', String(options?.limit ?? 100))
+  if (options?.createdFrom) url.searchParams.set('created_from', options.createdFrom)
+  if (options?.createdTo) url.searchParams.set('created_to', options.createdTo)
+  const res = await fetch(url.toString(), { cache: 'no-store' })
+  if (!res.ok) {
+    const body = await readTextSafe(res)
+    throw new Error(`Failed to load decision log (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as AlertDecisionLogRow[]
+}

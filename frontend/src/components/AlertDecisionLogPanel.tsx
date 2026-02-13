@@ -1,6 +1,7 @@
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
 import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
 import Divider from '@mui/material/Divider'
@@ -11,12 +12,30 @@ import TableBody from '@mui/material/TableBody'
 import TableCell from '@mui/material/TableCell'
 import TableHead from '@mui/material/TableHead'
 import TableRow from '@mui/material/TableRow'
+import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { fetchAlertDecisionLog, type AlertDecisionLogRow } from '../services/riskEngine'
+import { fetchAlertDecisionLogFiltered, type AlertDecisionLogRow } from '../services/riskEngine'
+
+const formatDateLocal = (d: Date): string => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+const dateRangeToIso = (range: { from: string; to: string }): { fromIso?: string; toIso?: string } => {
+  const from = (range.from || '').trim()
+  const to = (range.to || '').trim()
+  if (!from && !to) return {}
+  const out: { fromIso?: string; toIso?: string } = {}
+  if (from) out.fromIso = new Date(`${from}T00:00:00`).toISOString()
+  if (to) out.toIso = new Date(`${to}T23:59:59.999`).toISOString()
+  return out
+}
 
 function formatReasons(raw: string | null | undefined): string {
   const s = (raw ?? '').trim()
@@ -60,14 +79,28 @@ export function AlertDecisionLogPanel({
   active?: boolean
 }) {
   const navigate = useNavigate()
+  const today = formatDateLocal(new Date())
   const [rows, setRows] = useState<AlertDecisionLogRow[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rangeDraft, setRangeDraft] = useState<{ from: string; to: string }>({
+    from: today,
+    to: today,
+  })
+  const [rangeApplied, setRangeApplied] = useState<{ from: string; to: string }>({
+    from: today,
+    to: today,
+  })
 
   const load = async () => {
     setBusy(true)
     try {
-      const res = await fetchAlertDecisionLog(limit)
+      const { fromIso, toIso } = dateRangeToIso(rangeApplied)
+      const res = await fetchAlertDecisionLogFiltered({
+        limit,
+        createdFrom: fromIso,
+        createdTo: toIso,
+      })
       setRows(Array.isArray(res) ? res : [])
       setError(null)
     } catch (err) {
@@ -81,7 +114,7 @@ export function AlertDecisionLogPanel({
     if (!active) return
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, limit])
+  }, [active, limit, rangeApplied])
 
   if (!active) return null
 
@@ -91,6 +124,99 @@ export function AlertDecisionLogPanel({
         <Typography variant="h6" sx={{ flex: 1, minWidth: 260 }}>
           {title}
         </Typography>
+        <TextField
+          size="small"
+          label="From"
+          type="date"
+          value={rangeDraft.from}
+          onChange={(e) => setRangeDraft((prev) => ({ ...prev, from: e.target.value }))}
+          InputLabelProps={{ shrink: true }}
+          sx={{ width: 150 }}
+        />
+        <TextField
+          size="small"
+          label="To"
+          type="date"
+          value={rangeDraft.to}
+          onChange={(e) => setRangeDraft((prev) => ({ ...prev, to: e.target.value }))}
+          InputLabelProps={{ shrink: true }}
+          sx={{ width: 150 }}
+        />
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => {
+            const a = (rangeDraft.from || '').trim()
+            const b = (rangeDraft.to || '').trim()
+            if (a && b && a > b) {
+              setError('Invalid date range: From must be <= To.')
+              return
+            }
+            // UI guardrail; backend enforces too.
+            if (a && b) {
+              const days = Math.floor(
+                (new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) /
+                  (24 * 60 * 60 * 1000),
+              ) + 1
+              if (days > 15) {
+                setError('Date range too large; max allowed is 15 days.')
+                return
+              }
+            }
+            setError(null)
+            setRangeApplied(rangeDraft)
+          }}
+          disabled={busy}
+        >
+          Apply
+        </Button>
+        <Button
+          size="small"
+          variant="text"
+          onClick={() => {
+            const t = formatDateLocal(new Date())
+            setError(null)
+            setRangeDraft({ from: t, to: t })
+            setRangeApplied({ from: t, to: t })
+          }}
+          disabled={busy}
+        >
+          Today
+        </Button>
+        <Button
+          size="small"
+          variant="text"
+          onClick={() => {
+            const now = new Date()
+            const to = formatDateLocal(now)
+            const fromD = new Date(now)
+            fromD.setDate(now.getDate() - 6)
+            const from = formatDateLocal(fromD)
+            setError(null)
+            setRangeDraft({ from, to })
+            setRangeApplied({ from, to })
+          }}
+          disabled={busy}
+        >
+          7D
+        </Button>
+        <Button
+          size="small"
+          variant="text"
+          onClick={() => {
+            const now = new Date()
+            const to = formatDateLocal(now)
+            const fromD = new Date(now)
+            fromD.setDate(now.getDate() - 14)
+            const from = formatDateLocal(fromD)
+            setError(null)
+            setRangeDraft({ from, to })
+            setRangeApplied({ from, to })
+          }}
+          disabled={busy}
+        >
+          15D
+        </Button>
         {helpHash ? (
           <Tooltip title="Help" arrow placement="top">
             <IconButton
