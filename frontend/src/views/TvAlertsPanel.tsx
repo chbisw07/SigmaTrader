@@ -23,6 +23,23 @@ import { formatInDisplayTimeZone } from '../utils/datetime'
 type PayloadRow = { id: string; key: string; value: string }
 type TvAlertRow = TvAlert & { strategy_display: string }
 
+const formatDateLocal = (d: Date): string => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+const dateRangeToIso = (range: { from: string; to: string }): { fromIso?: string; toIso?: string } => {
+  const from = (range.from || '').trim()
+  const to = (range.to || '').trim()
+  if (!from && !to) return {}
+  const out: { fromIso?: string; toIso?: string } = {}
+  if (from) out.fromIso = new Date(`${from}T00:00:00`).toISOString()
+  if (to) out.toIso = new Date(`${to}T23:59:59.999`).toISOString()
+  return out
+}
+
 function formatValue(value: unknown): string {
   if (value == null) return 'null'
   if (typeof value === 'string') return value
@@ -115,6 +132,7 @@ export function TvAlertsPanel({
   active?: boolean
 }) {
   const { displayTimeZone } = useTimeSettings()
+  const today = formatDateLocal(new Date())
   const [rows, setRows] = useState<TvAlertRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -125,12 +143,19 @@ export function TvAlertsPanel({
   const [payloadRows, setPayloadRows] = useState<PayloadRow[]>([])
   const [payloadJsonPretty, setPayloadJsonPretty] = useState<string>('')
   const [payloadParseError, setPayloadParseError] = useState<string | null>(null)
+  const [todayOnly, setTodayOnly] = useState(true)
 
   const refresh = async (options: { silent?: boolean } = {}) => {
     const { silent = false } = options
     try {
       if (!silent) setLoading(true)
-      const data = await listTvAlerts()
+      const { fromIso, toIso } = todayOnly
+        ? dateRangeToIso({ from: today, to: today })
+        : {}
+      const data = await listTvAlerts({
+        receivedFrom: fromIso,
+        receivedTo: toIso,
+      })
       const enriched: TvAlertRow[] = data.map((a) => {
         const rawStrategyId =
           extractStrategyIdFromPayload(a.raw_payload) ??
@@ -157,13 +182,19 @@ export function TvAlertsPanel({
   }, [active, loadedOnce])
 
   useEffect(() => {
+    if (!active || !loadedOnce) return
+    void refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayOnly])
+
+  useEffect(() => {
     if (!active) return
     const id = window.setInterval(() => {
       void refresh({ silent: true })
     }, 5000)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active])
+  }, [active, todayOnly])
 
   useEffect(() => {
     if (!openPayload) return
@@ -280,7 +311,17 @@ export function TvAlertsPanel({
             TradingView webhook alerts ingested by SigmaTrader.
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={todayOnly}
+                onChange={(e) => setTodayOnly(e.target.checked)}
+                size="small"
+              />
+            }
+            label="Today only"
+          />
           <Button
             variant="outlined"
             size="small"

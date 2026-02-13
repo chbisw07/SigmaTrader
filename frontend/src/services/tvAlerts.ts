@@ -17,9 +17,15 @@ export type TvAlert = {
   raw_payload: string
 }
 
-export async function listTvAlerts(limit = 200): Promise<TvAlert[]> {
+export async function listTvAlerts(options?: {
+  limit?: number
+  receivedFrom?: string
+  receivedTo?: string
+}): Promise<TvAlert[]> {
   const url = new URL('/api/tv-alerts', window.location.origin)
-  url.searchParams.set('limit', String(limit))
+  url.searchParams.set('limit', String(options?.limit ?? 200))
+  if (options?.receivedFrom) url.searchParams.set('received_from', options.receivedFrom)
+  if (options?.receivedTo) url.searchParams.set('received_to', options.receivedTo)
   const res = await fetch(url.toString())
   if (!res.ok) {
     const body = await res.text()
@@ -29,4 +35,3 @@ export async function listTvAlerts(limit = 200): Promise<TvAlert[]> {
   }
   return (await res.json()) as TvAlert[]
 }
-
