@@ -323,6 +323,8 @@ export function HoldingsExitPanel({
     ]
   }, [busyId, displayTimeZone])
 
+  if (!active) return null
+
   return (
     <Box>
       <Box

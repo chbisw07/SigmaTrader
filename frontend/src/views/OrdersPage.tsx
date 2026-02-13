@@ -370,9 +370,17 @@ export function OrdersPanel({
       minWidth: 200,
       renderCell: (params: GridRenderCellParams) => (
         <Typography
-          variant="body2"
+          variant="caption"
           color="error"
-          sx={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.25 }}
+          sx={{
+            whiteSpace: 'normal',
+            wordBreak: 'break-word',
+            lineHeight: 1.25,
+            display: '-webkit-box',
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
         >
           {params.value ?? '-'}
         </Typography>
@@ -405,6 +413,8 @@ export function OrdersPanel({
       },
     },
   ]
+
+  if (!active) return null
 
   return (
     <Box>
@@ -581,12 +591,11 @@ export function OrdersPanel({
               setSelectionModel(ids)
             }}
             density="compact"
-            getRowHeight={() => 'auto'}
+            rowHeight={56}
             sx={{
               height: '100%',
               '& .MuiDataGrid-cell': {
                 py: 0.5,
-                alignItems: 'flex-start',
               },
             }}
           />

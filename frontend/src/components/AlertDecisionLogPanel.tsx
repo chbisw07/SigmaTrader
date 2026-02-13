@@ -52,10 +52,12 @@ export function AlertDecisionLogPanel({
   title = 'Alert decision log',
   helpHash = 'alert-decision-log',
   limit = 200,
+  active = true,
 }: {
   title?: string
   helpHash?: string | null
   limit?: number
+  active?: boolean
 }) {
   const navigate = useNavigate()
   const [rows, setRows] = useState<AlertDecisionLogRow[]>([])
@@ -76,9 +78,12 @@ export function AlertDecisionLogPanel({
   }
 
   useEffect(() => {
+    if (!active) return
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [active, limit])
+
+  if (!active) return null
 
   return (
     <Paper sx={{ p: 2 }}>

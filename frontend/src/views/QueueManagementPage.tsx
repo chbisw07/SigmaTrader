@@ -102,6 +102,7 @@ export function QueueManagementPage() {
             title="Alert decision log (execution layer)"
             helpHash="alert-decision-log"
             limit={200}
+            active={tab === 'risk_mgmt'}
           />
         </Box>
       </Box>

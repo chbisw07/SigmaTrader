@@ -488,6 +488,8 @@ export function ManagedRiskPanel({
     </Paper>
   )
 
+  if (!active) return null
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <Paper sx={{ p: 2 }}>

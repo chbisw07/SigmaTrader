@@ -791,6 +791,8 @@ export function WaitingQueuePanel({
     },
   ]
 
+  if (!active) return null
+
   return (
     <Box>
       <Box

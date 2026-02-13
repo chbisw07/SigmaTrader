@@ -19,6 +19,8 @@ export function ManagedExitsPanel({
   const initialTab = useMemo<ManagedExitsTab>(() => 'positions', [])
   const [tab, setTab] = useState<ManagedExitsTab>(initialTab)
 
+  if (!active) return null
+
   return (
     <Box>
       <Tabs
@@ -38,4 +40,3 @@ export function ManagedExitsPanel({
     </Box>
   )
 }
-

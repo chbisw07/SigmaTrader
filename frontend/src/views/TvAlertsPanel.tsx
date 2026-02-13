@@ -213,6 +213,8 @@ export function TvAlertsPanel({
     },
   ]
 
+  if (!active) return null
+
   return (
     <Box>
       <Box
