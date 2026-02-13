@@ -248,6 +248,7 @@ def rebalance_execute(
     user: User = Depends(get_current_user),
 ) -> RebalanceExecuteResponse:
     brokers = _broker_list(payload.broker_name)
+    correlation_id = getattr(request.state, "correlation_id", None)
 
     results: list[RebalanceExecuteResult] = []
     for broker in brokers:
@@ -313,9 +314,9 @@ def rebalance_execute(
                     try:
                         execute_order_internal(
                             order_id=order.id,
-                            request=request,
                             db=db,
                             settings=settings,
+                            correlation_id=correlation_id,
                         )
                         db.refresh(order)
                     except HTTPException as exc:
@@ -499,9 +500,9 @@ def rebalance_execute(
                     try:
                         execute_order_internal(
                             order_id=order.id,
-                            request=request,
                             db=db,
                             settings=settings,
+                            correlation_id=correlation_id,
                         )
                         db.refresh(order)
                     except HTTPException as exc:
