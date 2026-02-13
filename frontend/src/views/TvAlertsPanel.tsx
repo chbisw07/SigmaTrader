@@ -81,7 +81,18 @@ function extractStrategyIdFromPayload(raw: string): string | null {
   const { parsed } = safeParseJson(raw || '')
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const obj = parsed as Record<string, unknown>
+
+  const signal =
+    obj.signal && typeof obj.signal === 'object' && !Array.isArray(obj.signal)
+      ? (obj.signal as Record<string, unknown>)
+      : null
+
   const candidates = [
+    signal?.strategy_id,
+    signal?.strategyId,
+    signal?.strategy,
+    signal?.strategy_name,
+    signal?.strategyName,
     obj.strategy_id,
     obj.strategyId,
     obj.strategy,
