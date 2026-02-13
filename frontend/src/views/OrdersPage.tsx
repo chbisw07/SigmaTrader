@@ -348,8 +348,8 @@ export function OrdersPanel({
     {
       field: 'broker',
       headerName: 'Broker Order',
-      flex: 1,
-      minWidth: 180,
+      flex: 1.5,
+      minWidth: 260,
       valueGetter: (_value, row) => {
         const order = row as Order
         if (order.simulated) {
@@ -366,7 +366,7 @@ export function OrdersPanel({
     {
       field: 'error_message',
       headerName: 'Error',
-      flex: 2,
+      flex: 1.7,
       minWidth: 200,
       renderCell: (params: GridRenderCellParams) => (
         <Typography
