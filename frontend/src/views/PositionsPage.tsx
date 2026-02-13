@@ -33,12 +33,11 @@ import {
 } from '../components/PriceChart'
 import {
   fetchDailyPositions,
-  fetchPositionsAnalysis,
   syncPositions,
-  type PositionsAnalysis,
   type PositionSnapshot,
 } from '../services/positions'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
+import { fetchOrdersInsights, type OrdersInsights } from '../services/orders'
 import {
   clearZerodhaPostbackFailures,
   fetchZerodhaPostbackEvents,
@@ -75,11 +74,6 @@ const formatInr = (n: number | null | undefined, opts?: { fractionDigits?: numbe
   }).format(Number(n))
 }
 
-const formatPct = (n: number | null | undefined) => {
-  if (n == null || !Number.isFinite(Number(n))) return '—'
-  return `${(Number(n) * 100).toFixed(1)}%`
-}
-
 const asRecord = (v: unknown): Record<string, unknown> | null => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null
   return v as Record<string, unknown>
@@ -114,16 +108,13 @@ export function PositionsPage() {
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [live, setLive] = useState(true)
-  const [analysis, setAnalysis] = useState<PositionsAnalysis | null>(null)
-  const [analysisLoading, setAnalysisLoading] = useState(false)
-  const [analysisPolling, setAnalysisPolling] = useState(false)
-  const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [orderInsights, setOrderInsights] = useState<OrdersInsights | null>(null)
+  const [orderInsightsLoading, setOrderInsightsLoading] = useState(false)
+  const [orderInsightsError, setOrderInsightsError] = useState<string | null>(null)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
   const loadSeqRef = useRef(0)
-  const analysisSeqRef = useRef(0)
   const positionsKeyRef = useRef<string>('')
-  const analysisKeyRef = useRef<string>('')
   const [lastLiveUpdateAt, setLastLiveUpdateAt] = useState<string | null>(null)
   const symbolApplyTimeoutRef = useRef<number | null>(null)
   const symbolAutoApplyMountedRef = useRef(false)
@@ -133,6 +124,7 @@ export function PositionsPage() {
   const [symbolQuery, setSymbolQuery] = useState<string>('')
   const [includeZero, setIncludeZero] = useState(true)
   const [startingCash, setStartingCash] = useState(0)
+  const [analysisSelectedDate, setAnalysisSelectedDate] = useState<string | null>(null)
 
   const [zerodhaStatus, setZerodhaStatus] = useState<ZerodhaStatus | null>(null)
   const [postbackEvents, setPostbackEvents] = useState<ZerodhaPostbackEvent[]>([])
@@ -199,38 +191,24 @@ export function PositionsPage() {
     }
   }
 
-  const loadAnalysis = async (opts?: { silent?: boolean; startDateOverride?: string; endDateOverride?: string }) => {
-    const seq = (analysisSeqRef.current += 1)
+  const loadOrderInsights = async (opts?: { startDateOverride?: string; endDateOverride?: string }) => {
+    setOrderInsightsLoading(true)
+    setOrderInsightsError(null)
     try {
-      if (opts?.silent) setAnalysisPolling(true)
-      else setAnalysisLoading(true)
       const startDateParam = opts?.startDateOverride ?? startDate
       const endDateParam = opts?.endDateOverride ?? endDate
-      const data = await fetchPositionsAnalysis({
-        broker_name: selectedBroker,
-        start_date: startDateParam || undefined,
-        end_date: endDateParam || undefined,
-        symbol: symbolQuery || undefined,
-        top_n: 10,
+      const data = await fetchOrdersInsights({
+        brokerName: selectedBroker,
+        startDate: startDateParam || undefined,
+        endDate: endDateParam || undefined,
+        includeSimulated: false,
+        topN: 20,
       })
-      if (seq !== analysisSeqRef.current) return
-      const key = JSON.stringify(data.summary ?? {})
-      if (key !== analysisKeyRef.current) {
-        analysisKeyRef.current = key
-        setAnalysis(data)
-        setLastLiveUpdateAt(new Date().toISOString())
-      }
-      if (!opts?.silent) setAnalysisError(null)
+      setOrderInsights(data)
     } catch (err) {
-      if (seq !== analysisSeqRef.current) return
-      if (!opts?.silent) {
-        setAnalysisError(err instanceof Error ? err.message : 'Failed to load analysis')
-      }
+      setOrderInsightsError(err instanceof Error ? err.message : 'Failed to load order insights')
     } finally {
-      if (seq === analysisSeqRef.current) {
-        if (opts?.silent) setAnalysisPolling(false)
-        else setAnalysisLoading(false)
-      }
+      setOrderInsightsLoading(false)
     }
   }
 
@@ -293,14 +271,15 @@ export function PositionsPage() {
     // the grid doesn't look "stuck" on the old broker while the request runs.
     setPositions([])
     positionsKeyRef.current = ''
-    analysisKeyRef.current = ''
     setError(null)
+    setOrderInsights(null)
+    setOrderInsightsError(null)
     setZerodhaStatus(null)
     setPostbackEvents([])
     setPostbackError(null)
     setPostbackSelectedId(null)
-    void loadSnapshots()
-    if (activeTab === 'analysis') void loadAnalysis()
+    if (activeTab === 'snapshots') void loadSnapshots()
+    else void loadSnapshots({ includeZeroOverride: true })
     if (selectedBroker === 'zerodha') void loadZerodhaPostbacks()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBroker])
@@ -309,12 +288,12 @@ export function PositionsPage() {
     if (!live) return
     // Live mode only re-fetches cached rows from SigmaTrader DB; it does not
     // hit the broker. Broker changes still require "Refresh from <broker>".
-    const id = window.setInterval(() => {
-      if (activeTab === 'snapshots') void loadSnapshots({ silent: true })
-      else if (activeTab === 'transactions') {
-        void loadSnapshots({ includeZeroOverride: true, silent: true })
-      } else if (activeTab === 'analysis') void loadAnalysis({ silent: true })
-    }, 4000)
+	    const id = window.setInterval(() => {
+	      if (activeTab === 'snapshots') void loadSnapshots({ silent: true })
+	      else if (activeTab === 'transactions') {
+	        void loadSnapshots({ includeZeroOverride: true, silent: true })
+	      } else if (activeTab === 'analysis') void loadSnapshots({ includeZeroOverride: true, silent: true })
+	    }, 4000)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, activeTab, selectedBroker, startDate, endDate, symbolQuery, includeZero, startingCash])
@@ -371,7 +350,7 @@ export function PositionsPage() {
       } else if (activeTab === 'transactions') {
         await loadSnapshots({ preferLatest: true, includeZeroOverride: true })
       } else {
-        await loadAnalysis()
+        await loadSnapshots({ preferLatest: true, includeZeroOverride: true })
       }
     } catch (err) {
       setError(
@@ -398,7 +377,14 @@ export function PositionsPage() {
         endDateOverride: opts?.endDate,
       })
     } else {
-      await loadAnalysis({ startDateOverride: opts?.startDate, endDateOverride: opts?.endDate })
+      await loadSnapshots({
+        includeZeroOverride: true,
+        startDateOverride: opts?.startDate,
+        endDateOverride: opts?.endDate,
+      })
+      if (orderInsights != null) {
+        await loadOrderInsights({ startDateOverride: opts?.startDate, endDateOverride: opts?.endDate })
+      }
     }
   }
 
@@ -490,6 +476,160 @@ export function PositionsPage() {
         : a.as_of_date.localeCompare(b.as_of_date),
     )
   }, [positions])
+
+  type DailyRealityRow = {
+    id: string
+    as_of_date: string
+    captured_at: string | null
+    realised_pnl: number
+    unrealised_pnl: number
+    net_pnl: number
+    open_value: number
+    turnover_buy: number
+    turnover_sell: number
+    traded_symbols: number
+    open_positions: number
+  }
+
+  const deriveSnapshotParts = (r: PositionSnapshot) => {
+    const product = String(r.product ?? '').toUpperCase()
+    const netQty = Number(r.qty ?? 0) || 0
+    const openQty = product === 'CNC' || product === 'DELIVERY' ? Math.max(0, netQty) : netQty
+    const isOpen = openQty !== 0
+
+    const buyQty = Number(r.day_buy_qty ?? r.buy_qty ?? 0) || 0
+    const sellQty = Number(r.day_sell_qty ?? r.sell_qty ?? 0) || 0
+    const hasTrades = buyQty > 0 || sellQty > 0
+
+    const netPnl = Number(r.pnl ?? 0) || 0
+    const realisedPnl = !isOpen && (hasTrades || netQty !== 0) ? netPnl : 0
+    const unrealisedPnl = isOpen ? netPnl : 0
+
+    const px =
+      Number(r.ltp ?? r.last_price ?? r.close_price ?? r.avg_price ?? 0) || 0
+    const openValue = px > 0 ? Math.abs(openQty) * px : 0
+
+    return {
+      product,
+      netQty,
+      openQty,
+      buyQty,
+      sellQty,
+      hasTrades,
+      netPnl,
+      realisedPnl,
+      unrealisedPnl,
+      openValue,
+    }
+  }
+
+  const dailyReality = useMemo((): DailyRealityRow[] => {
+    if (!positions || positions.length === 0) return []
+
+    const byDate = new Map<
+      string,
+      {
+        realised: number
+        unrealised: number
+        net: number
+        openValue: number
+        turnoverBuy: number
+        turnoverSell: number
+        tradedKeys: Set<string>
+        openKeys: Set<string>
+        capturedAtMax: number
+      }
+    >()
+
+    for (const r of positions) {
+      const date = String(r.as_of_date || '').slice(0, 10)
+      if (!date) continue
+
+      const key = `${String(r.symbol || '').toUpperCase()}:${String(r.exchange || '').toUpperCase()}:${String(
+        r.product || '',
+      ).toUpperCase()}`
+
+      const cur =
+        byDate.get(date) ?? {
+          realised: 0,
+          unrealised: 0,
+          net: 0,
+          openValue: 0,
+          turnoverBuy: 0,
+          turnoverSell: 0,
+          tradedKeys: new Set<string>(),
+          openKeys: new Set<string>(),
+          capturedAtMax: 0,
+        }
+
+      const parts = deriveSnapshotParts(r)
+      cur.realised += parts.realisedPnl
+      cur.unrealised += parts.unrealisedPnl
+      cur.net += parts.netPnl
+      cur.openValue += parts.openValue
+
+      const buyQty = parts.buyQty
+      const sellQty = parts.sellQty
+      const buyPx = Number(r.day_buy_avg_price ?? r.buy_avg_price ?? r.avg_buy_price ?? 0) || 0
+      const sellPx = Number(r.day_sell_avg_price ?? r.sell_avg_price ?? r.avg_sell_price ?? 0) || 0
+      if (buyQty > 0 && buyPx > 0) {
+        cur.turnoverBuy += buyQty * buyPx
+        cur.tradedKeys.add(key)
+      }
+      if (sellQty > 0 && sellPx > 0) {
+        cur.turnoverSell += sellQty * sellPx
+        cur.tradedKeys.add(key)
+      }
+
+      if (parts.openQty !== 0) cur.openKeys.add(key)
+
+      const cap = Date.parse(String(r.captured_at || ''))
+      if (Number.isFinite(cap)) cur.capturedAtMax = Math.max(cur.capturedAtMax, cap)
+
+      byDate.set(date, cur)
+    }
+
+    return Array.from(byDate.entries())
+      .map(([d, v]) => ({
+        id: d,
+        as_of_date: d,
+        captured_at: v.capturedAtMax ? new Date(v.capturedAtMax).toISOString() : null,
+        realised_pnl: v.realised,
+        unrealised_pnl: v.unrealised,
+        net_pnl: v.net,
+        open_value: v.openValue,
+        turnover_buy: v.turnoverBuy,
+        turnover_sell: v.turnoverSell,
+        traded_symbols: v.tradedKeys.size,
+        open_positions: v.openKeys.size,
+      }))
+      .sort((a, b) => b.as_of_date.localeCompare(a.as_of_date))
+  }, [positions])
+
+  const realityTotals = useMemo(() => {
+    let realised = 0
+    let unrealised = 0
+    let net = 0
+    let openValue = 0
+    let buy = 0
+    let sell = 0
+    for (const d of dailyReality) {
+      realised += Number(d.realised_pnl) || 0
+      unrealised += Number(d.unrealised_pnl) || 0
+      net += Number(d.net_pnl) || 0
+      openValue += Number(d.open_value) || 0
+      buy += Number(d.turnover_buy) || 0
+      sell += Number(d.turnover_sell) || 0
+    }
+    return { realised, unrealised, net, openValue, buy, sell, total: buy + sell }
+  }, [dailyReality])
+
+  useEffect(() => {
+    if (activeTab !== 'analysis') return
+    if (!dailyReality.length) return
+    if (analysisSelectedDate && dailyReality.some((d) => d.as_of_date === analysisSelectedDate)) return
+    setAnalysisSelectedDate(dailyReality[0].as_of_date)
+  }, [activeTab, dailyReality, analysisSelectedDate])
 
   const dailyCash = useMemo((): DailyCashRow[] => {
     if (!positions || positions.length === 0) return []
@@ -610,6 +750,208 @@ export function PositionsPage() {
       { name: 'Net liquidation', points: netLiqPoints },
     ]
   }, [dailyCash])
+
+  const dailyRealityAsc = useMemo(
+    () => [...dailyReality].sort((a, b) => a.as_of_date.localeCompare(b.as_of_date)),
+    [dailyReality],
+  )
+
+  const netPnlCandles = useMemo(
+    () => mkLineCandles(dailyRealityAsc.map((d) => ({ as_of_date: d.as_of_date, value: d.net_pnl }))),
+    [dailyRealityAsc, mkLineCandles],
+  )
+
+  const pnlOverlays = useMemo((): PriceOverlay[] => {
+    const realisedPoints = dailyRealityAsc.map((d) => ({ ts: d.as_of_date, value: d.realised_pnl }))
+    const unrealisedPoints = dailyRealityAsc.map((d) => ({ ts: d.as_of_date, value: d.unrealised_pnl }))
+    return [
+      { name: 'Realised P&L', points: realisedPoints },
+      { name: 'Unrealised P&L', points: unrealisedPoints },
+    ]
+  }, [dailyRealityAsc])
+
+  const dailyRealityColumns: GridColDef[] = [
+    { field: 'as_of_date', headerName: 'Date', width: 110 },
+    {
+      field: 'captured_at',
+      headerName: 'Captured',
+      width: 180,
+      valueFormatter: (v) => (v ? formatInDisplayTimeZone(String(v), displayTimeZone) : ''),
+    },
+    {
+      field: 'realised_pnl',
+      headerName: 'Realised P&L',
+      width: 130,
+      type: 'number',
+      renderCell: (params) => <PnlChip value={Number(params.value || 0)} />,
+    },
+    {
+      field: 'unrealised_pnl',
+      headerName: 'Unrealised',
+      width: 120,
+      type: 'number',
+      renderCell: (params) => <PnlChip value={Number(params.value || 0)} />,
+    },
+    {
+      field: 'net_pnl',
+      headerName: 'Net P&L',
+      width: 120,
+      type: 'number',
+      renderCell: (params) => <PnlChip value={Number(params.value || 0)} />,
+    },
+    {
+      field: 'open_value',
+      headerName: 'Open value',
+      width: 130,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+    },
+    {
+      field: 'turnover_buy',
+      headerName: 'Buy turnover',
+      width: 130,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+    },
+    {
+      field: 'turnover_sell',
+      headerName: 'Sell turnover',
+      width: 130,
+      type: 'number',
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+    },
+    {
+      field: 'traded_symbols',
+      headerName: '# Traded',
+      width: 95,
+      type: 'number',
+    },
+    {
+      field: 'open_positions',
+      headerName: '# Open pos',
+      width: 100,
+      type: 'number',
+    },
+  ]
+
+  const dayDrillRows = useMemo(() => {
+    if (!analysisSelectedDate) return []
+    return positions
+      .filter((r) => String(r.as_of_date || '').slice(0, 10) === analysisSelectedDate)
+      .sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)))
+  }, [positions, analysisSelectedDate])
+
+  const dayDrillTotals = useMemo(() => {
+    let realised = 0
+    let unrealised = 0
+    let net = 0
+    let openValue = 0
+    let buy = 0
+    let sell = 0
+    let traded = 0
+    let openPositions = 0
+    for (const r of dayDrillRows) {
+      const parts = deriveSnapshotParts(r)
+      realised += parts.realisedPnl
+      unrealised += parts.unrealisedPnl
+      net += parts.netPnl
+      openValue += parts.openValue
+      if (parts.openQty !== 0) openPositions += 1
+      const buyQty = Number(r.day_buy_qty ?? r.buy_qty ?? 0) || 0
+      const sellQty = Number(r.day_sell_qty ?? r.sell_qty ?? 0) || 0
+      const buyPx = Number(r.day_buy_avg_price ?? r.buy_avg_price ?? r.avg_buy_price ?? 0) || 0
+      const sellPx = Number(r.day_sell_avg_price ?? r.sell_avg_price ?? r.avg_sell_price ?? 0) || 0
+      if (buyQty > 0 && buyPx > 0) buy += buyQty * buyPx
+      if (sellQty > 0 && sellPx > 0) sell += sellQty * sellPx
+      if (buyQty > 0 || sellQty > 0) traded += 1
+    }
+    return { realised, unrealised, net, openValue, openPositions, buy, sell, total: buy + sell, traded }
+  }, [dayDrillRows])
+
+  const dayDrillColumns: GridColDef[] = [
+    { field: 'symbol', headerName: 'Symbol', width: 220 },
+    {
+      field: 'product',
+      headerName: 'Product',
+      width: 95,
+      renderCell: (params) => {
+        const v = String(params.value ?? '').toUpperCase()
+        const color = v === 'CNC' ? 'warning' : v === 'MIS' ? 'info' : 'default'
+        return (
+          <Chip
+            size="small"
+            label={v || '—'}
+            color={color as any}
+            variant="outlined"
+            sx={{ height: 20, fontWeight: 700 }}
+          />
+        )
+      },
+    },
+    {
+      field: 'order_type',
+      headerName: 'Type',
+      width: 95,
+      renderCell: (params) => {
+        const v = String(params.value ?? '').toUpperCase()
+        const color = v === 'BUY' ? 'success' : v === 'SELL' ? 'error' : 'default'
+        return (
+          <Chip
+            size="small"
+            label={v || '—'}
+            color={color as any}
+            variant="filled"
+            sx={{ height: 20, fontWeight: 800 }}
+          />
+        )
+      },
+    },
+    { field: 'day_buy_qty', headerName: 'Buy qty', width: 90, type: 'number' },
+    { field: 'day_sell_qty', headerName: 'Sell qty', width: 90, type: 'number' },
+    {
+      field: '__open_qty',
+      headerName: 'Open qty',
+      width: 90,
+      type: 'number',
+      valueGetter: (_v, row) => deriveSnapshotParts(row as PositionSnapshot).openQty,
+    },
+    {
+      field: 'realised',
+      headerName: 'Realised',
+      width: 120,
+      type: 'number',
+      renderCell: (params) => {
+        const r = params.row as PositionSnapshot
+        const val = deriveSnapshotParts(r).realisedPnl
+        return <PnlChip value={val} />
+      },
+    },
+    {
+      field: 'unrealised',
+      headerName: 'Unrealised',
+      width: 120,
+      type: 'number',
+      renderCell: (params) => {
+        const r = params.row as PositionSnapshot
+        return <PnlChip value={deriveSnapshotParts(r).unrealisedPnl} />
+      },
+    },
+    {
+      field: 'pnl',
+      headerName: 'Net P&L',
+      width: 120,
+      type: 'number',
+      renderCell: (params) => <PnlChip value={Number(params.value || 0)} />,
+    },
+    {
+      field: '__open_value',
+      headerName: 'Open value',
+      width: 130,
+      type: 'number',
+      valueGetter: (_v, row) => deriveSnapshotParts(row as PositionSnapshot).openValue,
+      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
+    },
+  ]
 
   const columns: GridColDef[] = [
     { field: 'as_of_date', headerName: 'Date', width: 110 },
@@ -801,110 +1143,6 @@ export function PositionsPage() {
     },
   ]
 
-  const monthlyColumns: GridColDef[] = [
-    { field: 'month', headerName: 'Month', width: 110 },
-    {
-      field: 'trades_pnl',
-      headerName: 'Closed trades P&L',
-      width: 170,
-      type: 'number',
-      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
-      cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
-    },
-    {
-      field: 'trades_count',
-      headerName: '# Trades',
-      width: 95,
-      type: 'number',
-    },
-    {
-      field: 'win_rate',
-      headerName: 'Win rate',
-      width: 105,
-      valueFormatter: (v) => formatPct(Number(v)),
-    },
-    {
-      field: 'turnover_total',
-      headerName: 'Turnover',
-      width: 140,
-      type: 'number',
-      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
-    },
-  ]
-
-  const symbolPnlColumns: GridColDef[] = [
-    { field: 'symbol', headerName: 'Symbol', width: 130 },
-    { field: 'product', headerName: 'Product', width: 90 },
-    {
-      field: 'pnl',
-      headerName: 'P&L',
-      width: 130,
-      type: 'number',
-      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
-      cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
-    },
-    { field: 'trades', headerName: 'Trades', width: 90, type: 'number' },
-    {
-      field: 'win_rate',
-      headerName: 'Win rate',
-      width: 110,
-      valueFormatter: (v) => formatPct(Number(v)),
-    },
-  ]
-
-  const openPositionsColumns: GridColDef[] = [
-    { field: 'symbol', headerName: 'Symbol', width: 140 },
-    { field: 'exchange', headerName: 'Exch', width: 80 },
-    { field: 'product', headerName: 'Product', width: 90 },
-    { field: 'qty', headerName: 'Qty', width: 90, type: 'number' },
-    {
-      field: 'avg_price',
-      headerName: 'Avg',
-      width: 110,
-      type: 'number',
-      valueFormatter: (v) => (v != null ? Number(v).toFixed(2) : ''),
-    },
-    {
-      field: 'pnl',
-      headerName: 'P&L',
-      width: 120,
-      type: 'number',
-      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
-      cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
-    },
-  ]
-
-  const closedTradesColumns: GridColDef[] = [
-    { field: 'symbol', headerName: 'Symbol', width: 140 },
-    { field: 'product', headerName: 'Product', width: 90 },
-    {
-      field: 'opened_at',
-      headerName: 'Opened',
-      width: 180,
-      valueFormatter: (v) =>
-        v ? formatInDisplayTimeZone(String(v), displayTimeZone) : '',
-    },
-    {
-      field: 'closed_at',
-      headerName: 'Closed',
-      width: 180,
-      valueFormatter: (v) =>
-        v ? formatInDisplayTimeZone(String(v), displayTimeZone) : '',
-    },
-    {
-      field: 'pnl',
-      headerName: 'P&L',
-      width: 120,
-      type: 'number',
-      valueFormatter: (v) => formatInr(Number(v), { fractionDigits: 0 }),
-      cellClassName: (params: GridCellParams) =>
-        params.value != null && Number(params.value) < 0 ? 'pnl-negative' : '',
-    },
-  ]
-
   const txColumns: GridColDef[] = [
     { field: 'as_of_date', headerName: 'Date', width: 110 },
     { field: 'symbol', headerName: 'Symbol', width: 140 },
@@ -1076,12 +1314,12 @@ export function PositionsPage() {
         }}
       >
         <Typography color="text.secondary">
-          {activeTab === 'snapshots'
-            ? 'Daily position snapshots (from broker positions). Refresh captures a new snapshot for today.'
-            : activeTab === 'transactions'
-              ? 'Transaction timeline and cash/funds curve derived from daily position snapshots (day buy/sell fields).'
-              : 'Trading insights from executed orders (closed trades) + daily position snapshots (turnover).'}
-        </Typography>
+	          {activeTab === 'snapshots'
+	            ? 'Daily position snapshots (from broker positions). Refresh captures a new snapshot for today.'
+	            : activeTab === 'transactions'
+	              ? 'Transaction timeline and cash/funds curve derived from daily position snapshots (day buy/sell fields).'
+	              : 'Day-by-day P&L derived from broker snapshots (realised/unrealised/pnl) with drilldown.'}
+	        </Typography>
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           {brokers.length > 0 && (
             <TextField
@@ -1160,17 +1398,17 @@ export function PositionsPage() {
               ) : null,
             }}
           />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={activeTab === 'transactions' ? true : includeZero}
-                onChange={(e) => setIncludeZero(e.target.checked)}
-                disabled={activeTab === 'transactions'}
-              />
-            }
-            label="Include zero qty"
-            sx={{ mr: 0 }}
-          />
+	          <FormControlLabel
+	            control={
+	              <Checkbox
+	                checked={activeTab === 'snapshots' ? includeZero : true}
+	                onChange={(e) => setIncludeZero(e.target.checked)}
+	                disabled={activeTab !== 'snapshots'}
+	              />
+	            }
+	            label="Include zero qty"
+	            sx={{ mr: 0 }}
+	          />
           <FormControlLabel
             control={
               <Switch checked={live} onChange={(e) => setLive(e.target.checked)} disabled={refreshing} />
@@ -1178,13 +1416,13 @@ export function PositionsPage() {
             label="Live"
             sx={{ mr: 0 }}
           />
-          {live ? (
-            <Stack direction="row" alignItems="center" spacing={0.75} sx={{ ml: 0.5 }}>
-              {polling || analysisPolling ? <CircularProgress size={14} /> : null}
-              <Typography variant="caption" color="text.secondary">
-                {lastLiveUpdateAt
-                  ? `Updated ${formatInDisplayTimeZone(lastLiveUpdateAt, displayTimeZone)}`
-                  : '—'}
+	          {live ? (
+	            <Stack direction="row" alignItems="center" spacing={0.75} sx={{ ml: 0.5 }}>
+	              {polling ? <CircularProgress size={14} /> : null}
+	              <Typography variant="caption" color="text.secondary">
+	                {lastLiveUpdateAt
+	                  ? `Updated ${formatInDisplayTimeZone(lastLiveUpdateAt, displayTimeZone)}`
+	                  : '—'}
               </Typography>
             </Stack>
           ) : null}
@@ -1314,17 +1552,17 @@ export function PositionsPage() {
           value={activeTab}
           onChange={(_e, v) => {
             setActiveTab(v)
-            if (v === 'analysis' && analysis == null && !analysisLoading) void loadAnalysis()
+            if (v === 'analysis') void loadSnapshots({ includeZeroOverride: true })
             if (v === 'transactions') void loadSnapshots({ includeZeroOverride: true })
           }}
           variant="scrollable"
           scrollButtons="auto"
-        >
-          <Tab value="snapshots" label="Daily snapshots" />
-          <Tab value="analysis" label="Positions analysis" />
-          <Tab value="transactions" label="Transactions charts" />
-        </Tabs>
-      </Paper>
+	        >
+	          <Tab value="snapshots" label="Daily snapshots" />
+	          <Tab value="analysis" label="Daily P&L" />
+	          <Tab value="transactions" label="Transactions charts" />
+	        </Tabs>
+	      </Paper>
 
       {activeTab === 'snapshots' ? (
         loading ? (
@@ -1463,143 +1701,264 @@ export function PositionsPage() {
                 />
               </Box>
             </Paper>
-          </Box>
-        )
-      ) : analysisLoading ? (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <CircularProgress size={20} />
-          <Typography variant="body2">Loading analysis…</Typography>
-        </Box>
-      ) : analysisError ? (
-        <Typography variant="body2" color="error">
-          {analysisError}
-        </Typography>
-      ) : !analysis ? (
-        <Typography variant="body2" color="text.secondary">
-          No analysis available yet. Try selecting a date range with executed trades, then click Apply.
-        </Typography>
-      ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Overview
-            </Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
-              <Chip
-                size="small"
-                label={`Range: ${analysis.summary.date_from} → ${analysis.summary.date_to}`}
-              />
-              <Chip size="small" label={`Broker: ${analysis.summary.broker_name}`} />
-              <Chip size="small" label={`Closed trades: ${analysis.summary.trades_count}`} />
-              <Chip size="small" label={`Win rate: ${formatPct(analysis.summary.trades_win_rate)}`} />
-              <Chip size="small" label={`Open positions: ${analysis.summary.open_positions_count}`} />
-              <Chip size="small" label={`Turnover: ${formatInr(analysis.summary.turnover_total)}`} />
-              <PnlChip value={analysis.summary.trades_pnl} />
-            </Box>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              Turnover is estimated from daily position snapshots (day buy/sell fields). Closed trade P&L is from analytics trades.
-            </Typography>
-          </Paper>
+	          </Box>
+	        )
+	      ) : loading ? (
+	        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+	          <CircularProgress size={20} />
+	          <Typography variant="body2">Loading snapshots…</Typography>
+	        </Box>
+	      ) : error ? (
+	        <Typography variant="body2" color="error">
+	          {error}
+	        </Typography>
+	      ) : dailyReality.length === 0 ? (
+	        <Typography variant="body2" color="text.secondary">
+	          No data available for this date range. Try widening the range and click Apply.
+	        </Typography>
+	      ) : (
+	        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+	          <Paper sx={{ p: 2 }}>
+	            <Typography variant="h6" gutterBottom>
+	              Reality check (broker snapshots)
+	            </Typography>
+		            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+		              <Chip size="small" label={`Range: ${startDate || '—'} → ${endDate || '—'}`} />
+		              <Chip size="small" label={`Broker: ${selectedBroker}`} />
+		              <Chip size="small" label={`Rows: ${positions.length}`} />
+		              <Chip size="small" label={`Turnover: ${formatInr(realityTotals.total)}`} />
+		              <Chip size="small" label={`Open value: ${formatInr(realityTotals.openValue)}`} />
+		              <Chip size="small" label="Realised" variant="outlined" />
+		              <PnlChip value={realityTotals.realised} />
+		              <Chip size="small" label="Unrealised" variant="outlined" />
+		              <PnlChip value={realityTotals.unrealised} />
+		              <Chip size="small" label="Net" variant="outlined" />
+		              <PnlChip value={realityTotals.net} />
+		            </Box>
+	            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+	              These numbers are aggregated from the broker positions snapshots (realised/unrealised/pnl fields).
+	              Charges/fees are not included in the snapshots; we’ll add a contract-note based charges view separately.
+	            </Typography>
+		          </Paper>
 
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Monthly performance
-            </Typography>
-            <Box sx={{ height: 340 }}>
-              <DataGrid
-                rows={analysis.monthly}
-                columns={monthlyColumns}
-                getRowId={(r) => r.month}
-                density="compact"
-                disableRowSelectionOnClick
-                sx={{ '& .pnl-negative': { color: 'error.main' } }}
-                initialState={{ pagination: { paginationModel: { pageSize: 12 } } }}
-                pageSizeOptions={[12, 24, 60]}
-              />
-            </Box>
-          </Paper>
+		          <Paper sx={{ p: 2 }}>
+		            <Typography variant="h6" gutterBottom>
+		              P&L curve (Net vs Realised/Unrealised)
+		            </Typography>
+		            <PriceChart
+		              candles={netPnlCandles}
+		              chartType="line"
+		              overlays={pnlOverlays}
+		              height={260}
+		              showLegend
+		              baseSeriesName="Net P&L"
+		            />
+		          </Paper>
+	
+		          <Paper sx={{ p: 2 }}>
+		            <Typography variant="h6" gutterBottom>
+		              Day-by-day P&L (click a day to drill down)
+	            </Typography>
+	            <Box sx={{ height: 340 }}>
+	              <DataGrid
+	                rows={dailyReality}
+	                columns={dailyRealityColumns}
+	                getRowId={(r) => r.id}
+	                density="compact"
+	                disableRowSelectionOnClick
+	                onRowClick={(params) => setAnalysisSelectedDate(String(params.id))}
+	                getRowClassName={(params) =>
+	                  analysisSelectedDate && String(params.id) === analysisSelectedDate ? 'reality-selected' : ''
+	                }
+	                sx={{
+	                  '& .reality-selected': {
+	                    outline: '1px solid',
+	                    outlineColor: 'primary.main',
+	                    backgroundColor: 'rgba(25, 118, 210, 0.08)',
+	                  },
+	                }}
+	                initialState={{ pagination: { paginationModel: { pageSize: 15 } } }}
+	                pageSizeOptions={[15, 30, 100]}
+	              />
+	            </Box>
+	          </Paper>
 
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
-              gap: 2,
-            }}
-          >
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                Winners (closed trades)
-              </Typography>
-              <Box sx={{ height: 320 }}>
-                <DataGrid
-                  rows={analysis.winners}
-                  columns={symbolPnlColumns}
-                  getRowId={(r) => `${r.symbol}:${r.product || ''}`}
-                  density="compact"
-                  disableRowSelectionOnClick
-                  sx={{ '& .pnl-negative': { color: 'error.main' } }}
-                  initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
-                  pageSizeOptions={[10]}
-                />
-              </Box>
-            </Paper>
+	          <Paper sx={{ p: 2 }}>
+	            <Typography variant="h6" gutterBottom>
+	              Drilldown: {analysisSelectedDate || '—'}
+	            </Typography>
+	            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 1 }}>
+	              <Chip size="small" label={`# traded: ${dayDrillTotals.traded}`} />
+	              <Chip size="small" label={`# open pos: ${dayDrillTotals.openPositions}`} />
+	              <Chip size="small" label={`Turnover: ${formatInr(dayDrillTotals.total)}`} />
+	              <Chip size="small" label={`Open value: ${formatInr(dayDrillTotals.openValue)}`} />
+	              <Chip size="small" label="Realised" variant="outlined" />
+	              <PnlChip value={dayDrillTotals.realised} />
+	              <Chip size="small" label="Unrealised" variant="outlined" />
+	              <PnlChip value={dayDrillTotals.unrealised} />
+	              <Chip size="small" label="Net" variant="outlined" />
+	              <PnlChip value={dayDrillTotals.net} />
+	            </Box>
+	            <Box sx={{ height: 420 }}>
+	              <DataGrid
+	                rows={dayDrillRows}
+	                columns={dayDrillColumns}
+	                getRowId={(r) => r.id}
+	                density="compact"
+	                disableRowSelectionOnClick
+	                slots={{ toolbar: GridToolbar }}
+	                slotProps={{
+	                  toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 300 } },
+	                }}
+	                initialState={{ pagination: { paginationModel: { pageSize: 25 } } }}
+	                pageSizeOptions={[25, 50, 100]}
+	              />
+	            </Box>
+	          </Paper>
 
-            <Paper sx={{ p: 2 }}>
-              <Typography variant="h6" gutterBottom>
-                Losers (closed trades)
-              </Typography>
-              <Box sx={{ height: 320 }}>
-                <DataGrid
-                  rows={analysis.losers}
-                  columns={symbolPnlColumns}
-                  getRowId={(r) => `${r.symbol}:${r.product || ''}`}
-                  density="compact"
-                  disableRowSelectionOnClick
-                  sx={{ '& .pnl-negative': { color: 'error.main' } }}
-                  initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
-                  pageSizeOptions={[10]}
-                />
-              </Box>
-            </Paper>
-          </Box>
+		          <Accordion defaultExpanded={false}>
+		            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+		              <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', flexWrap: 'wrap' }}>
+		                <Typography variant="subtitle1" sx={{ flex: 1, minWidth: 260 }}>
+		                  Order analytics (SigmaTrader)
+		                </Typography>
+		                {orderInsights ? (
+		                  <Chip
+		                    size="small"
+		                    label={`Orders: ${orderInsights.summary.orders_total} • Exec: ${orderInsights.summary.orders_executed}`}
+		                  />
+		                ) : (
+		                  <Chip size="small" label="Not loaded" variant="outlined" />
+		                )}
+		              </Stack>
+		            </AccordionSummary>
+		            <AccordionDetails>
+		              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+		                Shows alerts received, risk decisions (placed/blocked), and orders created/executed by SigmaTrader. This does not include broker-side manual trades.
+		              </Typography>
+		              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center" sx={{ mb: 1 }}>
+		                <Button
+		                  size="small"
+		                  variant="outlined"
+		                  onClick={() => void loadOrderInsights({ startDateOverride: startDate, endDateOverride: endDate })}
+		                  disabled={orderInsightsLoading}
+		                >
+		                  {orderInsightsLoading ? 'Loading…' : 'Load'}
+		                </Button>
+		                {orderInsightsError ? (
+		                  <Typography variant="caption" color="error">
+		                    {orderInsightsError}
+		                  </Typography>
+		                ) : null}
+		              </Stack>
+		              {orderInsights ? (
+		                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+		                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+		                    <Chip size="small" label={`TV alerts: ${orderInsights.summary.tv_alerts}`} />
+		                    <Chip
+		                      size="small"
+		                      label={`Decisions: ${orderInsights.summary.decisions_placed} placed • ${orderInsights.summary.decisions_blocked} blocked`}
+		                    />
+		                    <Chip
+		                      size="small"
+		                      label={`TV share: ${
+		                        orderInsights.summary.decisions_total
+		                          ? Math.round((orderInsights.summary.decisions_from_tv * 100) / orderInsights.summary.decisions_total)
+		                          : 0
+		                      }%`}
+		                    />
+		                    <Chip
+		                      size="small"
+		                      label={`Orders: ${orderInsights.summary.orders_total} • Exec: ${orderInsights.summary.orders_executed}`}
+		                    />
+		                    <Chip
+		                      size="small"
+		                      label={`Exec rate: ${
+		                        orderInsights.summary.orders_total
+		                          ? Math.round((orderInsights.summary.orders_executed * 100) / orderInsights.summary.orders_total)
+		                          : 0
+		                      }%`}
+		                    />
+		                    <Chip size="small" label={`MIS: ${orderInsights.summary.order_products?.MIS ?? 0}`} />
+		                    <Chip size="small" label={`CNC: ${orderInsights.summary.order_products?.CNC ?? 0}`} />
+		                    <Chip size="small" label={`BUY: ${orderInsights.summary.order_sides?.BUY ?? 0}`} />
+		                    <Chip size="small" label={`SELL: ${orderInsights.summary.order_sides?.SELL ?? 0}`} />
+		                  </Box>
 
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Open positions (current)
-            </Typography>
-            <Box sx={{ height: 360 }}>
-              <DataGrid
-                rows={analysis.open_positions}
-                columns={openPositionsColumns}
-                getRowId={(r) => r.id}
-                density="compact"
-                disableRowSelectionOnClick
-                sx={{ '& .pnl-negative': { color: 'error.main' } }}
-                initialState={{ pagination: { paginationModel: { pageSize: 15 } } }}
-                pageSizeOptions={[15, 30, 100]}
-              />
-            </Box>
-          </Paper>
+		                  <Box sx={{ height: 320 }}>
+		                    <DataGrid
+		                      rows={orderInsights.daily.map((r) => ({ id: r.day, ...r }))}
+		                      columns={[
+		                        { field: 'day', headerName: 'Date', width: 110 },
+		                        { field: 'tv_alerts', headerName: 'TV', width: 70, type: 'number' },
+		                        { field: 'decisions_placed', headerName: 'Placed', width: 80, type: 'number' },
+		                        { field: 'decisions_blocked', headerName: 'Blocked', width: 90, type: 'number' },
+		                        { field: 'orders_total', headerName: 'Orders', width: 85, type: 'number' },
+		                        { field: 'orders_executed', headerName: 'Exec', width: 75, type: 'number' },
+		                        { field: 'orders_rejected_risk', headerName: 'Risk rej', width: 90, type: 'number' },
+		                        { field: 'orders_failed', headerName: 'Failed', width: 80, type: 'number' },
+		                        {
+		                          field: 'mix_product',
+		                          headerName: 'MIS/CNC',
+		                          width: 120,
+		                          valueGetter: (_v, row) =>
+		                            `MIS:${row.order_products?.MIS ?? 0} CNC:${row.order_products?.CNC ?? 0}`,
+		                        },
+		                        {
+		                          field: 'mix_side',
+		                          headerName: 'BUY/SELL',
+		                          width: 120,
+		                          valueGetter: (_v, row) =>
+		                            `B:${row.order_sides?.BUY ?? 0} S:${row.order_sides?.SELL ?? 0}`,
+		                        },
+		                      ]}
+		                      density="compact"
+		                      disableRowSelectionOnClick
+		                      initialState={{ pagination: { paginationModel: { pageSize: 15 } } }}
+		                      pageSizeOptions={[15, 30, 100]}
+		                    />
+		                  </Box>
 
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Recent closed trades
-            </Typography>
-            <Divider sx={{ mb: 2 }} />
-            <Box sx={{ height: 360 }}>
-              <DataGrid
-                rows={analysis.closed_trades.map((r, idx) => ({ id: idx, ...r }))}
-                columns={closedTradesColumns}
-                density="compact"
-                disableRowSelectionOnClick
-                sx={{ '& .pnl-negative': { color: 'error.main' } }}
-                initialState={{ pagination: { paginationModel: { pageSize: 15 } } }}
-                pageSizeOptions={[15, 30, 100]}
-              />
-            </Box>
-          </Paper>
-        </Box>
-      )}
+		                  <Box sx={{ height: 340 }}>
+		                    <DataGrid
+		                      rows={orderInsights.top_symbols.map((r) => ({ id: r.symbol, ...r }))}
+		                      columns={[
+		                        { field: 'symbol', headerName: 'Symbol', width: 140 },
+		                        { field: 'buys', headerName: 'Buy', width: 80, type: 'number' },
+		                        { field: 'sells', headerName: 'Sell', width: 80, type: 'number' },
+		                        { field: 'orders_total', headerName: 'Orders', width: 90, type: 'number' },
+		                        { field: 'orders_executed', headerName: 'Exec', width: 80, type: 'number' },
+		                        { field: 'decisions_blocked', headerName: 'Blocked', width: 90, type: 'number' },
+		                      ]}
+		                      density="compact"
+		                      disableRowSelectionOnClick
+		                      slots={{ toolbar: GridToolbar }}
+		                      slotProps={{
+		                        toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 300 } },
+		                      }}
+		                      initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+		                      pageSizeOptions={[10, 20, 50]}
+		                    />
+		                  </Box>
+
+		                  {orderInsights.top_block_reasons?.length ? (
+		                    <Box>
+		                      <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+		                        Top block reasons
+		                      </Typography>
+		                      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+		                        {orderInsights.top_block_reasons.map((r) => (
+		                          <Chip key={r.reason} size="small" label={`${r.reason} (${r.count})`} variant="outlined" />
+		                        ))}
+		                      </Stack>
+		                    </Box>
+		                  ) : null}
+		                </Box>
+		              ) : null}
+		            </AccordionDetails>
+		          </Accordion>
+	        </Box>
+	      )}
     </Box>
   )
 }

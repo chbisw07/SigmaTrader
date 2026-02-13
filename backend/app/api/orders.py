@@ -4,7 +4,8 @@ import inspect
 import json
 import logging
 import time
-from datetime import UTC, datetime, timedelta
+from collections import Counter, defaultdict
+from datetime import UTC, date, datetime, time as dt_time, timedelta
 from typing import Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -17,12 +18,19 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
 from app.db.session import SessionLocal, get_db
-from app.models import BrokerConnection, Group, Order, Position, Strategy, User
+from app.models import Alert, AlertDecisionLog, BrokerConnection, Group, Order, Position, Strategy, User
 from app.schemas.orders import (
     ManualOrderCreate,
     OrderRead,
     OrderStatusUpdate,
     OrderUpdate,
+)
+from app.schemas.orders_insights import (
+    OrdersInsightsDayRead,
+    OrdersInsightsRead,
+    OrdersInsightsReasonRead,
+    OrdersInsightsSummaryRead,
+    OrdersInsightsSymbolRead,
 )
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
@@ -249,6 +257,295 @@ def list_orders(
     if dt_to is not None:
         query = query.filter(Order.created_at <= dt_to)
     return query.order_by(Order.created_at.desc()).all()
+
+
+@router.get("/insights", response_model=OrdersInsightsRead)
+def orders_insights(
+    broker_name: Annotated[Optional[str], Query()] = None,
+    start_date: Annotated[Optional[date], Query()] = None,
+    end_date: Annotated[Optional[date], Query()] = None,
+    include_simulated: bool = Query(default=False),
+    top_n: int = Query(default=15, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+) -> OrdersInsightsRead:
+    """Return a lightweight daily insight summary for orders + risk decisions.
+
+    This view is intended for SigmaTrader activity (alerts, risk decisions, and
+    orders created/executed via SigmaTrader), not full broker-ledger accounting.
+    """
+
+    def _ist_tz():
+        try:
+            from zoneinfo import ZoneInfo
+
+            return ZoneInfo("Asia/Kolkata")
+        except Exception:
+            return None
+
+    def _ensure_utc(dt: datetime) -> datetime:
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+    ist = _ist_tz()
+
+    if start_date is None and end_date is None:
+        now = datetime.now(UTC)
+        today = now.astimezone(ist).date() if ist is not None else date.today()
+        start_date = today
+        end_date = today
+
+    assert start_date is not None
+    assert end_date is not None
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    if (end_date - start_date) > timedelta(days=15):
+        raise HTTPException(
+            status_code=400,
+            detail="Date range too large; max allowed is 15 days.",
+        )
+
+    def _range_utc(d_from: date, d_to: date) -> tuple[datetime, datetime]:
+        if ist is None:
+            dt_from = datetime.combine(d_from, dt_time.min, tzinfo=UTC)
+            dt_to = datetime.combine(d_to, dt_time.max, tzinfo=UTC)
+            return dt_from, dt_to
+        dt_from = (
+            datetime.combine(d_from, dt_time.min).replace(tzinfo=ist).astimezone(UTC)
+        )
+        dt_to = (
+            datetime.combine(d_to, dt_time.max).replace(tzinfo=ist).astimezone(UTC)
+        )
+        return dt_from, dt_to
+
+    dt_from, dt_to = _range_utc(start_date, end_date)
+
+    def _day_key(dt: datetime) -> date:
+        dt_u = _ensure_utc(dt)
+        return dt_u.astimezone(ist).date() if ist is not None else dt_u.date()
+
+    broker = (broker_name or "").strip().lower() or None
+
+    # --- TV alerts received (TradingView webhooks ingested) ---
+    alerts_q = db.query(Alert.received_at).filter(
+        Alert.source == "TRADINGVIEW",
+        Alert.received_at >= dt_from,
+        Alert.received_at <= dt_to,
+    )
+    if user is not None:
+        alerts_q = alerts_q.filter((Alert.user_id == user.id) | (Alert.user_id.is_(None)))
+    tv_alert_rows: list[tuple[datetime]] = list(alerts_q.all())
+    tv_alerts_by_day: Counter[date] = Counter()
+    for (received_at,) in tv_alert_rows:
+        tv_alerts_by_day[_day_key(received_at)] += 1
+
+    # --- Risk decisions (PLACED/BLOCKED) ---
+    decisions_q = db.query(AlertDecisionLog).filter(
+        AlertDecisionLog.created_at >= dt_from,
+        AlertDecisionLog.created_at <= dt_to,
+    )
+    if user is not None:
+        decisions_q = decisions_q.filter(
+            (AlertDecisionLog.user_id == user.id) | (AlertDecisionLog.user_id.is_(None))
+        )
+    decision_rows: list[AlertDecisionLog] = list(decisions_q.all())
+
+    decision_products_by_day: defaultdict[date, Counter[str]] = defaultdict(Counter)
+    decision_sides_by_day: defaultdict[date, Counter[str]] = defaultdict(Counter)
+    decision_totals_by_day: Counter[date] = Counter()
+    decision_placed_by_day: Counter[date] = Counter()
+    decision_blocked_by_day: Counter[date] = Counter()
+    decision_tv_by_day: Counter[date] = Counter()
+    blocked_reasons: Counter[str] = Counter()
+    blocked_by_symbol: Counter[str] = Counter()
+
+    for row in decision_rows:
+        d = _day_key(row.created_at)
+        decision_totals_by_day[d] += 1
+        if (row.source or "").strip().upper() == "TRADINGVIEW":
+            decision_tv_by_day[d] += 1
+
+        dec = (row.decision or "").strip().upper() or "BLOCKED"
+        if dec == "PLACED":
+            decision_placed_by_day[d] += 1
+        else:
+            decision_blocked_by_day[d] += 1
+            sym = (row.symbol or "").strip().upper()
+            if sym:
+                blocked_by_symbol[sym] += 1
+            try:
+                reasons = json.loads(row.reasons_json or "[]")
+                if isinstance(reasons, list):
+                    for r in reasons:
+                        s = str(r or "").strip()
+                        if s:
+                            blocked_reasons[s] += 1
+            except Exception:
+                pass
+
+        prod = (row.resolved_product or row.product_hint or "—").strip().upper()
+        side = (row.side or "—").strip().upper()
+        decision_products_by_day[d][prod] += 1
+        decision_sides_by_day[d][side] += 1
+
+    # --- Orders created/executed ---
+    orders_q = (
+        db.query(Order, Alert.source.label("alert_source"))
+        .outerjoin(Alert, Order.alert_id == Alert.id)
+        .filter(Order.created_at >= dt_from, Order.created_at <= dt_to)
+    )
+    if user is not None:
+        orders_q = orders_q.filter((Order.user_id == user.id) | (Order.user_id.is_(None)))
+    if broker is not None:
+        broker_norm = _ensure_supported_broker(broker)
+        orders_q = orders_q.filter(Order.broker_name == broker_norm)
+    if not include_simulated:
+        orders_q = orders_q.filter(Order.simulated.is_(False))
+    order_rows: list[tuple[Order, Optional[str]]] = list(orders_q.all())
+
+    order_products_by_day: defaultdict[date, Counter[str]] = defaultdict(Counter)
+    order_sides_by_day: defaultdict[date, Counter[str]] = defaultdict(Counter)
+    order_totals_by_day: Counter[date] = Counter()
+    order_executed_by_day: Counter[date] = Counter()
+    order_failed_by_day: Counter[date] = Counter()
+    order_rejected_risk_by_day: Counter[date] = Counter()
+    order_waiting_by_day: Counter[date] = Counter()
+
+    order_products_total: Counter[str] = Counter()
+    order_sides_total: Counter[str] = Counter()
+    order_origins_total: Counter[str] = Counter()
+    order_statuses_total: Counter[str] = Counter()
+
+    symbol_buys: Counter[str] = Counter()
+    symbol_sells: Counter[str] = Counter()
+    symbol_orders_total: Counter[str] = Counter()
+    symbol_orders_executed: Counter[str] = Counter()
+
+    for order, alert_source in order_rows:
+        d = _day_key(order.created_at)
+        order_totals_by_day[d] += 1
+
+        prod = (order.product or "—").strip().upper()
+        side = (order.side or "—").strip().upper()
+        st = (order.status or "—").strip().upper()
+
+        order_products_by_day[d][prod] += 1
+        order_sides_by_day[d][side] += 1
+        order_products_total[prod] += 1
+        order_sides_total[side] += 1
+        order_statuses_total[st] += 1
+
+        origin = "MANUAL"
+        if order.alert_id is not None:
+            origin = (
+                "TRADINGVIEW"
+                if (alert_source or "").strip().upper() == "TRADINGVIEW"
+                else "ALERT"
+            )
+        order_origins_total[origin] += 1
+
+        if st in {"EXECUTED", "PARTIALLY_EXECUTED"}:
+            order_executed_by_day[d] += 1
+            sym_u = (order.symbol or "").strip().upper()
+            if sym_u:
+                symbol_orders_executed[sym_u] += 1
+        elif st == "FAILED":
+            order_failed_by_day[d] += 1
+        elif st == "REJECTED_RISK":
+            order_rejected_risk_by_day[d] += 1
+        elif st == "WAITING":
+            order_waiting_by_day[d] += 1
+
+        sym = (order.symbol or "").strip().upper()
+        if sym:
+            symbol_orders_total[sym] += 1
+            if side == "BUY":
+                symbol_buys[sym] += 1
+            elif side == "SELL":
+                symbol_sells[sym] += 1
+
+    # --- Build daily output (include all days in range) ---
+    days: list[date] = []
+    cur = start_date
+    while cur <= end_date:
+        days.append(cur)
+        cur = date.fromordinal(cur.toordinal() + 1)
+
+    daily: list[OrdersInsightsDayRead] = []
+    for d in days:
+        daily.append(
+            OrdersInsightsDayRead(
+                day=d,
+                tv_alerts=int(tv_alerts_by_day.get(d, 0)),
+                decisions_total=int(decision_totals_by_day.get(d, 0)),
+                decisions_placed=int(decision_placed_by_day.get(d, 0)),
+                decisions_blocked=int(decision_blocked_by_day.get(d, 0)),
+                decisions_from_tv=int(decision_tv_by_day.get(d, 0)),
+                orders_total=int(order_totals_by_day.get(d, 0)),
+                orders_executed=int(order_executed_by_day.get(d, 0)),
+                orders_failed=int(order_failed_by_day.get(d, 0)),
+                orders_rejected_risk=int(order_rejected_risk_by_day.get(d, 0)),
+                orders_waiting=int(order_waiting_by_day.get(d, 0)),
+                decision_products=dict(decision_products_by_day.get(d, Counter())),
+                decision_sides=dict(decision_sides_by_day.get(d, Counter())),
+                order_products=dict(order_products_by_day.get(d, Counter())),
+                order_sides=dict(order_sides_by_day.get(d, Counter())),
+            )
+        )
+
+    summary = OrdersInsightsSummaryRead(
+        date_from=start_date,
+        date_to=end_date,
+        broker_name=broker,
+        tv_alerts=int(sum(tv_alerts_by_day.values())),
+        decisions_total=int(sum(decision_totals_by_day.values())),
+        decisions_placed=int(sum(decision_placed_by_day.values())),
+        decisions_blocked=int(sum(decision_blocked_by_day.values())),
+        decisions_from_tv=int(sum(decision_tv_by_day.values())),
+        orders_total=int(sum(order_totals_by_day.values())),
+        orders_executed=int(sum(order_executed_by_day.values())),
+        orders_failed=int(sum(order_failed_by_day.values())),
+        orders_rejected_risk=int(sum(order_rejected_risk_by_day.values())),
+        orders_waiting=int(sum(order_waiting_by_day.values())),
+        decision_products=dict(sum(decision_products_by_day.values(), Counter())),
+        decision_sides=dict(sum(decision_sides_by_day.values(), Counter())),
+        order_products=dict(order_products_total),
+        order_sides=dict(order_sides_total),
+        origins=dict(order_origins_total),
+        statuses=dict(order_statuses_total),
+    )
+
+    symbols = set(symbol_orders_total.keys()) | set(blocked_by_symbol.keys())
+    sym_rows: list[OrdersInsightsSymbolRead] = []
+    for sym in symbols:
+        if not sym:
+            continue
+        sym_rows.append(
+            OrdersInsightsSymbolRead(
+                symbol=sym,
+                buys=int(symbol_buys.get(sym, 0)),
+                sells=int(symbol_sells.get(sym, 0)),
+                orders_total=int(symbol_orders_total.get(sym, 0)),
+                orders_executed=int(symbol_orders_executed.get(sym, 0)),
+                decisions_blocked=int(blocked_by_symbol.get(sym, 0)),
+            )
+        )
+    sym_rows.sort(
+        key=lambda r: (r.orders_total + r.decisions_blocked, r.orders_executed),
+        reverse=True,
+    )
+    top_symbols = sym_rows[: int(top_n)]
+
+    top_block_reasons = [
+        OrdersInsightsReasonRead(reason=reason, count=int(count))
+        for reason, count in blocked_reasons.most_common(10)
+    ]
+
+    return OrdersInsightsRead(
+        summary=summary,
+        daily=daily,
+        top_symbols=top_symbols,
+        top_block_reasons=top_block_reasons,
+    )
 
 
 @router.post("/", response_model=OrderRead)
