@@ -58,12 +58,8 @@ const formatDateLocal = (d: Date): string => {
 
 const defaultDateRange = (): { from: string; to: string } => {
   const today = new Date()
-  const dayOfWeek = today.getDay() // 0=Sun,1=Mon
-  const diffToMonday = (dayOfWeek + 6) % 7
-  const monday = new Date(today)
-  monday.setDate(today.getDate() - diffToMonday)
   return {
-    from: formatDateLocal(monday),
+    from: formatDateLocal(today),
     to: formatDateLocal(today),
   }
 }
@@ -160,18 +156,22 @@ export function PositionsPage() {
     preferLatest?: boolean
     includeZeroOverride?: boolean
     silent?: boolean
+    startDateOverride?: string
+    endDateOverride?: string
   }) => {
     const seq = (loadSeqRef.current += 1)
     try {
       if (opts?.silent) setPolling(true)
       else setLoading(true)
+      const startDateParam = opts?.startDateOverride ?? startDate
+      const endDateParam = opts?.endDateOverride ?? endDate
       const params =
-        opts?.preferLatest && !startDate && !endDate && !symbolQuery
+        opts?.preferLatest && !startDateParam && !endDateParam && !symbolQuery
           ? { broker_name: selectedBroker }
           : {
               broker_name: selectedBroker,
-              start_date: startDate || undefined,
-              end_date: endDate || undefined,
+              start_date: startDateParam || undefined,
+              end_date: endDateParam || undefined,
               symbol: symbolQuery || undefined,
               include_zero: opts?.includeZeroOverride ?? includeZero,
             }
@@ -199,15 +199,17 @@ export function PositionsPage() {
     }
   }
 
-  const loadAnalysis = async (opts?: { silent?: boolean }) => {
+  const loadAnalysis = async (opts?: { silent?: boolean; startDateOverride?: string; endDateOverride?: string }) => {
     const seq = (analysisSeqRef.current += 1)
     try {
       if (opts?.silent) setAnalysisPolling(true)
       else setAnalysisLoading(true)
+      const startDateParam = opts?.startDateOverride ?? startDate
+      const endDateParam = opts?.endDateOverride ?? endDate
       const data = await fetchPositionsAnalysis({
         broker_name: selectedBroker,
-        start_date: startDate || undefined,
-        end_date: endDate || undefined,
+        start_date: startDateParam || undefined,
+        end_date: endDateParam || undefined,
         symbol: symbolQuery || undefined,
         top_n: 10,
       })
@@ -382,18 +384,33 @@ export function PositionsPage() {
     }
   }
 
-  const handleApply = async () => {
+  const handleApply = async (opts?: { startDate?: string; endDate?: string }) => {
     if (symbolApplyTimeoutRef.current != null) {
       window.clearTimeout(symbolApplyTimeoutRef.current)
       symbolApplyTimeoutRef.current = null
     }
     if (activeTab === 'snapshots') {
-      await loadSnapshots()
+      await loadSnapshots({ startDateOverride: opts?.startDate, endDateOverride: opts?.endDate })
     } else if (activeTab === 'transactions') {
-      await loadSnapshots({ includeZeroOverride: true })
+      await loadSnapshots({
+        includeZeroOverride: true,
+        startDateOverride: opts?.startDate,
+        endDateOverride: opts?.endDate,
+      })
     } else {
-      await loadAnalysis()
+      await loadAnalysis({ startDateOverride: opts?.startDate, endDateOverride: opts?.endDate })
     }
+  }
+
+  const applyDatePreset = (days: 1 | 7 | 15) => {
+    const today = new Date()
+    const to = formatDateLocal(today)
+    const fromDate = new Date(today)
+    fromDate.setDate(today.getDate() - (days - 1))
+    const from = formatDateLocal(fromDate)
+    setStartDate(from)
+    setEndDate(to)
+    void handleApply({ startDate: from, endDate: to })
   }
 
   type TransactionRow = {
@@ -596,10 +613,75 @@ export function PositionsPage() {
 
   const columns: GridColDef[] = [
     { field: 'as_of_date', headerName: 'Date', width: 110 },
-    { field: 'symbol', headerName: 'Symbol', width: 140 },
+    {
+      field: 'symbol',
+      headerName: 'Symbol',
+      width: 240,
+      renderCell: (params) => {
+        const r = params.row as PositionSnapshot
+        const symbol = String(params.value ?? '').toUpperCase()
+        const product = String(r.product ?? '').toUpperCase()
+        const buyQty = Number(r.day_buy_qty ?? r.buy_qty ?? 0) || 0
+        const sellQty = Number(r.day_sell_qty ?? r.sell_qty ?? 0) || 0
+        const side = String(
+          r.order_type ?? (sellQty > 0 && buyQty === 0 ? 'SELL' : buyQty > 0 && sellQty === 0 ? 'BUY' : ''),
+        ).toUpperCase()
+        const showSoldHolding = product === 'CNC' && side === 'SELL' && buyQty === 0 && sellQty > 0
+        return (
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {symbol || '—'}
+            </span>
+            {showSoldHolding ? (
+              <Chip
+                size="small"
+                label="SOLD HOLDING"
+                variant="outlined"
+                color="warning"
+                sx={{ height: 20, fontWeight: 600 }}
+              />
+            ) : null}
+          </Stack>
+        )
+      },
+    },
     { field: 'exchange', headerName: 'Exch', width: 80 },
-    { field: 'product', headerName: 'Product', width: 90 },
-    { field: 'order_type', headerName: 'Type', width: 90 },
+    {
+      field: 'product',
+      headerName: 'Product',
+      width: 95,
+      renderCell: (params) => {
+        const v = String(params.value ?? '').toUpperCase()
+        const color = v === 'CNC' ? 'warning' : v === 'MIS' ? 'info' : 'default'
+        return (
+          <Chip
+            size="small"
+            label={v || '—'}
+            color={color as any}
+            variant="outlined"
+            sx={{ height: 20, fontWeight: 700 }}
+          />
+        )
+      },
+    },
+    {
+      field: 'order_type',
+      headerName: 'Type',
+      width: 95,
+      renderCell: (params) => {
+        const v = String(params.value ?? '').toUpperCase()
+        const color = v === 'BUY' ? 'success' : v === 'SELL' ? 'error' : 'default'
+        return (
+          <Chip
+            size="small"
+            label={v || '—'}
+            color={color as any}
+            variant="filled"
+            sx={{ height: 20, fontWeight: 800 }}
+          />
+        )
+      },
+    },
     {
       field: 'qty',
       headerName: 'Qty',
@@ -1033,6 +1115,30 @@ export function PositionsPage() {
             onChange={(e) => setEndDate(e.target.value)}
             InputLabelProps={{ shrink: true }}
           />
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => applyDatePreset(1)}
+            disabled={loading || refreshing}
+          >
+            Today
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => applyDatePreset(7)}
+            disabled={loading || refreshing}
+          >
+            7D
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => applyDatePreset(15)}
+            disabled={loading || refreshing}
+          >
+            15D
+          </Button>
           <TextField
             label="Symbol"
             size="small"
@@ -1094,7 +1200,7 @@ export function PositionsPage() {
               helperText="Used to build cash curve"
             />
           )}
-          <Button size="small" variant="outlined" onClick={handleApply} disabled={loading || refreshing}>
+          <Button size="small" variant="outlined" onClick={() => void handleApply()} disabled={loading || refreshing}>
             Apply
           </Button>
           <Button size="small" variant="outlined" onClick={handleRefresh} disabled={loading || refreshing}>
