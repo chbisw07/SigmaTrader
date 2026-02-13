@@ -208,10 +208,27 @@ def list_orders(
     status: Annotated[Optional[str], Query()] = None,
     strategy_id: Annotated[Optional[int], Query()] = None,
     broker_name: Annotated[Optional[str], Query()] = None,
+    created_from: Annotated[Optional[str], Query()] = None,
+    created_to: Annotated[Optional[str], Query()] = None,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user_optional),
 ) -> List[Order]:
     """Return a simple order history list with basic filters."""
+
+    def _parse_iso_dt(raw: str | None) -> datetime | None:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        try:
+            # Support JS `toISOString()` which uses a trailing 'Z'.
+            s2 = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s2)
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid created_from/created_to; expected ISO datetime.",
+            ) from exc
 
     query = db.query(Order).options(joinedload(Order.alert))
     if user is not None:
@@ -225,6 +242,12 @@ def list_orders(
     if broker_name is not None:
         broker = _ensure_supported_broker(broker_name)
         query = query.filter(Order.broker_name == broker)
+    dt_from = _parse_iso_dt(created_from)
+    dt_to = _parse_iso_dt(created_to)
+    if dt_from is not None:
+        query = query.filter(Order.created_at >= dt_from)
+    if dt_to is not None:
+        query = query.filter(Order.created_at <= dt_to)
     return query.order_by(Order.created_at.desc()).all()
 
 

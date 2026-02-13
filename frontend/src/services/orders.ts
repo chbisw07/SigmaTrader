@@ -184,6 +184,8 @@ export async function fetchOrdersHistory(options?: {
   status?: string
   strategyId?: number
   brokerName?: string
+  createdFrom?: string
+  createdTo?: string
 }): Promise<Order[]> {
   const url = new URL('/api/orders/', window.location.origin)
   if (options?.status) {
@@ -194,6 +196,12 @@ export async function fetchOrdersHistory(options?: {
   }
   if (options?.brokerName) {
     url.searchParams.set('broker_name', options.brokerName)
+  }
+  if (options?.createdFrom) {
+    url.searchParams.set('created_from', options.createdFrom)
+  }
+  if (options?.createdTo) {
+    url.searchParams.set('created_to', options.createdTo)
   }
   const res = await fetch(url.toString())
   if (!res.ok) {

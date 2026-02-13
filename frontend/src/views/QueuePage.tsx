@@ -914,7 +914,8 @@ export function WaitingQueuePanel({
             width: '100%',
             mt: 2,
             // In tabbed mode, keep the panel height stable to avoid flicker/layout jumps.
-            height: embedded ? '65vh' : undefined,
+            height: embedded ? 'calc(100vh - 280px)' : undefined,
+            minHeight: embedded ? 520 : undefined,
           }}
         >
           <DataGrid

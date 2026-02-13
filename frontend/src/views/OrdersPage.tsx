@@ -23,6 +23,37 @@ import {
   type GridRenderCellParams,
 } from '@mui/x-data-grid'
 
+const formatDateLocal = (d: Date): string => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+const dateRangeToIso = (range: { from: string; to: string }): { fromIso?: string; toIso?: string } => {
+  const from = (range.from || '').trim()
+  const to = (range.to || '').trim()
+  if (!from && !to) return {}
+  const out: { fromIso?: string; toIso?: string } = {}
+  if (from) out.fromIso = new Date(`${from}T00:00:00`).toISOString()
+  if (to) out.toIso = new Date(`${to}T23:59:59.999`).toISOString()
+  return out
+}
+
+const isMoveToQueueEligible = (order: Order): boolean => {
+  const status = String(order.status ?? '').toUpperCase()
+  const brokerId = order.broker_order_id ?? order.zerodha_order_id ?? null
+  const alreadyRequeued = (order.error_message ?? '').includes(
+    'Requeued to Waiting Queue as order #',
+  )
+  return (
+    !order.simulated &&
+    !brokerId &&
+    !alreadyRequeued &&
+    (status === 'FAILED' || status === 'REJECTED_RISK' || status === 'CANCELLED')
+  )
+}
+
 export function OrdersPanel({
   embedded = false,
   active = true,
@@ -32,16 +63,27 @@ export function OrdersPanel({
 }) {
   const { displayTimeZone } = useTimeSettings()
   const navigate = useNavigate()
+  const today = formatDateLocal(new Date())
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const [showSimulated, setShowSimulated] = useState<boolean>(true)
+  const [showSimulated, setShowSimulated] = useState<boolean>(false)
+  const [dateRangeDraft, setDateRangeDraft] = useState<{ from: string; to: string }>({
+    from: today,
+    to: today,
+  })
+  const [dateRangeApplied, setDateRangeApplied] = useState<{ from: string; to: string }>({
+    from: today,
+    to: today,
+  })
   const [loadedOnce, setLoadedOnce] = useState(false)
   const [brokers, setBrokers] = useState<BrokerInfo[]>([])
   const [selectedBroker, setSelectedBroker] = useState<string>('zerodha')
   const [managedRiskCount, setManagedRiskCount] = useState<number>(0)
   const [moveBusyId, setMoveBusyId] = useState<number | null>(null)
+  const [bulkMoveBusy, setBulkMoveBusy] = useState(false)
+  const [selectionModel, setSelectionModel] = useState<number[]>([])
   const [snackbar, setSnackbar] = useState<{
     open: boolean
     message: string
@@ -51,7 +93,12 @@ export function OrdersPanel({
   const loadOrders = async () => {
     try {
       setLoading(true)
-      const data = await fetchOrdersHistory({ brokerName: selectedBroker })
+      const { fromIso, toIso } = dateRangeToIso(dateRangeApplied)
+      const data = await fetchOrdersHistory({
+        brokerName: selectedBroker,
+        createdFrom: fromIso,
+        createdTo: toIso,
+      })
       setOrders(data)
       setError(null)
     } catch (err) {
@@ -94,10 +141,11 @@ export function OrdersPanel({
 
   useEffect(() => {
     if (!active || !loadedOnce) return
+    setSelectionModel([])
     void loadOrders()
     void loadManagedRiskCount()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBroker])
+  }, [selectedBroker, dateRangeApplied])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -113,6 +161,72 @@ export function OrdersPanel({
       setRefreshing(false)
       await loadOrders()
       await loadManagedRiskCount()
+    }
+  }
+
+  const visibleOrders = orders.filter((order) => showSimulated || !order.simulated)
+  const eligibleVisibleIds = visibleOrders.filter(isMoveToQueueEligible).map((o) => o.id)
+
+  const handleMoveToQueue = async (orderId: number) => {
+    setMoveBusyId(orderId)
+    try {
+      const queued = await moveOrderToWaiting(orderId)
+      setSnackbar({
+        open: true,
+        message: `Queued a new WAITING order (#${queued.id}).`,
+        severity: 'success',
+      })
+      setSelectionModel([])
+      await loadOrders()
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Failed to move order',
+        severity: 'error',
+      })
+    } finally {
+      setMoveBusyId(null)
+    }
+  }
+
+  const handleBulkMoveToQueue = async () => {
+    const ids = selectionModel.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    if (!ids.length) return
+    const ok = window.confirm(
+      `Move ${ids.length} selected order${ids.length > 1 ? 's' : ''} to the Waiting Queue?`,
+    )
+    if (!ok) return
+    setBulkMoveBusy(true)
+    const failures: Array<{ id: number; message: string }> = []
+    try {
+      for (const id of ids) {
+        try {
+          await moveOrderToWaiting(id)
+        } catch (err) {
+          failures.push({
+            id,
+            message: err instanceof Error ? err.message : 'Failed to move order',
+          })
+        }
+      }
+      setSelectionModel([])
+      await loadOrders()
+      if (failures.length > 0) {
+        const first = failures[0]
+        setSnackbar({
+          open: true,
+          message: `Moved ${ids.length - failures.length}/${ids.length} orders. First failure (order ${first.id}): ${first.message}`,
+          severity: 'error',
+        })
+      } else {
+        setSnackbar({
+          open: true,
+          message: `Moved ${ids.length} order${ids.length > 1 ? 's' : ''} to the Waiting Queue.`,
+          severity: 'success',
+        })
+      }
+    } finally {
+      setBulkMoveBusy(false)
     }
   }
 
@@ -177,7 +291,7 @@ export function OrdersPanel({
     {
       field: 'status',
       headerName: 'Status',
-      width: 130,
+      width: 160,
       renderCell: (params: GridRenderCellParams) => {
         const order = params.row as Order
         const base = String(order.status ?? '')
@@ -255,7 +369,11 @@ export function OrdersPanel({
       flex: 2,
       minWidth: 200,
       renderCell: (params: GridRenderCellParams) => (
-        <Typography variant="body2" color="error">
+        <Typography
+          variant="body2"
+          color="error"
+          sx={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.25 }}
+        >
           {params.value ?? '-'}
         </Typography>
       ),
@@ -268,16 +386,7 @@ export function OrdersPanel({
       filterable: false,
       renderCell: (params: GridRenderCellParams) => {
         const order = params.row as Order
-        const status = String(order.status ?? '').toUpperCase()
-        const brokerId = order.broker_order_id ?? order.zerodha_order_id ?? null
-        const alreadyRequeued = (order.error_message ?? '').includes(
-          'Requeued to Waiting Queue as order #',
-        )
-        const eligible =
-          !order.simulated &&
-          !brokerId &&
-          !alreadyRequeued &&
-          (status === 'FAILED' || status === 'REJECTED_RISK' || status === 'CANCELLED')
+        const eligible = isMoveToQueueEligible(order)
 
         if (!eligible) return null
 
@@ -287,36 +396,7 @@ export function OrdersPanel({
             variant="outlined"
             disabled={moveBusyId === order.id}
             onClick={() => {
-              void (async () => {
-                setMoveBusyId(order.id)
-                try {
-                  const queued = await moveOrderToWaiting(order.id)
-                  setOrders((prev) => {
-                    const suffix = `Requeued to Waiting Queue as order #${queued.id}.`
-                    const next = prev.map((o) => {
-                      if (o.id !== order.id) return o
-                      const base = (o.error_message ?? '').trim()
-                      const msg = base ? `${base} ${suffix}` : suffix
-                      return { ...o, error_message: msg }
-                    })
-                    return [queued, ...next.filter((o) => o.id !== queued.id)]
-                  })
-                  setSnackbar({
-                    open: true,
-                    message: `Queued a new WAITING order (#${queued.id}).`,
-                    severity: 'success',
-                  })
-                  navigate('/queue?tab=waiting')
-                } catch (err) {
-                  setSnackbar({
-                    open: true,
-                    message: err instanceof Error ? err.message : 'Failed to move order',
-                    severity: 'error',
-                  })
-                } finally {
-                  setMoveBusyId(null)
-                }
-              })()
+              void handleMoveToQueue(order.id)
             }}
           >
             {moveBusyId === order.id ? 'Moving…' : 'Move to queue'}
@@ -377,6 +457,59 @@ export function OrdersPanel({
               ))}
             </TextField>
           )}
+          <TextField
+            size="small"
+            label="From"
+            type="date"
+            value={dateRangeDraft.from}
+            onChange={(e) =>
+              setDateRangeDraft((prev) => ({ ...prev, from: e.target.value }))
+            }
+            InputLabelProps={{ shrink: true }}
+            sx={{ width: 150 }}
+          />
+          <TextField
+            size="small"
+            label="To"
+            type="date"
+            value={dateRangeDraft.to}
+            onChange={(e) =>
+              setDateRangeDraft((prev) => ({ ...prev, to: e.target.value }))
+            }
+            InputLabelProps={{ shrink: true }}
+            sx={{ width: 150 }}
+          />
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={() => {
+              const a = (dateRangeDraft.from || '').trim()
+              const b = (dateRangeDraft.to || '').trim()
+              if (a && b && a > b) {
+                setSnackbar({
+                  open: true,
+                  message: 'Invalid date range: From must be <= To.',
+                  severity: 'error',
+                })
+                return
+              }
+              setDateRangeApplied(dateRangeDraft)
+            }}
+            disabled={loading || refreshing}
+          >
+            Apply
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            onClick={() => {
+              setDateRangeDraft({ from: today, to: today })
+              setDateRangeApplied({ from: today, to: today })
+            }}
+            disabled={loading || refreshing}
+          >
+            Today
+          </Button>
           <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <input
               type="checkbox"
@@ -385,6 +518,28 @@ export function OrdersPanel({
             />
             <Typography variant="body2">Show paper (simulated) orders</Typography>
           </label>
+          {eligibleVisibleIds.length > 0 && (
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => setSelectionModel(eligibleVisibleIds)}
+              disabled={loading || refreshing}
+            >
+              Select move-to-queue ({eligibleVisibleIds.length})
+            </Button>
+          )}
+          {selectionModel.length > 0 && (
+            <Button
+              size="small"
+              variant="contained"
+              onClick={() => {
+                void handleBulkMoveToQueue()
+              }}
+              disabled={bulkMoveBusy || loading || refreshing}
+            >
+              {bulkMoveBusy ? 'Moving…' : `Move selected (${selectionModel.length})`}
+            </Button>
+          )}
           <Button
             size="small"
             variant="outlined"
@@ -406,14 +561,34 @@ export function OrdersPanel({
           {error}
         </Typography>
       ) : (
-        <Paper sx={{ width: '100%', height: '65vh' }}>
+        <Paper
+          sx={{
+            width: '100%',
+            height: embedded ? 'calc(100vh - 280px)' : 'calc(100vh - 220px)',
+            minHeight: 520,
+          }}
+        >
           <DataGrid
-            rows={orders.filter((order) => showSimulated || !order.simulated)}
+            rows={visibleOrders}
             columns={columns}
             getRowId={(row) => row.id}
             disableRowSelectionOnClick
+            checkboxSelection
+            isRowSelectable={(params) => isMoveToQueueEligible(params.row as Order)}
+            rowSelectionModel={selectionModel}
+            onRowSelectionModelChange={(newSelection) => {
+              const ids = newSelection.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+              setSelectionModel(ids)
+            }}
             density="compact"
-            sx={{ height: '100%' }}
+            getRowHeight={() => 'auto'}
+            sx={{
+              height: '100%',
+              '& .MuiDataGrid-cell': {
+                py: 0.5,
+                alignItems: 'flex-start',
+              },
+            }}
           />
         </Paper>
       )}
