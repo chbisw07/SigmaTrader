@@ -85,3 +85,55 @@ def test_sync_order_statuses_updates_local_orders() -> None:
         assert orders["1001"].status == "EXECUTED"
         assert orders["1002"].status == "REJECTED"
         assert "Insufficient funds" in (orders["1002"].error_message or "")
+
+
+def test_sync_reconciles_recent_waiting_orders_without_ids() -> None:
+    with SessionLocal() as session:
+        waiting = Order(
+            symbol="NSE:CAPACITE",
+            exchange="NSE",
+            side="BUY",
+            qty=53,
+            price=None,
+            order_type="MARKET",
+            product="CNC",
+            gtt=False,
+            status="WAITING",
+            mode="MANUAL",
+            simulated=False,
+            broker_name="zerodha",
+            broker_order_id=None,
+            zerodha_order_id=None,
+            error_message="Requeued from order #266. Original: Max positions reached.",
+        )
+        session.add(waiting)
+        session.commit()
+        session.refresh(waiting)
+
+        fake_client = _FakeZerodhaClient(
+            [
+                {
+                    "order_id": "2001",
+                    "status": "COMPLETE",
+                    "exchange": "NSE",
+                    "tradingsymbol": "CAPACITE",
+                    "transaction_type": "BUY",
+                    "quantity": 53,
+                    "product": "CNC",
+                    "order_type": "MARKET",
+                    "price": 0,
+                    "trigger_price": 0,
+                    "order_timestamp": "2026-02-13 12:45:00",
+                }
+            ]
+        )
+
+        updated_count = sync_order_statuses(session, fake_client)
+        assert updated_count == 1
+
+        refreshed = session.get(Order, int(waiting.id))
+        assert refreshed is not None
+        assert refreshed.status == "EXECUTED"
+        assert refreshed.broker_order_id == "2001"
+        assert refreshed.zerodha_order_id == "2001"
+        assert "Requeued from order #266" in (refreshed.error_message or "")

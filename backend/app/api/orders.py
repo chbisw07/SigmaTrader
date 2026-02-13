@@ -633,6 +633,10 @@ def execute_order_internal(
             detail="Only non-simulated WAITING orders can be executed.",
         )
 
+    def _is_requeue_note(msg: str | None) -> bool:
+        s = (msg or "").strip()
+        return bool(s.startswith("Requeued from order #") or "Requeued from order #" in s)
+
     # Execution policy state:
     # - Used as a concurrency guard (inflight marker) when Risk Settings are enabled.
     # - Never blocks structural exits (exposure-reducing orders).
@@ -1559,7 +1563,8 @@ def execute_order_internal(
             order.zerodha_order_id = trigger_id
         order.status = "SENT"
         order.sent_at = now_utc
-        order.error_message = None
+        if not _is_requeue_note(getattr(order, "error_message", None)):
+            order.error_message = None
         db.add(order)
         db.commit()
         db.refresh(order)
@@ -1728,7 +1733,8 @@ def execute_order_internal(
         order.broker_order_id = result.order_id
         order.status = "SENT"
         order.sent_at = now_utc
-        order.error_message = None
+        if not _is_requeue_note(getattr(order, "error_message", None)):
+            order.error_message = None
         db.add(order)
         db.commit()
         db.refresh(order)
@@ -1910,7 +1916,8 @@ def execute_order_internal(
         order.zerodha_order_id = result.order_id
     order.status = "SENT"
     order.sent_at = now_utc
-    order.error_message = None
+    if not _is_requeue_note(getattr(order, "error_message", None)):
+        order.error_message = None
     db.add(order)
     db.commit()
     db.refresh(order)
