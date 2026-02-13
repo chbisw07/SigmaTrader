@@ -21,6 +21,7 @@ import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 
 type PayloadRow = { id: string; key: string; value: string }
+type TvAlertRow = TvAlert & { strategy_display: string }
 
 function formatValue(value: unknown): string {
   if (value == null) return 'null'
@@ -76,6 +77,25 @@ function safeParseJson(text: string): { parsed: unknown | null; error: string | 
   }
 }
 
+function extractStrategyIdFromPayload(raw: string): string | null {
+  const { parsed } = safeParseJson(raw || '')
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const obj = parsed as Record<string, unknown>
+  const candidates = [
+    obj.strategy_id,
+    obj.strategyId,
+    obj.strategy,
+    obj.strategy_name,
+    obj.strategyName,
+  ]
+  for (const v of candidates) {
+    if (v == null) continue
+    const s = String(v).trim()
+    if (s) return s
+  }
+  return null
+}
+
 export function TvAlertsPanel({
   embedded = false,
   active = true,
@@ -84,11 +104,11 @@ export function TvAlertsPanel({
   active?: boolean
 }) {
   const { displayTimeZone } = useTimeSettings()
-  const [rows, setRows] = useState<TvAlert[]>([])
+  const [rows, setRows] = useState<TvAlertRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [loadedOnce, setLoadedOnce] = useState(false)
-  const [openPayload, setOpenPayload] = useState<TvAlert | null>(null)
+  const [openPayload, setOpenPayload] = useState<TvAlertRow | null>(null)
   const [payloadTab, setPayloadTab] = useState<'table' | 'json'>('table')
   const [showRawJson, setShowRawJson] = useState(false)
   const [payloadRows, setPayloadRows] = useState<PayloadRow[]>([])
@@ -100,7 +120,16 @@ export function TvAlertsPanel({
     try {
       if (!silent) setLoading(true)
       const data = await listTvAlerts()
-      setRows(data)
+      const enriched: TvAlertRow[] = data.map((a) => {
+        const rawStrategyId =
+          extractStrategyIdFromPayload(a.raw_payload) ??
+          (a.strategy_id != null ? String(a.strategy_id) : null)
+        return {
+          ...a,
+          strategy_display: rawStrategyId ?? a.strategy_name ?? '—',
+        }
+      })
+      setRows(enriched)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load TV alerts')
@@ -163,10 +192,13 @@ export function TvAlertsPanel({
           : '',
     },
     {
-      field: 'strategy_name',
+      field: 'strategy_display',
       headerName: 'Strategy',
       width: 170,
-      valueFormatter: (value) => (value ? String(value) : '—'),
+      valueGetter: (_value, row) => {
+        const alert = row as TvAlertRow
+        return alert.strategy_display || '—'
+      },
     },
     { field: 'symbol', headerName: 'Symbol', width: 200 },
     { field: 'action', headerName: 'Side', width: 80 },
@@ -199,7 +231,7 @@ export function TvAlertsPanel({
       sortable: false,
       filterable: false,
       renderCell: (params) => {
-        const alert = params.row as TvAlert
+        const alert = params.row as TvAlertRow
         return (
           <Button
             size="small"
