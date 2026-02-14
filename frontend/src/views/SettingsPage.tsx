@@ -1479,7 +1479,7 @@ export function SettingsPage() {
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block' }}>
                 Tip: For SigmaTrader TradingView Strategy v6, create a single TradingView alert
-                (Strategy → Order fills) and set Message to <code>{{`{{strategy.order.alert_message}}`}}</code>.
+                (Strategy → Order fills) and set Message to <code>{'{{strategy.order.alert_message}}'}</code>.
               </Typography>
               <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                 <TextField
