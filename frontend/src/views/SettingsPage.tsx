@@ -1402,7 +1402,8 @@ export function SettingsPage() {
               </Box>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
                 Used to authenticate incoming alerts at <code>/webhook/tradingview</code>. You can
-                send it either in the JSON payload as <code>secret</code> or via the header{' '}
+                send it either in the JSON payload as <code>secret</code> (legacy), as{' '}
+                <code>meta.secret</code> (recommended for Strategy alerts), or via the header{' '}
                 <code>X-SIGMATRADER-SECRET</code>.
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1475,6 +1476,10 @@ export function SettingsPage() {
                 Controls what happens after an alert is converted into an order. AUTO attempts to
                 dispatch immediately; MANUAL places it into the Waiting Queue. Risk settings apply
                 on dispatch.
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block' }}>
+                Tip: For SigmaTrader TradingView Strategy v6, create a single TradingView alert
+                (Strategy → Order fills) and set Message to <code>{{`{{strategy.order.alert_message}}`}}</code>.
               </Typography>
               <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                 <TextField
