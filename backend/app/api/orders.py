@@ -820,6 +820,12 @@ def edit_order(
             detail="Only non-simulated WAITING MANUAL orders can be edited.",
         )
 
+    def _field_was_set(name: str) -> bool:
+        fs = getattr(payload, "model_fields_set", None)
+        if fs is None:
+            fs = getattr(payload, "__fields_set__", None)
+        return bool(fs and name in fs)
+
     updated = False
 
     if payload.qty is not None:
@@ -907,6 +913,19 @@ def edit_order(
             )
         order.execution_target = target
         updated = True
+
+    if _field_was_set("risk_spec"):
+        if payload.risk_spec is None:
+            order.risk_spec_json = None
+            updated = True
+        else:
+            if bool(getattr(order, "is_exit", False)):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Risk exits cannot be set for managed-exit orders.",
+                )
+            order.risk_spec_json = payload.risk_spec.to_json()
+            updated = True
 
     if not updated:
         return order

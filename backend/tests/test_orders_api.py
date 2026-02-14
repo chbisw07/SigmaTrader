@@ -141,6 +141,48 @@ def test_edit_order_rounds_price_to_tick() -> None:
         assert order.price == 320.3
 
 
+def test_edit_order_can_set_and_clear_risk_spec() -> None:
+    order_id = _create_order_via_webhook()
+
+    # Set a custom managed-risk spec.
+    resp_edit = client.patch(
+        f"/api/orders/{order_id}",
+        json={
+            "risk_spec": {
+                "stop_loss": {"enabled": True, "mode": "PCT", "value": 2},
+                "trailing_stop": {"enabled": True, "mode": "PCT", "value": 1},
+                "trailing_activation": {"enabled": True, "mode": "PCT", "value": 3},
+                "exit_order_type": "MARKET",
+            }
+        },
+    )
+    assert resp_edit.status_code == 200
+    edited = resp_edit.json()
+    assert edited["id"] == order_id
+    assert edited.get("risk_spec") is not None
+    assert edited["risk_spec"]["stop_loss"]["enabled"] is True
+
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        assert (order.risk_spec_json or "").strip()
+
+    # Clear the spec explicitly.
+    resp_clear = client.patch(
+        f"/api/orders/{order_id}",
+        json={"risk_spec": None},
+    )
+    assert resp_clear.status_code == 200
+    cleared = resp_clear.json()
+    assert cleared["id"] == order_id
+    assert cleared.get("risk_spec") is None
+
+    with SessionLocal() as session:
+        order = session.get(Order, order_id)
+        assert order is not None
+        assert order.risk_spec_json is None
+
+
 def test_manual_order_cannot_execute_when_broker_not_connected() -> None:
     """Manual WAITING orders should remain in queue if Zerodha is not connected."""
 

@@ -260,6 +260,17 @@ class Order(Base):
         )
         return str(src).strip().upper() or "ALERT"
 
+    @property
+    def risk_spec(self):
+        """Parsed SigmaTrader-managed risk exits spec (if configured)."""
+
+        try:
+            from app.schemas.managed_risk import RiskSpec
+
+            return RiskSpec.from_json(getattr(self, "risk_spec_json", None))
+        except Exception:
+            return None
+
 
 class IndicatorRule(Base):
     __tablename__ = "indicator_rules"

@@ -58,6 +58,7 @@ export type Order = {
   mode: string
   execution_target?: ExecutionTarget
   simulated: boolean
+  risk_spec?: RiskSpec | null
   created_at: string
   updated_at: string
   broker_order_id?: string | null
@@ -164,6 +165,7 @@ export async function updateOrder(
     product?: string
     gtt?: boolean
     execution_target?: ExecutionTarget
+    risk_spec?: RiskSpec | null
   },
 ): Promise<Order> {
   const res = await fetch(`/api/orders/${orderId}`, {

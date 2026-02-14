@@ -1,7 +1,9 @@
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import Chip from '@mui/material/Chip'
 import CircularProgress from '@mui/material/CircularProgress'
 import Paper from '@mui/material/Paper'
+import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
@@ -28,6 +30,8 @@ import {
   executeOrder,
   updateOrder,
   type Order,
+  type DistanceMode,
+  type RiskSpec,
   type ExecutionTarget,
 } from '../services/orders'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
@@ -94,9 +98,55 @@ export function WaitingQueuePanel({
   const [holdingsError, setHoldingsError] = useState<string | null>(null)
   const [holdingsPct, setHoldingsPct] = useState<string>('100')
 
+  const [riskSlEnabled, setRiskSlEnabled] = useState(false)
+  const [riskSlMode, setRiskSlMode] = useState<DistanceMode>('PCT')
+  const [riskSlValue, setRiskSlValue] = useState<string>('')
+  const [riskSlAtrPeriod, setRiskSlAtrPeriod] = useState<string>('14')
+  const [riskSlAtrTf, setRiskSlAtrTf] = useState<string>('1d')
+
+  const [riskTrailEnabled, setRiskTrailEnabled] = useState(false)
+  const [riskTrailMode, setRiskTrailMode] = useState<DistanceMode>('PCT')
+  const [riskTrailValue, setRiskTrailValue] = useState<string>('')
+  const [riskTrailAtrPeriod, setRiskTrailAtrPeriod] = useState<string>('14')
+  const [riskTrailAtrTf, setRiskTrailAtrTf] = useState<string>('1d')
+
+  const [riskActivationEnabled, setRiskActivationEnabled] = useState(false)
+  const [riskActivationMode, setRiskActivationMode] = useState<DistanceMode>('PCT')
+  const [riskActivationValue, setRiskActivationValue] = useState<string>('')
+  const [riskActivationAtrPeriod, setRiskActivationAtrPeriod] = useState<string>('14')
+  const [riskActivationAtrTf, setRiskActivationAtrTf] = useState<string>('1d')
+
+  const [riskCooldownMs, setRiskCooldownMs] = useState<string>('')
+
   const getCaps = (brokerName?: string | null): BrokerCapabilities | null => {
     const name = (brokerName ?? selectedBroker ?? 'zerodha').toLowerCase()
     return brokerCaps[name] ?? null
+  }
+
+  const riskSummary = (spec?: RiskSpec | null): string | null => {
+    if (!spec) return null
+    const parts: string[] = []
+    const fmt = (mode: DistanceMode, value: number, tf?: string) => {
+      if (mode === 'PCT') return `${value}%`
+      if (mode === 'ABS') return `₹${value}`
+      return `ATR×${value}${tf ? ` ${tf}` : ''}`
+    }
+    if (spec.stop_loss?.enabled) {
+      parts.push(
+        `SL ${fmt(spec.stop_loss.mode, spec.stop_loss.value, spec.stop_loss.atr_tf)}`,
+      )
+    }
+    if (spec.trailing_stop?.enabled) {
+      parts.push(
+        `Tr ${fmt(spec.trailing_stop.mode, spec.trailing_stop.value, spec.trailing_stop.atr_tf)}`,
+      )
+    }
+    if (spec.trailing_activation?.enabled) {
+      parts.push(
+        `Act ${fmt(spec.trailing_activation.mode, spec.trailing_activation.value, spec.trailing_activation.atr_tf)}`,
+      )
+    }
+    return parts.length ? parts.join(' • ') : null
   }
 
   const normalizeSymbolExchange = (
@@ -303,6 +353,33 @@ export function WaitingQueuePanel({
     setLtp(null)
     setLtpError(null)
     setError(null)
+
+    const spec = order.risk_spec ?? null
+    setRiskSlEnabled(Boolean(spec?.stop_loss?.enabled))
+    setRiskSlMode(spec?.stop_loss?.mode ?? 'PCT')
+    setRiskSlValue(spec?.stop_loss?.enabled ? String(spec.stop_loss.value) : '')
+    setRiskSlAtrPeriod(String(spec?.stop_loss?.atr_period ?? 14))
+    setRiskSlAtrTf(String(spec?.stop_loss?.atr_tf ?? '1d'))
+
+    setRiskTrailEnabled(Boolean(spec?.trailing_stop?.enabled))
+    setRiskTrailMode(spec?.trailing_stop?.mode ?? 'PCT')
+    setRiskTrailValue(
+      spec?.trailing_stop?.enabled ? String(spec.trailing_stop.value) : '',
+    )
+    setRiskTrailAtrPeriod(String(spec?.trailing_stop?.atr_period ?? 14))
+    setRiskTrailAtrTf(String(spec?.trailing_stop?.atr_tf ?? '1d'))
+
+    setRiskActivationEnabled(Boolean(spec?.trailing_activation?.enabled))
+    setRiskActivationMode(spec?.trailing_activation?.mode ?? 'PCT')
+    setRiskActivationValue(
+      spec?.trailing_activation?.enabled
+        ? String(spec.trailing_activation.value)
+        : '',
+    )
+    setRiskActivationAtrPeriod(String(spec?.trailing_activation?.atr_period ?? 14))
+    setRiskActivationAtrTf(String(spec?.trailing_activation?.atr_tf ?? '1d'))
+
+    setRiskCooldownMs(spec?.cooldown_ms != null ? String(spec.cooldown_ms) : '')
   }
 
   const editBrokerName = (editingOrder?.broker_name ?? selectedBroker ?? 'zerodha').toLowerCase()
@@ -479,6 +556,7 @@ export function WaitingQueuePanel({
         execution_target: ExecutionTarget
         trigger_price?: number
         trigger_percent?: number
+        risk_spec?: RiskSpec | null
       } = {
         qty,
         price,
@@ -494,6 +572,74 @@ export function WaitingQueuePanel({
       if (triggerPercent !== undefined) {
         payload.trigger_percent = triggerPercent
       }
+
+      const parseDistance = (
+        enabled: boolean,
+        mode: DistanceMode,
+        valueRaw: string,
+        atrPeriodRaw: string,
+        atrTf: string,
+        label: string,
+      ) => {
+        if (!enabled) {
+          return { enabled: false, mode, value: 0 }
+        }
+        const v = Number(valueRaw)
+        if (!Number.isFinite(v) || v <= 0) {
+          throw new Error(`${label} value must be > 0 when enabled`)
+        }
+        if (mode === 'ATR') {
+          const p = Number(atrPeriodRaw)
+          if (!Number.isFinite(p) || p < 2) {
+            throw new Error(`${label} ATR period must be >= 2`)
+          }
+          return { enabled: true, mode, value: v, atr_period: p, atr_tf: atrTf }
+        }
+        return { enabled: true, mode, value: v }
+      }
+
+      const anyRiskEnabled =
+        riskSlEnabled || riskTrailEnabled || riskActivationEnabled
+
+      let cooldownMs: number | null | undefined
+      if (riskCooldownMs.trim() !== '') {
+        const cd = Number(riskCooldownMs)
+        if (!Number.isFinite(cd) || cd < 0) {
+          throw new Error('Cooldown ms must be a non-negative integer')
+        }
+        cooldownMs = Math.floor(cd)
+      }
+
+      payload.risk_spec = anyRiskEnabled
+        ? {
+            stop_loss: parseDistance(
+              riskSlEnabled,
+              riskSlMode,
+              riskSlValue,
+              riskSlAtrPeriod,
+              riskSlAtrTf,
+              'Stop-loss',
+            ),
+            trailing_stop: parseDistance(
+              riskTrailEnabled,
+              riskTrailMode,
+              riskTrailValue,
+              riskTrailAtrPeriod,
+              riskTrailAtrTf,
+              'Trailing stop-loss',
+            ),
+            trailing_activation: parseDistance(
+              riskActivationEnabled,
+              riskActivationMode,
+              riskActivationValue,
+              riskActivationAtrPeriod,
+              riskActivationAtrTf,
+              'Trailing profit activation',
+            ),
+            exit_order_type: 'MARKET',
+            ...(cooldownMs != null ? { cooldown_ms: cooldownMs } : {}),
+          }
+        : null
 
       const updated = await updateOrder(editingOrder.id, payload)
 
@@ -744,6 +890,30 @@ export function WaitingQueuePanel({
         const order = row as Order
         if (!order.gtt) return 'No'
         return order.synthetic_gtt ? 'Sigma' : 'GTT'
+      },
+    },
+    {
+      field: 'risk_spec',
+      headerName: 'Exits',
+      description: 'SigmaTrader-managed risk exits (per-order).',
+      width: 190,
+      sortable: false,
+      filterable: false,
+      renderCell: (params: GridRenderCellParams) => {
+        const order = params.row as Order
+        const summary = riskSummary(order.risk_spec)
+        if (summary) {
+          return (
+            <Tooltip title="Custom SigmaTrader-managed exits configured for this order.">
+              <Chip size="small" color="info" variant="outlined" label={summary} />
+            </Tooltip>
+          )
+        }
+        return (
+          <Tooltip title="No custom exits set on this order. Risk profile defaults may still apply when enabled.">
+            <Chip size="small" color="warning" variant="outlined" label="No custom" />
+          </Tooltip>
+        )
       },
     },
     {
@@ -1259,6 +1429,337 @@ export function WaitingQueuePanel({
                   })()
                 }
               />
+              <Box
+                sx={{
+                  mt: 1,
+                  p: 1,
+                  borderRadius: 1,
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    Risk exits (SigmaTrader-managed)
+                  </Typography>
+                  <Button
+                    size="small"
+                    variant="text"
+                    color="warning"
+                    onClick={() => {
+                      const ok = window.confirm(
+                        'Clear all SigmaTrader-managed risk exits for this order?',
+                      )
+                      if (!ok) return
+                      setRiskSlEnabled(false)
+                      setRiskTrailEnabled(false)
+                      setRiskActivationEnabled(false)
+                      setRiskSlValue('')
+                      setRiskTrailValue('')
+                      setRiskActivationValue('')
+                      setRiskCooldownMs('')
+                    }}
+                    disabled={
+                      !riskSlEnabled &&
+                      !riskTrailEnabled &&
+                      !riskActivationEnabled &&
+                      riskCooldownMs.trim() === ''
+                    }
+                  >
+                    Clear exits
+                  </Button>
+                </Box>
+
+                {(() => {
+                  const anyEnabled =
+                    riskSlEnabled || riskTrailEnabled || riskActivationEnabled
+                  const spec: RiskSpec | null = anyEnabled
+                    ? {
+                        stop_loss: {
+                          enabled: riskSlEnabled,
+                          mode: riskSlMode,
+                          value: Number(riskSlValue || 0),
+                          atr_period: Number(riskSlAtrPeriod || 14) || 14,
+                          atr_tf: riskSlAtrTf,
+                        },
+                        trailing_stop: {
+                          enabled: riskTrailEnabled,
+                          mode: riskTrailMode,
+                          value: Number(riskTrailValue || 0),
+                          atr_period: Number(riskTrailAtrPeriod || 14) || 14,
+                          atr_tf: riskTrailAtrTf,
+                        },
+                        trailing_activation: {
+                          enabled: riskActivationEnabled,
+                          mode: riskActivationMode,
+                          value: Number(riskActivationValue || 0),
+                          atr_period:
+                            Number(riskActivationAtrPeriod || 14) || 14,
+                          atr_tf: riskActivationAtrTf,
+                        },
+                        exit_order_type: 'MARKET',
+                        cooldown_ms:
+                          riskCooldownMs.trim() === ''
+                            ? null
+                            : Number(riskCooldownMs),
+                      }
+                    : null
+                  const summary = riskSummary(spec)
+                  if (summary) {
+                    return (
+                      <Typography variant="caption" color="text.secondary">
+                        {summary}
+                      </Typography>
+                    )
+                  }
+                  return (
+                    <Typography variant="caption" color="warning.main">
+                      No custom exits set. This order may rely on risk profile defaults (if enabled) or have no SigmaTrader-managed exits.
+                    </Typography>
+                  )
+                })()}
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={riskSlEnabled}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setRiskSlEnabled(checked)
+                        if (!checked) {
+                          setRiskTrailEnabled(false)
+                          setRiskActivationEnabled(false)
+                          setRiskCooldownMs('')
+                        }
+                      }}
+                    />
+                  }
+                  label="Stop-loss"
+                />
+                {riskSlEnabled && (
+                  <>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <TextField
+                        label="SL mode"
+                        select
+                        value={riskSlMode}
+                        onChange={(e) =>
+                          setRiskSlMode(e.target.value as DistanceMode)
+                        }
+                        size="small"
+                        sx={{ flex: 1 }}
+                      >
+                        <MenuItem value="PCT">%</MenuItem>
+                        <MenuItem value="ABS">₹</MenuItem>
+                        <MenuItem value="ATR">ATR×</MenuItem>
+                      </TextField>
+                      <TextField
+                        label="SL value"
+                        type="number"
+                        value={riskSlValue}
+                        onChange={(e) => setRiskSlValue(e.target.value)}
+                        size="small"
+                        sx={{ flex: 1 }}
+                      />
+                    </Box>
+                    {riskSlMode === 'ATR' && (
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <TextField
+                          label="ATR period"
+                          type="number"
+                          value={riskSlAtrPeriod}
+                          onChange={(e) => setRiskSlAtrPeriod(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        />
+                        <TextField
+                          label="ATR tf"
+                          select
+                          value={riskSlAtrTf}
+                          onChange={(e) => setRiskSlAtrTf(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        >
+                          <MenuItem value="1m">1m</MenuItem>
+                          <MenuItem value="5m">5m</MenuItem>
+                          <MenuItem value="15m">15m</MenuItem>
+                          <MenuItem value="30m">30m</MenuItem>
+                          <MenuItem value="1h">1h</MenuItem>
+                          <MenuItem value="1d">1d</MenuItem>
+                        </TextField>
+                      </Box>
+                    )}
+                  </>
+                )}
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={riskTrailEnabled}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setRiskTrailEnabled(checked)
+                        if (checked) {
+                          setRiskSlEnabled(true)
+                        } else {
+                          setRiskActivationEnabled(false)
+                        }
+                      }}
+                    />
+                  }
+                  label="Trailing stop-loss"
+                />
+                {riskTrailEnabled && (
+                  <>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <TextField
+                        label="Trail mode"
+                        select
+                        value={riskTrailMode}
+                        onChange={(e) =>
+                          setRiskTrailMode(e.target.value as DistanceMode)
+                        }
+                        size="small"
+                        sx={{ flex: 1 }}
+                      >
+                        <MenuItem value="PCT">%</MenuItem>
+                        <MenuItem value="ABS">₹</MenuItem>
+                        <MenuItem value="ATR">ATR×</MenuItem>
+                      </TextField>
+                      <TextField
+                        label="Trail value"
+                        type="number"
+                        value={riskTrailValue}
+                        onChange={(e) => setRiskTrailValue(e.target.value)}
+                        size="small"
+                        sx={{ flex: 1 }}
+                      />
+                    </Box>
+                    {riskTrailMode === 'ATR' && (
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <TextField
+                          label="ATR period"
+                          type="number"
+                          value={riskTrailAtrPeriod}
+                          onChange={(e) => setRiskTrailAtrPeriod(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        />
+                        <TextField
+                          label="ATR tf"
+                          select
+                          value={riskTrailAtrTf}
+                          onChange={(e) => setRiskTrailAtrTf(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        >
+                          <MenuItem value="1m">1m</MenuItem>
+                          <MenuItem value="5m">5m</MenuItem>
+                          <MenuItem value="15m">15m</MenuItem>
+                          <MenuItem value="30m">30m</MenuItem>
+                          <MenuItem value="1h">1h</MenuItem>
+                          <MenuItem value="1d">1d</MenuItem>
+                        </TextField>
+                      </Box>
+                    )}
+                  </>
+                )}
+
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={riskActivationEnabled}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setRiskActivationEnabled(checked)
+                        if (checked) {
+                          setRiskSlEnabled(true)
+                          setRiskTrailEnabled(true)
+                        }
+                      }}
+                    />
+                  }
+                  label="Trailing profit activation"
+                />
+                {riskActivationEnabled && (
+                  <>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <TextField
+                        label="Activation mode"
+                        select
+                        value={riskActivationMode}
+                        onChange={(e) =>
+                          setRiskActivationMode(e.target.value as DistanceMode)
+                        }
+                        size="small"
+                        sx={{ flex: 1 }}
+                      >
+                        <MenuItem value="PCT">%</MenuItem>
+                        <MenuItem value="ABS">₹</MenuItem>
+                        <MenuItem value="ATR">ATR×</MenuItem>
+                      </TextField>
+                      <TextField
+                        label="Activation value"
+                        type="number"
+                        value={riskActivationValue}
+                        onChange={(e) =>
+                          setRiskActivationValue(e.target.value)
+                        }
+                        size="small"
+                        sx={{ flex: 1 }}
+                      />
+                    </Box>
+                    {riskActivationMode === 'ATR' && (
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                        <TextField
+                          label="ATR period"
+                          type="number"
+                          value={riskActivationAtrPeriod}
+                          onChange={(e) =>
+                            setRiskActivationAtrPeriod(e.target.value)
+                          }
+                          size="small"
+                          sx={{ flex: 1 }}
+                        />
+                        <TextField
+                          label="ATR tf"
+                          select
+                          value={riskActivationAtrTf}
+                          onChange={(e) => setRiskActivationAtrTf(e.target.value)}
+                          size="small"
+                          sx={{ flex: 1 }}
+                        >
+                          <MenuItem value="1m">1m</MenuItem>
+                          <MenuItem value="5m">5m</MenuItem>
+                          <MenuItem value="15m">15m</MenuItem>
+                          <MenuItem value="30m">30m</MenuItem>
+                          <MenuItem value="1h">1h</MenuItem>
+                          <MenuItem value="1d">1d</MenuItem>
+                        </TextField>
+                      </Box>
+                    )}
+                  </>
+                )}
+
+                <TextField
+                  label="Cooldown ms (optional)"
+                  type="number"
+                  value={riskCooldownMs}
+                  onChange={(e) => setRiskCooldownMs(e.target.value)}
+                  size="small"
+                  fullWidth
+                  disabled={
+                    !riskSlEnabled && !riskTrailEnabled && !riskActivationEnabled
+                  }
+                  helperText="Applies only when exits are enabled."
+                />
+              </Box>
               <Box
                 sx={{
                   mt: 1,

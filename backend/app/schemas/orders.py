@@ -52,6 +52,7 @@ class OrderRead(BaseModel):
     mode: str
     execution_target: ExecutionTarget = "LIVE"
     simulated: bool
+    risk_spec: Optional[RiskSpec] = None
     created_at: datetime
     updated_at: datetime
     broker_order_id: Optional[str] = None
@@ -88,6 +89,7 @@ class OrderUpdate(BaseModel):
     product: Optional[str] = None
     gtt: Optional[bool] = None
     execution_target: Optional[ExecutionTarget] = None
+    risk_spec: Optional[RiskSpec] = None
 
 
 class ManualOrderCreate(BaseModel):
