@@ -212,6 +212,7 @@ export function TradingViewAlertPayloadBuilder({
   webhookSecret: string
 }) {
   const effectiveSecret = webhookSecret?.trim() ? webhookSecret.trim() : '{{SECRET}}'
+  const recommendedAlertMessage = '{{strategy.order.alert_message}}'
 
   const [templateName, setTemplateName] = useState<string>('')
   const [signal, setSignal] = useState<SignalFields>(() => ({ ...DEFAULT_SIGNAL }))
@@ -461,6 +462,23 @@ export function TradingViewAlertPayloadBuilder({
     }
   }
 
+  const onCopyRecommendedMessage = async () => {
+    try {
+      await writeToClipboard(recommendedAlertMessage)
+      setSnackbar({
+        open: true,
+        message: 'Copied TradingView alert message.',
+        severity: 'success',
+      })
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Failed to copy message',
+        severity: 'error',
+      })
+    }
+  }
+
   return (
     <Paper sx={{ p: 2 }}>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -491,6 +509,31 @@ export function TradingViewAlertPayloadBuilder({
         This builder produces signals (not executable orders). Hints are informational only and may
         be ignored by SigmaTrader.
       </Typography>
+
+      <Alert severity="info" sx={{ mt: 1 }}>
+        <Typography variant="body2" sx={{ mb: 1 }}>
+          Recommended for SigmaTrader TradingView Strategy v6: create a single TradingView alert
+          (Strategy → Order fills) and set Message to:
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+          <TextField
+            size="small"
+            value={recommendedAlertMessage}
+            label="TradingView alert message"
+            fullWidth
+            sx={{ maxWidth: 520 }}
+            InputProps={{ readOnly: true }}
+          />
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<ContentCopyIcon />}
+            onClick={() => void onCopyRecommendedMessage()}
+          >
+            Copy
+          </Button>
+        </Box>
+      </Alert>
 
       <Divider sx={{ my: 2 }} />
 

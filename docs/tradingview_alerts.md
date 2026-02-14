@@ -66,6 +66,16 @@ Quick check:
 
 SigmaTrader expects a JSON object. TradingView will replace placeholders like `{{exchange}}` / `{{ticker}}` / `{{interval}}` / `{{close}}`.
 
+### Recommended (ST Strategy v6): Order fills alert + `{{strategy.order.alert_message}}`
+
+If you are using SigmaTrader’s TradingView Strategy v6 (or any Pine strategy that sets `alert_message=` on `strategy.entry/close/exit`), configure **one** TradingView alert:
+
+- Alert type: **Strategy → Order fills**
+- Webhook URL: `.../webhook/tradingview`
+- Message: `{{strategy.order.alert_message}}`
+
+In this mode, the **strategy itself** generates the JSON (typically `{ meta, signal, hints }`) and TradingView forwards it verbatim. This is more reliable than maintaining multiple `alertcondition()` templates.
+
 Important: for numeric fields like `price` and `quantity`, **do not put the placeholder in quotes**.
 
 ### A) Limit order (recommended default)

@@ -293,6 +293,94 @@ def test_webhook_accepts_meta_signal_hints_payload_without_st_user_id() -> None:
         assert alert.user_id == default_user.id
 
 
+def test_webhook_accepts_strategy_v6_order_fills_alert_message_payload_as_text() -> None:
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-{uuid4().hex}",
+            "strategy_name": "ST Strategy v6",
+            # Strategy v6 can send ticker + exchange separately (no NSE: prefix).
+            "symbol": "INFY",
+            "exchange": "NSE",
+            # Semantic side is not BUY/SELL in this format.
+            "side": "ENTRY_LONG",
+            # Execution action should still be BUY/SELL.
+            "order_action": "BUY",
+            "order_id": "tv-order-v6-1",
+            "order_tag": "ST_ENTRY_LONG",
+            "market_position": "long",
+            "position_size": "1",
+            "position_size_prev": "0",
+            "qty": 1,
+            "amount": 10000,
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-14T16:50:00Z",
+        },
+        "hints": {},
+    }
+
+    # Simulate TradingView Strategy alert message = {{strategy.order.alert_message}}
+    # which arrives as a text/plain body.
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        alert = session.get(Alert, int(data["alert_id"]))
+        assert alert is not None
+        # Ref price is persisted for audit, but the order should remain MARKET.
+        assert alert.price == 1500.0
+        assert alert.action == "BUY"
+
+        order = session.get(Order, int(data["order_id"]))
+        assert order is not None
+        assert order.order_type == "MARKET"
+        assert order.price is None
+        assert order.qty == 1
+        assert order.is_exit is False
+
+
+def test_webhook_marks_strategy_v6_exit_orders_as_exits() -> None:
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-exit-{uuid4().hex}",
+            "strategy_name": "ST Strategy v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "EXIT_SHORT",
+            "order_action": "BUY",
+            "order_id": "tv-order-v6-exit-1",
+            "qty": 1,
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-14T16:55:00Z",
+        },
+        "hints": {},
+    }
+
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+
+    data = response.json()
+    with SessionLocal() as session:
+        order = session.get(Order, int(data["order_id"]))
+        assert order is not None
+        assert order.is_exit is True
+
+
 def test_webhook_does_not_dedupe_across_symbols_for_same_order_id() -> None:
     unique_strategy = f"webhook-test-strategy-group-{uuid4().hex}"
     base = {

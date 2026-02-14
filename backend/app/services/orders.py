@@ -93,6 +93,8 @@ def create_order_from_alert(
 
     qty = alert.qty if alert.qty is not None else 0.0
 
+    order_price = round_price_to_tick(alert.price) if order_type != "MARKET" else None
+
     order = Order(
         alert_id=alert.id,
         strategy_id=alert.strategy_id,
@@ -102,7 +104,7 @@ def create_order_from_alert(
         exchange=alert.exchange,
         side=alert.action,
         qty=qty,
-        price=round_price_to_tick(alert.price),
+        price=order_price,
         order_type=order_type,
         product=product,
         gtt=False,

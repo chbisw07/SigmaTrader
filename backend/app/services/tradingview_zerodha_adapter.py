@@ -57,11 +57,16 @@ def normalize_tradingview_payload_for_zerodha(
     product = (payload.trade_details.product or fallback_product).upper()
 
     # Derive order_type:
-    # - When a price is provided in the TradingView payload we treat this as
-    #   a LIMIT order to avoid accidentally sending market orders at
-    #   unfavourable prices.
-    # - When price is omitted we default to MARKET.
-    order_type = "LIMIT" if price is not None else "MARKET"
+    # - Legacy TradingView payloads: when a price is provided treat as LIMIT to
+    #   avoid accidental market orders at unfavourable prices.
+    # - Strategy v6 order-fills payloads commonly include ref_price for context;
+    #   treat those as MARKET unless an explicit LIMIT is provided elsewhere.
+    if str(getattr(payload, "payload_format", "") or "").strip().upper() in {
+        "TRADINGVIEW_META_SIGNAL_HINTS_V6",
+    }:
+        order_type = "MARKET"
+    else:
+        order_type = "LIMIT" if price is not None else "MARKET"
 
     symbol_display = payload.symbol
     broker_exchange = payload.exchange or "NSE"

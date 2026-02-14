@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -97,6 +97,56 @@ class TradingViewWebhookPayload(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_platform(cls, values: dict[str, Any]) -> dict[str, Any]:
+        def _coerce_datetime(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, (int, float)):
+                ts = float(value)
+                if ts > 1_000_000_000_000:
+                    ts = ts / 1000.0
+                try:
+                    return datetime.fromtimestamp(ts, tz=timezone.utc)
+                except Exception:
+                    return value
+            if isinstance(value, str):
+                s = value.strip()
+                if not s:
+                    return None
+                if s.isdigit():
+                    try:
+                        ts = float(s)
+                        if ts > 1_000_000_000_000:
+                            ts = ts / 1000.0
+                        return datetime.fromtimestamp(ts, tz=timezone.utc)
+                    except Exception:
+                        return value
+            return value
+
+        def _pick_order_action(signal: dict[str, Any]) -> str | None:
+            # Prefer explicit BUY/SELL from order-fills alerts.
+            for k in ("order_action", "orderAction", "action", "side"):
+                raw = signal.get(k)
+                if raw is None:
+                    continue
+                s = str(raw).strip().upper()
+                if s in {"BUY", "SELL"}:
+                    return s
+            # Some strategies send semantic sides like ENTRY_LONG/EXIT_SHORT; infer when possible.
+            raw = str(signal.get("side") or "").strip().upper()
+            if raw.startswith("ENTRY_"):
+                if "SHORT" in raw:
+                    return "SELL"
+                if "LONG" in raw:
+                    return "BUY"
+            if raw.startswith("EXIT_") or raw.startswith("CLOSE_"):
+                if "SHORT" in raw:
+                    return "BUY"
+                if "LONG" in raw:
+                    return "SELL"
+            return None
+
         if not isinstance(values, dict):
             return values
 
@@ -112,7 +162,24 @@ class TradingViewWebhookPayload(BaseModel):
             if not isinstance(hints, dict):
                 hints = {}
 
-            values.setdefault("payload_format", "TRADINGVIEW_META_SIGNAL_HINTS_V1")
+            meta_version = meta.get("version")
+            # Strategy v6 order-fills payloads often keep meta.version="1.0"; detect via signal keys too.
+            looks_v6 = any(
+                signal.get(k) is not None
+                for k in ("order_action", "order_tag", "market_position", "position_size")
+            )
+            if meta_version is not None and str(meta_version).strip():
+                values.setdefault(
+                    "payload_format",
+                    "TRADINGVIEW_META_SIGNAL_HINTS_V6"
+                    if looks_v6 or str(meta_version).strip().startswith("6")
+                    else "TRADINGVIEW_META_SIGNAL_HINTS_V1",
+                )
+            else:
+                values.setdefault(
+                    "payload_format",
+                    "TRADINGVIEW_META_SIGNAL_HINTS_V6" if looks_v6 else "TRADINGVIEW_META_SIGNAL_HINTS_V1",
+                )
 
             # Map meta
             if "secret" not in values and meta.get("secret") is not None:
@@ -127,6 +194,7 @@ class TradingViewWebhookPayload(BaseModel):
             if "strategy_name" not in values:
                 values["strategy_name"] = (
                     signal.get("strategy_name")
+                    or signal.get("strategy")
                     or signal.get("strategy_id")
                     or values.get("strategy_name")
                 )
@@ -139,12 +207,21 @@ class TradingViewWebhookPayload(BaseModel):
                 values["interval"] = signal.get("timeframe")
 
             if "trade_details" not in values:
+                action = _pick_order_action(signal)
                 values["trade_details"] = {
-                    "order_action": signal.get("side"),
-                    "price": signal.get("price"),
-                    # Quantity is intentionally omitted in the v1 schema; SigmaTrader
-                    # treats any quantity hints as informational only.
-                    "quantity": None,
+                    # Order-Fills schema uses order_action for BUY/SELL; keep legacy side support.
+                    "order_action": action or signal.get("side"),
+                    "price": (
+                        signal.get("ref_price")
+                        if signal.get("ref_price") is not None
+                        else signal.get("price")
+                    ),
+                    "quantity": (
+                        signal.get("qty")
+                        if signal.get("qty") is not None
+                        else signal.get("quantity")
+                    ),
+                    "product": signal.get("product"),
                 }
 
             if "order_id" not in values and signal.get("order_id") is not None:
@@ -157,10 +234,35 @@ class TradingViewWebhookPayload(BaseModel):
             if "hints" not in values and hints:
                 values["hints"] = hints
 
+            # Enrich hints with signal context (kept optional and forward-compatible).
+            try:
+                merged_hints = dict(values.get("hints") or {})
+                for key in (
+                    "order_tag",
+                    "market_position",
+                    "position_size",
+                    "position_size_prev",
+                    "amount",
+                    "product",
+                    "ref_price",
+                    "timeframe",
+                    "timestamp",
+                ):
+                    if signal.get(key) is not None:
+                        merged_hints.setdefault(key, signal.get(key))
+                # Preserve semantic signal side even when order_action drives execution.
+                if signal.get("side") is not None:
+                    merged_hints.setdefault("signal_side", signal.get("side"))
+                values["hints"] = merged_hints
+            except Exception:
+                pass
+
             if "product_hint" not in values:
                 ph = signal.get("product_hint")
                 if ph is None and isinstance(hints, dict):
                     ph = hints.get("product_hint")
+                if ph is None and signal.get("product") is not None:
+                    ph = signal.get("product")
                 if ph is not None:
                     values["product_hint"] = ph
 
@@ -229,6 +331,12 @@ class TradingViewWebhookPayload(BaseModel):
         # Accept "strategy" as an alias for strategy_name.
         if "strategy_name" not in values and "strategy" in values:
             values["strategy_name"] = values.get("strategy")
+
+        # Normalize bar_time/timestamp representations (ISO string, epoch seconds/ms).
+        if "bar_time" in values:
+            values["bar_time"] = _coerce_datetime(values.get("bar_time"))
+        if "timestamp" in values:
+            values["timestamp"] = _coerce_datetime(values.get("timestamp"))
 
         return values
 

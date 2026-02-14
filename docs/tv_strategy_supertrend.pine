@@ -1,0 +1,156 @@
+//@version=6
+strategy(title="SuperTrend Strategy", shorttitle="ST Strategy v6", overlay=true)
+
+// ─── INPUTS ─────────────────────────────────────────────────────
+length = input.int(22, title="ATR Period")
+mult = input.float(3, title="ATR Multiplier", step=0.1)
+src = input.source(hl2, title="Source")
+wicks = input.bool(true, title="Take Wicks into Account?")
+showLabels = input.bool(true, title="Show Buy/Sell Labels?")
+highlightState = input.bool(true, title="Highlight State?")
+
+// NEW: sizing + routing
+amount  = input.float(10000, "Amount per Trade (₹)", minval=0)
+product = input.string("MIS", "Product", options=["MIS", "CNC"])
+// Keep this simple + safe (Close). Avoid indicator lines here.
+qtyPrice = input.source(close, "Qty Price Basis")
+
+tradeMode = input.string(
+     "Both",
+     title="Trade Direction",
+     options=["Long only", "Short only", "Both"]
+)
+
+allowLong  = tradeMode == "Both" or tradeMode == "Long only"
+allowShort = tradeMode == "Both" or tradeMode == "Short only"
+
+// NEW: qty calc (with a safe fallback so orders still generate)
+float px  = qtyPrice
+int   qty = (px > 0) ? int(math.floor(amount / px)) : 0
+// If qty becomes 0 (e.g., crypto price > amount), fall back to 1 so strategy still places orders.
+// (If you don't want this behavior, set fallbackQty=false)
+fallbackQty = input.bool(true, "Fallback qty=1 if calculated qty is 0?")
+qty := (fallbackQty and qty <= 0) ? 1 : qty
+
+// ─── SUPERTREND CALCULATION ───────────────────────────────────
+atrValue   = mult * ta.atr(length)
+highPrice  = wicks ? high : close
+lowPrice   = wicks ? low  : close
+doji4price = open == close and open == low and open == high
+
+var float longStop  = na
+var float shortStop = na
+
+longStopPrev = nz(longStop[1], src - atrValue)
+longStop := doji4price ? longStopPrev :
+     (lowPrice[1] > longStopPrev ? math.max(src - atrValue, longStopPrev) : src - atrValue)
+
+shortStopPrev = nz(shortStop[1], src + atrValue)
+shortStop := doji4price ? shortStopPrev :
+     (highPrice[1] < shortStopPrev ? math.min(src + atrValue, shortStopPrev) : src + atrValue)
+
+// Trend direction (1 = long, -1 = short)
+var int dir = 1
+dir := dir == -1 and highPrice > shortStopPrev ? 1 :
+       dir == 1 and lowPrice  < longStopPrev  ? -1 : dir
+
+// Buy/Sell signals (trend flip)
+buySignal  = (dir == 1)  and (dir[1] == -1)
+sellSignal = (dir == -1) and (dir[1] == 1)
+
+// ─── PLOTTING ────────────────────────────────────────────────
+longColor  = color.green
+shortColor = color.red
+
+longStopPlot  = plot(dir == 1 ? longStop : na, title="Long Stop", linewidth=2, color=longColor,  style=plot.style_linebr)
+shortStopPlot = plot(dir == 1 ? na : shortStop, title="Short Stop", linewidth=2, color=shortColor, style=plot.style_linebr)
+
+// Labels
+plotshape(buySignal and showLabels ? longStop : na,
+     title="Buy Label", text="Buy",
+     location=location.absolute,
+     style=shape.labelup, size=size.tiny,
+     color=longColor, textcolor=color.white)
+
+plotshape(sellSignal and showLabels ? shortStop : na,
+     title="Sell Label", text="Sell",
+     location=location.absolute,
+     style=shape.labeldown, size=size.tiny,
+     color=shortColor, textcolor=color.white)
+
+// Highlight trend state
+midPricePlot  = plot(ohlc4, display=display.none)
+longFillColor  = highlightState ? color.new(longColor, 80)  : na
+shortFillColor = highlightState ? color.new(shortColor, 80) : na
+fill(midPricePlot, longStopPlot,  title="Long State Fill",  color=longFillColor)
+fill(midPricePlot, shortStopPlot, title="Short State Fill", color=shortFillColor)
+
+// ─── OPTIONAL INFO ALERTS ──────────────────────────────────────
+changeCond = dir != dir[1]
+alertcondition(changeCond, title="SuperTrend Direction Change",
+     message="SuperTrend changed direction. Symbol: {{ticker}} Price: {{close}}")
+alertcondition(buySignal, title="SuperTrend Buy",
+     message="SuperTrend Buy. Symbol: {{ticker}} Price: {{close}}")
+alertcondition(sellSignal, title="SuperTrend Sell",
+     message="SuperTrend Sell. Symbol: {{ticker}} Price: {{close}}")
+
+// ─── JSON PAYLOAD FOR {{strategy.order.alert_message}} ──────────
+f_payload(_side, _orderTag, _qty, _amount, _product) =>
+    (
+    '{' +
+      '"meta":{"secret":"my-secret","platform":"TRADINGVIEW","version":"1.0"},' +
+      '"signal":{' +
+        '"strategy_id":"SUPERTREND",' +
+        '"strategy_name":"ST Strategy v6",' +
+        '"symbol":"{{ticker}}",' +
+        '"exchange":"{{exchange}}",' +
+        '"side":"' + _side + '",' +
+        '"order_action":"{{strategy.order.action}}",' +
+        '"order_id":"{{strategy.order.id}}",' +
+        '"order_tag":"' + _orderTag + '",' +
+        '"market_position":"{{strategy.market_position}}",' +
+        '"position_size":"{{strategy.position_size}}",' +
+        '"position_size_prev":"{{strategy.position_size[1]}}",' +
+        '"qty":' + str.tostring(_qty) + ',' +
+        '"amount":' + str.tostring(_amount) + ',' +
+        '"product":"' + _product + '",' +
+        '"ref_price":{{close}},' +
+        '"timeframe":"{{interval}}",' +
+        '"timestamp":"{{timenow}}"' +
+      '},' +
+      '"hints":{}' +
+    '}'
+    )
+
+// ─── STRATEGY EXITS (ALWAYS) ───────────────────────────────────
+if buySignal
+    strategy.close(
+        "Short",
+        alert_message=f_payload("EXIT_SHORT", "ST_FLIP_EXIT_SHORT", math.abs(strategy.position_size), amount, product)
+    )
+
+if sellSignal
+    strategy.close(
+        "Long",
+        alert_message=f_payload("EXIT_LONG", "ST_FLIP_EXIT_LONG", math.abs(strategy.position_size), amount, product)
+    )
+
+// ─── STRATEGY ENTRIES (GATED BY MODE) ──────────────────────────
+if buySignal and allowLong
+    strategy.entry(
+        "Long",
+        strategy.long,
+        qty=qty,
+        alert_message=f_payload("ENTRY_LONG", "ST_ENTRY_LONG", qty, amount, product)
+    )
+
+if sellSignal and allowShort
+    strategy.entry(
+        "Short",
+        strategy.short,
+        qty=qty,
+        alert_message=f_payload("ENTRY_SHORT", "ST_ENTRY_SHORT", qty, amount, product)
+    )
+
+// NOTE (TV Alert UI):
+// Create ONE alert on this strategy and set Message = {{strategy.order.alert_message}}
