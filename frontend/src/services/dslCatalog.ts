@@ -7,6 +7,7 @@ export type DslCatalogKind =
   | 'custom_indicator'
   | 'keyword'
   | 'source'
+  | 'user'
 
 export type DslCatalogItem = {
   kind: DslCatalogKind
@@ -14,6 +15,53 @@ export type DslCatalogItem = {
   signature: string
   details: string
   insertText?: string
+}
+
+export type UserDslCatalogItem = {
+  expr: string
+  signature: string
+  details: string
+}
+
+const DSL_CATALOG_USER_STORAGE_KEY = 'st_dsl_catalog_user_items_v1'
+
+export function loadUserDslCatalogItems(): UserDslCatalogItem[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(DSL_CATALOG_USER_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const out: UserDslCatalogItem[] = []
+    for (const x of parsed) {
+      if (!x || typeof x !== 'object') continue
+      const rec = x as any
+      const expr = String(rec.expr ?? '').trim()
+      const signature = String(rec.signature ?? '').trim()
+      const details = String(rec.details ?? '').trim()
+      if (!expr || !signature) continue
+      out.push({ expr, signature, details })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+export function saveUserDslCatalogItems(items: UserDslCatalogItem[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    const cleaned = (items ?? [])
+      .map((x) => ({
+        expr: String(x.expr ?? '').trim(),
+        signature: String(x.signature ?? '').trim(),
+        details: String(x.details ?? '').trim(),
+      }))
+      .filter((x) => x.expr.length > 0 && x.signature.length > 0)
+    window.localStorage.setItem(DSL_CATALOG_USER_STORAGE_KEY, JSON.stringify(cleaned))
+  } catch {
+    // ignore
+  }
 }
 
 export type BuiltinDslFunction = {
@@ -252,9 +300,11 @@ const METRIC_DETAILS: Record<(typeof ALERT_V3_METRICS)[number], string> = {
 export function buildDslCatalog({
   operands = [],
   customIndicators = [],
+  userItems = [],
 }: {
   operands?: string[]
   customIndicators?: Array<{ name: string; params?: string[]; description?: string | null }>
+  userItems?: UserDslCatalogItem[]
 }): DslCatalogItem[] {
   const items: DslCatalogItem[] = []
 
@@ -330,6 +380,24 @@ export function buildDslCatalog({
       signature: `${ci.name}(${args})`,
       details: ci.description || 'Custom indicator function.',
       insertText: `${ci.name}(${args})`,
+    })
+  }
+
+  const users = (userItems ?? [])
+    .map((x) => ({
+      expr: String(x.expr || '').trim(),
+      signature: String(x.signature || '').trim(),
+      details: String(x.details || '').trim(),
+    }))
+    .filter((x) => x.expr.length > 0 && x.signature.length > 0)
+    .sort((a, b) => a.expr.localeCompare(b.expr))
+  for (const u of users) {
+    items.push({
+      kind: 'user',
+      expr: u.expr,
+      signature: u.signature,
+      details: u.details || 'User-defined snippet.',
+      insertText: u.signature,
     })
   }
 
