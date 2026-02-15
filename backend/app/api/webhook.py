@@ -330,6 +330,10 @@ def tradingview_webhook(
         else:
             candidates = [
                 raw_body,
+                # Some send a JSON-encoded string containing JSON.
+                raw_body[1:-1]
+                if raw_body.startswith('"') and raw_body.endswith('"')
+                else raw_body,
                 _strip_trailing_commas(raw_body),
                 _strip_thousands_separators(raw_body),
                 _strip_trailing_commas(_strip_thousands_separators(raw_body)),
@@ -338,10 +342,32 @@ def tradingview_webhook(
             parsed_json: dict[str, Any] | None = None
             for candidate in dict.fromkeys(candidates):
                 try:
-                    parsed_json = json.loads(candidate)
-                    break
+                    parsed = json.loads(candidate)
+                    # If this decoded into a string, try decoding once more.
+                    if isinstance(parsed, str):
+                        try:
+                            parsed2 = json.loads(parsed)
+                            parsed = parsed2
+                        except Exception:
+                            pass
+                    if isinstance(parsed, dict):
+                        parsed_json = parsed
+                        break
                 except json.JSONDecodeError:
                     continue
+
+            if parsed_json is None:
+                # Best-effort: extract embedded JSON object from noisy/plain text bodies.
+                try:
+                    start = raw_body.find("{")
+                    end = raw_body.rfind("}")
+                    if start >= 0 and end > start:
+                        embedded = raw_body[start : end + 1]
+                        parsed = json.loads(embedded)
+                        if isinstance(parsed, dict):
+                            parsed_json = parsed
+                except Exception:
+                    parsed_json = None
 
             if parsed_json is not None:
                 payload = parsed_json
@@ -468,6 +494,24 @@ def tradingview_webhook(
         if payload.get("test") == "tradingview":
             return {"status": "ok"}
 
+        # Explicit meta.platform guard for the {meta, signal, hints} schema.
+        meta_raw = payload.get("meta")
+        if isinstance(meta_raw, dict) and meta_raw.get("platform") is not None:
+            p = str(meta_raw.get("platform") or "").strip().upper()
+            if p and p != "TRADINGVIEW":
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="webhook",
+                    message="TradingView webhook rejected: meta.platform must be TRADINGVIEW",
+                    correlation_id=correlation_id,
+                    details={"meta_platform": p},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid TradingView payload: meta.platform must be TRADINGVIEW.",
+                )
+
         # Allow header-only auth by injecting a placeholder secret into the
         # payload before parsing, so callers can omit "secret" from the JSON.
         payload_with_secret = dict(payload)
@@ -496,21 +540,34 @@ def tradingview_webhook(
 
                 signal = payload_with_secret.get("signal")
                 side = signal.get("side") if isinstance(signal, dict) else None
+                order_action = (
+                    signal.get("order_action") if isinstance(signal, dict) else None
+                )
                 if any(
                     list(err.get("loc") or []) == ["trade_details", "order_action"]
                     and "BUY or SELL" in str(err.get("msg") or "")
                     for err in errors
                 ):
-                    if isinstance(side, str) and side.strip().startswith("{{"):
+                    if isinstance(order_action, str) and order_action.strip().startswith(
+                        "{{"
+                    ):
+                        error_detail = (
+                            "Invalid TradingView payload: signal.order_action must resolve to BUY or SELL. "
+                            "Your alert is sending a placeholder token (e.g. {{strategy.order.action}}) "
+                            "that is not being expanded by TradingView. Use a Strategy 'Order fills' alert "
+                            "and set Alert Message = {{strategy.order.alert_message}}."
+                        )
+                    elif isinstance(side, str) and side.strip().startswith("{{"):
                         error_detail = (
                             "Invalid TradingView payload: signal.side must resolve to BUY or SELL. "
                             "Your alert is sending a placeholder token (e.g. {{strategy.order.action}}) "
                             "that is not being expanded by TradingView. Use a Strategy 'Order fills' alert "
-                            "or set signal.side to BUY/SELL."
+                            "and set Alert Message = {{strategy.order.alert_message}}."
                         )
                     else:
                         error_detail = (
-                            "Invalid TradingView payload: signal.side must be BUY or SELL."
+                            "Invalid TradingView payload: missing/invalid BUY/SELL action. "
+                            "Expected signal.order_action (preferred) or signal.side to be BUY or SELL."
                         )
             record_system_event(
                 db,
@@ -561,7 +618,10 @@ def tradingview_webhook(
     user: User | None = None
     if st_user:
         user = db.query(User).filter(User.username == st_user).one_or_none()
-    elif payload.payload_format == "TRADINGVIEW_META_SIGNAL_HINTS_V1":
+    elif payload.payload_format in {
+        "TRADINGVIEW_META_SIGNAL_HINTS_V1",
+        "TRADINGVIEW_META_SIGNAL_HINTS_V6",
+    }:
         user = _pick_default_webhook_user(db, settings)
         if user is not None:
             st_user = user.username
@@ -828,6 +888,22 @@ def tradingview_webhook(
             mode = "MANUAL"
             auto_execute = False
 
+    # Strategy v6 order-fills payloads can encode entry/exit semantics in signal.side
+    # (e.g., ENTRY_LONG / EXIT_SHORT). Preserve exit classification for both BUY and SELL.
+    tv_is_exit = False
+    try:
+        sside = str((payload.hints or {}).get("signal_side") or "").strip().upper()
+        if sside.startswith(("EXIT_", "CLOSE_")):
+            tv_is_exit = True
+    except Exception:
+        tv_is_exit = False
+
+    risk_is_exit = (
+        bool(getattr(sell_resolution, "is_exit", False))
+        if sell_resolution is not None and str(alert.action).strip().upper() == "SELL"
+        else False
+    )
+
     order = create_order_from_alert(
         db=db,
         alert=alert,
@@ -838,9 +914,7 @@ def tradingview_webhook(
         execution_target=exec_target,
         user_id=alert.user_id,
         client_order_id=client_order_id,
-        is_exit=bool(getattr(sell_resolution, "is_exit", False))
-        if sell_resolution is not None and str(alert.action).strip().upper() == "SELL"
-        else False,
+        is_exit=bool(tv_is_exit or risk_is_exit),
     )
 
     # If TradingView omitted qty (or templates didn't expand it), auto-size the
