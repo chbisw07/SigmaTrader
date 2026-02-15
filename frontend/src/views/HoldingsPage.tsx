@@ -3350,6 +3350,11 @@ export function HoldingsPage() {
             atr_period: slPeriod,
             atr_tf: riskSlAtrTf,
           },
+          take_profit: {
+            enabled: false,
+            mode: 'PCT',
+            value: 0,
+          },
           trailing_stop: {
             enabled: riskTrailEnabled,
             mode: riskTrailMode,

@@ -12,7 +12,7 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.main import app
-from app.models import Alert, BrokerSecret, Order, Strategy, User
+from app.models import Alert, BrokerSecret, Order, Position, Strategy, User
 
 client = TestClient(app)
 
@@ -113,154 +113,176 @@ def test_webhook_persists_alert_with_valid_secret() -> None:
         assert order.mode == "MANUAL"
 
 
-def test_webhook_sell_qty_resolves_from_live_holdings(monkeypatch) -> None:
-    """TradingView SELL should default to an exit-style qty when holdings exist."""
-
-    import app.api.orders as orders_api
-
-    class _FakeClient:
-        def list_holdings(self):
-            return [{"tradingsymbol": "INFY", "exchange": "NSE", "quantity": 10}]
-
-        def list_positions(self):
-            return {"net": []}
-
-    def _fake_get_broker_client(db, settings, broker_name, user_id=None):
-        return _FakeClient()
-
-    monkeypatch.setattr(orders_api, "_get_broker_client", _fake_get_broker_client)
-
-    unique_strategy = f"webhook-test-strategy-sell-holdings-{uuid4().hex}"
+def test_webhook_strategy_v6_entry_uses_product_and_qty_from_payload() -> None:
     payload = {
-        "secret": "test-secret",
-        "platform": "TRADINGVIEW",
-        "st_user_id": "webhook-user",
-        "strategy_name": unique_strategy,
-        "symbol": "NSE:INFY",
-        "exchange": "NSE",
-        "interval": "5",
-        "trade_details": {"order_action": "SELL", "quantity": 1, "price": 1500.0},
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-entry-{uuid4().hex}",
+            "strategy_name": "ST v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "ENTRY_LONG",
+            "order_action": "BUY",
+            "order_id": "Long",
+            "order_tag": "ST_ENTRY_LONG",
+            "qty": "14",
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-15T05:16:23Z",
+        },
+        "hints": {},
     }
 
-    response = client.post("/webhook/tradingview", json=payload)
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
     assert response.status_code == 201
     data = response.json()
     assert data["status"] == "accepted"
 
     with SessionLocal() as session:
-        alert = session.get(Alert, int(data["alert_id"]))
-        assert alert is not None
-        assert alert.action == "SELL"
-        assert alert.qty == 10
-        assert "SELL qty resolved" in (alert.reason or "")
-
         order = session.get(Order, int(data["order_id"]))
         assert order is not None
-        assert order.side == "SELL"
-        assert order.qty == 10
-        assert bool(getattr(order, "is_exit", False)) is True
+        assert float(order.qty or 0.0) == 14.0
+        assert str(order.product or "").upper() == "MIS"
 
 
-def test_webhook_sell_qty_resolves_from_t1_holdings(monkeypatch) -> None:
-    """Zerodha holdings can be in t1_quantity; AUTO SELL should still resolve qty."""
-
-    import app.api.orders as orders_api
-
-    class _FakeClient:
-        def list_holdings(self):
-            return [
-                {
-                    "tradingsymbol": "INFY",
-                    "exchange": "NSE",
-                    "quantity": 0,
-                    "t1_quantity": 7,
-                }
-            ]
-
-        def list_positions(self):
-            return {"net": []}
-
-    def _fake_get_broker_client(db, settings, broker_name, user_id=None):
-        return _FakeClient()
-
-    monkeypatch.setattr(orders_api, "_get_broker_client", _fake_get_broker_client)
-
-    unique_strategy = f"webhook-test-strategy-sell-t1-holdings-{uuid4().hex}"
+def test_webhook_uses_default_product_when_payload_omits_product() -> None:
     payload = {
-        "secret": "test-secret",
-        "platform": "TRADINGVIEW",
-        "st_user_id": "webhook-user",
-        "strategy_name": unique_strategy,
-        "symbol": "NSE:INFY",
-        "exchange": "NSE",
-        "interval": "5",
-        "trade_details": {"order_action": "SELL", "quantity": 1, "price": 1500.0},
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-entry-noprod-{uuid4().hex}",
+            "strategy_name": "ST v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "ENTRY_LONG",
+            "order_action": "BUY",
+            "order_id": "Long",
+            "order_tag": "ST_ENTRY_LONG",
+            "qty": "2",
+            # product intentionally omitted -> should fall back to TV webhook default (CNC).
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-15T05:16:25Z",
+        },
+        "hints": {},
     }
 
-    response = client.post("/webhook/tradingview", json=payload)
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
     assert response.status_code == 201
     data = response.json()
     assert data["status"] == "accepted"
 
     with SessionLocal() as session:
-        alert = session.get(Alert, int(data["alert_id"]))
-        assert alert is not None
-        assert alert.action == "SELL"
-        assert float(alert.qty or 0.0) == 7.0
-
         order = session.get(Order, int(data["order_id"]))
         assert order is not None
-        assert order.side == "SELL"
-        assert float(order.qty or 0.0) == 7.0
         assert str(order.product or "").upper() == "CNC"
-        assert bool(getattr(order, "is_exit", False)) is True
 
 
-def test_webhook_ignores_sell_when_no_holdings_or_positions(monkeypatch) -> None:
-    """When we can confirm no position exists, create a WAITING order for review."""
+def test_webhook_strategy_v6_exit_qty_resolves_from_cached_positions_same_product() -> None:
+    with SessionLocal() as session:
+        session.add(
+            Position(
+                broker_name="zerodha",
+                symbol="INFY",
+                exchange="NSE",
+                product="MIS",
+                qty=7.0,
+                avg_price=1500.0,
+                pnl=0.0,
+            )
+        )
+        session.commit()
 
-    import app.api.orders as orders_api
-
-    class _FakeClient:
-        def list_holdings(self):
-            return []
-
-        def list_positions(self):
-            return {"net": []}
-
-    def _fake_get_broker_client(db, settings, broker_name, user_id=None):
-        return _FakeClient()
-
-    monkeypatch.setattr(orders_api, "_get_broker_client", _fake_get_broker_client)
-
-    unique_strategy = f"webhook-test-strategy-sell-reject-{uuid4().hex}"
     payload = {
-        "secret": "test-secret",
-        "platform": "TRADINGVIEW",
-        "st_user_id": "webhook-user",
-        "strategy_name": unique_strategy,
-        "symbol": "NSE:INFY",
-        "exchange": "NSE",
-        "interval": "5",
-        "trade_details": {"order_action": "SELL", "quantity": 1, "price": 1500.0},
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-exit-{uuid4().hex}",
+            "strategy_name": "ST v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "EXIT_LONG",
+            "order_action": "SELL",
+            "order_id": "ExitLong",
+            "order_tag": "ST_EXIT_LONG",
+            # qty intentionally omitted -> should resolve from positions table.
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-15T05:16:30Z",
+        },
+        "hints": {},
     }
 
-    response = client.post("/webhook/tradingview", json=payload)
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
     assert response.status_code == 201
     data = response.json()
     assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        order = session.get(Order, int(data["order_id"]))
+        assert order is not None
+        assert order.is_exit is True
+        assert float(order.qty or 0.0) == 7.0
+        assert str(order.product or "").upper() == "MIS"
+
+
+def test_webhook_strategy_v6_exit_ignored_when_qty_missing_and_no_position() -> None:
+    with SessionLocal() as session:
+        session.query(Position).filter(
+            Position.broker_name == "zerodha",
+            Position.exchange == "NSE",
+            Position.symbol == "INFY",
+            Position.product == "MIS",
+        ).delete()
+        session.commit()
+
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-exit-missing-{uuid4().hex}",
+            "strategy_name": "ST v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "EXIT_LONG",
+            "order_action": "SELL",
+            "order_id": "ExitLong",
+            "order_tag": "ST_EXIT_LONG",
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-15T05:16:31Z",
+        },
+        "hints": {},
+    }
+
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "ignored"
+    assert data["reason"] == "no_open_position"
     assert "alert_id" in data
-    assert "order_id" in data
 
     with SessionLocal() as session:
         alert = session.get(Alert, int(data["alert_id"]))
         assert alert is not None
-        order = session.get(Order, int(data["order_id"]))
-        assert order is not None
-        assert order.alert_id == alert.id
-        assert order.status == "WAITING"
-        assert order.mode == "MANUAL"
-        assert "TV SELL needs review" in (order.error_message or "")
+        rows = session.query(Order).filter(Order.alert_id == int(alert.id)).all()
+        assert rows == []
 
 
 def test_webhook_accepts_meta_signal_hints_payload_without_st_user_id() -> None:
@@ -345,6 +367,97 @@ def test_webhook_accepts_strategy_v6_order_fills_alert_message_payload_as_text()
         assert order.price is None
         assert order.qty == 1
         assert order.is_exit is False
+
+
+def test_webhook_strategy_v6_dedupes_duplicates_by_order_id_tag_timestamp() -> None:
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-dedupe-{uuid4().hex}",
+            "strategy_name": "ST v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "ENTRY_LONG",
+            "order_action": "BUY",
+            "order_id": "Long",
+            "order_tag": "ST_ENTRY_LONG",
+            "qty": 1,
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-15T05:17:00Z",
+        },
+        "hints": {},
+    }
+
+    resp_a = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert resp_a.status_code == 201
+    assert resp_a.json()["status"] == "accepted"
+
+    resp_b = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert resp_b.status_code == 201
+    data_b = resp_b.json()
+    assert data_b["status"] == "deduped"
+    assert "order_id" in data_b
+
+
+def test_webhook_strategy_v6_persists_risk_exits_from_hints() -> None:
+    from app.schemas.managed_risk import RiskSpec
+
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-exits-{uuid4().hex}",
+            "strategy_name": "ST v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "ENTRY_LONG",
+            "order_action": "BUY",
+            "order_id": "Long",
+            "order_tag": "ST_ENTRY_LONG",
+            "qty": 1,
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-15T05:17:10Z",
+        },
+        "hints": {
+            "stop_type": "SL-M",
+            "stop_price": 1485.0,
+            "tp_enabled": "true",
+            "take_profit": 1515.0,
+            "trail_enabled": "true",
+            "trail_dist": 5.0,
+        },
+    }
+
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        order = session.get(Order, int(data["order_id"]))
+        assert order is not None
+        assert order.is_exit is False
+        assert (order.risk_spec_json or "").strip()
+        spec = RiskSpec.from_json(order.risk_spec_json)
+        assert spec is not None
+        assert spec.stop_loss.enabled is True
+        assert spec.take_profit.enabled is True
+        assert spec.trailing_stop.enabled is True
 
 
 def test_webhook_marks_strategy_v6_exit_orders_as_exits() -> None:

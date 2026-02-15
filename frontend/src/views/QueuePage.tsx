@@ -136,6 +136,11 @@ export function WaitingQueuePanel({
         `SL ${fmt(spec.stop_loss.mode, spec.stop_loss.value, spec.stop_loss.atr_tf)}`,
       )
     }
+    if (spec.take_profit?.enabled) {
+      parts.push(
+        `TP ${fmt(spec.take_profit.mode, spec.take_profit.value, spec.take_profit.atr_tf)}`,
+      )
+    }
     if (spec.trailing_stop?.enabled) {
       parts.push(
         `Tr ${fmt(spec.trailing_stop.mode, spec.trailing_stop.value, spec.trailing_stop.atr_tf)}`,
@@ -620,6 +625,12 @@ export function WaitingQueuePanel({
               riskSlAtrTf,
               'Stop-loss',
             ),
+            take_profit:
+              editingOrder?.risk_spec?.take_profit ?? ({
+                enabled: false,
+                mode: 'PCT',
+                value: 0,
+              } as const),
             trailing_stop: parseDistance(
               riskTrailEnabled,
               riskTrailMode,
@@ -1485,6 +1496,12 @@ export function WaitingQueuePanel({
                           atr_period: Number(riskSlAtrPeriod || 14) || 14,
                           atr_tf: riskSlAtrTf,
                         },
+                        take_profit:
+                          editingOrder?.risk_spec?.take_profit ?? ({
+                            enabled: false,
+                            mode: 'PCT',
+                            value: 0,
+                          } as const),
                         trailing_stop: {
                           enabled: riskTrailEnabled,
                           mode: riskTrailMode,

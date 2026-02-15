@@ -81,6 +81,7 @@ def create_order_from_alert(
     execution_target: str | None = None,
     user_id: int | None = None,
     client_order_id: str | None = None,
+    risk_spec_json: str | None = None,
     is_exit: bool = False,
 ) -> Order:
     """Create and persist an Order in WAITING state derived from an Alert.
@@ -113,6 +114,7 @@ def create_order_from_alert(
         broker_name=(broker_name or "zerodha").strip().lower() or "zerodha",
         execution_target=(execution_target or "LIVE").strip().upper() or "LIVE",
         simulated=False,
+        risk_spec_json=risk_spec_json,
         is_exit=bool(is_exit),
     )
 

@@ -481,6 +481,7 @@ class ManagedRiskPosition(Base):
 
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     stop_distance: Mapped[float | None] = mapped_column(Float)
+    take_profit_distance: Mapped[float | None] = mapped_column(Float)
     trail_distance: Mapped[float | None] = mapped_column(Float)
     activation_distance: Mapped[float | None] = mapped_column(Float)
 

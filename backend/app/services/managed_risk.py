@@ -446,6 +446,8 @@ def ensure_managed_risk_for_executed_order(
     if raw_order_spec is not None:
         if raw_order_spec.stop_loss.enabled:
             spec.stop_loss = raw_order_spec.stop_loss
+        if raw_order_spec.take_profit.enabled:
+            spec.take_profit = raw_order_spec.take_profit
         if raw_order_spec.trailing_stop.enabled:
             spec.trailing_stop = raw_order_spec.trailing_stop
         if raw_order_spec.trailing_activation.enabled:
@@ -534,6 +536,14 @@ def ensure_managed_risk_for_executed_order(
         symbol=symbol,
         exchange=exchange,
         spec=spec.trailing_activation,
+    )
+    tp_dist = _distance_from_entry(
+        db,
+        settings,
+        entry_price=float(avg_price),
+        symbol=symbol,
+        exchange=exchange,
+        spec=spec.take_profit,
     )
     if spec.trailing_stop.enabled and (trail_dist is None or float(trail_dist) <= 0):
         trail_dist = float(stop_dist)
@@ -713,6 +723,7 @@ def ensure_managed_risk_for_executed_order(
         risk_spec_json=spec.to_json(),
         entry_price=float(avg_price),
         stop_distance=float(stop_dist),
+        take_profit_distance=float(tp_dist) if tp_dist is not None else None,
         trail_distance=float(trail_dist) if trail_dist else None,
         activation_distance=float(act_dist) if act_dist else None,
         best_favorable_price=float(best),
@@ -1005,6 +1016,25 @@ def process_managed_risk_once() -> int:
                 processed += 1
                 continue
 
+            tp_dist = float(getattr(mrp, "take_profit_distance", 0.0) or 0.0)
+            tp_triggered = False
+            if tp_dist > 0:
+                try:
+                    side_u = str(mrp.side or "").strip().upper()
+                    entry_px = float(mrp.entry_price)
+                    target = (
+                        entry_px + float(tp_dist)
+                        if side_u == "BUY"
+                        else entry_px - float(tp_dist)
+                    )
+                    ltp_f = float(ltp)
+                    if side_u == "BUY":
+                        tp_triggered = ltp_f >= float(target)
+                    elif side_u == "SELL":
+                        tp_triggered = ltp_f <= float(target)
+                except Exception:
+                    tp_triggered = False
+
             trail_distance = float(mrp.trail_distance) if mrp.trail_distance else None
             activation_distance = (
                 float(mrp.activation_distance) if mrp.activation_distance else None
@@ -1032,7 +1062,9 @@ def process_managed_risk_once() -> int:
             db.add(mrp)
             db.commit()
 
-            if not update.triggered or not update.exit_reason:
+            exit_triggered = bool(tp_triggered or update.triggered)
+            exit_reason = "TP" if tp_triggered else update.exit_reason
+            if not exit_triggered or not exit_reason:
                 processed += 1
                 continue
 
@@ -1047,7 +1079,7 @@ def process_managed_risk_once() -> int:
                 .update(
                     {
                         ManagedRiskPosition.status: "EXITING",
-                        ManagedRiskPosition.exit_reason: update.exit_reason,
+                        ManagedRiskPosition.exit_reason: exit_reason,
                         ManagedRiskPosition.updated_at: now,
                         ManagedRiskPosition.last_ltp: float(ltp),
                     },
@@ -1070,7 +1102,7 @@ def process_managed_risk_once() -> int:
                     exit_order = _create_exit_order(
                         db2,
                         mrp=mrp2,
-                        exit_reason=update.exit_reason,
+                        exit_reason=exit_reason,
                     )
                     db2.commit()
                 except Exception:

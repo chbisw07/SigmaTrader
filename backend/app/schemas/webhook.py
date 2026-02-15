@@ -231,10 +231,11 @@ class TradingViewWebhookPayload(BaseModel):
             if "bar_time" not in values and signal.get("timestamp") is not None:
                 values["bar_time"] = signal.get("timestamp")
 
-            if "hints" not in values and hints:
-                values["hints"] = hints
+            if "hints" not in values:
+                values["hints"] = hints if isinstance(hints, dict) else {}
 
             # Enrich hints with signal context (kept optional and forward-compatible).
+            # Run this even when hints is empty so callers can rely on signal_side/order_tag, etc.
             try:
                 merged_hints = dict(values.get("hints") or {})
                 for key in (

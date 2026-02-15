@@ -49,6 +49,7 @@ const defaultDistanceSpec = (): DistanceSpec => ({
 const buildRiskSpec = (position?: ManagedRiskPosition | null): RiskSpec => {
   const base = {
     stop_loss: defaultDistanceSpec(),
+    take_profit: defaultDistanceSpec(),
     trailing_stop: defaultDistanceSpec(),
     trailing_activation: defaultDistanceSpec(),
     exit_order_type: 'MARKET' as const,
@@ -59,6 +60,7 @@ const buildRiskSpec = (position?: ManagedRiskPosition | null): RiskSpec => {
     ...base,
     ...position.risk_spec,
     stop_loss: { ...base.stop_loss, ...position.risk_spec.stop_loss },
+    take_profit: { ...base.take_profit, ...position.risk_spec.take_profit },
     trailing_stop: { ...base.trailing_stop, ...position.risk_spec.trailing_stop },
     trailing_activation: {
       ...base.trailing_activation,

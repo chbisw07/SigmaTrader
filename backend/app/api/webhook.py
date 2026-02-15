@@ -29,8 +29,16 @@ from app.services.tradingview_zerodha_adapter import (
     NormalizedAlert,
     normalize_tradingview_payload_for_zerodha,
 )
-from app.services.tradingview_sell_qty import resolve_tradingview_sell_qty
 from app.services.webhook_secrets import get_tradingview_webhook_secret
+from app.services.tradingview_intent import (
+    build_risk_spec_from_hints,
+    extract_signal_side,
+    is_exit_signal,
+    resolve_action_from_signal_side,
+    resolve_exit_qty_from_cached_positions,
+    resolve_product,
+    resolve_qty_from_payload,
+)
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -753,55 +761,107 @@ def tradingview_webhook(
         default_product=str(getattr(cfg, "default_product", "CNC") or "CNC"),
     )
 
-    sell_resolution = None
-    if str(normalized.side).strip().upper() == "SELL":
-        try:
-            sell_resolution = resolve_tradingview_sell_qty(
-                db,
-                settings,
-                user=user,
-                broker_name=broker_name,
-                exchange=normalized.broker_exchange,
-                symbol=normalized.broker_symbol,
-                desired_product=normalized.product,
-                payload_qty=float(normalized.qty or 0.0),
-            )
-        except Exception:
-            sell_resolution = None
+    signal_side = extract_signal_side(payload)
+    normalized.side = resolve_action_from_signal_side(
+        signal_side,
+        fallback=str(normalized.side or "").strip().upper(),
+    )
 
-        if sell_resolution is not None and not bool(getattr(sell_resolution, "reject", False)):
-            # Best-effort: override qty/product when we found a sellable quantity.
-            try:
-                normalized.qty = float(
-                    getattr(sell_resolution, "qty", normalized.qty) or 0.0
-                )
-            except Exception:
-                pass
-            resolved_product = getattr(sell_resolution, "resolved_product", None)
-            if resolved_product:
-                normalized.product = str(resolved_product).strip().upper()
-            resolved_exchange = getattr(sell_resolution, "resolved_exchange", None)
-            if resolved_exchange:
-                normalized.broker_exchange = str(resolved_exchange).strip().upper()
-            resolved_symbol = getattr(sell_resolution, "resolved_symbol", None)
-            if resolved_symbol:
-                normalized.broker_symbol = str(resolved_symbol).strip().upper()
+    normalized.product = resolve_product(
+        payload,
+        default_product=str(getattr(cfg, "default_product", "CNC") or "CNC"),
+    )
+
+    resolved_qty = resolve_qty_from_payload(payload)
+    normalized.qty = float(resolved_qty) if resolved_qty is not None else 0.0
+
+    tv_is_exit = is_exit_signal(signal_side)
+    if tv_is_exit and float(normalized.qty or 0.0) <= 0:
+        exit_qty = resolve_exit_qty_from_cached_positions(
+            db,
+            broker_name=broker_name,
+            exchange=normalized.broker_exchange,
+            symbol=normalized.broker_symbol,
+            product=normalized.product,
+            signal_side=signal_side,
+        )
+        if exit_qty is None or float(exit_qty) <= 0:
+            # Safety: do not attempt to dispatch an EXIT without an explicit qty,
+            # and never derive product/qty from holdings.
+            alert = Alert(
+                user_id=user.id,
+                strategy_id=(strategy.id if use_strategy_mode and strategy is not None else None),
+                symbol=normalized.symbol_display,
+                exchange=normalized.broker_exchange,
+                interval=normalized.timeframe,
+                action=normalized.side,
+                qty=normalized.qty,
+                price=normalized.price,
+                platform=payload.platform,
+                source="TRADINGVIEW",
+                raw_payload=normalized.raw_payload,
+                bar_time=normalized.bar_time,
+                reason=(
+                    f"{(normalized.reason or '').strip()} | "
+                    f"ST: Ignored EXIT (no open position for {normalized.product} {normalized.broker_exchange}:{normalized.broker_symbol})."
+                ).strip(" |"),
+            )
+            db.add(alert)
+            db.commit()
+            db.refresh(alert)
+            record_system_event(
+                db,
+                level="INFO",
+                category="alert",
+                message="TradingView EXIT ignored (no open position qty)",
+                correlation_id=correlation_id,
+                details={
+                    "alert_id": int(alert.id),
+                    "broker_name": broker_name,
+                    "exchange": normalized.broker_exchange,
+                    "symbol": normalized.broker_symbol,
+                    "product": normalized.product,
+                    "signal_side": signal_side,
+                },
+            )
+            return {
+                "status": "ignored",
+                "reason": "no_open_position",
+                "alert_id": int(alert.id),
+            }
+        normalized.qty = float(exit_qty)
 
     client_order_id: str | None = None
     try:
         raw_order_id = str(getattr(payload, "order_id", "") or "").strip()
+        order_tag = str((payload.hints or {}).get("order_tag") or "").strip()
         bt = getattr(payload, "bar_time", None)
+        strat_key = str(payload.strategy_id or payload.strategy_name or "").strip()
         symbol_key = f"{normalized.broker_exchange}:{normalized.broker_symbol}"
         if raw_order_id and "{{" not in raw_order_id and bt is not None:
-            # Some TradingView setups reuse order_id values across symbols (e.g. "Buy").
-            # Include symbol + timestamp to prevent cross-symbol deduping for group alerts,
-            # while still deduping retries for the same bar/event.
-            client_order_id = f"TV:{symbol_key}:{raw_order_id}:{bt.isoformat()}"
+            # Idempotency: prefer explicit strategy identifiers when present.
+            # Uses: order_id + order_tag + timestamp, scoped by symbol (+strategy).
+            basis = "|".join(
+                [
+                    symbol_key,
+                    strat_key,
+                    raw_order_id,
+                    order_tag,
+                    str(signal_side or ""),
+                    str(normalized.side or ""),
+                    str(normalized.product or ""),
+                    bt.isoformat(),
+                ]
+            )
+            digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:20]
+            client_order_id = f"TV:{digest}"
         else:
             # Fallback idempotency key: hash of normalized payload + bar time (if any).
             raw_basis = normalized.raw_payload
             if bt is not None:
                 raw_basis = f"{raw_basis}|{bt.isoformat()}"
+            if order_tag:
+                raw_basis = f"{raw_basis}|order_tag={order_tag}"
             digest = hashlib.sha1(raw_basis.encode("utf-8")).hexdigest()[:20]
             client_order_id = f"TVA:{digest}"
         if client_order_id and len(client_order_id) > 128:
@@ -831,27 +891,23 @@ def tradingview_webhook(
             }
 
     alert_reason = normalized.reason
-    if sell_resolution is not None and str(normalized.side).strip().upper() == "SELL":
-        src = str(getattr(sell_resolution, "source", "") or "").strip().lower()
-        qty_note = None
+    risk_spec_json = None
+    risk_hint_details: dict[str, Any] | None = None
+    if not tv_is_exit:
         try:
-            qty_note = float(getattr(sell_resolution, "qty", 0.0) or 0.0)
-        except Exception:
-            qty_note = None
-        if src in {"holdings", "positions"} and qty_note is not None and qty_note > 0:
-            suffix = f"ST: SELL qty resolved from {src} ({qty_note})."
-            alert_reason = f"{(alert_reason or '').strip()} | {suffix}".strip(" |")
-        elif bool(getattr(sell_resolution, "reject", False)) and bool(
-            getattr(sell_resolution, "checked_live", False)
-        ):
-            note = str(getattr(sell_resolution, "note", "") or "").strip()
-            suffix = (
-                "ST: SELL could not be matched to holdings/positions; "
-                "created as WAITING for review."
+            risk_from_hints = build_risk_spec_from_hints(
+                payload,
+                ref_price=float(normalized.price) if normalized.price is not None else None,
             )
-            if note:
-                suffix = f"{suffix} ({note})"
-            alert_reason = f"{(alert_reason or '').strip()} | {suffix}".strip(" |")
+            risk_spec_json = risk_from_hints.risk_spec_json
+            risk_hint_details = risk_from_hints.details
+            if risk_spec_json:
+                alert_reason = (
+                    f"{(alert_reason or '').strip()} | ST: Exits parsed from alert hints."
+                ).strip(" |")
+        except Exception:
+            risk_spec_json = None
+            risk_hint_details = None
 
     alert = Alert(
         user_id=normalized.user_id,
@@ -878,32 +934,6 @@ def tradingview_webhook(
     db.commit()
     db.refresh(alert)
 
-    # Safety: when we can confirm this SELL does not map to an existing
-    # holding/position, do not auto-dispatch. Create a WAITING order so the
-    # user can correct qty/product or intentionally proceed.
-    if sell_resolution is not None and str(alert.action).strip().upper() == "SELL":
-        if bool(getattr(sell_resolution, "reject", False)) and bool(
-            getattr(sell_resolution, "checked_live", False)
-        ):
-            mode = "MANUAL"
-            auto_execute = False
-
-    # Strategy v6 order-fills payloads can encode entry/exit semantics in signal.side
-    # (e.g., ENTRY_LONG / EXIT_SHORT). Preserve exit classification for both BUY and SELL.
-    tv_is_exit = False
-    try:
-        sside = str((payload.hints or {}).get("signal_side") or "").strip().upper()
-        if sside.startswith(("EXIT_", "CLOSE_")):
-            tv_is_exit = True
-    except Exception:
-        tv_is_exit = False
-
-    risk_is_exit = (
-        bool(getattr(sell_resolution, "is_exit", False))
-        if sell_resolution is not None and str(alert.action).strip().upper() == "SELL"
-        else False
-    )
-
     order = create_order_from_alert(
         db=db,
         alert=alert,
@@ -914,7 +944,8 @@ def tradingview_webhook(
         execution_target=exec_target,
         user_id=alert.user_id,
         client_order_id=client_order_id,
-        is_exit=bool(tv_is_exit or risk_is_exit),
+        risk_spec_json=risk_spec_json,
+        is_exit=bool(tv_is_exit),
     )
 
     # If TradingView omitted qty (or templates didn't expand it), auto-size the
@@ -936,21 +967,25 @@ def tradingview_webhook(
         except Exception:
             pass
 
-    if sell_resolution is not None and str(order.side).strip().upper() == "SELL":
-        if bool(getattr(sell_resolution, "reject", False)) and bool(
-            getattr(sell_resolution, "checked_live", False)
-        ):
-            # Make the issue obvious in the Waiting Queue without preventing edits.
-            note = getattr(sell_resolution, "note", None) or "no holdings/positions found"
-            msg = (
-                "TV SELL needs review: SigmaTrader could not find holdings/positions "
-                f"for this symbol ({note}). Edit qty/product or execute intentionally."
+    if risk_hint_details is not None and risk_spec_json:
+        try:
+            record_system_event(
+                db,
+                level="INFO",
+                category="order",
+                message="TradingView exits captured from alert hints",
+                correlation_id=correlation_id,
+                details={
+                    "order_id": int(order.id),
+                    "alert_id": int(alert.id),
+                    "product": normalized.product,
+                    "qty": float(order.qty or 0.0),
+                    "signal_side": signal_side,
+                    "hints": risk_hint_details,
+                },
             )
-            if not (order.error_message or "").strip():
-                order.error_message = msg
-                db.add(order)
-                db.commit()
-                db.refresh(order)
+        except Exception:
+            pass
 
     # For AUTO webhooks we immediately execute the order via the same execution
     # path used by the manual queue endpoint. When configured for PAPER
