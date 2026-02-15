@@ -3,6 +3,8 @@ import { useTheme } from '@mui/material/styles'
 import Editor, { useMonaco } from '@monaco-editor/react'
 import { useEffect, useMemo, useRef } from 'react'
 
+import { BUILTIN_DSL_FUNCTIONS, DSL_KEYWORDS, DSL_SOURCES } from '../services/dslCatalog'
+
 type CustomIndicatorForDsl = {
   id: number
   name: string
@@ -23,6 +25,7 @@ type DslEditorProps = {
   operands?: string[]
   customIndicators?: CustomIndicatorForDsl[]
   onCtrlEnter?: () => void
+  onEditorMount?: (editor: any) => void
 }
 
 function _snippetForCustomIndicator(ci: CustomIndicatorForDsl): string {
@@ -42,6 +45,7 @@ export function DslEditor({
   operands = [],
   customIndicators = [],
   onCtrlEnter,
+  onEditorMount,
 }: DslEditorProps) {
   const theme = useTheme()
   const monaco = useMonaco()
@@ -60,45 +64,14 @@ export function DslEditor({
       ),
     )
 
-    const sources = ['open', 'high', 'low', 'close', 'volume', 'hlc3']
+    const sources = DSL_SOURCES.map((s) => s.expr)
 
-    const keywordItems = [
-      { label: 'AND', insertText: 'AND' },
-      { label: 'OR', insertText: 'OR' },
-      { label: 'NOT', insertText: 'NOT' },
-      { label: 'CROSSES_ABOVE', insertText: 'CROSSES_ABOVE' },
-      { label: 'CROSSES_BELOW', insertText: 'CROSSES_BELOW' },
-      { label: 'MOVING_UP', insertText: 'MOVING_UP' },
-      { label: 'MOVING_DOWN', insertText: 'MOVING_DOWN' },
-    ]
+    const keywordItems = DSL_KEYWORDS.map((k) => ({ label: k.expr, insertText: k.expr }))
 
-    const builtinFnItems = [
-      { label: 'OPEN', snippet: 'OPEN("${1:1d}")' },
-      { label: 'HIGH', snippet: 'HIGH("${1:1d}")' },
-      { label: 'LOW', snippet: 'LOW("${1:1d}")' },
-      { label: 'CLOSE', snippet: 'CLOSE("${1:1d}")' },
-      { label: 'VOLUME', snippet: 'VOLUME("${1:1d}")' },
-      { label: 'PRICE', snippet: 'PRICE("${1:1d}")' },
-
-      { label: 'SMA', snippet: 'SMA(${1:close}, ${2:14}, "${3:1d}")' },
-      { label: 'EMA', snippet: 'EMA(${1:close}, ${2:14}, "${3:1d}")' },
-      { label: 'RSI', snippet: 'RSI(${1:close}, ${2:14}, "${3:1d}")' },
-      { label: 'STDDEV', snippet: 'STDDEV(${1:close}, ${2:14}, "${3:1d}")' },
-      { label: 'MAX', snippet: 'MAX(${1:close}, ${2:14}, "${3:1d}")' },
-      { label: 'MIN', snippet: 'MIN(${1:close}, ${2:14}, "${3:1d}")' },
-      { label: 'AVG', snippet: 'AVG(${1:close}, ${2:14}, "${3:1d}")' },
-      { label: 'SUM', snippet: 'SUM(${1:close}, ${2:14}, "${3:1d}")' },
-
-      { label: 'RET', snippet: 'RET(${1:close}, "${2:1d}")' },
-      { label: 'ROC', snippet: 'ROC(${1:close}, ${2:14})' },
-      { label: 'ATR', snippet: 'ATR(${1:14}, "${2:1d}")' },
-
-      { label: 'OBV', snippet: 'OBV(${1:close}, ${2:volume}, "${3:1d}")' },
-      { label: 'VWAP', snippet: 'VWAP(${1:hlc3}, ${2:volume}, "${3:1d}")' },
-
-      { label: 'CROSSING_ABOVE', snippet: 'CROSSING_ABOVE(${1:a}, ${2:b})' },
-      { label: 'CROSSING_BELOW', snippet: 'CROSSING_BELOW(${1:a}, ${2:b})' },
-    ]
+    const builtinFnItems = BUILTIN_DSL_FUNCTIONS.map((fn) => ({
+      label: fn.name,
+      snippet: fn.snippet,
+    }))
 
     const customFnItems = (customIndicators ?? [])
       .map((ci) => ({
@@ -229,6 +202,7 @@ export function DslEditor({
         value={value}
         onChange={(v) => onChange(v ?? '')}
         onMount={(editor, editorMonaco) => {
+          if (onEditorMount) onEditorMount(editor)
           if (!ctrlEnterRef.current) return
           editor.addCommand(
             // Ctrl+Enter on Windows/Linux, Cmd+Enter on macOS.
