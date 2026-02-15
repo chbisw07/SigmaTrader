@@ -238,6 +238,75 @@ def test_webhook_strategy_v6_exit_qty_resolves_from_cached_positions_same_produc
         assert str(order.product or "").upper() == "MIS"
 
 
+def test_webhook_strategy_v6_exit_qty_resolves_from_live_positions_when_cache_missing(
+    monkeypatch,
+) -> None:
+    import app.api.orders as orders_api
+
+    class _FakeClient:
+        def list_positions(self):
+            return {
+                "net": [
+                    {
+                        "tradingsymbol": "INFY",
+                        "exchange": "NSE",
+                        "product": "MIS",
+                        "quantity": 5,
+                    }
+                ]
+            }
+
+    def _fake_get_broker_client(db, settings, broker_name, user_id=None):
+        return _FakeClient()
+
+    monkeypatch.setattr(orders_api, "_get_broker_client", _fake_get_broker_client)
+
+    with SessionLocal() as session:
+        session.query(Position).filter(
+            Position.broker_name == "zerodha",
+            Position.exchange == "NSE",
+            Position.symbol == "INFY",
+            Position.product == "MIS",
+        ).delete()
+        session.commit()
+
+    payload = {
+        "meta": {"secret": "test-secret", "platform": "TRADINGVIEW", "version": "1.0"},
+        "signal": {
+            "strategy_id": f"st-v6-exit-live-{uuid4().hex}",
+            "strategy_name": "ST v6",
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "side": "EXIT_LONG",
+            "order_action": "SELL",
+            "order_id": "ExitLong",
+            "order_tag": "ST_EXIT_LONG",
+            # qty intentionally omitted -> should resolve from live broker positions.
+            "product": "MIS",
+            "ref_price": 1500.0,
+            "timeframe": "5",
+            "timestamp": "2026-02-15T05:16:40Z",
+        },
+        "hints": {},
+    }
+
+    response = client.post(
+        "/webhook/tradingview",
+        content=json.dumps(payload),
+        headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == "accepted"
+
+    with SessionLocal() as session:
+        order = session.get(Order, int(data["order_id"]))
+        assert order is not None
+        assert order.is_exit is True
+        assert float(order.qty or 0.0) == 5.0
+        assert str(order.product or "").upper() == "MIS"
+
+
 def test_webhook_strategy_v6_exit_ignored_when_qty_missing_and_no_position() -> None:
     with SessionLocal() as session:
         session.query(Position).filter(

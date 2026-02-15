@@ -162,6 +162,13 @@ class TradingViewWebhookPayload(BaseModel):
             if not isinstance(hints, dict):
                 hints = {}
 
+            # Strategy v6 sometimes nests hints under signal.hints; merge those.
+            nested_hints = signal.get("hints")
+            if isinstance(nested_hints, dict) and nested_hints:
+                merged = dict(nested_hints)
+                merged.update(hints)  # root hints take precedence
+                hints = merged
+
             meta_version = meta.get("version")
             # Strategy v6 order-fills payloads often keep meta.version="1.0"; detect via signal keys too.
             looks_v6 = any(

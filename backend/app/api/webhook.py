@@ -36,6 +36,7 @@ from app.services.tradingview_intent import (
     is_exit_signal,
     resolve_action_from_signal_side,
     resolve_exit_qty_from_cached_positions,
+    resolve_exit_qty_from_live_positions,
     resolve_product,
     resolve_qty_from_payload,
 )
@@ -785,6 +786,20 @@ def tradingview_webhook(
             product=normalized.product,
             signal_side=signal_side,
         )
+        exit_src = "cached_positions"
+        if exit_qty is None or float(exit_qty) <= 0:
+            exit_qty = resolve_exit_qty_from_live_positions(
+                db,
+                settings,
+                user_id=int(user.id),
+                broker_name=broker_name,
+                exchange=normalized.broker_exchange,
+                symbol=normalized.broker_symbol,
+                product=normalized.product,
+                signal_side=signal_side,
+            )
+            exit_src = "broker_positions"
+
         if exit_qty is None or float(exit_qty) <= 0:
             # Safety: do not attempt to dispatch an EXIT without an explicit qty,
             # and never derive product/qty from holdings.
@@ -822,6 +837,7 @@ def tradingview_webhook(
                     "symbol": normalized.broker_symbol,
                     "product": normalized.product,
                     "signal_side": signal_side,
+                    "source": "positions",
                 },
             )
             return {
@@ -830,6 +846,25 @@ def tradingview_webhook(
                 "alert_id": int(alert.id),
             }
         normalized.qty = float(exit_qty)
+        try:
+            record_system_event(
+                db,
+                level="INFO",
+                category="order",
+                message="TradingView EXIT qty resolved from positions",
+                correlation_id=correlation_id,
+                details={
+                    "broker_name": broker_name,
+                    "exchange": normalized.broker_exchange,
+                    "symbol": normalized.broker_symbol,
+                    "product": normalized.product,
+                    "signal_side": signal_side,
+                    "qty": float(exit_qty),
+                    "source": exit_src,
+                },
+            )
+        except Exception:
+            pass
 
     client_order_id: str | None = None
     try:

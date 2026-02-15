@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
 from unittest.mock import patch
 
 from app.core.auth import hash_password
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
-from app.models import ManagedRiskPosition, Order, RiskProfile, User
+from app.models import Alert, ManagedRiskPosition, Order, RiskProfile, User
 from app.schemas.managed_risk import DistanceSpec, RiskSpec
 from app.services.managed_risk import (
     _update_stop_state,
@@ -407,3 +408,80 @@ def test_policy_managed_risk_respects_stop_rules_group_toggle() -> None:
             risk_profile=prof2,
         )
         assert mrp2 is None
+
+
+def test_tradingview_hint_exits_resolve_distances_from_fill_price() -> None:
+    settings = get_settings()
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "risk-user").one()
+
+        tv_payload = {
+            "hints": {
+                "stop_type": "SL-M",
+                "stop_price": 90.0,
+                "tp_enabled": "true",
+                "take_profit": 110.0,
+                "trail_enabled": "true",
+                "trail_dist": 2.0,
+            }
+        }
+        alert = Alert(
+            user_id=user.id,
+            symbol="INFY",
+            exchange="NSE",
+            interval="1m",
+            action="BUY",
+            qty=1,
+            price=100.0,
+            platform="TRADINGVIEW",
+            source="TRADINGVIEW",
+            raw_payload=json.dumps(tv_payload),
+        )
+        db.add(alert)
+        db.commit()
+        db.refresh(alert)
+
+        spec = RiskSpec(
+            stop_loss=DistanceSpec(enabled=True, mode="PCT", value=1.0),
+            take_profit=DistanceSpec(enabled=False, mode="PCT", value=0.0),
+            trailing_stop=DistanceSpec(enabled=False, mode="PCT", value=0.0),
+            trailing_activation=DistanceSpec(enabled=False, mode="PCT", value=0.0),
+            exit_order_type="MARKET",
+        )
+        order = Order(
+            user_id=user.id,
+            alert_id=int(alert.id),
+            broker_name="zerodha",
+            symbol="INFY",
+            exchange="NSE",
+            side="BUY",
+            qty=1,
+            price=None,
+            order_type="MARKET",
+            product="MIS",
+            gtt=False,
+            status="EXECUTED",
+            mode="AUTO",
+            execution_target="LIVE",
+            simulated=False,
+            risk_spec_json=spec.to_json(),
+            is_exit=False,
+        )
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
+        mrp = ensure_managed_risk_for_executed_order(
+            db,
+            settings,
+            order=order,
+            filled_qty=1,
+            avg_price=100.0,
+        )
+        assert mrp is not None
+        db.commit()
+        db.refresh(mrp)
+
+        assert float(mrp.stop_distance or 0.0) == 10.0
+        assert float(getattr(mrp, "take_profit_distance") or 0.0) == 10.0
+        assert float(mrp.trail_distance or 0.0) == 2.0
