@@ -29,8 +29,8 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { DslHelpDialog } from '../components/DslHelpDialog'
 import { DslEditor } from '../components/DslEditor'
+import { DslExprHelpDrawer } from '../components/DslExprHelpDrawer'
 import type { AlertVariableDef } from '../services/alertsV3'
 import {
   ALERT_V3_METRICS,
@@ -249,6 +249,7 @@ export function ScreenerPage() {
     useState<ConditionRow[]>(DEFAULT_CONDITION_ROWS)
   const [conditionDsl, setConditionDsl] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const dslEditorRef = useRef<any | null>(null)
   const [evaluationCadence, setEvaluationCadence] = useState<string>('')
 
   // Saved strategy (optional)
@@ -510,6 +511,17 @@ export function ScreenerPage() {
       .filter((x) => x.length > 0)
     return Array.from(new Set([...vars, ...ALERT_V3_METRICS]))
   }, [effectiveVariables])
+
+  const insertIntoDslEditor = (text: string) => {
+    const editor = dslEditorRef.current
+    if (editor && typeof editor.trigger === 'function') {
+      editor.focus()
+      editor.trigger('dsl-expr-help', 'type', { text })
+      if (typeof editor.getValue === 'function') setConditionDsl(editor.getValue())
+      return
+    }
+    setConditionDsl((prev) => (prev ? `${prev}\n${text}` : text))
+  }
 
   useEffect(() => {
     let active = true
@@ -1873,6 +1885,9 @@ export function ScreenerPage() {
                     customIndicators={customIndicators}
                     height={160}
                     onCtrlEnter={() => void handleRun()}
+                    onEditorMount={(editor) => {
+                      dslEditorRef.current = editor
+                    }}
                   />
                   <Typography variant="caption" color="text.secondary">
                     Suggestions show as you type; press <code>Tab</code> to accept a snippet; press{' '}
@@ -2197,10 +2212,13 @@ export function ScreenerPage() {
         </DialogActions>
       </Dialog>
 
-      <DslHelpDialog
+      <DslExprHelpDrawer
         open={helpOpen}
         onClose={() => setHelpOpen(false)}
-        context="screener"
+        operands={operandOptions}
+        customIndicators={customIndicators}
+        onInsert={insertIntoDslEditor}
+        title="Screener DSL expression help"
       />
     </Box>
   )
