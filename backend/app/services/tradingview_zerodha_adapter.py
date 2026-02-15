@@ -56,17 +56,46 @@ def normalize_tradingview_payload_for_zerodha(
         fallback_product = "CNC"
     product = (payload.trade_details.product or fallback_product).upper()
 
+    def _as_float(v: object) -> float | None:
+        try:
+            if v is None:
+                return None
+            if isinstance(v, (int, float)):
+                return float(v)
+            if isinstance(v, str):
+                s = v.strip().replace(",", "")
+                if not s:
+                    return None
+                return float(s)
+        except Exception:
+            return None
+        return None
+
+    hints = payload.hints or {}
+    hints_order_type = str(hints.get("order_type") or "").strip().upper()
+
     # Derive order_type:
-    # - Legacy TradingView payloads: when a price is provided treat as LIMIT to
-    #   avoid accidental market orders at unfavourable prices.
-    # - Strategy v6 order-fills payloads commonly include ref_price for context;
-    #   treat those as MARKET unless an explicit LIMIT is provided elsewhere.
-    if str(getattr(payload, "payload_format", "") or "").strip().upper() in {
+    # - Prefer explicit hints.order_type (Strategy v6).
+    # - Otherwise:
+    #   - v6 order-fills commonly include ref_price for context; treat those as MARKET.
+    #   - legacy payloads: when a price is provided treat as LIMIT.
+    if hints_order_type in {"MARKET", "LIMIT"}:
+        order_type = hints_order_type
+    elif str(getattr(payload, "payload_format", "") or "").strip().upper() in {
         "TRADINGVIEW_META_SIGNAL_HINTS_V6",
     }:
         order_type = "MARKET"
     else:
         order_type = "LIMIT" if price is not None else "MARKET"
+
+    if order_type == "LIMIT":
+        limit_price = _as_float(hints.get("limit_price"))
+        # For v6 payloads, trade_details.price is typically ref_price; prefer limit_price.
+        px = limit_price if limit_price is not None and limit_price > 0 else price
+        if px is None or float(px) <= 0:
+            order_type = "MARKET"
+        else:
+            price = float(px)
 
     symbol_display = payload.symbol
     broker_exchange = payload.exchange or "NSE"

@@ -25,6 +25,7 @@ export type DistanceSpec = {
 
 export type RiskSpec = {
   stop_loss: DistanceSpec
+  take_profit: DistanceSpec
   trailing_stop: DistanceSpec
   trailing_activation: DistanceSpec
   exit_order_type: 'MARKET'

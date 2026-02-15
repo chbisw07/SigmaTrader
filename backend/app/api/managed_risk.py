@@ -66,6 +66,18 @@ def _to_read(
             order = db.get(Order, int(mrp.exit_order_id))
             if order is not None:
                 exit_status = order.status
+
+    tp_dist = getattr(mrp, "take_profit_distance", None)
+    tp_price = None
+    try:
+        if tp_dist is not None and float(tp_dist) > 0:
+            side_u = str(mrp.side or "").strip().upper()
+            entry_px = float(mrp.entry_price)
+            tp_price = (
+                entry_px + float(tp_dist) if side_u == "BUY" else entry_px - float(tp_dist)
+            )
+    except Exception:
+        tp_price = None
     return ManagedRiskPositionRead(
         id=mrp.id,
         user_id=mrp.user_id,
@@ -81,6 +93,8 @@ def _to_read(
         execution_target=mrp.execution_target,
         entry_price=mrp.entry_price,
         stop_distance=mrp.stop_distance,
+        take_profit_distance=float(tp_dist) if tp_dist is not None else None,
+        take_profit_price=float(tp_price) if tp_price is not None else None,
         trail_distance=mrp.trail_distance,
         activation_distance=mrp.activation_distance,
         current_stop=_current_stop(mrp),

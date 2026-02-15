@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -13,7 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token
 from app.core.market_hours import is_market_open_now
 from app.db.session import SessionLocal
-from app.models import BrokerConnection, ManagedRiskPosition, Order, Position, RiskProfile
+from app.models import Alert, BrokerConnection, ManagedRiskPosition, Order, Position, RiskProfile
 from app.schemas.managed_risk import DistanceSpec, RiskSpec
 from app.services.broker_instruments import resolve_broker_symbol_and_token
 from app.services.broker_secrets import get_broker_secret
@@ -41,6 +42,64 @@ def _split_symbol_exchange(symbol: str, exchange: str | None) -> tuple[str, str]
             exch = ex
         sym = ts
     return sym.strip().upper(), exch
+
+
+def _tv_as_float(v: object) -> float | None:
+    if v is None:
+        return None
+    try:
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            s = v.strip().replace(",", "")
+            if not s:
+                return None
+            return float(s)
+    except Exception:
+        return None
+    return None
+
+
+def _tv_as_boolish(v: object) -> bool:
+    if isinstance(v, bool):
+        return bool(v)
+    if v is None:
+        return False
+    s = str(v).strip().lower()
+    if s in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return False
+
+
+def _extract_tradingview_hints(db: Session, *, order: Order) -> dict[str, object] | None:
+    """Extract normalized TradingView hints from the linked Alert (if present)."""
+
+    if not getattr(order, "alert_id", None):
+        return None
+    try:
+        alert = db.get(Alert, int(order.alert_id))
+    except Exception:
+        alert = None
+    if alert is None:
+        return None
+    src = (getattr(alert, "source", None) or getattr(alert, "platform", None) or "").strip().upper()
+    if src != "TRADINGVIEW":
+        return None
+    raw = getattr(alert, "raw_payload", None)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    hints = parsed.get("hints")
+    if not isinstance(hints, dict):
+        return None
+    return hints  # type: ignore[return-value]
 
 
 def _atr(
@@ -446,6 +505,8 @@ def ensure_managed_risk_for_executed_order(
     if raw_order_spec is not None:
         if raw_order_spec.stop_loss.enabled:
             spec.stop_loss = raw_order_spec.stop_loss
+        if raw_order_spec.take_profit.enabled:
+            spec.take_profit = raw_order_spec.take_profit
         if raw_order_spec.trailing_stop.enabled:
             spec.trailing_stop = raw_order_spec.trailing_stop
         if raw_order_spec.trailing_activation.enabled:
@@ -471,6 +532,72 @@ def ensure_managed_risk_for_executed_order(
 
     symbol, exchange = _split_symbol_exchange(order.symbol, order.exchange)
 
+    # TradingView v6 can send absolute protective levels (stop/tp) and trail distance
+    # in the alert hints. Persisted order.risk_spec_json is created before the fill
+    # exists, so it may be based on ref_price; here we recompute distances from the
+    # actual fill to match industry-standard behavior.
+    tv_hints = _extract_tradingview_hints(db, order=order)
+    tv_explicit_sl = False
+    tv_explicit_trail = False
+    if tv_hints:
+        stop_price = _tv_as_float(tv_hints.get("stop_price"))
+        stop_type = str(tv_hints.get("stop_type") or "").strip().upper() or None
+        tp_enabled = _tv_as_boolish(tv_hints.get("tp_enabled"))
+        take_profit = _tv_as_float(tv_hints.get("take_profit"))
+        trail_enabled = _tv_as_boolish(tv_hints.get("trail_enabled"))
+        trail_dist = _tv_as_float(tv_hints.get("trail_dist"))
+
+        derived: dict[str, object] = {}
+        if stop_price is not None and float(stop_price) > 0:
+            sl_dist = abs(float(avg_price) - float(stop_price))
+            if sl_dist > 0:
+                spec.stop_loss = DistanceSpec(enabled=True, mode="ABS", value=float(sl_dist))
+                tv_explicit_sl = True
+                derived["stop_distance_abs"] = float(sl_dist)
+        if tp_enabled and take_profit is not None and float(take_profit) > 0:
+            tp_dist = abs(float(take_profit) - float(avg_price))
+            if tp_dist > 0:
+                spec.take_profit = DistanceSpec(enabled=True, mode="ABS", value=float(tp_dist))
+                derived["take_profit_distance_abs"] = float(tp_dist)
+        if trail_enabled and trail_dist is not None and float(trail_dist) > 0:
+            if spec.stop_loss.enabled:
+                spec.trailing_stop = DistanceSpec(enabled=True, mode="ABS", value=float(trail_dist))
+                # TradingView hints currently do not include a separate activation distance.
+                spec.trailing_activation = DistanceSpec(enabled=False, mode="ABS", value=0.0)
+                derived["trail_distance_abs"] = float(trail_dist)
+                tv_explicit_trail = True
+            else:
+                derived["trail_ignored_reason"] = "missing_stop_loss"
+
+        if derived:
+            try:
+                record_system_event(
+                    db,
+                    level="INFO",
+                    category="risk",
+                    message="TradingView protective exits resolved from fill",
+                    correlation_id="managed-risk",
+                    details={
+                        "order_id": int(order.id),
+                        "alert_id": int(order.alert_id) if order.alert_id is not None else None,
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "side": side,
+                        "product": product,
+                        "avg_fill": float(avg_price),
+                        "stop_type": stop_type,
+                        "stop_price": float(stop_price) if stop_price is not None else None,
+                        "tp_enabled": bool(tp_enabled),
+                        "take_profit": float(take_profit) if take_profit is not None else None,
+                        "trail_enabled": bool(trail_enabled),
+                        "trail_dist": float(trail_dist) if trail_dist is not None else None,
+                        "derived": derived,
+                        "execution_path": "SIGMA_MANAGED_EXITS",
+                    },
+                )
+            except Exception:
+                pass
+
     stop_dist = _distance_from_entry(
         db,
         settings,
@@ -492,7 +619,7 @@ def ensure_managed_risk_for_executed_order(
         else:
             return None
 
-    if stop_rules_enforced and risk_profile is not None:
+    if not tv_explicit_sl and stop_rules_enforced and risk_profile is not None:
         min_abs = float(avg_price) * float(getattr(risk_profile, "min_stop_distance_pct", 0.0) or 0.0) / 100.0
         max_abs = float(avg_price) * float(getattr(risk_profile, "max_stop_distance_pct", 0.0) or 0.0) / 100.0
         stop_dist = max(float(min_abs), min(float(stop_dist), float(max_abs)))
@@ -535,11 +662,20 @@ def ensure_managed_risk_for_executed_order(
         exchange=exchange,
         spec=spec.trailing_activation,
     )
+    tp_dist = _distance_from_entry(
+        db,
+        settings,
+        entry_price=float(avg_price),
+        symbol=symbol,
+        exchange=exchange,
+        spec=spec.take_profit,
+    )
     if spec.trailing_stop.enabled and (trail_dist is None or float(trail_dist) <= 0):
         trail_dist = float(stop_dist)
 
     if (
-        stop_rules_enforced
+        (not tv_explicit_trail)
+        and stop_rules_enforced
         and risk_profile is not None
         and spec.trailing_stop.enabled
         and trail_dist is not None
@@ -576,7 +712,8 @@ def ensure_managed_risk_for_executed_order(
             if act_atr > 0 and base_atr > 0:
                 act_dist = float(stop_dist) * (act_atr / base_atr)
     if (
-        stop_rules_enforced
+        (not tv_explicit_trail)
+        and stop_rules_enforced
         and risk_profile is not None
         and base is not None
         and base.trailing_activation.enabled
@@ -713,6 +850,7 @@ def ensure_managed_risk_for_executed_order(
         risk_spec_json=spec.to_json(),
         entry_price=float(avg_price),
         stop_distance=float(stop_dist),
+        take_profit_distance=float(tp_dist) if tp_dist is not None else None,
         trail_distance=float(trail_dist) if trail_dist else None,
         activation_distance=float(act_dist) if act_dist else None,
         best_favorable_price=float(best),
@@ -1005,6 +1143,25 @@ def process_managed_risk_once() -> int:
                 processed += 1
                 continue
 
+            tp_dist = float(getattr(mrp, "take_profit_distance", 0.0) or 0.0)
+            tp_triggered = False
+            if tp_dist > 0:
+                try:
+                    side_u = str(mrp.side or "").strip().upper()
+                    entry_px = float(mrp.entry_price)
+                    target = (
+                        entry_px + float(tp_dist)
+                        if side_u == "BUY"
+                        else entry_px - float(tp_dist)
+                    )
+                    ltp_f = float(ltp)
+                    if side_u == "BUY":
+                        tp_triggered = ltp_f >= float(target)
+                    elif side_u == "SELL":
+                        tp_triggered = ltp_f <= float(target)
+                except Exception:
+                    tp_triggered = False
+
             trail_distance = float(mrp.trail_distance) if mrp.trail_distance else None
             activation_distance = (
                 float(mrp.activation_distance) if mrp.activation_distance else None
@@ -1032,7 +1189,9 @@ def process_managed_risk_once() -> int:
             db.add(mrp)
             db.commit()
 
-            if not update.triggered or not update.exit_reason:
+            exit_triggered = bool(tp_triggered or update.triggered)
+            exit_reason = "TP" if tp_triggered else update.exit_reason
+            if not exit_triggered or not exit_reason:
                 processed += 1
                 continue
 
@@ -1047,7 +1206,7 @@ def process_managed_risk_once() -> int:
                 .update(
                     {
                         ManagedRiskPosition.status: "EXITING",
-                        ManagedRiskPosition.exit_reason: update.exit_reason,
+                        ManagedRiskPosition.exit_reason: exit_reason,
                         ManagedRiskPosition.updated_at: now,
                         ManagedRiskPosition.last_ltp: float(ltp),
                     },
@@ -1070,7 +1229,7 @@ def process_managed_risk_once() -> int:
                     exit_order = _create_exit_order(
                         db2,
                         mrp=mrp2,
-                        exit_reason=update.exit_reason,
+                        exit_reason=exit_reason,
                     )
                     db2.commit()
                 except Exception:

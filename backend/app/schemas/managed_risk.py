@@ -65,6 +65,7 @@ class DistanceSpec(BaseModel):
 
 class RiskSpec(BaseModel):
     stop_loss: DistanceSpec = Field(default_factory=DistanceSpec)
+    take_profit: DistanceSpec = Field(default_factory=DistanceSpec)
     trailing_stop: DistanceSpec = Field(default_factory=DistanceSpec)
     trailing_activation: DistanceSpec = Field(default_factory=DistanceSpec)
     exit_order_type: ExitOrderType = "MARKET"
@@ -91,6 +92,7 @@ class RiskSpec(BaseModel):
         @model_validator(mode="after")
         def _validate_consistency(self) -> "RiskSpec":
             sl = self.stop_loss
+            tp = self.take_profit
             ts = self.trailing_stop
             act = self.trailing_activation
 
@@ -102,6 +104,8 @@ class RiskSpec(BaseModel):
                 )
             if sl.enabled and sl.value <= 0:
                 raise ValueError("stop_loss.value must be > 0 when enabled")
+            if tp.enabled and tp.value <= 0:
+                raise ValueError("take_profit.value must be > 0 when enabled")
             if ts.enabled and ts.value <= 0:
                 raise ValueError("trailing_stop.value must be > 0 when enabled")
             if act.enabled and act.value <= 0:
@@ -113,6 +117,7 @@ class RiskSpec(BaseModel):
         @model_validator(mode="after")
         def _validate_consistency(cls, values):  # type: ignore[no-redef]
             sl = values.get("stop_loss")
+            tp = values.get("take_profit")
             ts = values.get("trailing_stop")
             act = values.get("trailing_activation")
 
@@ -124,6 +129,8 @@ class RiskSpec(BaseModel):
                 )
             if sl and getattr(sl, "enabled", False) and float(sl.value or 0) <= 0:
                 raise ValueError("stop_loss.value must be > 0 when enabled")
+            if tp and getattr(tp, "enabled", False) and float(tp.value or 0) <= 0:
+                raise ValueError("take_profit.value must be > 0 when enabled")
             if ts and getattr(ts, "enabled", False) and float(ts.value or 0) <= 0:
                 raise ValueError("trailing_stop.value must be > 0 when enabled")
             if act and getattr(act, "enabled", False) and float(act.value or 0) <= 0:
@@ -162,6 +169,8 @@ class ManagedRiskPositionRead(BaseModel):
     execution_target: str
     entry_price: float
     stop_distance: float | None
+    take_profit_distance: float | None
+    take_profit_price: float | None
     trail_distance: float | None
     activation_distance: float | None
     current_stop: float | None
