@@ -22,7 +22,7 @@ import TableRow from '@mui/material/TableRow'
 import TextField from '@mui/material/TextField'
 import Tooltip from '@mui/material/Tooltip'
 import Typography from '@mui/material/Typography'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   buildDslCatalog,
@@ -33,10 +33,40 @@ import {
   type UserDslCatalogItem,
 } from '../services/dslCatalog'
 
+const DSL_HELP_DRAWER_WIDTH_STORAGE_KEY = 'st_dsl_help_drawer_width_v1'
+const DEFAULT_DRAWER_WIDTH = 560
+const MIN_DRAWER_WIDTH = 420
+
 type CustomIndicator = {
   name: string
   params?: string[]
   description?: string | null
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n))
+}
+
+function loadDrawerWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_DRAWER_WIDTH
+  try {
+    const raw = window.localStorage.getItem(DSL_HELP_DRAWER_WIDTH_STORAGE_KEY)
+    const n = raw ? Number(raw) : Number.NaN
+    if (!Number.isFinite(n)) return DEFAULT_DRAWER_WIDTH
+    const max = Math.max(MIN_DRAWER_WIDTH, Math.floor(window.innerWidth * 0.9))
+    return clamp(Math.floor(n), MIN_DRAWER_WIDTH, max)
+  } catch {
+    return DEFAULT_DRAWER_WIDTH
+  }
+}
+
+function saveDrawerWidth(width: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(DSL_HELP_DRAWER_WIDTH_STORAGE_KEY, String(width))
+  } catch {
+    // ignore
+  }
 }
 
 export function DslExprHelpDrawer({
@@ -57,6 +87,8 @@ export function DslExprHelpDrawer({
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<DslCatalogKind | 'all'>('all')
   const [userItems, setUserItems] = useState<UserDslCatalogItem[]>([])
+  const [drawerWidth, setDrawerWidth] = useState<number>(() => loadDrawerWidth())
+  const resizingRef = useRef(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editMode, setEditMode] = useState<'add' | 'edit'>('add')
   const [editExpr, setEditExpr] = useState('')
@@ -67,6 +99,16 @@ export function DslExprHelpDrawer({
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importError, setImportError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setDrawerWidth(loadDrawerWidth())
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    saveDrawerWidth(drawerWidth)
+  }, [drawerWidth, open])
 
   useEffect(() => {
     if (!open) return
@@ -224,6 +266,42 @@ export function DslExprHelpDrawer({
     }
   }
 
+  const startResize = (e: React.MouseEvent) => {
+    if (typeof window === 'undefined') return
+    // Disable resizing on very small viewports (drawer is full width).
+    if (window.innerWidth < 600) return
+
+    e.preventDefault()
+    resizingRef.current = true
+    document.body.style.userSelect = 'none'
+
+    const onMove = (evt: MouseEvent) => {
+      if (!resizingRef.current) return
+      const max = Math.max(MIN_DRAWER_WIDTH, Math.floor(window.innerWidth * 0.9))
+      // Drawer is anchored right; width is distance from cursor to right edge.
+      const next = clamp(
+        Math.floor(window.innerWidth - evt.clientX),
+        MIN_DRAWER_WIDTH,
+        max,
+      )
+      setDrawerWidth(next)
+    }
+
+    const onUp = () => {
+      resizingRef.current = false
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const resetDrawerWidth = () => {
+    setDrawerWidth(DEFAULT_DRAWER_WIDTH)
+  }
+
   return (
     <Drawer
       anchor="right"
@@ -231,12 +309,54 @@ export function DslExprHelpDrawer({
       onClose={onClose}
       PaperProps={{
         sx: {
-          width: { xs: '100vw', sm: 560 },
+          width: { xs: '100vw', sm: drawerWidth },
           maxWidth: '100vw',
           p: 2,
+          position: 'relative',
         },
       }}
     >
+      <Tooltip title="Drag to resize (double-click to reset)">
+        <Box
+          role="separator"
+          aria-label="Resize drawer"
+          onMouseDown={startResize}
+          onDoubleClick={resetDrawerWidth}
+          sx={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 10,
+            cursor: 'col-resize',
+            zIndex: 2,
+            display: { xs: 'none', sm: 'block' },
+            '&:hover': {
+              backgroundColor: 'action.hover',
+            },
+            borderRight: '1px solid',
+            borderColor: 'divider',
+          }}
+        >
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 2,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 0.5,
+              opacity: 0.6,
+            }}
+          >
+            <Box sx={{ width: 4, height: 4, borderRadius: 99, bgcolor: 'text.disabled' }} />
+            <Box sx={{ width: 4, height: 4, borderRadius: 99, bgcolor: 'text.disabled' }} />
+            <Box sx={{ width: 4, height: 4, borderRadius: 99, bgcolor: 'text.disabled' }} />
+          </Box>
+        </Box>
+      </Tooltip>
+
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
           <Typography variant="h6">{title}</Typography>
@@ -319,7 +439,7 @@ export function DslExprHelpDrawer({
           <TableBody>
             {items.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={3}>
+                <TableCell colSpan={4}>
                   <Typography variant="body2" color="text.secondary">
                     No matches.
                   </Typography>
