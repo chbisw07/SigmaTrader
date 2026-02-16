@@ -27,11 +27,11 @@ import {
 } from '@mui/x-data-grid'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { DslHelpDialog } from '../components/DslHelpDialog'
 import { DslEditor } from '../components/DslEditor'
+import { DslExprHelpDrawer } from '../components/DslExprHelpDrawer'
 import { fetchBrokers, type BrokerInfo } from '../services/brokers'
 import { listGroups, type Group } from '../services/groups'
 import { searchMarketSymbols, type MarketSymbol } from '../services/marketData'
@@ -66,6 +66,7 @@ import {
 import { SignalStrategiesTab } from './SignalStrategiesTab'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
+import { appendDslText, insertIntoInputAtCursor, insertIntoMonacoEditor } from '../utils/dslInsert'
 
 function useFormatDateTime() {
   const { displayTimeZone } = useTimeSettings()
@@ -450,7 +451,12 @@ function AlertV3EditorDialog({
     rhs: string
   }
 
-  const [helpOpen, setHelpOpen] = useState(false)
+  const [exprHelpOpen, setExprHelpOpen] = useState(false)
+  const conditionDslEditorRef = useRef<any>(null)
+  const varDslInputRefs = useRef<Record<number, HTMLInputElement | HTMLTextAreaElement | null>>({})
+  const exprHelpTargetRef = useRef<{ kind: 'condition' } | { kind: 'var_dsl'; idx: number }>({
+    kind: 'condition',
+  })
   const [name, setName] = useState('')
   const [brokerName, setBrokerName] = useState<string>('zerodha')
   const [targetKind, setTargetKind] = useState<'SYMBOL' | 'HOLDINGS' | 'GROUP'>(
@@ -843,6 +849,43 @@ function AlertV3EditorDialog({
 	    return Array.from(new Set([...vars, ...ALERT_V3_METRICS]))
 	  }, [variables])
 
+    const openExprHelpForCondition = () => {
+      exprHelpTargetRef.current = { kind: 'condition' }
+      setExprHelpOpen(true)
+    }
+
+    const openExprHelpForVarDsl = (idx: number) => {
+      exprHelpTargetRef.current = { kind: 'var_dsl', idx }
+      setExprHelpOpen(true)
+    }
+
+    const insertFromExprHelp = (text: string) => {
+      const target = exprHelpTargetRef.current
+      if (target.kind === 'condition') {
+        const updated = insertIntoMonacoEditor(conditionDslEditorRef.current, text)
+        if (updated != null) {
+          setConditionDsl(updated)
+          return
+        }
+        setConditionDsl((prev) => appendDslText(prev, text))
+        return
+      }
+
+      const idx = target.idx
+      const el = varDslInputRefs.current[idx] ?? null
+      const inserted = insertIntoInputAtCursor(el, text)
+      setVariables((prev) =>
+        prev.map((v, i) =>
+          i === idx
+            ? {
+                ...v,
+                dsl: inserted ?? appendDslText(String(v.dsl ?? ''), text),
+              }
+            : v,
+        ),
+      )
+    }
+
     const activeStrategyVersion = useMemo(() => {
       if (selectedStrategyVersionId == null) return null
       return strategyVersions.find((v) => v.id === selectedStrategyVersionId) ?? null
@@ -1003,15 +1046,15 @@ function AlertV3EditorDialog({
   return (
     <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="md" fullWidth>
       <DialogTitle
-        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-      >
-        <span>{alert ? 'Edit alert' : 'Create alert'}</span>
-        <Tooltip title="Help: DSL syntax, functions, metrics">
-          <IconButton size="small" onClick={() => setHelpOpen(true)}>
-            <HelpOutlineIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      </DialogTitle>
+	        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+	      >
+	        <span>{alert ? 'Edit alert' : 'Create alert'}</span>
+	        <Tooltip title="DSL expression help (functions/metrics/keywords)">
+	          <IconButton size="small" onClick={openExprHelpForCondition}>
+	            <HelpOutlineIcon fontSize="small" />
+	          </IconButton>
+	        </Tooltip>
+	      </DialogTitle>
       <DialogContent sx={{ pt: 2 }}>
         <TextField
           label="Name"
@@ -1407,13 +1450,35 @@ function AlertV3EditorDialog({
                 <MenuItem value="CUSTOM">Custom indicator</MenuItem>
               </TextField>
               {variableKindOf(v) === 'DSL' && (
-                <TextField
-                  label="DSL"
-                  size="small"
-                  value={v.dsl ?? ''}
-                  onChange={(e) => updateVar(idx, { ...v, dsl: e.target.value })}
-                  sx={{ flex: 1, minWidth: 260 }}
-                />
+                <Box
+                  sx={{
+                    display: 'flex',
+                    gap: 1,
+                    flex: 1,
+                    minWidth: 260,
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  <TextField
+                    label="DSL"
+                    size="small"
+                    value={v.dsl ?? ''}
+                    onChange={(e) => updateVar(idx, { ...v, dsl: e.target.value })}
+                    sx={{ flex: 1, minWidth: 260 }}
+                    inputRef={(el) => {
+                      varDslInputRefs.current[idx] = el
+                    }}
+                  />
+                  <Tooltip title="Open DSL expression help">
+                    <IconButton
+                      size="small"
+                      onClick={() => openExprHelpForVarDsl(idx)}
+                      sx={{ mt: 0.5 }}
+                    >
+                      <HelpOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
               )}
               {variableKindOf(v) === 'METRIC' && (
                 <TextField
@@ -1989,25 +2054,34 @@ function AlertV3EditorDialog({
               </Box>
             )}
 
-            {conditionTab === 1 && (
-              <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                  Condition DSL
-                </Typography>
-                <DslEditor
-                  languageId="st-dsl-alerts-condition"
-                  value={conditionDsl}
-                  onChange={setConditionDsl}
-                  operands={operandOptions}
-                  customIndicators={customIndicators}
-                  height={160}
-                />
-                <Typography variant="caption" color="text.secondary">
-                  Example: <code>RSI_1H_14 &lt; 30 AND TODAY_PNL_PCT &gt; 5</code> — press{' '}
-                  <code>Tab</code> to accept a suggestion/snippet.
-                </Typography>
-              </Box>
-            )}
+	            {conditionTab === 1 && (
+	              <Box sx={{ mb: 2 }}>
+	                <Stack direction="row" spacing={1} sx={{ mb: 0.5 }} alignItems="center">
+	                  <Typography variant="subtitle2">Condition DSL</Typography>
+	                  <Box sx={{ flex: 1 }} />
+	                  <Tooltip title="Open DSL expression help">
+	                    <IconButton size="small" onClick={openExprHelpForCondition}>
+	                      <HelpOutlineIcon fontSize="small" />
+	                    </IconButton>
+	                  </Tooltip>
+	                </Stack>
+	                <DslEditor
+	                  languageId="st-dsl-alerts-condition"
+	                  value={conditionDsl}
+	                  onChange={setConditionDsl}
+	                  operands={operandOptions}
+	                  customIndicators={customIndicators}
+	                  height={160}
+	                  onEditorMount={(editor) => {
+	                    conditionDslEditorRef.current = editor
+	                  }}
+	                />
+	                <Typography variant="caption" color="text.secondary">
+	                  Example: <code>RSI_1H_14 &lt; 30 AND TODAY_PNL_PCT &gt; 5</code> — press{' '}
+	                  <code>Tab</code> to accept a suggestion/snippet.
+	                </Typography>
+	              </Box>
+	            )}
 
             <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 1 }}>
               <TextField
@@ -2328,7 +2402,14 @@ function AlertV3EditorDialog({
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </DialogActions>
-      <DslHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} context="alerts" />
+      <DslExprHelpDrawer
+        open={exprHelpOpen}
+        onClose={() => setExprHelpOpen(false)}
+        operands={operandOptions}
+        customIndicators={customIndicators}
+        onInsert={insertFromExprHelp}
+        title="Alert DSL expression help"
+      />
     </Dialog>
   )
 }

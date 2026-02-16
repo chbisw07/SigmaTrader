@@ -24,9 +24,10 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import RefreshIcon from '@mui/icons-material/Refresh'
 
-import { DslHelpDialog } from '../components/DslHelpDialog'
+import { DslExprHelpDrawer } from '../components/DslExprHelpDrawer'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
+import { appendDslText, insertIntoMonacoEditor } from '../utils/dslInsert'
 import { listGroupMembers, listGroups, type Group } from '../services/groups'
 import { fetchHoldings, type Holding } from '../services/positions'
 import { fetchBrokerCapabilities } from '../services/brokerRuntime'
@@ -569,10 +570,11 @@ export function DashboardPage() {
 	    }
 	    return {}
 	  })
-	  const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
-	  const [signalLoading, setSignalLoading] = useState(false)
-	  const [signalError, setSignalError] = useState<string | null>(null)
-	  const [dslHelpOpen, setDslHelpOpen] = useState(false)
+		  const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
+		  const [signalLoading, setSignalLoading] = useState(false)
+		  const [signalError, setSignalError] = useState<string | null>(null)
+		  const [exprHelpOpen, setExprHelpOpen] = useState(false)
+      const signalDslEditorRef = useRef<any>(null)
 
     // Saved strategy (optional) for dashboard signals/overlays
     const [strategyDialogOpen, setStrategyDialogOpen] = useState(false)
@@ -590,6 +592,32 @@ export function DashboardPage() {
   const [customIndicators, setCustomIndicators] = useState<CustomIndicator[]>([])
   const [customIndicatorsLoading, setCustomIndicatorsLoading] = useState(false)
   const [customIndicatorsError, setCustomIndicatorsError] = useState<string | null>(null)
+
+  const signalOperandOptions = useMemo(() => {
+    return [
+      ...(indicatorRows
+        .map((r) => String(r.name || '').trim())
+        .filter(Boolean)),
+      'open',
+      'high',
+      'low',
+      'close',
+      'volume',
+    ]
+  }, [indicatorRows])
+
+  const openExprHelpForSignals = () => {
+    setExprHelpOpen(true)
+  }
+
+  const insertFromExprHelp = (text: string) => {
+    const updated = insertIntoMonacoEditor(signalDslEditorRef.current, text)
+    if (updated != null) {
+      setSignalDsl(updated)
+      return
+    }
+    setSignalDsl((prev) => appendDslText(prev, text))
+  }
 
   useEffect(() => {
     let active = true
@@ -2057,13 +2085,13 @@ export function DashboardPage() {
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Typography variant="subtitle2">DSL signals</Typography>
                   <Box sx={{ flex: 1 }} />
-                  <Tooltip title="Help: DSL syntax, functions, metrics">
+                  <Tooltip title="DSL expression help (functions/metrics/keywords)">
                     <IconButton
                       size="small"
                       onClick={(e) => {
                         e.preventDefault()
                         e.stopPropagation()
-                        setDslHelpOpen(true)
+                        openExprHelpForSignals()
                       }}
                     >
                       <HelpOutlineIcon fontSize="small" />
@@ -2077,16 +2105,7 @@ export function DashboardPage() {
                       value={signalDsl}
                       onChange={(v) => setSignalDsl(v)}
                       height={140}
-                      operands={[
-                        ...(indicatorRows
-                          .map((r) => String(r.name || '').trim())
-                          .filter(Boolean)),
-                        'open',
-                        'high',
-                        'low',
-                        'close',
-                        'volume',
-                      ]}
+                      operands={signalOperandOptions}
                       customIndicators={customIndicators.map((ci) => ({
                         id: ci.id,
                         name: ci.name,
@@ -2094,6 +2113,9 @@ export function DashboardPage() {
                         description: ci.description || null,
                       }))}
                       onCtrlEnter={() => void runSignals()}
+                      onEditorMount={(editor) => {
+                        signalDslEditorRef.current = editor
+                      }}
                     />
 	                    <Stack direction="row" spacing={1} alignItems="center">
 	                      <Button
@@ -2336,10 +2358,13 @@ export function DashboardPage() {
         </DialogActions>
       </Dialog>
 
-      <DslHelpDialog
-        open={dslHelpOpen}
-        onClose={() => setDslHelpOpen(false)}
-        context="dashboard"
+      <DslExprHelpDrawer
+        open={exprHelpOpen}
+        onClose={() => setExprHelpOpen(false)}
+        operands={signalOperandOptions}
+        customIndicators={customIndicators}
+        onInsert={insertFromExprHelp}
+        title="Dashboard DSL expression help"
       />
     </Box>
   )

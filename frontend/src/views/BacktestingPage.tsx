@@ -31,8 +31,10 @@ import useMediaQuery from '@mui/material/useMediaQuery'
 import { useNavigate } from 'react-router-dom'
 
 import { DslEditor } from '../components/DslEditor'
+import { DslExprHelpDrawer } from '../components/DslExprHelpDrawer'
 import { KeyValueJsonDialog } from '../components/KeyValueJsonDialog'
 import { MarkdownLite } from '../components/MarkdownLite'
+import { appendDslText, insertIntoMonacoEditor } from '../utils/dslInsert'
 import {
   PriceChart,
   type PriceCandle,
@@ -300,6 +302,21 @@ export function BacktestingPage() {
 
   const [helpOpen, setHelpOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [exprHelpOpen, setExprHelpOpen] = useState(false)
+  const [exprHelpTitle, setExprHelpTitle] = useState('DSL expression help')
+  const exprHelpTargetRef = useRef<
+    'PFS_ENTRY' | 'PFS_EXIT' | 'STRATEGY_ENTRY' | 'STRATEGY_EXIT'
+  >('STRATEGY_ENTRY')
+  const dslEditorRefs = useRef<Record<string, any>>({})
+
+  const openExprHelp = (
+    target: 'PFS_ENTRY' | 'PFS_EXIT' | 'STRATEGY_ENTRY' | 'STRATEGY_EXIT',
+    title: string,
+  ) => {
+    exprHelpTargetRef.current = target
+    setExprHelpTitle(title)
+    setExprHelpOpen(true)
+  }
 
   const [inputsPanelWidth, setInputsPanelWidth] = useState<number>(() => {
     try {
@@ -454,6 +471,35 @@ export function BacktestingPage() {
   const [portfolioStrategyDslTab, setPortfolioStrategyDslTab] = useState<
     'ENTRY' | 'EXIT'
   >('ENTRY')
+
+  const insertFromExprHelp = (text: string) => {
+    const target = exprHelpTargetRef.current
+    const editor = dslEditorRefs.current[target] ?? null
+    const updated = insertIntoMonacoEditor(editor, text)
+
+    const fallback = (setter: (fn: (prev: string) => string) => void) => {
+      setter((prev) => appendDslText(prev, text))
+    }
+
+    if (target === 'PFS_ENTRY') {
+      if (updated != null) setPortfolioStrategyEntryDsl(updated)
+      else fallback(setPortfolioStrategyEntryDsl)
+      return
+    }
+    if (target === 'PFS_EXIT') {
+      if (updated != null) setPortfolioStrategyExitDsl(updated)
+      else fallback(setPortfolioStrategyExitDsl)
+      return
+    }
+    if (target === 'STRATEGY_ENTRY') {
+      if (updated != null) setStrategyEntryDsl(updated)
+      else fallback(setStrategyEntryDsl)
+      return
+    }
+    if (updated != null) setStrategyExitDsl(updated)
+    else fallback(setStrategyExitDsl)
+  }
+
   const [portfolioStrategyProduct, setPortfolioStrategyProduct] =
     useState<ProductType>('CNC')
   const [portfolioStrategyDirection, setPortfolioStrategyDirection] =
@@ -3542,53 +3588,83 @@ export function BacktestingPage() {
                       <Tab value="EXIT" label="Exit DSL" />
                     </Tabs>
                     <Box sx={{ mt: 1 }}>
-                      {portfolioStrategyDslTab === 'ENTRY' ? (
-                        <>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ display: 'block', mb: 0.5 }}
-                          >
-                            Entry DSL (evaluate at close)
-                          </Typography>
-                          <DslEditor
-                            languageId="st-dsl-backtest-portfolio-strategy-entry"
-                            value={portfolioStrategyEntryDsl}
-                            onChange={setPortfolioStrategyEntryDsl}
-                            customIndicators={customIndicators}
-                            height={96}
-                            fontSize={11}
-                            paddingY={6}
-                            onCtrlEnter={() => void handleRun()}
-                          />
-                          <Typography variant="caption" color="text.secondary">
-                            Example: <code>RSI(14) &lt; 30</code>
-                          </Typography>
-                        </>
-                      ) : (
-                        <>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ display: 'block', mb: 0.5 }}
-                          >
-                            Exit DSL (evaluate at close)
-                          </Typography>
-                          <DslEditor
-                            languageId="st-dsl-backtest-portfolio-strategy-exit"
-                            value={portfolioStrategyExitDsl}
-                            onChange={setPortfolioStrategyExitDsl}
-                            customIndicators={customIndicators}
-                            height={96}
-                            fontSize={11}
-                            paddingY={6}
-                            onCtrlEnter={() => void handleRun()}
-                          />
-                          <Typography variant="caption" color="text.secondary">
-                            Example: <code>RSI(14) &gt; 70</code>
-                          </Typography>
-                        </>
-                      )}
+	                      {portfolioStrategyDslTab === 'ENTRY' ? (
+	                        <>
+	                          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+	                            <Typography variant="caption" color="text.secondary">
+	                              Entry DSL (evaluate at close)
+	                            </Typography>
+	                            <Box sx={{ flex: 1 }} />
+	                            <Tooltip title="Open DSL expression help">
+	                              <IconButton
+	                                size="small"
+	                                onClick={() =>
+	                                  openExprHelp(
+	                                    'PFS_ENTRY',
+	                                    'Portfolio strategy entry DSL help',
+	                                  )
+	                                }
+	                              >
+	                                <HelpOutlineIcon fontSize="small" />
+	                              </IconButton>
+	                            </Tooltip>
+	                          </Stack>
+	                          <DslEditor
+	                            languageId="st-dsl-backtest-portfolio-strategy-entry"
+	                            value={portfolioStrategyEntryDsl}
+	                            onChange={setPortfolioStrategyEntryDsl}
+	                            customIndicators={customIndicators}
+	                            height={96}
+	                            fontSize={11}
+	                            paddingY={6}
+	                            onCtrlEnter={() => void handleRun()}
+	                            onEditorMount={(editor) => {
+	                              dslEditorRefs.current.PFS_ENTRY = editor
+	                            }}
+	                          />
+	                          <Typography variant="caption" color="text.secondary">
+	                            Example: <code>RSI(14) &lt; 30</code>
+	                          </Typography>
+	                        </>
+	                      ) : (
+	                        <>
+	                          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+	                            <Typography variant="caption" color="text.secondary">
+	                              Exit DSL (evaluate at close)
+	                            </Typography>
+	                            <Box sx={{ flex: 1 }} />
+	                            <Tooltip title="Open DSL expression help">
+	                              <IconButton
+	                                size="small"
+	                                onClick={() =>
+	                                  openExprHelp(
+	                                    'PFS_EXIT',
+	                                    'Portfolio strategy exit DSL help',
+	                                  )
+	                                }
+	                              >
+	                                <HelpOutlineIcon fontSize="small" />
+	                              </IconButton>
+	                            </Tooltip>
+	                          </Stack>
+	                          <DslEditor
+	                            languageId="st-dsl-backtest-portfolio-strategy-exit"
+	                            value={portfolioStrategyExitDsl}
+	                            onChange={setPortfolioStrategyExitDsl}
+	                            customIndicators={customIndicators}
+	                            height={96}
+	                            fontSize={11}
+	                            paddingY={6}
+	                            onCtrlEnter={() => void handleRun()}
+	                            onEditorMount={(editor) => {
+	                              dslEditorRefs.current.PFS_EXIT = editor
+	                            }}
+	                          />
+	                          <Typography variant="caption" color="text.secondary">
+	                            Example: <code>RSI(14) &gt; 70</code>
+	                          </Typography>
+	                        </>
+	                      )}
                     </Box>
                   </Box>
 
@@ -4045,53 +4121,77 @@ export function BacktestingPage() {
                       <Tab value="EXIT" label="Exit DSL" />
                     </Tabs>
                     <Box sx={{ mt: 1 }}>
-                      {strategyDslTab === 'ENTRY' ? (
-                        <>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ display: 'block', mb: 0.5 }}
-                          >
-                            Entry DSL (evaluate at close)
-                          </Typography>
-                          <DslEditor
-                            languageId="st-dsl-backtest-strategy-entry"
-                            value={strategyEntryDsl}
-                            onChange={setStrategyEntryDsl}
-                            customIndicators={customIndicators}
-                            height={96}
-                            fontSize={11}
-                            paddingY={6}
-                            onCtrlEnter={() => void handleRun()}
-                          />
-                          <Typography variant="caption" color="text.secondary">
-                            Example: <code>RSI(14) &lt; 30</code>
-                          </Typography>
-                        </>
-                      ) : (
-                        <>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ display: 'block', mb: 0.5 }}
-                          >
-                            Exit DSL (evaluate at close)
-                          </Typography>
-                          <DslEditor
-                            languageId="st-dsl-backtest-strategy-exit"
-                            value={strategyExitDsl}
-                            onChange={setStrategyExitDsl}
-                            customIndicators={customIndicators}
-                            height={96}
-                            fontSize={11}
-                            paddingY={6}
-                            onCtrlEnter={() => void handleRun()}
-                          />
-                          <Typography variant="caption" color="text.secondary">
-                            Example: <code>RSI(14) &gt; 70</code>
-                          </Typography>
-                        </>
-                      )}
+	                      {strategyDslTab === 'ENTRY' ? (
+	                        <>
+	                          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+	                            <Typography variant="caption" color="text.secondary">
+	                              Entry DSL (evaluate at close)
+	                            </Typography>
+	                            <Box sx={{ flex: 1 }} />
+	                            <Tooltip title="Open DSL expression help">
+	                              <IconButton
+	                                size="small"
+	                                onClick={() =>
+	                                  openExprHelp('STRATEGY_ENTRY', 'Strategy entry DSL help')
+	                                }
+	                              >
+	                                <HelpOutlineIcon fontSize="small" />
+	                              </IconButton>
+	                            </Tooltip>
+	                          </Stack>
+	                          <DslEditor
+	                            languageId="st-dsl-backtest-strategy-entry"
+	                            value={strategyEntryDsl}
+	                            onChange={setStrategyEntryDsl}
+	                            customIndicators={customIndicators}
+	                            height={96}
+	                            fontSize={11}
+	                            paddingY={6}
+	                            onCtrlEnter={() => void handleRun()}
+	                            onEditorMount={(editor) => {
+	                              dslEditorRefs.current.STRATEGY_ENTRY = editor
+	                            }}
+	                          />
+	                          <Typography variant="caption" color="text.secondary">
+	                            Example: <code>RSI(14) &lt; 30</code>
+	                          </Typography>
+	                        </>
+	                      ) : (
+	                        <>
+	                          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+	                            <Typography variant="caption" color="text.secondary">
+	                              Exit DSL (evaluate at close)
+	                            </Typography>
+	                            <Box sx={{ flex: 1 }} />
+	                            <Tooltip title="Open DSL expression help">
+	                              <IconButton
+	                                size="small"
+	                                onClick={() =>
+	                                  openExprHelp('STRATEGY_EXIT', 'Strategy exit DSL help')
+	                                }
+	                              >
+	                                <HelpOutlineIcon fontSize="small" />
+	                              </IconButton>
+	                            </Tooltip>
+	                          </Stack>
+	                          <DslEditor
+	                            languageId="st-dsl-backtest-strategy-exit"
+	                            value={strategyExitDsl}
+	                            onChange={setStrategyExitDsl}
+	                            customIndicators={customIndicators}
+	                            height={96}
+	                            fontSize={11}
+	                            paddingY={6}
+	                            onCtrlEnter={() => void handleRun()}
+	                            onEditorMount={(editor) => {
+	                              dslEditorRefs.current.STRATEGY_EXIT = editor
+	                            }}
+	                          />
+	                          <Typography variant="caption" color="text.secondary">
+	                            Example: <code>RSI(14) &gt; 70</code>
+	                          </Typography>
+	                        </>
+	                      )}
                     </Box>
                   </Box>
 
@@ -4573,6 +4673,15 @@ export function BacktestingPage() {
           <Button onClick={() => setHelpOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      <DslExprHelpDrawer
+        open={exprHelpOpen}
+        onClose={() => setExprHelpOpen(false)}
+        customIndicators={customIndicators}
+        operands={[]}
+        onInsert={insertFromExprHelp}
+        title={exprHelpTitle}
+      />
 
       <Dialog
         open={advancedOpen}
