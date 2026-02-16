@@ -181,6 +181,8 @@ export function DslHelpDialog({
                 <br />
                 - <code>ATR(len, tf)</code>
                 <br />
+                - <code>ADX(len, tf)</code>
+                <br />
                 - <code>RET(series, tf)</code> (percent return over the latest completed bar)
                 <br />
                 - <code>ROC(series, len)</code> (percent change over N bars)
@@ -188,6 +190,12 @@ export function DslHelpDialog({
                 - <code>OBV(price, volume, tf?)</code>
                 <br />
                 - <code>VWAP(price, volume, tf?)</code> (use <code>hlc3</code> as a common price input)
+                <br />
+                - <code>MACD(series, fast, slow, signal, tf?)</code>
+                <br />
+                - <code>MACD_SIGNAL(series, fast, slow, signal, tf?)</code>
+                <br />
+                - <code>MACD_HIST(series, fast, slow, signal, tf?)</code>
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 Multi-period returns: prefer <code>ROC(close, 14)</code> (14 trading days) or{' '}
@@ -284,4 +292,3 @@ AND RSI_14 BETWEEN 50 AND 80`}
     </Dialog>
   )
 }
-

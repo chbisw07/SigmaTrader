@@ -240,6 +240,30 @@ export const BUILTIN_DSL_FUNCTIONS: BuiltinDslFunction[] = [
     snippet: 'ATR(${1:14}, "${2:1d}")',
     details: 'Average True Range for the given timeframe.',
   },
+  {
+    name: 'ADX',
+    signature: 'ADX(14, "1d")',
+    snippet: 'ADX(${1:14}, "${2:1d}")',
+    details: 'Average Directional Index (trend strength) using high/low/close.',
+  },
+  {
+    name: 'MACD',
+    signature: 'MACD(close, 12, 26, 9, "1d")',
+    snippet: 'MACD(${1:close}, ${2:12}, ${3:26}, ${4:9}, "${5:1d}")',
+    details: 'MACD line: EMA(fast) - EMA(slow).',
+  },
+  {
+    name: 'MACD_SIGNAL',
+    signature: 'MACD_SIGNAL(close, 12, 26, 9, "1d")',
+    snippet: 'MACD_SIGNAL(${1:close}, ${2:12}, ${3:26}, ${4:9}, "${5:1d}")',
+    details: 'MACD signal line: EMA(MACD, signalLen).',
+  },
+  {
+    name: 'MACD_HIST',
+    signature: 'MACD_HIST(close, 12, 26, 9, "1d")',
+    snippet: 'MACD_HIST(${1:close}, ${2:12}, ${3:26}, ${4:9}, "${5:1d}")',
+    details: 'MACD histogram: MACD - signal.',
+  },
 
   {
     name: 'OBV',

@@ -63,6 +63,24 @@ def setup_module() -> None:  # type: ignore[override]
                 volume=1000.0,
             )
             session.add(c)
+
+        # Seed a second symbol with a simple trend + range so ADX/MACD have
+        # enough non-degenerate bars to produce values.
+        trend = [100.0 + float(i) for i in range(12)]  # 12 bars
+        for i, close in enumerate(trend):
+            ts = now - timedelta(days=len(trend) - 1 - i)
+            c = Candle(
+                symbol="TREND",
+                exchange="NSE",
+                timeframe="1d",
+                ts=ts,
+                open=close - 0.25,
+                high=close + 0.75,
+                low=close - 0.75,
+                close=close,
+                volume=1000.0,
+            )
+            session.add(c)
         pos = Position(
             symbol="TEST",
             product="CNC",
@@ -149,6 +167,27 @@ def test_v3_compiler_inlines_variables_and_autopicks_cadence() -> None:
             custom_indicators={},
         )
         assert matched
+
+
+def test_v3_eval_supports_adx_and_macd_builtins() -> None:
+    settings = get_settings()
+    # Use short lengths so the seeded 12 daily bars are sufficient to produce
+    # stable values without hitting missing-data paths.
+    expr = parse_v3_expression(
+        'ADX(3, "1d") > 10 AND MACD(close, 3, 6, 2, "1d") > -100000 '
+        'AND MACD_SIGNAL(close, 3, 6, 2, "1d") > -100000 '
+        'AND MACD_HIST(close, 3, 6, 2, "1d") > -100000'
+    )
+    with SessionLocal() as session:
+        matched, _snapshot, _bar_time = eval_condition(
+            expr,
+            db=session,
+            settings=settings,
+            symbol="TREND",
+            exchange="NSE",
+            custom_indicators={},
+        )
+    assert matched
 
 
 def test_alerts_v3_api_create_and_list() -> None:

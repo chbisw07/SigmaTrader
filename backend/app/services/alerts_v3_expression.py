@@ -508,15 +508,23 @@ def _ema_series(values: Sequence[float], length: int) -> list[float]:
     if length <= 0:
         return [_NAN] * n
     out = [_NAN] * n
-    if n < length:
-        return out
     k = 2.0 / (length + 1.0)
-    seed = values[:length]
-    if any(not isfinite(v) for v in seed):
+
+    # Seed on the first window of `length` consecutive finite values so EMA can
+    # be composed over series-producing functions (which often have leading NaNs).
+    start: Optional[int] = None
+    for i in range(length - 1, n):
+        window = values[i - length + 1 : i + 1]
+        if any(not isfinite(v) for v in window):
+            continue
+        start = i
+        break
+    if start is None:
         return out
-    ema = sum(seed) / length
-    out[length - 1] = ema
-    for i in range(length, n):
+
+    ema = sum(values[start - length + 1 : start + 1]) / length
+    out[start] = ema
+    for i in range(start + 1, n):
         v = values[i]
         if not isfinite(v) or not isfinite(ema):
             ema = _NAN
@@ -607,6 +615,120 @@ def _atr_series(
             continue
         out[i] = sum(window) / length
     return out
+
+
+def _adx_series(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    length: int,
+) -> list[float]:
+    """Average Directional Index (ADX), Wilder smoothing.
+
+    Returns a series aligned to input bars, with leading NaNs until enough data
+    is available (first ADX typically appears at index 2*length).
+    """
+
+    n = min(len(highs), len(lows), len(closes))
+    out = [_NAN] * n
+    if length <= 0 or n < (2 * length + 1):
+        return out
+
+    tr: list[float] = [_NAN] * n
+    plus_dm: list[float] = [_NAN] * n
+    minus_dm: list[float] = [_NAN] * n
+    for i in range(1, n):
+        h = highs[i]
+        low = lows[i]
+        pc = closes[i - 1]
+        ph = highs[i - 1]
+        pl = lows[i - 1]
+        if any(not isfinite(v) for v in (h, low, pc, ph, pl)):
+            continue
+        tr[i] = max(h - low, abs(h - pc), abs(low - pc))
+        up_move = h - ph
+        down_move = pl - low
+        plus_dm[i] = up_move if (up_move > down_move and up_move > 0) else 0.0
+        minus_dm[i] = down_move if (down_move > up_move and down_move > 0) else 0.0
+
+    sm_tr: list[float] = [_NAN] * n
+    sm_pdm: list[float] = [_NAN] * n
+    sm_mdm: list[float] = [_NAN] * n
+
+    init_end = length
+    init_tr = tr[1 : init_end + 1]
+    init_pdm = plus_dm[1 : init_end + 1]
+    init_mdm = minus_dm[1 : init_end + 1]
+    if any(not isfinite(v) for v in (*init_tr, *init_pdm, *init_mdm)):
+        return out
+
+    sm_tr[init_end] = sum(init_tr)
+    sm_pdm[init_end] = sum(init_pdm)
+    sm_mdm[init_end] = sum(init_mdm)
+
+    for i in range(init_end + 1, n):
+        if any(not isfinite(v) for v in (sm_tr[i - 1], sm_pdm[i - 1], sm_mdm[i - 1])):
+            continue
+        if any(not isfinite(v) for v in (tr[i], plus_dm[i], minus_dm[i])):
+            continue
+        sm_tr[i] = sm_tr[i - 1] - (sm_tr[i - 1] / length) + tr[i]
+        sm_pdm[i] = sm_pdm[i - 1] - (sm_pdm[i - 1] / length) + plus_dm[i]
+        sm_mdm[i] = sm_mdm[i - 1] - (sm_mdm[i - 1] / length) + minus_dm[i]
+
+    dx: list[float] = [_NAN] * n
+    for i in range(init_end, n):
+        st = sm_tr[i]
+        if not isfinite(st) or st == 0:
+            continue
+        pdi = 100.0 * (sm_pdm[i] / st) if isfinite(sm_pdm[i]) else _NAN
+        mdi = 100.0 * (sm_mdm[i] / st) if isfinite(sm_mdm[i]) else _NAN
+        if not isfinite(pdi) or not isfinite(mdi) or (pdi + mdi) == 0:
+            continue
+        dx[i] = 100.0 * abs(pdi - mdi) / (pdi + mdi)
+
+    first_adx_idx = 2 * length
+    seed_dx = dx[length : first_adx_idx]
+    if len(seed_dx) != length or any(not isfinite(v) for v in seed_dx):
+        return out
+
+    adx = sum(seed_dx) / length
+    out[first_adx_idx] = adx
+    for i in range(first_adx_idx + 1, n):
+        if not isfinite(adx) or not isfinite(dx[i]):
+            adx = _NAN
+        else:
+            adx = ((adx * (length - 1)) + dx[i]) / length
+        out[i] = adx
+
+    return out
+
+
+def _macd_components_series(
+    values: Sequence[float],
+    fast: int,
+    slow: int,
+    signal: int,
+) -> tuple[list[float], list[float], list[float]]:
+    n = len(values)
+    macd = [_NAN] * n
+    sig = [_NAN] * n
+    hist = [_NAN] * n
+    if fast <= 0 or slow <= 0 or signal <= 0 or n == 0:
+        return macd, sig, hist
+
+    ema_fast = _ema_series(values, fast)
+    ema_slow = _ema_series(values, slow)
+    for i in range(n):
+        a = ema_fast[i]
+        b = ema_slow[i]
+        macd[i] = (a - b) if (isfinite(a) and isfinite(b)) else _NAN
+
+    sig = _ema_series(macd, signal)
+    for i in range(n):
+        m = macd[i]
+        s = sig[i]
+        hist[i] = (m - s) if (isfinite(m) and isfinite(s)) else _NAN
+    return macd, sig, hist
 
 
 def _obv_series(closes: Sequence[float], volumes: Sequence[float]) -> list[float]:
@@ -973,6 +1095,10 @@ _ALLOWED_BUILTINS: set[str] = {
     "RET",
     "OBV",
     "VWAP",
+    "ADX",
+    "MACD",
+    "MACD_SIGNAL",
+    "MACD_HIST",
     # rolling
     "MAX",
     "MIN",
@@ -1193,6 +1319,16 @@ def _eval_series(
             closes, _ = cache.series(tf, "close")
             return _atr_series(highs, lows, closes, length), bar_time
 
+        if fn == "ADX":
+            if len(node.args) != 2:
+                raise IndicatorAlertError("ADX expects (length, timeframe)")
+            length = _len_from(node.args[0])
+            tf = _coerce_tf(node.args[1], params=params).lower()
+            highs, bar_time = cache.series(tf, "high")
+            lows, _ = cache.series(tf, "low")
+            closes, _ = cache.series(tf, "close")
+            return _adx_series(highs, lows, closes, length), bar_time
+
         if fn == "OBV":
             if len(node.args) != 3:
                 raise IndicatorAlertError("OBV expects (close, volume, timeframe)")
@@ -1202,6 +1338,29 @@ def _eval_series(
             )
             vols, _ = _eval_series(node.args[1], cache=cache, tf_hint=tf, params=params)
             return _obv_series(closes, vols), bar_time
+
+        if fn in {"MACD", "MACD_SIGNAL", "MACD_HIST"}:
+            if len(node.args) not in {4, 5}:
+                raise IndicatorAlertError(
+                    f"{fn} expects (series, fast, slow, signal, timeframe?)"
+                )
+            fast = _len_from(node.args[1])
+            slow = _len_from(node.args[2])
+            signal = _len_from(node.args[3])
+            tf = (
+                _coerce_tf(node.args[4], params=params).lower()
+                if len(node.args) == 5
+                else tf_hint
+            )
+            src, bar_time = _eval_series(
+                node.args[0], cache=cache, tf_hint=tf, params=params
+            )
+            macd, sig, hist = _macd_components_series(src, fast, slow, signal)
+            if fn == "MACD":
+                return macd, bar_time
+            if fn == "MACD_SIGNAL":
+                return sig, bar_time
+            return hist, bar_time
 
         if fn == "VWAP":
             if len(node.args) != 3:
@@ -1404,6 +1563,14 @@ def _eval_numeric(
         if name in {"OBV", "VWAP"}:
             # Compute from full series; works for both latest-only and per-bar
             # (in-memory) caches.
+            series, bar_time = _eval_series(
+                node, cache=cache, tf_hint="1d", params=params
+            )
+            now = series[-1] if series else None
+            prev = series[-2] if len(series) >= 2 else None
+            return SeriesValue(_as_optional(now), _as_optional(prev), bar_time)
+
+        if name in {"ADX", "MACD", "MACD_SIGNAL", "MACD_HIST"}:
             series, bar_time = _eval_series(
                 node, cache=cache, tf_hint="1d", params=params
             )
