@@ -534,32 +534,77 @@ def _ema_series(values: Sequence[float], length: int) -> list[float]:
     return out
 
 
+def _rma_series(values: Sequence[float], length: int) -> list[float]:
+    """Wilder's RMA (a.k.a. smoothed moving average).
+
+    Semantics (per docs/v3_dsl_semantics_spec.md):
+    - Requires `length` periods; first `length-1` bars are missing (NaN).
+    - Seed at the first index where a full finite window exists.
+    - Subsequent: rma = (prev_rma*(length-1) + value) / length
+    """
+
+    n = len(values)
+    out = [_NAN] * n
+    if length <= 0 or n < length:
+        return out
+
+    start: Optional[int] = None
+    for i in range(length - 1, n):
+        window = values[i - length + 1 : i + 1]
+        if any(not isfinite(v) for v in window):
+            continue
+        start = i
+        break
+    if start is None:
+        return out
+
+    rma = sum(values[start - length + 1 : start + 1]) / length
+    out[start] = rma
+    for i in range(start + 1, n):
+        v = values[i]
+        if not isfinite(v) or not isfinite(rma):
+            rma = _NAN
+        else:
+            rma = (rma * (length - 1) + v) / length
+        out[i] = rma
+    return out
+
+
 def _rsi_series(values: Sequence[float], length: int) -> list[float]:
     n = len(values)
     out = [_NAN] * n
-    if length <= 0 or n < length + 1:
+    if length <= 0 or n < length:
         return out
-    for i in range(length, n):
-        window = values[i - length : i + 1]
-        if any(not isfinite(v) for v in window):
+
+    gains = [_NAN] * n
+    losses = [_NAN] * n
+    gains[0] = 0.0
+    losses[0] = 0.0
+    for i in range(1, n):
+        prev = values[i - 1]
+        curr = values[i]
+        if not isfinite(prev) or not isfinite(curr):
             continue
-        gains: list[float] = []
-        losses: list[float] = []
-        for prev, curr in zip(window[:-1], window[1:], strict=False):
-            delta = curr - prev
-            if delta >= 0:
-                gains.append(delta)
-                losses.append(0.0)
-            else:
-                gains.append(0.0)
-                losses.append(-delta)
-        avg_gain = sum(gains) / length
-        avg_loss = sum(losses) / length
-        if avg_loss == 0:
-            out[i] = 100.0
+        delta = curr - prev
+        if delta >= 0:
+            gains[i] = delta
+            losses[i] = 0.0
         else:
-            rs = avg_gain / avg_loss
-            out[i] = 100.0 - 100.0 / (1.0 + rs)
+            gains[i] = 0.0
+            losses[i] = -delta
+
+    avg_g = _rma_series(gains, length)
+    avg_l = _rma_series(losses, length)
+    for i in range(n):
+        g = avg_g[i]
+        l = avg_l[i]
+        if not isfinite(g) or not isfinite(l):
+            continue
+        if l == 0:
+            out[i] = 100.0
+            continue
+        rs = g / l
+        out[i] = 100.0 - 100.0 / (1.0 + rs)
     return out
 
 
@@ -596,10 +641,18 @@ def _atr_series(
     highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], length: int
 ) -> list[float]:
     n = min(len(highs), len(lows), len(closes))
-    out = [_NAN] * n
-    if length <= 0 or n < length + 1:
-        return out
+    if length <= 0 or n < length:
+        return [_NAN] * n
+
     trs: list[float] = [_NAN] * n
+    # For i=0 we don't have prev_close. Define prev_close = close so TR reduces to (high-low).
+    if n >= 1:
+        h0 = highs[0]
+        l0 = lows[0]
+        c0 = closes[0]
+        if all(isfinite(v) for v in (h0, l0, c0)):
+            trs[0] = max(h0 - l0, abs(h0 - c0), abs(l0 - c0))
+
     for i in range(1, n):
         h = highs[i]
         low = lows[i]
@@ -607,14 +660,8 @@ def _atr_series(
         if any(not isfinite(v) for v in (h, low, pc)):
             continue
         trs[i] = max(h - low, abs(h - pc), abs(low - pc))
-    for i in range(n):
-        if i < length:
-            continue
-        window = trs[i - length + 1 : i + 1]
-        if any(not isfinite(v) for v in window):
-            continue
-        out[i] = sum(window) / length
-    return out
+
+    return _rma_series(trs, length)
 
 
 def _adx_series(
@@ -731,6 +778,91 @@ def _macd_components_series(
     return macd, sig, hist
 
 
+def _supertrend_series(
+    *,
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    source: Sequence[float],
+    length: int,
+    multiplier: float,
+) -> tuple[list[float], list[float]]:
+    """Compute Supertrend line + direction series.
+
+    Contract: docs/v3_dsl_semantics_spec.md (stateful, no lookahead, warmup).
+
+    Implementation notes:
+    - Uses ATR(length) with Wilder RMA smoothing.
+    - Default source is expected to be hl2 (handled by the caller).
+    - Produces NaN (missing) for the first `length-1` bars.
+    - Direction: +1 for uptrend, -1 for downtrend.
+    """
+
+    n = min(len(highs), len(lows), len(closes), len(source))
+    line = [_NAN] * n
+    direction = [_NAN] * n
+    if length <= 0 or n < length:
+        return line, direction
+
+    atr = _atr_series(highs[:n], lows[:n], closes[:n], length)
+    final_upper = [_NAN] * n
+    final_lower = [_NAN] * n
+
+    for i in range(n):
+        a = atr[i]
+        src = source[i]
+        c = closes[i]
+        if not (isfinite(a) and isfinite(src) and isfinite(c)):
+            continue
+
+        basic_upper = src + multiplier * a
+        basic_lower = src - multiplier * a
+
+        if i == 0:
+            final_upper[i] = basic_upper
+            final_lower[i] = basic_lower
+            continue
+
+        prev_c = closes[i - 1]
+        fu_prev = final_upper[i - 1]
+        fl_prev = final_lower[i - 1]
+
+        if isfinite(fu_prev) and isfinite(prev_c):
+            final_upper[i] = (
+                basic_upper
+                if (basic_upper < fu_prev or prev_c > fu_prev)
+                else fu_prev
+            )
+        else:
+            final_upper[i] = basic_upper
+
+        if isfinite(fl_prev) and isfinite(prev_c):
+            final_lower[i] = (
+                basic_lower
+                if (basic_lower > fl_prev or prev_c < fl_prev)
+                else fl_prev
+            )
+        else:
+            final_lower[i] = basic_lower
+
+        if i < length - 1:
+            continue
+
+        if i == length - 1 or not isfinite(direction[i - 1]):
+            # Deterministic initialization: start in uptrend at the first valid bar.
+            direction[i] = 1.0
+        else:
+            prev_dir = direction[i - 1]
+            if prev_dir > 0:
+                direction[i] = -1.0 if c < final_lower[i] else 1.0
+            else:
+                direction[i] = 1.0 if c > final_upper[i] else -1.0
+
+        line[i] = final_lower[i] if direction[i] > 0 else final_upper[i]
+
+    return line, direction
+
+
 def _obv_series(closes: Sequence[float], volumes: Sequence[float]) -> list[float]:
     n = min(len(closes), len(volumes))
     out = [_NAN] * n
@@ -822,31 +954,11 @@ def _ema(values: Sequence[float], length: int) -> SeriesValue:
 
 
 def _rsi(values: Sequence[float], length: int) -> SeriesValue:
-    if length <= 0 or len(values) < length + 1:
+    if length <= 0 or len(values) < length:
         return SeriesValue(None, None, None)
-
-    def _rsi_slice(slice_vals: Sequence[float]) -> Optional[float]:
-        if len(slice_vals) < length + 1:
-            return None
-        gains: List[float] = []
-        losses: List[float] = []
-        for prev, curr in zip(slice_vals[:-1], slice_vals[1:], strict=False):
-            delta = curr - prev
-            if delta >= 0:
-                gains.append(delta)
-                losses.append(0.0)
-            else:
-                gains.append(0.0)
-                losses.append(-delta)
-        avg_gain = sum(gains[-length:]) / length
-        avg_loss = sum(losses[-length:]) / length
-        if avg_loss == 0:
-            return 100.0
-        rs = avg_gain / avg_loss
-        return 100.0 - 100.0 / (1.0 + rs)
-
-    now = _rsi_slice(values)
-    prev = _rsi_slice(values[:-1]) if len(values) >= length + 2 else None
+    series = _rsi_series(values, length)
+    now = _as_optional(series[-1]) if series else None
+    prev = _as_optional(series[-2]) if len(series) >= 2 else None
     return SeriesValue(now, prev, None)
 
 
@@ -884,30 +996,12 @@ def _ret(values: Sequence[float]) -> SeriesValue:
 def _atr(
     highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], length: int
 ) -> SeriesValue:
-    if length <= 0 or len(highs) < length + 1 or len(closes) < length + 1:
+    n = min(len(highs), len(lows), len(closes))
+    if length <= 0 or n < length:
         return SeriesValue(None, None, None)
-
-    def _atr_slice(
-        highs_: Sequence[float], lows_: Sequence[float], closes_: Sequence[float]
-    ) -> Optional[float]:
-        trs: List[float] = []
-        for i in range(1, len(highs_)):
-            tr = max(
-                highs_[i] - lows_[i],
-                abs(highs_[i] - closes_[i - 1]),
-                abs(lows_[i] - closes_[i - 1]),
-            )
-            trs.append(tr)
-        if len(trs) < length:
-            return None
-        return sum(trs[-length:]) / length
-
-    now = _atr_slice(highs, lows, closes)
-    prev = (
-        _atr_slice(highs[:-1], lows[:-1], closes[:-1])
-        if len(highs) >= length + 2
-        else None
-    )
+    series = _atr_series(highs[:n], lows[:n], closes[:n], length)
+    now = _as_optional(series[-1]) if series else None
+    prev = _as_optional(series[-2]) if len(series) >= 2 else None
     return SeriesValue(now, prev, None)
 
 
@@ -1099,6 +1193,8 @@ _ALLOWED_BUILTINS: set[str] = {
     "MACD",
     "MACD_SIGNAL",
     "MACD_HIST",
+    "SUPERTREND_LINE",
+    "SUPERTREND_DIR",
     # rolling
     "MAX",
     "MIN",
@@ -1177,6 +1273,12 @@ def _eval_series(
     def _float_from(n: ExprNode) -> float:
         if isinstance(n, NumberNode):
             return float(n.value)
+        if isinstance(n, IdentNode):
+            key = n.name.strip().upper()
+            v = params.get(key)
+            if isinstance(v, (int, float)):
+                return float(v)
+            raise IndicatorAlertError(f"Value parameter '{n.name}' must be numeric")
         raise IndicatorAlertError("Value must be a numeric constant")
 
     if isinstance(node, NumberNode):
@@ -1361,6 +1463,56 @@ def _eval_series(
             if fn == "MACD_SIGNAL":
                 return sig, bar_time
             return hist, bar_time
+
+        if fn in {"SUPERTREND_LINE", "SUPERTREND_DIR"}:
+            # SUPERTREND_*([source], length, multiplier, [timeframe])
+            if len(node.args) not in {2, 3, 4}:
+                raise IndicatorAlertError(
+                    f"{fn} expects (len, mult, tf?) or (source, len, mult, tf?)"
+                )
+
+            idx = 0
+            src_node: ExprNode | None = None
+            if len(node.args) in {3, 4}:
+                # Heuristic: first arg is source if it's not a plain length number.
+                if not isinstance(node.args[0], NumberNode):
+                    src_node = node.args[0]
+                    idx = 1
+
+            length = _len_from(node.args[idx])
+            mult = _float_from(node.args[idx + 1])
+            tf = (
+                _coerce_tf(node.args[idx + 2], params=params).lower()
+                if len(node.args) == idx + 3
+                else tf_hint
+            )
+
+            highs, bar_time = cache.series(tf, "high")
+            lows, _ = cache.series(tf, "low")
+            closes, _ = cache.series(tf, "close")
+
+            if src_node is None:
+                n = min(len(highs), len(lows))
+                src = [
+                    _NAN
+                    if any(not isfinite(v) for v in (highs[i], lows[i]))
+                    else (highs[i] + lows[i]) / 2.0
+                    for i in range(n)
+                ]
+            else:
+                src, _src_time = _eval_series(src_node, cache=cache, tf_hint=tf, params=params)
+
+            st_line, st_dir = _supertrend_series(
+                highs=highs,
+                lows=lows,
+                closes=closes,
+                source=src,
+                length=length,
+                multiplier=mult,
+            )
+            if fn == "SUPERTREND_LINE":
+                return st_line, bar_time
+            return st_dir, bar_time
 
         if fn == "VWAP":
             if len(node.args) != 3:
@@ -1571,6 +1723,14 @@ def _eval_numeric(
             return SeriesValue(_as_optional(now), _as_optional(prev), bar_time)
 
         if name in {"ADX", "MACD", "MACD_SIGNAL", "MACD_HIST"}:
+            series, bar_time = _eval_series(
+                node, cache=cache, tf_hint="1d", params=params
+            )
+            now = series[-1] if series else None
+            prev = series[-2] if len(series) >= 2 else None
+            return SeriesValue(_as_optional(now), _as_optional(prev), bar_time)
+
+        if name in {"SUPERTREND_LINE", "SUPERTREND_DIR"}:
             series, bar_time = _eval_series(
                 node, cache=cache, tf_hint="1d", params=params
             )

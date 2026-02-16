@@ -57,6 +57,8 @@ _DSL_BUILTINS_RECOMMENDED: Set[str] = {
     "MACD",
     "MACD_SIGNAL",
     "MACD_HIST",
+    "SUPERTREND_LINE",
+    "SUPERTREND_DIR",
     # Cross helpers (event-only semantics)
     "CROSSOVER",
     "CROSSUNDER",
