@@ -680,6 +680,76 @@ export const timeSettingsHelp: HelpContext = {
   ],
 }
 
+export const notificationsSettingsHelp: HelpContext = {
+  id: 'settings-notifications',
+  title: 'Notifications help',
+  overview: [
+    'This tab controls desktop (system) notifications for alerts received/triggered by SigmaTrader.',
+    'Browser notifications must be allowed by your browser for the SigmaTrader site.',
+  ],
+  sections: [
+    {
+      id: 'notifications-desktop',
+      title: 'Desktop notifications',
+      qas: [
+        {
+          id: 'notifications-what',
+          question: 'What will I be notified about?',
+          answer: [
+            {
+              type: 'bullets',
+              items: [
+                'TradingView alerts received by SigmaTrader (TV Alerts).',
+                'Indicator-first alert events triggered by SigmaTrader (Alerts v3 events).',
+              ],
+            },
+          ],
+        },
+        {
+          id: 'notifications-permission',
+          question: 'Why do I need to allow notifications?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Browsers require an explicit permission grant before a site can show system notifications.',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  gettingStarted: [
+    'Open the Notifications tab in Settings.',
+    'Enable desktop notifications and grant permission when prompted.',
+  ],
+  troubleshooting: [
+    {
+      id: 'notifications-ts-denied',
+      question: 'It says permission is “denied”.',
+      answer: [
+        {
+          type: 'p',
+          text: 'Open your browser site settings for SigmaTrader and re-enable notifications, then toggle the setting again.',
+        },
+      ],
+    },
+    {
+      id: 'notifications-ts-no-popups',
+      question: 'I enabled it, but nothing pops up.',
+      answer: [
+        {
+          type: 'bullets',
+          items: [
+            'Try “Send test” to verify notifications work.',
+            'Some browsers require HTTPS (or localhost) for notifications.',
+            'Check OS notification settings / Focus modes (Do Not Disturb).',
+          ],
+        },
+      ],
+    },
+  ],
+}
+
 export const riskManagementGuide: HelpContext = {
   id: 'risk-guide',
   title: 'Risk Management Guide',
@@ -1173,4 +1243,5 @@ export const SETTINGS_HELP_BY_TAB = {
   webhook: tradingViewWebhookHelp,
   market: marketConfigurationHelp,
   time: timeSettingsHelp,
+  notifications: notificationsSettingsHelp,
 } as const

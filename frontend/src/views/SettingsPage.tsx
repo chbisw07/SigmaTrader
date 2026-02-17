@@ -7,10 +7,12 @@ import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
 import DialogContent from '@mui/material/DialogContent'
 import DialogTitle from '@mui/material/DialogTitle'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
+import Switch from '@mui/material/Switch'
 import Tab from '@mui/material/Tab'
 import Tabs from '@mui/material/Tabs'
 import Table from '@mui/material/Table'
@@ -73,6 +75,10 @@ import { EffectiveRiskSummaryPanel } from '../components/EffectiveRiskSummaryPan
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
 import { formatInTimeZone } from '../utils/datetime'
+import {
+  getDesktopAlertNotificationsEnabled,
+  setDesktopAlertNotificationsEnabled,
+} from '../services/desktopNotifications'
 
 const DISPLAY_TZ_PRESETS = [
   'Asia/Kolkata',
@@ -377,8 +383,12 @@ export function SettingsPage() {
   const { displayTimeZone, setDisplayTimeZone } = useTimeSettings()
   const systemTimeZone = getSystemTimeZone()
 
-  type SettingsTab = 'broker' | 'risk' | 'webhook' | 'market' | 'time'
+  type SettingsTab = 'broker' | 'risk' | 'webhook' | 'market' | 'time' | 'notifications'
   const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
+  const [desktopNotificationsEnabled, setDesktopNotificationsEnabledState] = useState<boolean>(
+    () => getDesktopAlertNotificationsEnabled(),
+  )
+  const [desktopNotificationsError, setDesktopNotificationsError] = useState<string | null>(null)
 
   const [brokerStatus, setBrokerStatus] = useState<ZerodhaStatus | null>(null)
   const [angeloneStatus, setAngeloneStatus] = useState<AngeloneStatus | null>(null)
@@ -461,7 +471,8 @@ export function SettingsPage() {
       normalizedTab === 'risk' ||
       normalizedTab === 'webhook' ||
       normalizedTab === 'market' ||
-      normalizedTab === 'time'
+      normalizedTab === 'time' ||
+      normalizedTab === 'notifications'
     ) {
       if (normalizedTab !== activeTab) setActiveTab(normalizedTab as SettingsTab)
     }
@@ -544,6 +555,8 @@ export function SettingsPage() {
             ? 'market'
             : next === 'time'
               ? 'time'
+              : next === 'notifications'
+                ? 'notifications'
               : 'broker'
     setActiveTab(nextTab)
     const params = new URLSearchParams(location.search)
@@ -552,6 +565,88 @@ export function SettingsPage() {
       { pathname: location.pathname, search: params.toString() },
       { replace: true },
     )
+  }
+
+  const notificationsSupported =
+    typeof window !== 'undefined' && 'Notification' in window
+
+  const notificationPermission: NotificationPermission | 'unsupported' =
+    notificationsSupported ? Notification.permission : 'unsupported'
+
+  const requestNotificationPermission = async (): Promise<NotificationPermission> => {
+    if (!notificationsSupported) return 'denied'
+    try {
+      return await new Promise<NotificationPermission>((resolve) => {
+        const done = (p: NotificationPermission) => resolve(p)
+        const ret = Notification.requestPermission(done) as unknown
+        if (ret && typeof (ret as any).then === 'function') {
+          ;(ret as Promise<NotificationPermission>).then(done).catch(() => done(Notification.permission))
+        }
+      })
+    } catch {
+      return Notification.permission
+    }
+  }
+
+  useEffect(() => {
+    if (!desktopNotificationsEnabled) return
+    if (notificationPermission !== 'granted') {
+      setDesktopNotificationsEnabledState(false)
+      setDesktopAlertNotificationsEnabled(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktopNotificationsEnabled, notificationPermission])
+
+  const handleDesktopNotificationsToggle = async (checked: boolean) => {
+    setDesktopNotificationsError(null)
+    if (!checked) {
+      setDesktopNotificationsEnabledState(false)
+      setDesktopAlertNotificationsEnabled(false)
+      return
+    }
+
+    if (!notificationsSupported) {
+      setDesktopNotificationsError('Browser notifications are not supported in this environment.')
+      setDesktopNotificationsEnabledState(false)
+      setDesktopAlertNotificationsEnabled(false)
+      return
+    }
+
+    if (Notification.permission === 'denied') {
+      setDesktopNotificationsError(
+        'Notifications are blocked for this site. Enable them in your browser site settings and try again.',
+      )
+      setDesktopNotificationsEnabledState(false)
+      setDesktopAlertNotificationsEnabled(false)
+      return
+    }
+
+    if (Notification.permission !== 'granted') {
+      const perm = await requestNotificationPermission()
+      if (perm !== 'granted') {
+        setDesktopNotificationsError('Notification permission was not granted.')
+        setDesktopNotificationsEnabledState(false)
+        setDesktopAlertNotificationsEnabled(false)
+        return
+      }
+    }
+
+    setDesktopNotificationsEnabledState(true)
+    setDesktopAlertNotificationsEnabled(true)
+  }
+
+  const sendTestDesktopNotification = () => {
+    if (!notificationsSupported) return
+    if (Notification.permission !== 'granted') return
+    try {
+      new Notification('SigmaTrader: Test notification', {
+        body: 'Desktop notifications are enabled.',
+        icon: '/sigma_trader_logo.png',
+        tag: 'st_desktop_notifications_test',
+      })
+    } catch {
+      // ignore
+    }
   }
 
   const handleMarketUpload = async (file: File) => {
@@ -802,6 +897,7 @@ export function SettingsPage() {
           <Tab value="webhook" label="TradingView webhook" />
           <Tab value="market" label="Market configuration" />
           <Tab value="time" label="Time" />
+          <Tab value="notifications" label="Notifications" />
         </Tabs>
       </Paper>
 
@@ -1377,6 +1473,74 @@ export function SettingsPage() {
               )
             })()}
           </Box>
+        </Paper>
+      ) : activeTab === 'notifications' ? (
+        <Paper sx={{ mb: 3, p: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="h6" sx={{ flex: 1, minWidth: 220 }}>
+              Desktop notifications
+            </Typography>
+            <Tooltip title="Help" arrow placement="top">
+              <IconButton
+                size="small"
+                onClick={() => setHelpOpen(true)}
+                aria-label="notifications help"
+              >
+                <HelpOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Chip
+              size="small"
+              label={
+                notificationPermission === 'unsupported'
+                  ? 'Notifications: Unsupported'
+                  : `Permission: ${notificationPermission}`
+              }
+              color={
+                notificationPermission === 'granted'
+                  ? 'success'
+                  : notificationPermission === 'denied'
+                    ? 'error'
+                    : 'default'
+              }
+              variant={notificationPermission === 'granted' ? 'filled' : 'outlined'}
+            />
+          </Box>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+            Shows a system notification when SigmaTrader receives TradingView alerts and when
+            indicator-first alert events trigger.
+          </Typography>
+
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={desktopNotificationsEnabled}
+                  onChange={(_e, checked) => void handleDesktopNotificationsToggle(checked)}
+                  disabled={notificationPermission === 'unsupported'}
+                />
+              }
+              label="Enable desktop notifications"
+            />
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={sendTestDesktopNotification}
+              disabled={!desktopNotificationsEnabled || notificationPermission !== 'granted'}
+            >
+              Send test
+            </Button>
+          </Box>
+
+          {desktopNotificationsError && (
+            <Typography variant="caption" color="error" sx={{ mt: 1, display: 'block' }}>
+              {desktopNotificationsError}
+            </Typography>
+          )}
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+            Note: Browser notifications typically require HTTPS (or <code>localhost</code>).
+          </Typography>
         </Paper>
       ) : activeTab === 'webhook' ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}>

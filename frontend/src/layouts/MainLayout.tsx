@@ -38,6 +38,11 @@ import { NavLink } from 'react-router-dom'
 
 import { useHealth } from '../services/health'
 import { logout, type CurrentUser } from '../services/auth'
+import { useDesktopAlertNotifications } from '../hooks/useDesktopAlertNotifications'
+import {
+  DESKTOP_NOTIFICATIONS_CHANGED_EVENT,
+  getDesktopAlertNotificationsEnabled,
+} from '../services/desktopNotifications'
 
 const drawerWidth = 220
 const collapsedDrawerWidth = 64
@@ -89,6 +94,11 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const open = Boolean(anchorEl)
   const [changePasswordOpen, setChangePasswordOpen] = useState(false)
+  const [desktopAlertsEnabled, setDesktopAlertsEnabled] = useState<boolean>(() =>
+    getDesktopAlertNotificationsEnabled(),
+  )
+
+  useDesktopAlertNotifications({ enabled: desktopAlertsEnabled })
 
   const handleDrawerToggle = () => {
     setMobileOpen((prev) => !prev)
@@ -126,6 +136,13 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
       // Ignore persistence errors.
     }
   }, [sidebarCollapsed])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handler = () => setDesktopAlertsEnabled(getDesktopAlertNotificationsEnabled())
+    window.addEventListener(DESKTOP_NOTIFICATIONS_CHANGED_EVENT, handler)
+    return () => window.removeEventListener(DESKTOP_NOTIFICATIONS_CHANGED_EVENT, handler)
+  }, [])
 
   const effectiveDrawerWidth = sidebarCollapsed
     ? collapsedDrawerWidth
