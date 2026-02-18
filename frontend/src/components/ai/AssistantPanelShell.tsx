@@ -6,12 +6,16 @@ import Typography from '@mui/material/Typography'
 import Tooltip from '@mui/material/Tooltip'
 import Divider from '@mui/material/Divider'
 import ChatIcon from '@mui/icons-material/Chat'
+import CloseIcon from '@mui/icons-material/Close'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 
 import { AssistantPanel } from './AssistantPanel'
 
 export function AssistantPanelShell() {
   const [open, setOpen] = useState(true)
-  const width = useMemo(() => 380, [])
+  const [minimized, setMinimized] = useState(false)
+  const width = useMemo(() => 440, [])
 
   return (
     <>
@@ -42,21 +46,55 @@ export function AssistantPanelShell() {
           '& .MuiDrawer-paper': {
             width,
             boxSizing: 'border-box',
-            top: { xs: 56, sm: 64 },
-            height: { xs: 'calc(100% - 56px)', sm: 'calc(100% - 64px)' },
+            // slightly shorter than full height to avoid a cramped look
+            top: { xs: 56 + 12, sm: 64 + 12 },
+            bottom: minimized ? 'auto' : 12,
+            height: minimized ? 72 : 'auto',
+            right: 12,
+            borderRadius: 2,
+            overflow: 'hidden',
           },
         }}
       >
-        <Box sx={{ px: 2, py: 1.5 }}>
-          <Typography variant="subtitle1">AI Trading Manager</Typography>
-          <Typography variant="caption" color="text.secondary">
-            Phase 0 (stub)
-          </Typography>
+        <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="subtitle1" noWrap>
+              AI Trading Manager
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap>
+              Phase 0 (stub)
+            </Typography>
+          </Box>
+          <Tooltip title={minimized ? 'Restore' : 'Minimize'}>
+            <IconButton
+              size="small"
+              onClick={() => setMinimized((p) => !p)}
+              aria-label={minimized ? 'Restore assistant panel' : 'Minimize assistant panel'}
+            >
+              {minimized ? (
+                <ExpandMoreIcon fontSize="small" />
+              ) : (
+                <ExpandLessIcon fontSize="small" />
+              )}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Close">
+            <IconButton
+              size="small"
+              onClick={() => setOpen(false)}
+              aria-label="Close assistant panel"
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Box>
-        <Divider />
-        <AssistantPanel />
+        {!minimized && (
+          <>
+            <Divider />
+            <AssistantPanel />
+          </>
+        )}
       </Drawer>
     </>
   )
 }
-
