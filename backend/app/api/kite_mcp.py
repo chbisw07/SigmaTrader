@@ -5,6 +5,7 @@ import urllib.parse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -163,6 +164,51 @@ async def kite_mcp_auth_start(
     set_ai_settings(db, settings, cfg)
 
     return KiteMcpAuthStartResponse(warning_text=text.strip(), login_url=login_url)
+
+
+@router.get("/auth/callback", include_in_schema=False)
+def kite_mcp_auth_callback(
+    session_id: str | None = None,
+    sessionId: str | None = None,  # noqa: N803 - upstream naming
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    """Optional OAuth callback endpoint.
+
+    The current Kite MCP login flow typically completes via Kite's own redirect,
+    but we keep this endpoint so deployments can choose to route callbacks back
+    into SigmaTrader (e.g., when the MCP server supports custom redirect URLs).
+    """
+
+    stored = False
+    sid = (session_id or sessionId or "").strip() or None
+    if sid:
+        try:
+            set_auth_session_id(db, settings, sid)
+            stored = True
+        except Exception:
+            stored = False
+
+    record_system_event(
+        db,
+        level="INFO",
+        category="KITE_MCP",
+        message="Kite MCP auth callback received.",
+        correlation_id=_corr(),
+        details={"event_type": "KITE_MCP_AUTH_CALLBACK", "stored": stored},
+    )
+
+    html = """
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Kite MCP Auth</title></head>
+  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px;">
+    <h2>Kite MCP authorization received</h2>
+    <p>You can close this tab and return to SigmaTrader → Settings → AI, then click “Refresh status”.</p>
+  </body>
+</html>
+""".strip()
+    return HTMLResponse(content=html)
 
 
 #

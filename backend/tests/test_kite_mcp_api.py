@@ -149,3 +149,22 @@ def test_snapshot_fetch(fake_kite_mcp) -> None:
     assert len(snap["holdings"]) == 1
     assert len(snap["positions"]) == 1
     assert len(snap["orders"]) == 1
+
+
+def test_auth_callback_stores_session_id(fake_kite_mcp) -> None:
+    resp = client.get("/api/mcp/kite/auth/callback?session_id=cb|token.sig")
+    assert resp.status_code == 200
+    assert "authorization received" in (resp.text or "").lower()
+
+    with SessionLocal() as db:
+        row = (
+            db.query(BrokerSecret)
+            .filter(
+                BrokerSecret.broker_name == "kite_mcp",
+                BrokerSecret.key == "auth_session_id_v1",
+                BrokerSecret.user_id.is_(None),
+            )
+            .one_or_none()
+        )
+        assert row is not None
+        assert "cb|token.sig" not in (row.value_encrypted or "")
