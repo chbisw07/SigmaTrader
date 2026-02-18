@@ -1237,8 +1237,119 @@ export const riskManagementGuide: HelpContext = {
   ],
 }
 
+export const aiSettingsHelp: HelpContext = {
+  id: 'settings-ai',
+  title: 'AI settings help',
+  overview: [
+    'This tab configures the AI Trading Manager subsystem (assistant UI, monitoring, and (future) broker-aware automation).',
+    'Broker is ultimate truth. SigmaTrader keeps an expected ledger and requires reconciliation for safety.',
+  ],
+  sections: [
+    {
+      id: 'ai-flags',
+      title: 'Feature flags & safety',
+      qas: [
+        {
+          id: 'ai-flags-what',
+          question: 'What do the feature flags control?',
+          answer: [
+            {
+              type: 'bullets',
+              items: [
+                'AI assistant enabled: shows the assistant panel UI.',
+                'Kite MCP enabled: enables broker-truth access via a Kite MCP server (Phase 1 integration).',
+                'Monitoring enabled: enables background monitoring jobs (Phase 1+).',
+                'AI execution enabled: allows the subsystem to place orders (policy-gated and audit-logged).',
+              ],
+            },
+            {
+              type: 'callout',
+              tone: 'warning',
+              text: 'Execution should remain OFF unless Kite MCP is connected and RiskGate/Orchestrator are fully wired.',
+            },
+          ],
+        },
+        {
+          id: 'ai-kill-switch',
+          question: 'What does the kill switch do?',
+          answer: [
+            {
+              type: 'p',
+              text: 'The kill switch disables all AI execution paths immediately, even if the execution flag is enabled.',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'kite-mcp',
+      title: 'Kite MCP',
+      qas: [
+        {
+          id: 'kite-mcp-what',
+          question: 'What is Kite MCP?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Kite MCP is a separate service that exposes broker data and broker actions via a controlled interface. SigmaTrader can test connectivity and cache capabilities.',
+            },
+          ],
+        },
+        {
+          id: 'kite-mcp-scopes',
+          question: 'What are scopes?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Scopes describe the intended permission surface (read-only vs trade). SigmaTrader still enforces policy and may veto execution regardless of scope.',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'llm-provider',
+      title: 'Model / provider',
+      qas: [
+        {
+          id: 'llm-provider-placeholder',
+          question: 'Is LLM provider configuration active?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Not fully yet. These values are stored server-side now so Phase 1 orchestrator can consume them without changing the UI contract.',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  gettingStarted: [
+    'Enable AI assistant to show the panel.',
+    'Configure Kite MCP server URL and run Test Connection.',
+    'Keep AI execution disabled until RiskGate and execution engine are fully integrated.',
+  ],
+  troubleshooting: [
+    {
+      id: 'ai-ts-execution-blocked',
+      question: 'Why is “AI execution enabled” blocked?',
+      answer: [
+        {
+          type: 'bullets',
+          items: [
+            'Kite MCP must be enabled and connected (run Test Connection).',
+            'If the kill switch is ON, execution remains blocked.',
+            'Check the Audit Log for the last Kite MCP test error.',
+          ],
+        },
+      ],
+    },
+  ],
+}
+
 export const SETTINGS_HELP_BY_TAB = {
   broker: brokerSettingsHelp,
+  ai: aiSettingsHelp,
   risk: riskSettingsHelp,
   webhook: tradingViewWebhookHelp,
   market: marketConfigurationHelp,

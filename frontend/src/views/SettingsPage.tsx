@@ -72,6 +72,7 @@ import { RiskGlobalsPanel } from '../components/RiskGlobalsPanel'
 import { RiskSettingsBackupPanel } from '../components/RiskSettingsBackupPanel'
 import { RiskSourceOverridesPanel } from '../components/RiskSourceOverridesPanel'
 import { EffectiveRiskSummaryPanel } from '../components/EffectiveRiskSummaryPanel'
+import { AiSettingsPanel } from '../components/AiSettingsPanel'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
 import { formatInTimeZone } from '../utils/datetime'
@@ -383,7 +384,7 @@ export function SettingsPage() {
   const { displayTimeZone, setDisplayTimeZone } = useTimeSettings()
   const systemTimeZone = getSystemTimeZone()
 
-  type SettingsTab = 'broker' | 'risk' | 'webhook' | 'market' | 'time' | 'notifications'
+  type SettingsTab = 'broker' | 'ai' | 'risk' | 'webhook' | 'market' | 'time' | 'notifications'
   const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabledState] = useState<boolean>(
     () => getDesktopAlertNotificationsEnabled(),
@@ -468,6 +469,7 @@ export function SettingsPage() {
     const normalizedTab = tab === 'strategy' ? 'webhook' : tab
     if (
       normalizedTab === 'broker' ||
+      normalizedTab === 'ai' ||
       normalizedTab === 'risk' ||
       normalizedTab === 'webhook' ||
       normalizedTab === 'market' ||
@@ -547,17 +549,19 @@ export function SettingsPage() {
 
   const handleTabChange = (_event: React.SyntheticEvent, next: string) => {
     const nextTab: SettingsTab =
-      next === 'risk'
-        ? 'risk'
-        : next === 'webhook'
-          ? 'webhook'
-          : next === 'market'
-            ? 'market'
-            : next === 'time'
-              ? 'time'
-              : next === 'notifications'
-                ? 'notifications'
-              : 'broker'
+      next === 'ai'
+        ? 'ai'
+        : next === 'risk'
+          ? 'risk'
+          : next === 'webhook'
+            ? 'webhook'
+            : next === 'market'
+              ? 'market'
+              : next === 'time'
+                ? 'time'
+                : next === 'notifications'
+                  ? 'notifications'
+                  : 'broker'
     setActiveTab(nextTab)
     const params = new URLSearchParams(location.search)
     params.set('tab', nextTab)
@@ -893,6 +897,7 @@ export function SettingsPage() {
           scrollButtons="auto"
         >
           <Tab value="broker" label="Broker settings" />
+          <Tab value="ai" label="AI" />
           <Tab value="risk" label="Risk settings" />
           <Tab value="webhook" label="TradingView webhook" />
           <Tab value="market" label="Market configuration" />
@@ -1193,6 +1198,12 @@ export function SettingsPage() {
               </Typography>
             )}
           </Paper>
+        </Box>
+      )}
+
+      {activeTab === 'ai' && (
+        <Box sx={{ mb: 3 }}>
+          <AiSettingsPanel />
         </Box>
       )}
 

@@ -34,6 +34,7 @@ import ViewListIcon from '@mui/icons-material/ViewList'
 import ManageSearchIcon from '@mui/icons-material/ManageSearch'
 import ScienceIcon from '@mui/icons-material/Science'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
+import SmartToyIcon from '@mui/icons-material/SmartToy'
 import { NavLink } from 'react-router-dom'
 
 import { useHealth } from '../services/health'
@@ -43,7 +44,7 @@ import {
   DESKTOP_NOTIFICATIONS_CHANGED_EVENT,
   getDesktopAlertNotificationsEnabled,
 } from '../services/desktopNotifications'
-import { isAiAssistantEnabled } from '../config/aiFeatures'
+import { AI_TM_FLAGS_CHANGED_EVENT, isAiAssistantEnabled } from '../config/aiFeatures'
 import { AssistantPanelShell } from '../components/ai/AssistantPanelShell'
 
 const drawerWidth = 220
@@ -79,6 +80,7 @@ const mainNavItems: NavItem[] = [
 
 const bottomNavItems: NavItem[] = [
   { label: 'Appearance', to: '/appearance', icon: <PaletteIcon /> },
+  { label: 'AI Settings', to: '/settings?tab=ai', icon: <SmartToyIcon /> },
   { label: 'Settings', to: '/settings', icon: <SettingsIcon /> },
 ]
 
@@ -99,6 +101,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
   const [desktopAlertsEnabled, setDesktopAlertsEnabled] = useState<boolean>(() =>
     getDesktopAlertNotificationsEnabled(),
   )
+  const [aiEnabled, setAiEnabled] = useState<boolean>(() => isAiAssistantEnabled())
 
   useDesktopAlertNotifications({ enabled: desktopAlertsEnabled })
 
@@ -144,6 +147,13 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
     const handler = () => setDesktopAlertsEnabled(getDesktopAlertNotificationsEnabled())
     window.addEventListener(DESKTOP_NOTIFICATIONS_CHANGED_EVENT, handler)
     return () => window.removeEventListener(DESKTOP_NOTIFICATIONS_CHANGED_EVENT, handler)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handler = () => setAiEnabled(isAiAssistantEnabled())
+    window.addEventListener(AI_TM_FLAGS_CHANGED_EVENT, handler)
+    return () => window.removeEventListener(AI_TM_FLAGS_CHANGED_EVENT, handler)
   }, [])
 
   const effectiveDrawerWidth = sidebarCollapsed
@@ -380,7 +390,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
       >
         {children}
       </Box>
-      {isAiAssistantEnabled() && <AssistantPanelShell />}
+      {aiEnabled && <AssistantPanelShell />}
     </Box>
   )
 }

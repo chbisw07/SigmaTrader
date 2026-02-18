@@ -1,4 +1,5 @@
 const LS_PREFIX = 'st_ai_tm_flags_v1'
+export const AI_TM_FLAGS_CHANGED_EVENT = 'st_ai_tm_flags_changed_v1'
 
 function readBoolParam(name: string): boolean | null {
   if (typeof window === 'undefined') return null
@@ -31,6 +32,7 @@ function writeBoolLS(name: string, enabled: boolean): void {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(`${LS_PREFIX}:${name}`, enabled ? '1' : '0')
+    window.dispatchEvent(new Event(AI_TM_FLAGS_CHANGED_EVENT))
   } catch {
     // ignore
   }
@@ -74,4 +76,3 @@ export function isAiAssistantEnabled(): boolean {
 export function setAiTmFeatureFlag(name: keyof AiTmFeatureFlags, enabled: boolean): void {
   writeBoolLS(name, enabled)
 }
-
