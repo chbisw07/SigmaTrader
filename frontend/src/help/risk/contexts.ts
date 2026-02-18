@@ -1317,7 +1317,7 @@ export const aiSettingsHelp: HelpContext = {
           answer: [
             {
               type: 'p',
-              text: 'Not fully yet. These values are stored server-side now so Phase 1 orchestrator can consume them without changing the UI contract.',
+              text: 'Yes for testing: you can configure OpenAI/Google/Local providers, discover models, store keys server-side (masked in UI), and run a test prompt. Full orchestrator/tool routing is still Phase 1 work.',
             },
           ],
         },

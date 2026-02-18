@@ -135,6 +135,63 @@ SigmaTrader includes an **AI Settings** tab at `Settings → AI` (`/settings?tab
 * `POST /api/settings/ai/kite/test`
 * `GET  /api/settings/ai/audit`
 
+### 8) AI Provider + Model (real test path)
+
+The **Model / Provider** panel in `Settings → AI` is now functional and lets you:
+
+* Choose provider: OpenAI / Google (Gemini) / Ollama (local) / LM Studio (local)
+* Store API keys securely server-side (encrypted; UI shows masked only)
+* Discover models (dynamic list) with fallback to manual model entry
+* Run a **Test Prompt** and see response + latency + token usage (best-effort)
+
+**Backend endpoints**
+
+* `GET  /api/ai/providers`
+* `GET  /api/ai/config`
+* `PUT  /api/ai/config`
+* `GET  /api/ai/keys?provider=<id>`
+* `POST /api/ai/keys`
+* `PUT  /api/ai/keys/{id}`
+* `DELETE /api/ai/keys/{id}`
+* `POST /api/ai/models/discover`
+* `POST /api/ai/test`
+
+**Auditability**
+
+* All config/key/test actions emit `SystemEvent` entries in category `AI_PROVIDER`.
+* When “Do not send PII” is enabled, audit logs store only a `prompt_hash` (no prompt preview).
+
+**How to test locally**
+
+OpenAI:
+1. `Settings → AI → Model / Provider`
+2. Provider: **OpenAI**
+3. Add key (name + API key), select it
+4. Enable provider
+5. Fetch models → pick a model (or type custom)
+6. Run Test
+
+Google (Gemini):
+1. Provider: **Google (Gemini)**
+2. Add key (AI Studio / Gemini API key), select it
+3. Enable provider
+4. Fetch models → pick a model
+5. Run Test
+
+Ollama:
+1. Start Ollama locally (default `http://localhost:11434`)
+2. Provider: **Ollama (local)**
+3. Enable provider
+4. Fetch models
+5. Choose a model and Run Test
+
+LM Studio:
+1. Start LM Studio server in OpenAI-compatible mode (typically `http://localhost:1234/v1`)
+2. Provider: **LM Studio (local)**
+3. Enable provider
+4. Fetch models
+5. Choose a model and Run Test
+
 **How to test locally**
 
 1. Start backend + frontend.
