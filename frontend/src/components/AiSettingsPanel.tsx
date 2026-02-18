@@ -25,6 +25,7 @@ import {
   type AiSettings,
 } from '../services/aiSettings'
 import { setAiTmFeatureFlag } from '../config/aiFeatures'
+import { AiProviderSettingsPanel } from './ai/AiProviderSettingsPanel'
 
 function statusChip(status: string) {
   const s = (status || '').toLowerCase()
@@ -409,112 +410,7 @@ export function AiSettingsPanel() {
         </Stack>
       </Paper>
 
-      <Paper sx={{ p: 2 }}>
-        <Typography variant="subtitle1">Model / Provider (Not active yet)</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ pt: 0.5 }}>
-          These settings are stored now so Phase 1 orchestrator can consume them later.
-        </Typography>
-
-        <Stack spacing={1.25} sx={{ pt: 1.5 }}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={settings.llm_provider.enabled}
-                onChange={(_, v) => void patch({ llm_provider: { ...settings.llm_provider, enabled: v } } as any)}
-              />
-            }
-            label="LLM provider enabled"
-          />
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-            <TextField
-              label="Provider"
-              value={settings.llm_provider.provider}
-              onChange={(e) => void patch({ llm_provider: { ...settings.llm_provider, provider: e.target.value as any } } as any)}
-              size="small"
-              select
-              sx={{ width: 200 }}
-            >
-              <MenuItem value="stub">stub</MenuItem>
-              <MenuItem value="openai">openai</MenuItem>
-              <MenuItem value="anthropic">anthropic</MenuItem>
-              <MenuItem value="local">local</MenuItem>
-            </TextField>
-            <TextField
-              label="Model"
-              value={settings.llm_provider.model ?? ''}
-              onChange={(e) => void patch({ llm_provider: { ...settings.llm_provider, model: e.target.value || null } } as any)}
-              size="small"
-              sx={{ minWidth: 240, flex: 1 }}
-              placeholder="e.g. gpt-5.2"
-            />
-          </Stack>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={settings.llm_provider.do_not_send_pii}
-                onChange={(_, v) => void patch({ llm_provider: { ...settings.llm_provider, do_not_send_pii: v } } as any)}
-              />
-            }
-            label="Do not send PII"
-          />
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-            <TextField
-              label="Max tokens / request"
-              type="number"
-              value={settings.llm_provider.limits.max_tokens_per_request ?? ''}
-              onChange={(e) =>
-                void patch({
-                  llm_provider: {
-                    ...settings.llm_provider,
-                    limits: {
-                      ...settings.llm_provider.limits,
-                      max_tokens_per_request: e.target.value ? Number(e.target.value) : null,
-                    },
-                  },
-                } as any)
-              }
-              size="small"
-              sx={{ width: 200 }}
-            />
-            <TextField
-              label="Max cost / request (USD)"
-              type="number"
-              value={settings.llm_provider.limits.max_cost_usd_per_request ?? ''}
-              onChange={(e) =>
-                void patch({
-                  llm_provider: {
-                    ...settings.llm_provider,
-                    limits: {
-                      ...settings.llm_provider.limits,
-                      max_cost_usd_per_request: e.target.value ? Number(e.target.value) : null,
-                    },
-                  },
-                } as any)
-              }
-              size="small"
-              sx={{ width: 220 }}
-            />
-            <TextField
-              label="Max cost / day (USD)"
-              type="number"
-              value={settings.llm_provider.limits.max_cost_usd_per_day ?? ''}
-              onChange={(e) =>
-                void patch({
-                  llm_provider: {
-                    ...settings.llm_provider,
-                    limits: {
-                      ...settings.llm_provider.limits,
-                      max_cost_usd_per_day: e.target.value ? Number(e.target.value) : null,
-                    },
-                  },
-                } as any)
-              }
-              size="small"
-              sx={{ width: 220 }}
-            />
-          </Stack>
-        </Stack>
-      </Paper>
+      <AiProviderSettingsPanel />
 
       <Dialog open={confirmExecOpen} onClose={() => setConfirmExecOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Enable AI execution?</DialogTitle>
