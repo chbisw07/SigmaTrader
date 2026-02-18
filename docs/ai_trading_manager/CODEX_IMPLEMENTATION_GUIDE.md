@@ -117,4 +117,30 @@ Each task in `sprint_tasks_codex.xlsx` must include:
 * Never allow execution without RiskGate pass.
 * All actions must produce DecisionTrace.
 
+### 7) AI Settings (ST Web UI)
+
+SigmaTrader includes an **AI Settings** tab at `Settings → AI` (`/settings?tab=ai`) to configure and test AI subsystem settings.
+
+**What it stores (server-side)**
+
+* Feature flags: `ai_assistant_enabled`, `kite_mcp_enabled`, `monitoring_enabled`, `ai_execution_enabled`
+* Execution kill switch (hard disable)
+* Kite MCP connection profile (URL, scopes, adapter placeholder) + last test status + cached capabilities
+* LLM provider config (placeholder; Phase 1 orchestrator will consume)
+
+**Backend endpoints**
+
+* `GET  /api/settings/ai`
+* `PUT  /api/settings/ai`
+* `POST /api/settings/ai/kite/test`
+* `GET  /api/settings/ai/audit`
+
+**How to test locally**
+
+1. Start backend + frontend.
+2. Open `Settings → AI`.
+3. Set Kite MCP server URL (e.g. `http://localhost:5555`) and click **Test Connection**.
+4. Verify **Connected** and check **View Audit Log**.
+5. Keep **AI execution enabled** OFF unless RiskGate + orchestrator are fully integrated.
+
 ---
