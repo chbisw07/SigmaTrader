@@ -63,6 +63,7 @@ from .ai_trading_manager import (
     AiTmTradePlan,
     AiTmExpectedPosition,
 )
+from .ai_provider import AiProviderKey
 
 __all__ = [
     "Alert",
@@ -134,4 +135,5 @@ __all__ = [
     "AiTmReconciliationRun",
     "AiTmTradePlan",
     "AiTmExpectedPosition",
+    "AiProviderKey",
 ]
