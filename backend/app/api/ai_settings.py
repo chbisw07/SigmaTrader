@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -9,7 +10,15 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import SystemEvent
-from app.schemas.ai_settings import AiAuditResponse, AiSettings, AiSettingsUpdate
+from app.schemas.ai_settings import (
+    AiAuditResponse,
+    AiSettings,
+    AiSettingsUpdate,
+    KiteMcpStatus,
+    KiteMcpTestRequest,
+    KiteMcpTestResponse,
+)
+from app.clients.kite_mcp import HttpKiteMCPClient
 from app.services.ai_trading_manager.ai_settings_config import (
     apply_ai_settings_update,
     get_ai_settings_with_source,
@@ -94,6 +103,72 @@ def update_ai_settings(
         },
     )
     return merged
+
+
+@router.post("/kite/test", response_model=KiteMcpTestResponse)
+def test_kite_mcp_connection(
+    payload: KiteMcpTestRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> KiteMcpTestResponse:
+    cfg, _src = get_ai_settings_with_source(db, settings)
+
+    # Allow overriding the URL (e.g. user typed and hit Test before saving).
+    if payload.server_url is not None:
+        try:
+            cfg = apply_ai_settings_update(
+                existing=cfg,
+                update=AiSettingsUpdate(kite_mcp={"server_url": payload.server_url}),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    server_url = (cfg.kite_mcp.server_url or "").strip()
+    if not server_url:
+        raise HTTPException(status_code=400, detail="Kite MCP server URL is not configured.")
+
+    client = HttpKiteMCPClient(timeout_seconds=5)
+    checked = datetime.now(UTC)
+    result = client.test_connection(server_url=server_url, fetch_capabilities=bool(payload.fetch_capabilities))
+
+    cfg.kite_mcp.last_checked_ts = checked
+    cfg.kite_mcp.last_status = KiteMcpStatus.connected if result.ok else KiteMcpStatus.error
+    cfg.kite_mcp.last_error = None if result.ok else (result.error or "Kite MCP connection test failed.")
+
+    cache: Dict[str, Any] = {}
+    if result.used_endpoint:
+        cache["used_endpoint"] = result.used_endpoint
+    if result.status_code is not None:
+        cache["status_code"] = int(result.status_code)
+    if result.health is not None:
+        cache["health"] = result.health
+    if result.capabilities is not None:
+        cache["capabilities"] = result.capabilities
+    if cache:
+        cfg.kite_mcp.capabilities_cache = cache
+
+    set_ai_settings(db, settings, cfg)
+    record_system_event(
+        db,
+        level="INFO" if result.ok else "WARNING",
+        category="KITE_MCP",
+        message="Kite MCP connection test completed." if result.ok else "Kite MCP connection test failed.",
+        correlation_id=_corr(),
+        details={
+            "server_url": server_url,
+            "status": cfg.kite_mcp.last_status.value,
+            "checked_ts": checked.isoformat(),
+            "error": cfg.kite_mcp.last_error,
+            "capabilities_cache": cfg.kite_mcp.capabilities_cache,
+        },
+    )
+
+    return KiteMcpTestResponse(
+        status=cfg.kite_mcp.last_status,
+        checked_ts=checked,
+        error=cfg.kite_mcp.last_error,
+        capabilities=cfg.kite_mcp.capabilities_cache or {},
+    )
 
 
 @router.get("/audit", response_model=AiAuditResponse)
