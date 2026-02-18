@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from ..core.config import Settings, get_settings
 from ..core.security import require_admin
 from . import (
+    ai_trading_manager,
     alerts_v3,
     analytics,
     angelone,
@@ -232,6 +233,13 @@ router.include_router(
     prefix="/api/brokers",
     dependencies=[Depends(require_admin)],
     tags=["brokers"],
+)
+
+router.include_router(
+    ai_trading_manager.router,
+    prefix="/api/ai",
+    dependencies=[Depends(require_admin)],
+    tags=["ai"],
 )
 
 router.include_router(

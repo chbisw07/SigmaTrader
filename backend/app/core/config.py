@@ -76,6 +76,15 @@ class Settings(BaseSettings):
     # "NSE:INFY,BSE:TCS" (also accepts bare symbols like "INFY").
     holdings_exit_allowlist_symbols: str | None = None
 
+    # --- AI Trading Manager (feature-flagged; Phase 0 must be merge-safe) ---
+    ai_assistant_enabled: bool = False
+    ai_execution_enabled: bool = False
+    # Hard kill switch: when enabled, blocks any broker-write execution paths even
+    # if ai_execution_enabled is true.
+    ai_execution_kill_switch: bool = False
+    kite_mcp_enabled: bool = False
+    monitoring_enabled: bool = False
+
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.
         model_config = SettingsConfigDict(
@@ -140,6 +149,34 @@ def get_settings() -> Settings:
     raw_allow = os.getenv("ST_HOLDINGS_EXIT_ALLOWLIST_SYMBOLS")
     if raw_allow is not None:
         settings.holdings_exit_allowlist_symbols = str(raw_allow).strip() or None
+
+    def _parse_bool(name: str) -> bool | None:
+        raw = os.getenv(name)
+        if raw is None:
+            return None
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    # AI Trading Manager flags: keep usable even in the BaseModel fallback where
+    # env loading is not automatic.
+    raw_ai_assistant = _parse_bool("ST_AI_ASSISTANT_ENABLED")
+    if raw_ai_assistant is not None:
+        settings.ai_assistant_enabled = raw_ai_assistant
+
+    raw_ai_exec = _parse_bool("ST_AI_EXECUTION_ENABLED")
+    if raw_ai_exec is not None:
+        settings.ai_execution_enabled = raw_ai_exec
+
+    raw_ai_kill = _parse_bool("ST_AI_EXECUTION_KILL_SWITCH")
+    if raw_ai_kill is not None:
+        settings.ai_execution_kill_switch = raw_ai_kill
+
+    raw_kite_mcp = _parse_bool("ST_KITE_MCP_ENABLED")
+    if raw_kite_mcp is not None:
+        settings.kite_mcp_enabled = raw_kite_mcp
+
+    raw_monitoring = _parse_bool("ST_MONITORING_ENABLED")
+    if raw_monitoring is not None:
+        settings.monitoring_enabled = raw_monitoring
 
     raw_poll = os.getenv("ST_HOLDINGS_EXIT_POLL_INTERVAL_SEC")
     if raw_poll is not None:

@@ -60,6 +60,9 @@ build/
 .idea/
 .history/
 
+# LibreOffice lock files
+.~lock.*#
+
 # Backend config (keep examples only)
 backend/config/*.json
 !backend/config/*.json.example

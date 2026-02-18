@@ -43,6 +43,8 @@ import {
   DESKTOP_NOTIFICATIONS_CHANGED_EVENT,
   getDesktopAlertNotificationsEnabled,
 } from '../services/desktopNotifications'
+import { isAiAssistantEnabled } from '../config/aiFeatures'
+import { AssistantPanelShell } from '../components/ai/AssistantPanelShell'
 
 const drawerWidth = 220
 const collapsedDrawerWidth = 64
@@ -378,6 +380,7 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
       >
         {children}
       </Box>
+      {isAiAssistantEnabled() && <AssistantPanelShell />}
     </Box>
   )
 }

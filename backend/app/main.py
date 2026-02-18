@@ -23,6 +23,9 @@ from .services.market_data import schedule_market_data_sync
 from .services.synthetic_gtt import schedule_synthetic_gtt
 from .services.users import ensure_default_admin
 from .services.risk_unified_migration import migrate_legacy_risk_policy_v1_to_unified
+from .services.ai_trading_manager.monitoring.scheduler import (
+    schedule_ai_tm_monitoring,
+)
 
 settings = get_settings()
 
@@ -171,6 +174,8 @@ async def _lifespan(_app: FastAPI):
         )
 
         schedule_holdings_summary_finalizer()
+        # AI Trading Manager monitoring loop is feature-flagged and no-ops unless enabled.
+        schedule_ai_tm_monitoring()
 
     enable_deployments = (
         (os.getenv("ST_ENABLE_DEPLOYMENTS_RUNTIME") or "").strip().lower()

@@ -48,6 +48,17 @@ from .trading import (
     Strategy,
 )
 from .user import User
+from .ai_trading_manager import (
+    AiTmBrokerSnapshot,
+    AiTmChatMessage,
+    AiTmDecisionTrace,
+    AiTmException,
+    AiTmIdempotencyRecord,
+    AiTmLedgerSnapshot,
+    AiTmMonitorJob,
+    AiTmMonitorTrigger,
+    AiTmReconciliationRun,
+)
 
 __all__ = [
     "Alert",
@@ -106,4 +117,13 @@ __all__ = [
     "DrawdownThreshold",
     "EquitySnapshot",
     "AlertDecisionLog",
+    "AiTmBrokerSnapshot",
+    "AiTmChatMessage",
+    "AiTmDecisionTrace",
+    "AiTmException",
+    "AiTmIdempotencyRecord",
+    "AiTmLedgerSnapshot",
+    "AiTmMonitorJob",
+    "AiTmMonitorTrigger",
+    "AiTmReconciliationRun",
 ]

@@ -15,6 +15,8 @@ import { BacktestingPage } from '../views/BacktestingPage'
 import { DeploymentsPage } from '../views/DeploymentsPage'
 import { DeploymentDetailsPage } from '../views/DeploymentDetailsPage'
 import { RiskManagementGuidePage } from '../views/RiskManagementGuidePage'
+import { ExceptionsCenterPage } from '../views/ExceptionsCenterPage'
+import { DecisionTracePage } from '../views/DecisionTracePage'
 
 export function AppRoutes() {
   return (
@@ -38,6 +40,8 @@ export function AppRoutes() {
       <Route path="/appearance" element={<AppearancePage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/risk-guide" element={<RiskManagementGuidePage />} />
+      <Route path="/ai/exceptions" element={<ExceptionsCenterPage />} />
+      <Route path="/ai/decision-traces/:decisionId" element={<DecisionTracePage />} />
       {/* /auth is handled at the App.tsx level */}
     </Routes>
   )
