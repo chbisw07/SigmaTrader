@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from ..core.config import Settings, get_settings
 from ..core.security import require_admin
 from . import (
+    ai_settings,
     ai_trading_manager,
     alerts_v3,
     analytics,
@@ -240,6 +241,13 @@ router.include_router(
     prefix="/api/ai",
     dependencies=[Depends(require_admin)],
     tags=["ai"],
+)
+
+router.include_router(
+    ai_settings.router,
+    prefix="/api/settings/ai",
+    dependencies=[Depends(require_admin)],
+    tags=["ai-settings"],
 )
 
 router.include_router(

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.core.config import get_settings
+from app.db.session import SessionLocal
+from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +24,20 @@ _state = SchedulerState()
 
 def _loop() -> None:
     settings = get_settings()
-    if not settings.monitoring_enabled:
-        return
-
     logger.info(
         "AI TM monitoring scheduler started",
         extra={"extra": {"monitoring_enabled": True}},
     )
     _state.running = True
     try:
-        while get_settings().monitoring_enabled:
+        while True:
+            with SessionLocal() as db:
+                cfg, _src = get_ai_settings_with_source(db, settings)
+                enabled = bool(cfg.feature_flags.monitoring_enabled)
+            if not enabled:
+                _state.last_tick_at = datetime.now(UTC)
+                time.sleep(1.0)
+                continue
             _state.last_tick_at = datetime.now(UTC)
             # Phase 0: store + API only. Evaluation/triggering arrives in Phase 1.
             time.sleep(1.0)
@@ -41,9 +47,6 @@ def _loop() -> None:
 
 
 def schedule_ai_tm_monitoring() -> None:
-    settings = get_settings()
-    if not settings.monitoring_enabled:
-        return
     if _state.running:
         return
     t = threading.Thread(target=_loop, name="ai-tm-monitoring", daemon=True)
@@ -52,4 +55,3 @@ def schedule_ai_tm_monitoring() -> None:
 
 def get_scheduler_state() -> SchedulerState:
     return _state
-

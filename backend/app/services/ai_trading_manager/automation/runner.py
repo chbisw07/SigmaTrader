@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models.ai_trading_manager import AiTmPlaybook, AiTmPlaybookRun
 from app.services.ai_trading_manager import audit_store
+from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
 from app.services.ai_trading_manager.broker_factory import get_broker_adapter
 from app.services.ai_trading_manager.execution.engine import ExecutionEngine
 from app.services.ai_trading_manager.feature_flags import require_execution_enabled
@@ -39,12 +40,14 @@ def _dedupe_key(playbook_id: str, now: datetime, cadence_sec: int) -> str:
 
 def run_automation_tick(*, max_playbooks: int = 20) -> int:
     settings = get_settings()
-    if not settings.monitoring_enabled:
-        return 0
 
     now = datetime.now(UTC)
     ran = 0
     with SessionLocal() as db:
+        cfg, _src = get_ai_settings_with_source(db, settings)
+        if not cfg.feature_flags.monitoring_enabled:
+            return 0
+
         due = (
             db.execute(
                 select(AiTmPlaybook)
@@ -141,12 +144,13 @@ def run_automation_tick(*, max_playbooks: int = 20) -> int:
                     outcome["execution"] = {"executed": False}
                 else:
                     auth_id = str(pb.armed_by_message_id) if pb.armed_by_message_id else None
-                    if settings.ai_execution_enabled and not settings.ai_execution_kill_switch:
+                    cfg2, _src2 = get_ai_settings_with_source(db, settings)
+                    if cfg2.feature_flags.ai_execution_enabled and not cfg2.kill_switch.ai_execution_kill_switch:
                         if not auth_id:
                             run_status = "SKIPPED"
                             outcome["execution"] = {"executed": False, "reason": "ARM_AUTH_MISSING"}
                         else:
-                            require_execution_enabled(settings)
+                            require_execution_enabled(db, settings)
                             engine = ExecutionEngine()
                             outcome["execution"] = engine.execute_to_broker(
                                 db,
@@ -195,13 +199,9 @@ def run_automation_tick(*, max_playbooks: int = 20) -> int:
 
 
 def _loop() -> None:
-    settings = get_settings()
-    if not settings.monitoring_enabled:
-        return
-
     _state.running = True
     try:
-        while get_settings().monitoring_enabled:
+        while True:
             _state.last_tick_at = datetime.now(UTC)
             try:
                 run_automation_tick()
@@ -213,9 +213,6 @@ def _loop() -> None:
 
 
 def schedule_ai_tm_automation() -> None:
-    settings = get_settings()
-    if not settings.monitoring_enabled:
-        return
     if _state.running:
         return
     t = threading.Thread(target=_loop, name="ai-tm-automation", daemon=True)

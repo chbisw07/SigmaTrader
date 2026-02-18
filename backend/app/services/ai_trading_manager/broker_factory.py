@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 
+from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
+
 from .broker_adapter import BrokerAdapter
 from .brokers.stub import StubBrokerAdapter
 
@@ -14,13 +16,14 @@ def get_broker_adapter(
     settings: Settings,
     user_id: int | None,
 ) -> BrokerAdapter:
+    cfg, _src = get_ai_settings_with_source(db, settings)
     # Phase 0 always uses stub. In Phase 1+, the kite_mcp_enabled flag selects
     # a broker-truth adapter. Until the real Kite MCP endpoints are available,
     # this is backed by the existing Zerodha KiteConnect integration.
-    if not settings.kite_mcp_enabled:
+    if not cfg.feature_flags.kite_mcp_enabled:
         return StubBrokerAdapter(mode="mirror")
 
-    broker = (settings.ai_broker_name or "zerodha").strip().lower()
+    broker = (cfg.kite_mcp.broker_adapter or settings.ai_broker_name or "zerodha").strip().lower()
     if broker == "angelone":
         from .brokers.angelone_smartapi import AngelOneSmartApiAdapter
 

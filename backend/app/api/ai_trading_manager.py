@@ -98,7 +98,7 @@ def get_thread(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> AiTmThread:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     log_with_correlation(logger, request, logging.INFO, "ai_tm.thread.read", account_id=account_id, thread_id=thread_id)
     return audit_store.get_thread(db, account_id=account_id, thread_id=thread_id)
 
@@ -111,7 +111,7 @@ def post_message(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> AiTmUserMessageResponse:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     corr = _correlation_id(request)
     user_id = user.id if user is not None else None
 
@@ -170,7 +170,7 @@ def list_traces(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     traces = audit_store.list_decision_traces(db, account_id=account_id, limit=min(limit, 200), offset=max(offset, 0))
     log_with_correlation(
         logger,
@@ -192,7 +192,7 @@ def get_trace(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     trace = audit_store.get_decision_trace(db, decision_id=decision_id)
     if trace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Decision trace not found.")
@@ -208,7 +208,7 @@ def reconcile_now(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     corr = _correlation_id(request)
     user_id = user.id if user is not None else None
 
@@ -282,7 +282,7 @@ def list_exceptions(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     rows = audit_store.list_exceptions(
         db,
         account_id=account_id,
@@ -309,7 +309,7 @@ def get_exception(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     row = audit_store.get_exception(db, exception_id=exception_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exception not found.")
@@ -325,7 +325,7 @@ def ack_exception_api(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
     row = audit_store.ack_exception(db, exception_id=exception_id, status="ACK")
     if row is None:
@@ -349,8 +349,8 @@ def list_monitor_jobs(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    require_ai_assistant_enabled(settings)
-    require_monitoring_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
+    require_monitoring_enabled(db, settings)
     jobs = audit_store.list_monitor_jobs(db, account_id=account_id)
     log_with_correlation(logger, request, logging.INFO, "ai_tm.monitor_jobs.list", account_id=account_id, n=len(jobs))
     return [j.model_dump(mode="json") for j in jobs]
@@ -364,8 +364,8 @@ def upsert_monitor_job(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
-    require_monitoring_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
+    require_monitoring_enabled(db, settings)
     errs = validate_monitor_job(payload)
     if errs:
         raise HTTPException(status_code=400, detail=",".join(errs))
@@ -399,8 +399,8 @@ def delete_monitor_job(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> None:
-    require_ai_assistant_enabled(settings)
-    require_monitoring_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
+    require_monitoring_enabled(db, settings)
     ok = audit_store.delete_monitor_job(db, monitor_job_id=monitor_job_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Monitor job not found.")
@@ -416,7 +416,7 @@ def resync_expected_ledger(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
     adapter = get_broker_adapter(db, settings=settings, user_id=user_id)
     broker_snapshot = adapter.get_snapshot(account_id=account_id)
@@ -442,7 +442,7 @@ def create_trade_plan(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
 
     plan = new_plan_from_intent(payload.intent)
@@ -467,7 +467,7 @@ def read_trade_plan(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     plan = get_trade_plan(db, plan_id=plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="Trade plan not found.")
@@ -482,7 +482,7 @@ def create_playbook_api(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
     plan = normalize_trade_plan(payload.plan)
     payload2 = payload.model_copy(update={"plan": plan})
@@ -506,7 +506,7 @@ def list_playbooks_api(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     return [p.model_dump(mode="json") for p in list_playbooks(db, account_id=account_id)]
 
 
@@ -516,7 +516,7 @@ def get_playbook_api(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     pb = get_playbook(db, playbook_id=playbook_id)
     if pb is None:
         raise HTTPException(status_code=404, detail="Playbook not found.")
@@ -533,8 +533,8 @@ def arm_playbook_api(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
-    require_monitoring_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
+    require_monitoring_enabled(db, settings)
     user_id = user.id if user is not None else None
     if armed and settings.ai_execution_enabled:
         if not authorization_message_id:
@@ -577,7 +577,7 @@ def run_playbook_now_api(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> Dict[str, Any]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
 
     pb = get_playbook(db, playbook_id=playbook_id)
@@ -626,7 +626,7 @@ def run_playbook_now_api(
         if not effective_auth_id:
             raise HTTPException(status_code=400, detail="authorization_message_id is required for execution.")
         _validate_authorization_message_id(db, message_id=effective_auth_id)
-        require_execution_enabled(settings)
+        require_execution_enabled(db, settings)
         if risk.decision.outcome.value == "allow":
             engine = ExecutionEngine()
             outcome["execution"] = engine.execute_to_broker(
@@ -678,7 +678,7 @@ def list_playbook_runs_api(
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     runs = list_playbook_runs(db, playbook_id=playbook_id, limit=limit)
     return [r.model_dump(mode="json") for r in runs]
 
@@ -691,7 +691,7 @@ def portfolio_diagnostics_api(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> PortfolioDiagnostics:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
     adapter = get_broker_adapter(db, settings=settings, user_id=user_id)
     broker_snapshot = adapter.get_snapshot(account_id=account_id)
@@ -745,7 +745,7 @@ def market_context_api(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> MarketContextResponse:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
     symbols_list = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
     overlay = build_market_context_overlay(db, symbols=symbols_list, exchange=exchange, timeframe=timeframe)
@@ -770,7 +770,7 @@ def sizing_suggest_api(
     db: Session = Depends(get_db),
     user: Optional[User] = Depends(get_current_user_optional),
 ) -> SizingSuggestResponse:
-    require_ai_assistant_enabled(settings)
+    require_ai_assistant_enabled(db, settings)
     user_id = user.id if user is not None else None
 
     equity_value = payload.equity_value
