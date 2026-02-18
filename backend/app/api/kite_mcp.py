@@ -12,6 +12,8 @@ from app.db.session import get_db
 from app.schemas.kite_mcp import (
     KiteMcpAuthStartResponse,
     KiteMcpStatusResponse,
+    KiteMcpToolCallRequest,
+    KiteMcpToolCallResponse,
     KiteMcpToolsListResponse,
 )
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source, set_ai_settings
@@ -195,6 +197,39 @@ async def kite_mcp_tools_list(
         details={"event_type": "KITE_MCP_TOOLS_LIST", "count": len(rows)},
     )
     return KiteMcpToolsListResponse(tools=rows)
+
+
+@router.post("/tools/call", response_model=KiteMcpToolCallResponse)
+async def kite_mcp_tools_call(
+    payload: KiteMcpToolCallRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> KiteMcpToolCallResponse:
+    _require_kite_mcp_enabled(db, settings)
+    cfg, _src = get_ai_settings_with_source(db, settings)
+    assert cfg.kite_mcp.server_url
+
+    auth_sid = get_auth_session_id(db, settings)
+    session = await kite_mcp_sessions.get_session(server_url=cfg.kite_mcp.server_url, auth_session_id=auth_sid)
+    try:
+        res = await session.tools_call(name=payload.name, arguments=payload.arguments or {})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "tools/call failed.") from exc
+
+    record_system_event(
+        db,
+        level="INFO",
+        category="KITE_MCP",
+        message="Kite MCP tool called.",
+        correlation_id=_corr(),
+        details={
+            "event_type": "KITE_MCP_TOOL_CALL",
+            "tool": payload.name,
+            "args_keys": sorted(list((payload.arguments or {}).keys())),
+            "is_error": bool(res.get("isError")) if isinstance(res, dict) else None,
+        },
+    )
+    return KiteMcpToolCallResponse(result=res if isinstance(res, dict) else {"result": res})
 
 
 __all__ = ["router"]
