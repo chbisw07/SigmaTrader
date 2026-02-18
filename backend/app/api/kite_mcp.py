@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.schemas.ai_trading_manager import BrokerSnapshot
+from app.schemas.ai_settings import KiteMcpStatus
 from app.schemas.kite_mcp import (
     KiteMcpAuthStartResponse,
     KiteMcpStatusResponse,
@@ -90,11 +92,17 @@ async def kite_mcp_status(
     session = await kite_mcp_sessions.get_session(server_url=server_url, auth_session_id=auth_sid)
     connected = False
     last_error: str | None = None
+    tools_count: int | None = None
+    last_connected_at: datetime | None = None
     try:
         await session.ensure_initialized()
         connected = True
+        last_connected_at = datetime.now(UTC)
     except Exception as exc:
         last_error = str(exc) or "Failed to connect."
+        cfg.kite_mcp.last_error = last_error
+        cfg.kite_mcp.last_status = KiteMcpStatus.error
+        set_ai_settings(db, settings, cfg)
         return KiteMcpStatusResponse(
             server_url=server_url,
             connected=False,
@@ -103,10 +111,27 @@ async def kite_mcp_status(
         )
 
     authorized = await _is_authorized(session)
+    try:
+        tools = await session.tools_list()
+        rows = tools.get("tools") if isinstance(tools, dict) else []
+        tools_count = len(rows) if isinstance(rows, list) else None
+    except Exception as exc:
+        last_error = str(exc) or "tools/list failed."
+
+    # Persist last-known status (best-effort) so the UI can show state even
+    # without running the explicit Test Connection action.
+    cfg.kite_mcp.last_connected_ts = last_connected_at
+    cfg.kite_mcp.tools_available_count = tools_count
+    cfg.kite_mcp.last_status = KiteMcpStatus.connected if connected else cfg.kite_mcp.last_status
+    cfg.kite_mcp.last_error = last_error
+    set_ai_settings(db, settings, cfg)
+
     return KiteMcpStatusResponse(
         server_url=server_url,
         connected=connected,
         authorized=authorized,
+        last_connected_at=last_connected_at,
+        tools_available_count=tools_count,
         server_info=session.state.server_info or {},
         capabilities=session.state.capabilities or {},
         last_error=last_error,
@@ -170,6 +195,8 @@ async def kite_mcp_auth_start(
 def kite_mcp_auth_callback(
     session_id: str | None = None,
     sessionId: str | None = None,  # noqa: N803 - upstream naming
+    code: str | None = None,
+    request_token: str | None = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> HTMLResponse:
@@ -181,7 +208,7 @@ def kite_mcp_auth_callback(
     """
 
     stored = False
-    sid = (session_id or sessionId or "").strip() or None
+    sid = (session_id or sessionId or code or request_token or "").strip() or None
     if sid:
         try:
             set_auth_session_id(db, settings, sid)
@@ -205,6 +232,14 @@ def kite_mcp_auth_callback(
   <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px;">
     <h2>Kite MCP authorization received</h2>
     <p>You can close this tab and return to SigmaTrader → Settings → AI, then click “Refresh status”.</p>
+    <script>
+      try {
+        if (window.opener) {
+          window.opener.postMessage({ type: "kite_mcp_auth_complete" }, "*");
+        }
+      } catch (e) {}
+      setTimeout(() => { try { window.close(); } catch (e) {} }, 500);
+    </script>
   </body>
 </html>
 """.strip()

@@ -2,6 +2,8 @@ export type KiteMcpStatus = {
   server_url?: string | null
   connected: boolean
   authorized: boolean
+  last_connected_at?: string | null
+  tools_available_count?: number | null
   server_info?: Record<string, unknown>
   capabilities?: Record<string, unknown>
   last_error?: string | null

@@ -42,6 +42,8 @@ class KiteMcpConfig(BaseModel):
 
     last_status: KiteMcpStatus = KiteMcpStatus.unknown
     last_checked_ts: Optional[datetime] = None
+    last_connected_ts: Optional[datetime] = None
+    tools_available_count: Optional[int] = None
     last_error: Optional[str] = None
     capabilities_cache: Dict[str, Any] = Field(default_factory=dict)
 
@@ -136,4 +138,3 @@ class KiteMcpTestResponse(BaseModel):
 class AiAuditResponse(BaseModel):
     items: List[Dict[str, Any]]
     next_offset: int
-

@@ -100,6 +100,7 @@ class McpSseClient:
                 raise
 
         self._sse_response: httpx.Response | None = None
+        self._sse_stream_cm: Any | None = None
         self._reader_task: asyncio.Task | None = None
 
         self._message_endpoint: str | None = None
@@ -123,14 +124,19 @@ class McpSseClient:
         if self._sse_response is not None:
             return
 
-        resp = await self._client.stream(
+        # Keep a strong reference to the stream context manager. Discarding it
+        # can close the underlying stream unexpectedly (GC/finalizer), which
+        # prevents us from receiving the initial `endpoint` event.
+        stream_cm = self._client.stream(
             "GET",
             self.server_url,
             headers={"Accept": "text/event-stream"},
-        ).__aenter__()
+        )
+        resp = await stream_cm.__aenter__()
+        self._sse_stream_cm = stream_cm
         self._sse_response = resp
 
-        endpoint_fut: asyncio.Future[str] = asyncio.get_event_loop().create_future()
+        endpoint_fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
         async def _reader() -> None:
             try:
@@ -161,22 +167,27 @@ class McpSseClient:
         self._reader_task = asyncio.create_task(_reader())
 
         try:
-            endpoint = await asyncio.wait_for(endpoint_fut, timeout=5)
+            endpoint_timeout = max(0.5, min(10.0, self._timeout_seconds))
+            endpoint = await asyncio.wait_for(endpoint_fut, timeout=endpoint_timeout)
         except Exception as exc:
+            await self.close()
             raise McpError("Failed to establish MCP SSE session.") from exc
 
         # Resolve relative endpoint against server origin.
         if endpoint.startswith("/"):
-            self._message_endpoint = urljoin(self.server_url + "/", endpoint.lstrip("/"))
+            # Absolute-path endpoint (origin-root).
+            self._message_endpoint = urljoin(self.server_url + "/", endpoint)
         else:
-            self._message_endpoint = endpoint
+            # Prefer joining against the SSE URL so relative paths like
+            # `message?sessionId=...` resolve correctly.
+            self._message_endpoint = urljoin(self.server_url + "/", endpoint)
 
     async def close(self) -> None:
         if self._reader_task is not None:
             self._reader_task.cancel()
             try:
                 await self._reader_task
-            except Exception:
+            except BaseException:
                 pass
             self._reader_task = None
 
@@ -192,6 +203,12 @@ class McpSseClient:
             except Exception:
                 pass
             self._sse_response = None
+        if self._sse_stream_cm is not None:
+            try:
+                await self._sse_stream_cm.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._sse_stream_cm = None
 
         if not self._external_client:
             await self._client.aclose()
@@ -209,10 +226,12 @@ class McpSseClient:
         timeout_seconds: float | None = None,
     ) -> Any:
         if self._message_endpoint is None:
+            await self.connect()
+        if self._message_endpoint is None:
             raise McpError("MCP session is not connected.")
 
         rid = self._alloc_id()
-        fut: asyncio.Future = asyncio.get_event_loop().create_future()
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
 
         payload: Dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": method}

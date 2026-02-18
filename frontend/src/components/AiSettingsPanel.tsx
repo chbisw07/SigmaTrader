@@ -99,6 +99,16 @@ export function AiSettingsPanel() {
     void load()
   }, [])
 
+  useEffect(() => {
+    const handler = (ev: MessageEvent) => {
+      if (ev?.data?.type === 'kite_mcp_auth_complete') {
+        void refreshMcpStatus()
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [])
+
   const patch = async (partial: Partial<AiSettings>) => {
     if (!settings) return
     setBusy(true)
@@ -185,6 +195,11 @@ export function AiSettingsPanel() {
       setAuthWarning(res.warning_text)
       setAuthUrl(res.login_url)
       setAuthOpen(true)
+      try {
+        window.open(res.login_url, '_blank', 'noopener,noreferrer')
+      } catch {
+        // ignore
+      }
       await refreshMcpStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start Kite MCP auth')
@@ -464,7 +479,7 @@ export function AiSettingsPanel() {
               size="small"
               variant="outlined"
               onClick={() => void handleTestKite(true)}
-              disabled={busy || !kite.server_url}
+              disabled={busy || !kite.server_url || !mcpStatus?.connected}
             >
               Fetch Capabilities
             </Button>

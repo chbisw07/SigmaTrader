@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -9,6 +10,8 @@ class KiteMcpStatusResponse(BaseModel):
     server_url: Optional[str] = None
     connected: bool = False
     authorized: bool = False
+    last_connected_at: Optional[datetime] = None
+    tools_available_count: Optional[int] = None
     server_info: Dict[str, Any] = Field(default_factory=dict)
     capabilities: Dict[str, Any] = Field(default_factory=dict)
     last_error: Optional[str] = None

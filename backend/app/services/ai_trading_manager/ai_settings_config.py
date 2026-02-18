@@ -66,6 +66,8 @@ def _env_defaults(settings: Settings) -> AiSettings:
             "broker_adapter": str(getattr(settings, "ai_broker_name", "zerodha") or "zerodha").strip().lower(),
             "last_status": KiteMcpStatus.unknown,
             "last_checked_ts": None,
+            "last_connected_ts": None,
+            "tools_available_count": None,
             "last_error": None,
             "capabilities_cache": {},
         },
