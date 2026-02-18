@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.schemas.kite_mcp import (
     KiteMcpAuthStartResponse,
     KiteMcpStatusResponse,
+    KiteMcpToolsListResponse,
 )
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source, set_ai_settings
 from app.services.kite_mcp.secrets import get_auth_session_id, set_auth_session_id
@@ -163,6 +164,37 @@ async def kite_mcp_auth_start(
 # Tools endpoints and the MCP console UI are added in follow-up commits:
 # - POST /tools/list
 # - POST /tools/call
+
+
+@router.post("/tools/list", response_model=KiteMcpToolsListResponse)
+async def kite_mcp_tools_list(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> KiteMcpToolsListResponse:
+    _require_kite_mcp_enabled(db, settings)
+    cfg, _src = get_ai_settings_with_source(db, settings)
+    assert cfg.kite_mcp.server_url
+
+    auth_sid = get_auth_session_id(db, settings)
+    session = await kite_mcp_sessions.get_session(server_url=cfg.kite_mcp.server_url, auth_session_id=auth_sid)
+    try:
+        tools = await session.tools_list()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "tools/list failed.") from exc
+
+    rows = tools.get("tools") if isinstance(tools, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+
+    record_system_event(
+        db,
+        level="INFO",
+        category="KITE_MCP",
+        message="Kite MCP tools listed.",
+        correlation_id=_corr(),
+        details={"event_type": "KITE_MCP_TOOLS_LIST", "count": len(rows)},
+    )
+    return KiteMcpToolsListResponse(tools=rows)
 
 
 __all__ = ["router"]
