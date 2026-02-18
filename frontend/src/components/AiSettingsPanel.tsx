@@ -28,6 +28,7 @@ import { setAiTmFeatureFlag } from '../config/aiFeatures'
 import { AiProviderSettingsPanel } from './ai/AiProviderSettingsPanel'
 import {
   fetchKiteMcpStatus,
+  fetchKiteMcpSnapshot,
   startKiteMcpAuth,
   type KiteMcpStatus,
 } from '../services/kiteMcp'
@@ -65,6 +66,7 @@ export function AiSettingsPanel() {
   const [authOpen, setAuthOpen] = useState(false)
   const [authWarning, setAuthWarning] = useState<string>('')
   const [authUrl, setAuthUrl] = useState<string>('')
+  const [snapshotSummary, setSnapshotSummary] = useState<string | null>(null)
 
   const connectedForExecution = useMemo(() => {
     if (!settings) return false
@@ -186,6 +188,24 @@ export function AiSettingsPanel() {
       await refreshMcpStatus()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start Kite MCP auth')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const fetchSnapshot = async () => {
+    setBusy(true)
+    setError(null)
+    setSnapshotSummary(null)
+    try {
+      const snap = await fetchKiteMcpSnapshot('default')
+      const holdings = Array.isArray(snap?.holdings) ? snap.holdings.length : 0
+      const positions = Array.isArray(snap?.positions) ? snap.positions.length : 0
+      const orders = Array.isArray(snap?.orders) ? snap.orders.length : 0
+      setSnapshotSummary(`Snapshot fetched: holdings=${holdings}, positions=${positions}, orders=${orders}`)
+      await refreshMcpStatus()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Snapshot fetch failed')
     } finally {
       setBusy(false)
     }
@@ -459,7 +479,17 @@ export function AiSettingsPanel() {
             <Button size="small" variant="outlined" onClick={() => void refreshMcpStatus()} disabled={busy}>
               Refresh status
             </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => void fetchSnapshot()}
+              disabled={busy || !mcpStatus?.authorized}
+            >
+              Fetch snapshot
+            </Button>
           </Stack>
+
+          {snapshotSummary && <Alert severity="success">{snapshotSummary}</Alert>}
 
           {kite.capabilities_cache && Object.keys(kite.capabilities_cache).length > 0 && (
             <Box sx={{ pt: 1 }}>

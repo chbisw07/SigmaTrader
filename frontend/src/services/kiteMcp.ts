@@ -61,3 +61,13 @@ export async function callKiteMcpTool(payload: {
   return data.result ?? {}
 }
 
+export async function fetchKiteMcpSnapshot(account_id?: string): Promise<any> {
+  const url = new URL('/api/mcp/kite/snapshot/fetch', window.location.origin)
+  if (account_id) url.searchParams.set('account_id', account_id)
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to fetch snapshot (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as any
+}

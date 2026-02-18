@@ -30,6 +30,7 @@ from app.schemas.ai_trading_manager import (
 )
 from app.services.ai_trading_manager import audit_store
 from app.services.ai_trading_manager.broker_factory import get_broker_adapter
+from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
 from app.services.ai_trading_manager.execution.engine import ExecutionEngine
 from app.services.ai_trading_manager.expected_ledger import resync_expected_positions
 from app.services.ai_trading_manager.feature_flags import (
@@ -57,6 +58,7 @@ from app.services.ai_trading_manager.reconciler import run_reconciler
 from app.services.ai_trading_manager.riskgate.engine import evaluate_riskgate
 from app.services.ai_trading_manager.sizing import extract_equity_value, suggest_qty
 from app.models.ai_trading_manager import AiTmChatMessage
+from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -201,7 +203,7 @@ def get_trace(
 
 
 @router.post("/reconcile")
-def reconcile_now(
+async def reconcile_now(
     request: Request,
     account_id: str = "default",
     settings: Settings = Depends(get_settings),
@@ -212,8 +214,18 @@ def reconcile_now(
     corr = _correlation_id(request)
     user_id = user.id if user is not None else None
 
-    adapter = get_broker_adapter(db, settings=settings, user_id=user_id)
-    broker_snapshot = adapter.get_snapshot(account_id=account_id)
+    cfg, _src = get_ai_settings_with_source(db, settings)
+    adapter_name = "stub"
+    if cfg.feature_flags.kite_mcp_enabled:
+        try:
+            broker_snapshot = await fetch_kite_mcp_snapshot(db, settings, account_id=account_id)
+            adapter_name = "kite_mcp"
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "Kite MCP snapshot fetch failed.") from exc
+    else:
+        adapter = get_broker_adapter(db, settings=settings, user_id=user_id)
+        adapter_name = adapter.name
+        broker_snapshot = adapter.get_snapshot(account_id=account_id)
     ledger_snapshot = build_ledger_snapshot(db, account_id=account_id)
 
     broker_row = audit_store.persist_broker_snapshot(db, broker_snapshot, user_id=user_id)
@@ -244,7 +256,7 @@ def reconcile_now(
             "broker_snapshot_id": broker_row.id,
             "ledger_snapshot_id": ledger_row.id,
             "reconciliation_run_id": run_row.run_id,
-            "adapter": adapter.name,
+            "adapter": adapter_name,
         },
     )
     trace.final_outcome = {

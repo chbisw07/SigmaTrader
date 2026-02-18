@@ -163,6 +163,18 @@ The **Model / Provider** panel in `Settings → AI` is now functional and lets y
 
 **How to test locally**
 
+Kite MCP (MCP over SSE):
+1. Start backend + frontend.
+2. Open `Settings → AI → Kite MCP`.
+3. Set MCP server URL to `https://mcp.kite.trade/sse` (note: this is an **MCP SSE** endpoint, not REST; do not append `/api/health`).
+4. Click **Test Connection** (this performs MCP `initialize` over SSE + HTTP/2).
+5. Click **Authorize**, open the login URL in your browser, and complete Kite login.
+6. Click **Refresh status** until it shows **Authorized**.
+7. Use **MCP Console**:
+   - **List tools**
+   - Call `get_holdings` / `get_positions` / `get_orders` / `get_margins`
+8. Click **Fetch snapshot** (persists a broker snapshot in the audit store).
+
 OpenAI:
 1. `Settings → AI → Model / Provider`
 2. Provider: **OpenAI**
@@ -192,12 +204,8 @@ LM Studio:
 4. Fetch models
 5. Choose a model and Run Test
 
-**How to test locally**
-
-1. Start backend + frontend.
-2. Open `Settings → AI`.
-3. Set Kite MCP server URL (e.g. `http://localhost:5555`) and click **Test Connection**.
-4. Verify **Connected** and check **View Audit Log**.
-5. Keep **AI execution enabled** OFF unless RiskGate + orchestrator are fully integrated.
+Notes:
+* Kite MCP requires HTTP/2 multiplexing for the SSE stream + message POST endpoint to share a session. Backend includes `h2` to enable httpx HTTP/2 support.
+* Keep **AI execution enabled** OFF unless RiskGate + orchestrator are fully integrated.
 
 ---

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
+from app.schemas.ai_trading_manager import BrokerSnapshot
 from app.schemas.kite_mcp import (
     KiteMcpAuthStartResponse,
     KiteMcpStatusResponse,
@@ -16,16 +17,18 @@ from app.schemas.kite_mcp import (
     KiteMcpToolCallResponse,
     KiteMcpToolsListResponse,
 )
+from app.services.ai_trading_manager import audit_store
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source, set_ai_settings
 from app.services.kite_mcp.secrets import get_auth_session_id, set_auth_session_id
 from app.services.kite_mcp.session_manager import kite_mcp_sessions
+from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
 router = APIRouter()
 
-_LOGIN_URL_RE = re.compile(r"https://kite\\.zerodha\\.com/connect/login\\?[^\\s\\]\\)]+")
+_LOGIN_URL_RE = re.compile(r"https://kite\.zerodha\.com/connect/login\?[^\s]+")
 
 
 def _corr() -> str:
@@ -230,6 +233,32 @@ async def kite_mcp_tools_call(
         },
     )
     return KiteMcpToolCallResponse(result=res if isinstance(res, dict) else {"result": res})
+
+
+@router.post("/snapshot/fetch", response_model=BrokerSnapshot)
+async def kite_mcp_fetch_snapshot(
+    account_id: str = "default",
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BrokerSnapshot:
+    _require_kite_mcp_enabled(db, settings)
+    snap = await fetch_kite_mcp_snapshot(db, settings, account_id=account_id)
+    audit_store.persist_broker_snapshot(db, snap, user_id=None)
+    record_system_event(
+        db,
+        level="INFO",
+        category="KITE_MCP",
+        message="Kite MCP snapshot fetched.",
+        correlation_id=_corr(),
+        details={
+            "event_type": "KITE_MCP_SNAPSHOT_FETCH",
+            "account_id": account_id,
+            "holdings": len(snap.holdings),
+            "positions": len(snap.positions),
+            "orders": len(snap.orders),
+        },
+    )
+    return snap
 
 
 __all__ = ["router"]
