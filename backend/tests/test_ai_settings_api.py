@@ -89,22 +89,32 @@ def test_execution_enable_blocked_without_connected_mcp() -> None:
 
 def test_kite_test_updates_status_and_allows_execution(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.api import ai_settings as ai_settings_api
-    from app.clients.kite_mcp import KiteMcpTestResult
 
-    class FakeKiteClient:
-        def __init__(self, *, timeout_seconds: int = 5) -> None:
+    class FakeMcp:
+        def __init__(self, *, server_url: str, timeout_seconds: float = 20) -> None:
+            self.server_url = server_url
             self.timeout_seconds = timeout_seconds
 
-        def test_connection(self, *, server_url: str, fetch_capabilities: bool = True) -> KiteMcpTestResult:
-            return KiteMcpTestResult(
-                ok=True,
-                status_code=200,
-                used_endpoint=f"{server_url.rstrip('/')}/health",
-                health={"ok": True},
-                capabilities={"tools": ["kite.place_order", "kite.positions"]} if fetch_capabilities else None,
-            )
+        async def __aenter__(self):
+            return self
 
-    monkeypatch.setattr(ai_settings_api, "HttpKiteMCPClient", FakeKiteClient)
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return None
+
+        async def initialize(self):
+            return type(
+                "Init",
+                (),
+                {
+                    "server_info": {"name": "Fake", "version": "0"},
+                    "capabilities": {"tools": {"listChanged": True}},
+                },
+            )()
+
+        async def tools_list(self):
+            return {"tools": [{"name": "get_holdings"}]}
+
+    monkeypatch.setattr(ai_settings_api, "McpSseClient", FakeMcp)
 
     # Enable Kite MCP feature flag (required for execution enable).
     resp0 = client.put("/api/settings/ai", json={"feature_flags": {"kite_mcp_enabled": True}})

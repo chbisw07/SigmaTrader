@@ -18,7 +18,7 @@ from app.schemas.ai_settings import (
     KiteMcpTestRequest,
     KiteMcpTestResponse,
 )
-from app.clients.kite_mcp import HttpKiteMCPClient
+from app.clients.mcp_sse import McpError, McpSseClient
 from app.services.ai_trading_manager.ai_settings_config import (
     apply_ai_settings_update,
     get_ai_settings_with_source,
@@ -106,7 +106,7 @@ def update_ai_settings(
 
 
 @router.post("/kite/test", response_model=KiteMcpTestResponse)
-def test_kite_mcp_connection(
+async def test_kite_mcp_connection(
     payload: KiteMcpTestRequest,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -127,32 +127,33 @@ def test_kite_mcp_connection(
     if not server_url:
         raise HTTPException(status_code=400, detail="Kite MCP server URL is not configured.")
 
-    client = HttpKiteMCPClient(timeout_seconds=5)
     checked = datetime.now(UTC)
-    result = client.test_connection(server_url=server_url, fetch_capabilities=bool(payload.fetch_capabilities))
+    cache: Dict[str, Any] = {}
+    ok = False
+    err: str | None = None
+    try:
+        async with McpSseClient(server_url=server_url, timeout_seconds=20) as mcp:
+            init = await mcp.initialize()
+            cache["server_info"] = init.server_info
+            cache["capabilities"] = init.capabilities
+            if payload.fetch_capabilities:
+                tools_res = await mcp.tools_list()
+                cache["tools"] = tools_res.get("tools") if isinstance(tools_res, dict) else tools_res
+            ok = True
+    except (ValueError, McpError) as exc:
+        err = str(exc) or "Kite MCP connection test failed."
 
     cfg.kite_mcp.last_checked_ts = checked
-    cfg.kite_mcp.last_status = KiteMcpStatus.connected if result.ok else KiteMcpStatus.error
-    cfg.kite_mcp.last_error = None if result.ok else (result.error or "Kite MCP connection test failed.")
-
-    cache: Dict[str, Any] = {}
-    if result.used_endpoint:
-        cache["used_endpoint"] = result.used_endpoint
-    if result.status_code is not None:
-        cache["status_code"] = int(result.status_code)
-    if result.health is not None:
-        cache["health"] = result.health
-    if result.capabilities is not None:
-        cache["capabilities"] = result.capabilities
-    if cache:
-        cfg.kite_mcp.capabilities_cache = cache
+    cfg.kite_mcp.last_status = KiteMcpStatus.connected if ok else KiteMcpStatus.error
+    cfg.kite_mcp.last_error = None if ok else err
+    cfg.kite_mcp.capabilities_cache = cache if cache else {}
 
     set_ai_settings(db, settings, cfg)
     record_system_event(
         db,
-        level="INFO" if result.ok else "WARNING",
+        level="INFO" if ok else "WARNING",
         category="KITE_MCP",
-        message="Kite MCP connection test completed." if result.ok else "Kite MCP connection test failed.",
+        message="Kite MCP connection test completed." if ok else "Kite MCP connection test failed.",
         correlation_id=_corr(),
         details={
             "server_url": server_url,
