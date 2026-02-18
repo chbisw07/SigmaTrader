@@ -80,11 +80,24 @@ class McpSseClient:
         self.server_url = _normalize_sse_url(server_url)
         self._timeout_seconds = float(timeout_seconds)
         self._external_client = client is not None
-        self._client = client or httpx.AsyncClient(
-            timeout=timeout_seconds,
-            follow_redirects=True,
-            http2=bool(http2),
-        )
+        if client is not None:
+            self._client = client
+        else:
+            try:
+                self._client = httpx.AsyncClient(
+                    timeout=timeout_seconds,
+                    follow_redirects=True,
+                    http2=bool(http2),
+                )
+            except ImportError as exc:
+                # httpx raises ImportError when http2=True but h2 isn't installed.
+                if http2:
+                    raise McpError(
+                        "HTTP/2 support is required for Kite MCP (SSE + message POST session affinity). "
+                        "Install backend dependencies: `pip install -r backend/requirements.txt` "
+                        "(or `pip install 'httpx[http2]'`)."
+                    ) from exc
+                raise
 
         self._sse_response: httpx.Response | None = None
         self._reader_task: asyncio.Task | None = None

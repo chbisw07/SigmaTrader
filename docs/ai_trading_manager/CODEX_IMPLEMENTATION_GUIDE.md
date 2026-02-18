@@ -206,6 +206,7 @@ LM Studio:
 
 Notes:
 * Kite MCP requires HTTP/2 multiplexing for the SSE stream + message POST endpoint to share a session. Backend includes `h2` to enable httpx HTTP/2 support.
+  - If you see an error about missing `h2`, reinstall backend deps: `pip install -r backend/requirements.txt`.
 * Optional callback endpoint exists at `/api/mcp/kite/auth/callback` for deployments that can route OAuth redirects back into SigmaTrader, but the default flow works by opening the Kite login URL and then refreshing status.
 * Keep **AI execution enabled** OFF unless RiskGate + orchestrator are fully integrated.
 
