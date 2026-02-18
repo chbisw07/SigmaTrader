@@ -41,6 +41,46 @@ export async function postAiMessage(payload: {
   return (await res.json()) as { thread: AiTmThread; decision_id: string }
 }
 
+export type AiChatToolCall = {
+  name: string
+  arguments: Record<string, unknown>
+  status: 'ok' | 'blocked' | 'error' | string
+  duration_ms: number
+  result_preview: string
+  error?: string | null
+}
+
+export async function chatAi(payload: {
+  account_id?: string
+  message: string
+  context?: Record<string, unknown>
+}): Promise<{
+  assistant_message: string
+  decision_id: string
+  tool_calls: AiChatToolCall[]
+  thread?: AiTmThread | null
+}> {
+  const res = await fetch('/api/ai/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_id: payload.account_id ?? 'default',
+      message: payload.message,
+      context: payload.context ?? {},
+    }),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to chat (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as {
+    assistant_message: string
+    decision_id: string
+    tool_calls: AiChatToolCall[]
+    thread?: AiTmThread | null
+  }
+}
+
 export type DecisionTrace = {
   decision_id: string
   correlation_id: string

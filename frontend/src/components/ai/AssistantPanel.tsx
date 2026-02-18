@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Divider from '@mui/material/Divider'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import Paper from '@mui/material/Paper'
 
 import {
+  chatAi,
   fetchAiThread,
   fetchPortfolioDiagnostics,
-  postAiMessage,
+  type AiChatToolCall,
   runAiReconcile,
   type AiTmMessage,
 } from '../../services/aiTradingManager'
@@ -30,11 +33,14 @@ function MessageRow({ m }: { m: AiTmMessage }) {
 }
 
 export function AssistantPanel() {
+  const navigate = useNavigate()
   const [messages, setMessages] = useState<AiTmMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [contextText, setContextText] = useState<string | null>(null)
+  const [lastDecisionId, setLastDecisionId] = useState<string | null>(null)
+  const [lastToolCalls, setLastToolCalls] = useState<AiChatToolCall[]>([])
 
   useEffect(() => {
     let active = true
@@ -60,8 +66,15 @@ export function AssistantPanel() {
     setBusy(true)
     setError(null)
     try {
-      const resp = await postAiMessage({ account_id: 'default', content })
-      setMessages(resp.thread.messages ?? [])
+      const resp = await chatAi({ account_id: 'default', message: content, context: {} })
+      setLastDecisionId(resp.decision_id)
+      setLastToolCalls(resp.tool_calls ?? [])
+      if (resp.thread?.messages) {
+        setMessages(resp.thread.messages ?? [])
+      } else {
+        const thread = await fetchAiThread({ account_id: 'default' })
+        setMessages(thread.messages ?? [])
+      }
       setInput('')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to send message')
@@ -131,6 +144,49 @@ export function AssistantPanel() {
           </Typography>
         ) : (
           messages.map((m) => <MessageRow key={m.message_id} m={m} />)
+        )}
+
+        {lastDecisionId && (
+          <Box sx={{ pt: 1 }}>
+            <Divider sx={{ my: 1.25 }} />
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap', pb: 1 }}>
+              <Typography variant="subtitle2" sx={{ flex: 1, minWidth: 180 }}>
+                Tool calls (latest)
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => navigate(`/ai/decision-traces/${encodeURIComponent(lastDecisionId)}`)}
+              >
+                View trace
+              </Button>
+            </Stack>
+            {lastToolCalls.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No tool calls.
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                {lastToolCalls.map((t, idx) => (
+                  <Paper key={`${t.name}-${idx}`} variant="outlined" sx={{ p: 1 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      {t.name} • {t.status} • {t.duration_ms}ms
+                    </Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                      args: {JSON.stringify(t.arguments ?? {}, null, 2)}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', pt: 0.5 }}
+                      color={t.status === 'error' || t.status === 'blocked' ? 'error' : 'text.primary'}
+                    >
+                      {t.result_preview}
+                    </Typography>
+                  </Paper>
+                ))}
+              </Stack>
+            )}
+          </Box>
         )}
       </Box>
       <Divider />
