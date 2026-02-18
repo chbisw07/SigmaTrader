@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     # Hard kill switch: when enabled, blocks any broker-write execution paths even
     # if ai_execution_enabled is true.
     ai_execution_kill_switch: bool = False
+    # Phase 3+: allow selecting an AI broker adapter implementation when
+    # broker-truth access is enabled (kite_mcp_enabled). Defaults to Zerodha.
+    ai_broker_name: str = "zerodha"  # zerodha|angelone
     kite_mcp_enabled: bool = False
     monitoring_enabled: bool = False
 
@@ -173,6 +176,10 @@ def get_settings() -> Settings:
     raw_kite_mcp = _parse_bool("ST_KITE_MCP_ENABLED")
     if raw_kite_mcp is not None:
         settings.kite_mcp_enabled = raw_kite_mcp
+
+    raw_ai_broker = os.getenv("ST_AI_BROKER_NAME")
+    if raw_ai_broker is not None:
+        settings.ai_broker_name = str(raw_ai_broker).strip().lower() or settings.ai_broker_name
 
     raw_monitoring = _parse_bool("ST_MONITORING_ENABLED")
     if raw_monitoring is not None:

@@ -20,9 +20,12 @@ from app.schemas.ai_trading_manager import (
     AiTmThread,
     AiTmUserMessageRequest,
     AiTmUserMessageResponse,
+    MarketContextResponse,
     MonitorJob,
     PlaybookCreateRequest,
     PortfolioDiagnostics,
+    SizingSuggestRequest,
+    SizingSuggestResponse,
     TradePlanCreateRequest,
 )
 from app.services.ai_trading_manager import audit_store
@@ -48,9 +51,11 @@ from app.services.ai_trading_manager.playbooks import (
     touch_playbook_after_run,
     upsert_trade_plan,
 )
+from app.services.ai_trading_manager.market_context import build_market_context_overlay
 from app.services.ai_trading_manager.portfolio_diagnostics import build_portfolio_diagnostics
 from app.services.ai_trading_manager.reconciler import run_reconciler
 from app.services.ai_trading_manager.riskgate.engine import evaluate_riskgate
+from app.services.ai_trading_manager.sizing import extract_equity_value, suggest_qty
 from app.models.ai_trading_manager import AiTmChatMessage
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -727,3 +732,97 @@ def portfolio_diagnostics_api(
     }
     audit_store.persist_decision_trace(db, trace, user_id=user_id)
     return diag
+
+
+@router.get("/market-context", response_model=MarketContextResponse)
+def market_context_api(
+    request: Request,
+    symbols: str,
+    account_id: str = "default",
+    exchange: str = "NSE",
+    timeframe: str = "1d",
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_optional),
+) -> MarketContextResponse:
+    require_ai_assistant_enabled(settings)
+    user_id = user.id if user is not None else None
+    symbols_list = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+    overlay = build_market_context_overlay(db, symbols=symbols_list, exchange=exchange, timeframe=timeframe)
+
+    trace = audit_store.new_decision_trace(
+        correlation_id=_correlation_id(request),
+        account_id=account_id,
+        user_message="market_context",
+        inputs_used={"symbols": symbols_list, "exchange": exchange, "timeframe": timeframe},
+    )
+    trace.final_outcome = {"type": "MARKET_CONTEXT", "symbols": len(symbols_list)}
+    audit_store.persist_decision_trace(db, trace, user_id=user_id)
+
+    return MarketContextResponse(overlay=overlay)
+
+
+@router.post("/sizing/suggest", response_model=SizingSuggestResponse)
+def sizing_suggest_api(
+    payload: SizingSuggestRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_optional),
+) -> SizingSuggestResponse:
+    require_ai_assistant_enabled(settings)
+    user_id = user.id if user is not None else None
+
+    equity_value = payload.equity_value
+    notes: List[str] = []
+    if equity_value is None:
+        adapter = get_broker_adapter(db, settings=settings, user_id=user_id)
+        snap = adapter.get_snapshot(account_id=payload.account_id)
+        equity_value = extract_equity_value(dict(snap.margins or {}))
+        if equity_value is None:
+            raise HTTPException(
+                status_code=400,
+                detail="equity_value is required (unable to infer from broker margins).",
+            )
+        notes.append(f"equity_inferred_from:{adapter.name}")
+
+    try:
+        suggested_qty, metrics = suggest_qty(
+            entry_price=float(payload.entry_price),
+            stop_price=float(payload.stop_price),
+            risk_budget_pct=float(payload.risk_budget_pct),
+            equity_value=float(equity_value),
+            max_qty=payload.max_qty,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    trace = audit_store.new_decision_trace(
+        correlation_id=_correlation_id(request),
+        account_id=payload.account_id,
+        user_message="sizing_suggest",
+        inputs_used={
+            "symbol": payload.symbol,
+            "exchange": payload.exchange,
+            "entry_price": payload.entry_price,
+            "stop_price": payload.stop_price,
+            "risk_budget_pct": payload.risk_budget_pct,
+            "equity_value": float(equity_value),
+        },
+    )
+    trace.final_outcome = {"type": "SIZING_SUGGEST", "suggested_qty": suggested_qty}
+    audit_store.persist_decision_trace(db, trace, user_id=user_id)
+
+    return SizingSuggestResponse(
+        symbol=payload.symbol.strip().upper(),
+        exchange=payload.exchange.strip().upper(),
+        entry_price=float(payload.entry_price),
+        stop_price=float(payload.stop_price),
+        risk_budget_pct=float(payload.risk_budget_pct),
+        equity_value=float(equity_value),
+        risk_per_share=float(metrics["risk_per_share"]),
+        risk_amount=float(metrics["risk_amount"]),
+        suggested_qty=int(suggested_qty),
+        notional_value=float(metrics["notional_value"]),
+        notes=notes,
+    )

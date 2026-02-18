@@ -62,7 +62,7 @@ export function AssistantPanelShell() {
               AI Trading Manager
             </Typography>
             <Typography variant="caption" color="text.secondary" noWrap>
-              Phase 0 (stub)
+              Phase 3 (proto)
             </Typography>
           </Box>
           <Tooltip title={minimized ? 'Restore' : 'Minimize'}>

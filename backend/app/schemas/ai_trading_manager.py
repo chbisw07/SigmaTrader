@@ -258,9 +258,78 @@ class PortfolioDriftItem(BaseModel):
     last_price: Optional[float] = None
 
 
+class TrendRegime(str, Enum):
+    up = "up"
+    down = "down"
+    range = "range"
+    unknown = "unknown"
+
+
+class VolatilityRegime(str, Enum):
+    low = "low"
+    normal = "normal"
+    high = "high"
+    unknown = "unknown"
+
+
+class SymbolMarketContext(BaseModel):
+    symbol: str
+    exchange: str = "NSE"
+    timeframe: str = "1d"
+    as_of_ts: datetime
+    close: Optional[float] = None
+    sma20: Optional[float] = None
+    sma50: Optional[float] = None
+    atr14: Optional[float] = None
+    atr14_pct: Optional[float] = None
+    vol20_ann_pct: Optional[float] = None
+    trend_regime: TrendRegime = TrendRegime.unknown
+    volatility_regime: VolatilityRegime = VolatilityRegime.unknown
+    notes: List[str] = Field(default_factory=list)
+
+
+class MarketContextOverlay(BaseModel):
+    as_of_ts: datetime
+    exchange: str = "NSE"
+    timeframe: str = "1d"
+    items: List[SymbolMarketContext] = Field(default_factory=list)
+    summary: Dict[str, Any] = Field(default_factory=dict)
+
+
 class PortfolioDiagnostics(BaseModel):
     as_of_ts: datetime
     account_id: str = "default"
     drift: List[PortfolioDriftItem] = Field(default_factory=list)
     risk_budgets: Dict[str, Any] = Field(default_factory=dict)
     correlation: Dict[str, Any] = Field(default_factory=dict)
+    market_context: Optional[MarketContextOverlay] = None
+
+
+class MarketContextResponse(BaseModel):
+    overlay: MarketContextOverlay
+
+
+class SizingSuggestRequest(BaseModel):
+    account_id: str = "default"
+    symbol: str = Field(min_length=1, max_length=128)
+    exchange: str = "NSE"
+    product: Literal["MIS", "CNC"] = "CNC"
+    entry_price: float = Field(gt=0)
+    stop_price: float = Field(gt=0)
+    risk_budget_pct: float = Field(gt=0, le=10)
+    equity_value: Optional[float] = Field(default=None, gt=0)
+    max_qty: Optional[int] = Field(default=None, ge=1)
+
+
+class SizingSuggestResponse(BaseModel):
+    symbol: str
+    exchange: str
+    entry_price: float
+    stop_price: float
+    risk_budget_pct: float
+    equity_value: float
+    risk_per_share: float
+    risk_amount: float
+    suggested_qty: int
+    notional_value: float
+    notes: List[str] = Field(default_factory=list)

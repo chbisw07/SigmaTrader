@@ -282,6 +282,27 @@ export type PortfolioDiagnostics = {
   }>
   risk_budgets: Record<string, unknown>
   correlation: Record<string, unknown>
+  market_context?: {
+    as_of_ts: string
+    exchange: string
+    timeframe: string
+    items: Array<{
+      symbol: string
+      exchange: string
+      timeframe: string
+      as_of_ts: string
+      close?: number | null
+      sma20?: number | null
+      sma50?: number | null
+      atr14?: number | null
+      atr14_pct?: number | null
+      vol20_ann_pct?: number | null
+      trend_regime: 'up' | 'down' | 'range' | 'unknown'
+      volatility_regime: 'low' | 'normal' | 'high' | 'unknown'
+      notes?: string[]
+    }>
+    summary?: Record<string, unknown>
+  } | null
 }
 
 export async function fetchPortfolioDiagnostics(payload?: { account_id?: string }): Promise<PortfolioDiagnostics> {

@@ -16,6 +16,8 @@ from app.schemas.ai_trading_manager import (
 )
 from app.services.ai_trading_manager.riskgate.policy_config import default_policy
 
+from .market_context import build_market_context_overlay
+
 
 def _quote_map(snapshot: BrokerSnapshot) -> Dict[str, float]:
     out: Dict[str, float] = {}
@@ -213,6 +215,7 @@ def build_portfolio_diagnostics(
 
     symbols = [d.symbol for d in drift if abs(float(d.broker_qty)) > 0 or abs(float(d.expected_qty)) > 0]
     corr = _correlation_from_candles(db, symbols=symbols)
+    market_context = build_market_context_overlay(db, symbols=symbols) if symbols else None
 
     return PortfolioDiagnostics(
         as_of_ts=broker_snapshot.as_of_ts or datetime.now(UTC),
@@ -220,4 +223,5 @@ def build_portfolio_diagnostics(
         drift=drift,
         risk_budgets=risk_budgets,
         correlation=corr,
+        market_context=market_context,
     )

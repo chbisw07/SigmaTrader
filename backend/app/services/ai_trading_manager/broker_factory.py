@@ -20,6 +20,15 @@ def get_broker_adapter(
     if not settings.kite_mcp_enabled:
         return StubBrokerAdapter(mode="mirror")
 
+    broker = (settings.ai_broker_name or "zerodha").strip().lower()
+    if broker == "angelone":
+        from .brokers.angelone_smartapi import AngelOneSmartApiAdapter
+
+        try:
+            return AngelOneSmartApiAdapter(db, settings=settings, user_id=user_id)
+        except Exception:
+            return StubBrokerAdapter(mode="mirror")
+
     from .brokers.zerodha_kiteconnect import ZerodhaKiteConnectAdapter
 
     try:
