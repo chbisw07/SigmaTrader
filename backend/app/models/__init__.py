@@ -57,7 +57,11 @@ from .ai_trading_manager import (
     AiTmLedgerSnapshot,
     AiTmMonitorJob,
     AiTmMonitorTrigger,
+    AiTmPlaybook,
+    AiTmPlaybookRun,
     AiTmReconciliationRun,
+    AiTmTradePlan,
+    AiTmExpectedPosition,
 )
 
 __all__ = [
@@ -125,5 +129,9 @@ __all__ = [
     "AiTmLedgerSnapshot",
     "AiTmMonitorJob",
     "AiTmMonitorTrigger",
+    "AiTmPlaybook",
+    "AiTmPlaybookRun",
     "AiTmReconciliationRun",
+    "AiTmTradePlan",
+    "AiTmExpectedPosition",
 ]

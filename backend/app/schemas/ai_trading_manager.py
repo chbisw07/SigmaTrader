@@ -202,3 +202,65 @@ class AiTmUserMessageResponse(BaseModel):
     thread: AiTmThread
     decision_id: str
 
+
+class TradePlanCreateRequest(BaseModel):
+    account_id: str = "default"
+    intent: TradeIntent
+
+
+class TradePlanCreateResponse(BaseModel):
+    plan: TradePlan
+
+
+class PlaybookCreateRequest(BaseModel):
+    account_id: str = "default"
+    name: str = Field(min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=10_000)
+    plan: TradePlan
+    cadence_sec: Optional[int] = Field(default=None, ge=1)
+
+
+class PlaybookRead(BaseModel):
+    playbook_id: str
+    account_id: str
+    name: str
+    description: Optional[str] = None
+    plan_id: str
+    enabled: bool
+    armed: bool
+    armed_at: Optional[datetime] = None
+    armed_by_message_id: Optional[str] = None
+    cadence_sec: Optional[int] = None
+    next_run_at: Optional[datetime] = None
+    last_run_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlaybookRunRead(BaseModel):
+    run_id: str
+    playbook_id: str
+    dedupe_key: str
+    decision_id: Optional[str] = None
+    authorization_message_id: Optional[str] = None
+    status: str
+    outcome: Dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class PortfolioDriftItem(BaseModel):
+    symbol: str
+    product: str = "CNC"
+    expected_qty: float
+    broker_qty: float
+    delta_qty: float
+    last_price: Optional[float] = None
+
+
+class PortfolioDiagnostics(BaseModel):
+    as_of_ts: datetime
+    account_id: str = "default"
+    drift: List[PortfolioDriftItem] = Field(default_factory=list)
+    risk_budgets: Dict[str, Any] = Field(default_factory=dict)
+    correlation: Dict[str, Any] = Field(default_factory=dict)

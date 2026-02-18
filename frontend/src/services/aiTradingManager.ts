@@ -72,6 +72,18 @@ export type AiTmException = {
   details?: Record<string, unknown>
 }
 
+export async function ackAiException(payload: { exception_id: string }): Promise<{
+  exception: AiTmException
+  decision_id: string
+}> {
+  const res = await fetch(`/api/ai/exceptions/${encodeURIComponent(payload.exception_id)}/ack`, { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to acknowledge exception (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as { exception: AiTmException; decision_id: string }
+}
+
 export async function fetchAiExceptions(params?: {
   account_id?: string
   status_filter?: string
@@ -104,3 +116,178 @@ export async function runAiReconcile(payload?: { account_id?: string }): Promise
   }
 }
 
+export type TradeIntent = {
+  symbols: string[]
+  side: 'BUY' | 'SELL'
+  product?: 'MIS' | 'CNC'
+  constraints?: Record<string, unknown>
+  risk_budget_pct?: number | null
+}
+
+export type TradePlan = {
+  plan_id: string
+  intent: TradeIntent
+  entry_rules?: unknown[]
+  sizing_method?: string
+  risk_model?: Record<string, unknown>
+  order_skeleton?: Record<string, unknown>
+  validity_window?: Record<string, unknown>
+  idempotency_scope?: string
+}
+
+export async function createTradePlan(payload: { account_id?: string; intent: TradeIntent }): Promise<{
+  plan: TradePlan
+  decision_id: string
+}> {
+  const res = await fetch('/api/ai/trade-plans', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_id: payload.account_id ?? 'default',
+      intent: payload.intent,
+    }),
+  })
+  if (!res.ok) throw new Error(`Failed to create trade plan (${res.status})`)
+  return (await res.json()) as { plan: TradePlan; decision_id: string }
+}
+
+export type Playbook = {
+  playbook_id: string
+  account_id: string
+  name: string
+  description?: string | null
+  plan_id: string
+  enabled: boolean
+  armed: boolean
+  armed_at?: string | null
+  armed_by_message_id?: string | null
+  cadence_sec?: number | null
+  next_run_at?: string | null
+  last_run_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function createPlaybook(payload: {
+  account_id?: string
+  name: string
+  description?: string
+  plan: TradePlan
+  cadence_sec?: number | null
+}): Promise<{ playbook: Playbook; decision_id: string }> {
+  const res = await fetch('/api/ai/playbooks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_id: payload.account_id ?? 'default',
+      name: payload.name,
+      description: payload.description ?? null,
+      plan: payload.plan,
+      cadence_sec: payload.cadence_sec ?? null,
+    }),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to create playbook (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as { playbook: Playbook; decision_id: string }
+}
+
+export async function fetchPlaybooks(params?: { account_id?: string }): Promise<Playbook[]> {
+  const url = new URL('/api/ai/playbooks', window.location.origin)
+  if (params?.account_id) url.searchParams.set('account_id', params.account_id)
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load playbooks (${res.status})`)
+  return (await res.json()) as Playbook[]
+}
+
+export async function setPlaybookArmed(payload: {
+  playbook_id: string
+  armed: boolean
+  authorization_message_id?: string
+}): Promise<{
+  playbook: Playbook
+  decision_id: string
+}> {
+  const url = new URL(`/api/ai/playbooks/${encodeURIComponent(payload.playbook_id)}/arm`, window.location.origin)
+  url.searchParams.set('armed', payload.armed ? '1' : '0')
+  if (payload.authorization_message_id) {
+    url.searchParams.set('authorization_message_id', payload.authorization_message_id)
+  }
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to arm playbook (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as { playbook: Playbook; decision_id: string }
+}
+
+export async function runPlaybookNow(payload: {
+  playbook_id: string
+  authorization_message_id?: string
+}): Promise<{ decision_id: string; outcome: Record<string, unknown> }> {
+  const url = new URL(`/api/ai/playbooks/${encodeURIComponent(payload.playbook_id)}/run-now`, window.location.origin)
+  if (payload.authorization_message_id) {
+    url.searchParams.set('authorization_message_id', payload.authorization_message_id)
+  }
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to run playbook (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as { decision_id: string; outcome: Record<string, unknown> }
+}
+
+export async function resyncExpectedLedger(payload?: { account_id?: string }): Promise<{
+  updated_positions: number
+  decision_id: string
+}> {
+  const url = new URL('/api/ai/expected-ledger/resync', window.location.origin)
+  if (payload?.account_id) url.searchParams.set('account_id', payload.account_id)
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to resync expected ledger (${res.status})`)
+  return (await res.json()) as { updated_positions: number; decision_id: string }
+}
+
+export type PlaybookRun = {
+  run_id: string
+  playbook_id: string
+  dedupe_key: string
+  decision_id?: string | null
+  authorization_message_id?: string | null
+  status: string
+  outcome?: Record<string, unknown>
+  started_at: string
+  completed_at?: string | null
+}
+
+export async function fetchPlaybookRuns(payload: { playbook_id: string; limit?: number }): Promise<PlaybookRun[]> {
+  const url = new URL(`/api/ai/playbooks/${encodeURIComponent(payload.playbook_id)}/runs`, window.location.origin)
+  if (payload.limit) url.searchParams.set('limit', String(payload.limit))
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load playbook runs (${res.status})`)
+  return (await res.json()) as PlaybookRun[]
+}
+
+export type PortfolioDiagnostics = {
+  as_of_ts: string
+  account_id: string
+  drift: Array<{
+    symbol: string
+    product: string
+    expected_qty: number
+    broker_qty: number
+    delta_qty: number
+    last_price?: number | null
+  }>
+  risk_budgets: Record<string, unknown>
+  correlation: Record<string, unknown>
+}
+
+export async function fetchPortfolioDiagnostics(payload?: { account_id?: string }): Promise<PortfolioDiagnostics> {
+  const url = new URL('/api/ai/portfolio/diagnostics', window.location.origin)
+  if (payload?.account_id) url.searchParams.set('account_id', payload.account_id)
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load portfolio diagnostics (${res.status})`)
+  return (await res.json()) as PortfolioDiagnostics
+}

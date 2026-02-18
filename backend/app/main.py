@@ -26,6 +26,9 @@ from .services.risk_unified_migration import migrate_legacy_risk_policy_v1_to_un
 from .services.ai_trading_manager.monitoring.scheduler import (
     schedule_ai_tm_monitoring,
 )
+from .services.ai_trading_manager.automation.runner import (
+    schedule_ai_tm_automation,
+)
 
 settings = get_settings()
 
@@ -176,6 +179,8 @@ async def _lifespan(_app: FastAPI):
         schedule_holdings_summary_finalizer()
         # AI Trading Manager monitoring loop is feature-flagged and no-ops unless enabled.
         schedule_ai_tm_monitoring()
+        # AI Trading Manager automation loop (Phase 2+) is also feature-flagged.
+        schedule_ai_tm_automation()
 
     enable_deployments = (
         (os.getenv("ST_ENABLE_DEPLOYMENTS_RUNTIME") or "").strip().lower()

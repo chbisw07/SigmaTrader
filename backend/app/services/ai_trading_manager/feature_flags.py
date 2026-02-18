@@ -22,9 +22,12 @@ def require_monitoring_enabled(settings: Settings) -> None:
 
 
 def require_execution_enabled(settings: Settings) -> None:
-    if not settings.ai_execution_enabled or settings.ai_execution_kill_switch:
+    if (
+        not settings.ai_execution_enabled
+        or settings.ai_execution_kill_switch
+        or not settings.kite_mcp_enabled
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="AI execution is not enabled.",
         )
-

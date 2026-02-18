@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from app.schemas.ai_trading_manager import DecisionToolCall, TradePlan
 
 from .idempotency_store import IdempotencyStore
 from .translator import translate_plan_to_order_intents
+from ..broker_adapter import BrokerAdapter, BrokerOrderAck
 
 
 def _payload_hash(value: Any) -> str:
@@ -75,3 +76,37 @@ class ExecutionEngine:
             tool_calls=tool_calls,
         )
 
+    def execute_to_broker(
+        self,
+        db: Session,
+        *,
+        user_id: Optional[int],
+        account_id: str,
+        correlation_id: str,
+        plan: TradePlan,
+        idempotency_key: str,
+        broker: BrokerAdapter,
+    ) -> Dict[str, Any]:
+        payload = plan.model_dump(mode="json")
+        payload_hash = _payload_hash(payload)
+        begin = self._idempotency.begin(
+            db,
+            user_id=user_id,
+            account_id=account_id,
+            key=idempotency_key,
+            payload_hash=payload_hash,
+        )
+        # If we didn't create it and it is completed, return prior result.
+        if not begin.created and str(begin.record.status).upper() == "COMPLETED":
+            return self._idempotency.read_result(begin.record)
+
+        intents = translate_plan_to_order_intents(plan=plan, correlation_id=correlation_id)
+        acks: list[dict[str, Any]] = []
+        for intent in intents:
+            intent2 = replace(intent, idempotency_key=idempotency_key)
+            ack: BrokerOrderAck = broker.place_order(account_id=account_id, intent=intent2)
+            acks.append({"symbol": intent.symbol, "broker_order_id": ack.broker_order_id, "status": ack.status})
+
+        result = {"mode": "execute", "plan_id": plan.plan_id, "orders": acks}
+        self._idempotency.mark_completed(db, record_id=begin.record.id, result=result)
+        return result

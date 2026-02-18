@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import (
     Boolean,
     ForeignKey,
+    Float,
     Index,
     Integer,
     String,
@@ -16,6 +17,111 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.db.types import UTCDateTime
+
+
+class AiTmTradePlan(Base):
+    __tablename__ = "ai_tm_trade_plans"
+
+    __table_args__ = (
+        UniqueConstraint("plan_id", name="ux_ai_tm_trade_plans_plan_id"),
+        Index("ix_ai_tm_trade_plans_account_ts", "account_id", "created_at"),
+        Index("ix_ai_tm_trade_plans_user_ts", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    plan_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class AiTmPlaybook(Base):
+    __tablename__ = "ai_tm_playbooks"
+
+    __table_args__ = (
+        UniqueConstraint("playbook_id", name="ux_ai_tm_playbooks_playbook_id"),
+        Index("ix_ai_tm_playbooks_account_id", "account_id"),
+        Index("ix_ai_tm_playbooks_user_id", "user_id"),
+        Index("ix_ai_tm_playbooks_next_run", "next_run_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    playbook_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text())
+    plan_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    armed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    armed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    armed_by_message_id: Mapped[Optional[str]] = mapped_column(String(64))
+    cadence_sec: Mapped[Optional[int]] = mapped_column(Integer)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class AiTmPlaybookRun(Base):
+    __tablename__ = "ai_tm_playbook_runs"
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="ux_ai_tm_playbook_runs_run_id"),
+        UniqueConstraint("playbook_id", "dedupe_key", name="ux_ai_tm_playbook_runs_dedupe"),
+        Index("ix_ai_tm_playbook_runs_playbook_ts", "playbook_id", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    playbook_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ai_tm_playbooks.playbook_id", ondelete="CASCADE"), nullable=False
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    decision_id: Mapped[Optional[str]] = mapped_column(String(64))
+    authorization_message_id: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="STARTED")  # STARTED/COMPLETED/FAILED
+    outcome_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+    started_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime())
+
+
+class AiTmExpectedPosition(Base):
+    __tablename__ = "ai_tm_expected_positions"
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "symbol", "product", name="ux_ai_tm_expected_pos_key"),
+        Index("ix_ai_tm_expected_positions_account", "account_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    product: Mapped[str] = mapped_column(String(16), nullable=False, default="CNC")
+    expected_qty: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    avg_price: Mapped[Optional[float]] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
 
 
 class AiTmBrokerSnapshot(Base):
@@ -285,5 +391,9 @@ __all__ = [
     "AiTmLedgerSnapshot",
     "AiTmMonitorJob",
     "AiTmMonitorTrigger",
+    "AiTmPlaybook",
+    "AiTmPlaybookRun",
     "AiTmReconciliationRun",
+    "AiTmTradePlan",
+    "AiTmExpectedPosition",
 ]

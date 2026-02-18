@@ -349,6 +349,22 @@ def get_exception(db: Session, *, exception_id: str) -> Optional[Dict[str, Any]]
     }
 
 
+def ack_exception(
+    db: Session,
+    *,
+    exception_id: str,
+    status: str = "ACK",
+) -> Optional[Dict[str, Any]]:
+    row = db.execute(select(AiTmException).where(AiTmException.exception_id == exception_id)).scalar_one_or_none()
+    if row is None:
+        return None
+    now = datetime.now(UTC)
+    row.status = status
+    row.updated_at = now
+    db.commit()
+    return get_exception(db, exception_id=exception_id)
+
+
 def upsert_monitor_job(
     db: Session,
     job: MonitorJob,

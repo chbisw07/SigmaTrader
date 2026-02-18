@@ -7,23 +7,46 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models import Order, Position
+from app.models.ai_trading_manager import AiTmExpectedPosition
 from app.schemas.ai_trading_manager import LedgerOrder, LedgerPosition, LedgerSnapshot
 
 
 def build_ledger_snapshot(db: Session, *, account_id: str = "default") -> LedgerSnapshot:
     now = datetime.now(UTC)
 
-    positions = db.execute(select(Position).order_by(Position.symbol)).scalars().all()
     expected_positions: List[LedgerPosition] = []
-    for p in positions:
-        expected_positions.append(
-            LedgerPosition(
-                symbol=p.symbol,
-                product=p.product,
-                expected_qty=float(p.qty),
-                avg_price=float(p.avg_price) if p.avg_price is not None else None,
-            )
+    expected_rows = (
+        db.execute(
+            select(AiTmExpectedPosition)
+            .where(AiTmExpectedPosition.account_id == account_id)
+            .order_by(AiTmExpectedPosition.symbol)
         )
+        .scalars()
+        .all()
+    )
+    if expected_rows:
+        for p in expected_rows:
+            expected_positions.append(
+                LedgerPosition(
+                    symbol=p.symbol,
+                    product=p.product,
+                    expected_qty=float(p.expected_qty),
+                    avg_price=float(p.avg_price) if p.avg_price is not None else None,
+                )
+            )
+    else:
+        # Phase 0 fallback: use the existing positions table as a best-effort
+        # "expected ledger" snapshot until expected ledger is populated.
+        positions = db.execute(select(Position).order_by(Position.symbol)).scalars().all()
+        for p in positions:
+            expected_positions.append(
+                LedgerPosition(
+                    symbol=p.symbol,
+                    product=p.product,
+                    expected_qty=float(p.qty),
+                    avg_price=float(p.avg_price) if p.avg_price is not None else None,
+                )
+            )
 
     orders = db.execute(select(Order).order_by(desc(Order.created_at)).limit(500)).scalars().all()
     expected_orders: List[LedgerOrder] = []
@@ -48,4 +71,3 @@ def build_ledger_snapshot(db: Session, *, account_id: str = "default") -> Ledger
         expected_orders=expected_orders,
         watchers=[],
     )
-
