@@ -35,6 +35,7 @@ from . import (
     strategies,
     system_events,
     tv_alerts,
+    kite_mcp,
     webhook,
     webhook_settings,
     zerodha,
@@ -256,6 +257,13 @@ router.include_router(
     prefix="/api/settings/ai",
     dependencies=[Depends(require_admin)],
     tags=["ai-settings"],
+)
+
+router.include_router(
+    kite_mcp.router,
+    prefix="/api/mcp/kite",
+    dependencies=[Depends(require_admin)],
+    tags=["kite-mcp"],
 )
 
 router.include_router(
