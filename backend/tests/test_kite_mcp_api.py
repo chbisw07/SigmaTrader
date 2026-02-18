@@ -111,6 +111,7 @@ def test_auth_start_stores_session_id(fake_kite_mcp) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["login_url"].startswith("https://kite.zerodha.com/connect/login")
+    assert "redirect_uri=" in data["login_url"]
 
     with SessionLocal() as db:
         row = (
@@ -152,9 +153,11 @@ def test_snapshot_fetch(fake_kite_mcp) -> None:
 
 
 def test_auth_callback_stores_session_id(fake_kite_mcp) -> None:
-    resp = client.get("/api/mcp/kite/auth/callback?session_id=cb|token.sig")
-    assert resp.status_code == 200
-    assert "authorization received" in (resp.text or "").lower()
+    resp = client.get(
+        "/api/mcp/kite/auth/callback?session_id=cb|token.sig&request_token=req123",
+        follow_redirects=False,
+    )
+    assert resp.status_code in {302, 303, 307, 308}
 
     with SessionLocal() as db:
         row = (
@@ -168,3 +171,15 @@ def test_auth_callback_stores_session_id(fake_kite_mcp) -> None:
         )
         assert row is not None
         assert "cb|token.sig" not in (row.value_encrypted or "")
+
+        rt = (
+            db.query(BrokerSecret)
+            .filter(
+                BrokerSecret.broker_name == "kite_mcp",
+                BrokerSecret.key == "request_token_v1",
+                BrokerSecret.user_id.is_(None),
+            )
+            .one_or_none()
+        )
+        assert rt is not None
+        assert "req123" not in (rt.value_encrypted or "")

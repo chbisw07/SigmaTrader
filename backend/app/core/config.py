@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     ai_broker_name: str = "zerodha"  # zerodha|angelone
     kite_mcp_enabled: bool = False
     monitoring_enabled: bool = False
+    # Public-facing base URL for backend (used to build OAuth callback URLs).
+    # Example: https://sigmatrader.in
+    backend_base_url: str | None = None
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.

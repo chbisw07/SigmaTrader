@@ -5,8 +5,9 @@ import urllib.parse
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -22,7 +23,7 @@ from app.schemas.kite_mcp import (
 )
 from app.services.ai_trading_manager import audit_store
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source, set_ai_settings
-from app.services.kite_mcp.secrets import get_auth_session_id, set_auth_session_id
+from app.services.kite_mcp.secrets import get_auth_session_id, set_auth_session_id, set_request_token
 from app.services.kite_mcp.session_manager import kite_mcp_sessions
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
 from app.services.system_events import record_system_event
@@ -65,6 +66,49 @@ def _extract_auth_session_id(login_url: str) -> str | None:
         return (parts.get("session_id") or [None])[0]
     except Exception:
         return None
+
+
+def _infer_backend_base_url(request: Request, settings: Settings) -> str:
+    # Config wins (works behind reverse proxies / tunnels).
+    if getattr(settings, "backend_base_url", None):
+        return str(settings.backend_base_url).rstrip("/")
+
+    # Otherwise infer from request headers.
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[
+        0
+    ].strip()
+    return f"{proto}://{host}".rstrip("/")
+
+
+def _rewrite_login_url(login_url: str, *, redirect_uri: str) -> str:
+    """Best-effort rewrite to force callback to SigmaTrader.
+
+    NOTE: Kite MCP uses the `kitemcp` app key. Whether Zerodha honors a dynamic
+    redirect URI is not guaranteed; we inject it as both a top-level query
+    param and within redirect_params for maximum compatibility.
+    """
+
+    try:
+        p = urllib.parse.urlparse(login_url)
+        qs = urllib.parse.parse_qs(p.query, keep_blank_values=True)
+
+        # Add top-level redirect_uri.
+        qs["redirect_uri"] = [redirect_uri]
+
+        # Also inject into redirect_params if present.
+        rp = (qs.get("redirect_params") or [None])[0]
+        if rp:
+            decoded = urllib.parse.unquote_plus(str(rp))
+            parts = urllib.parse.parse_qs(decoded, keep_blank_values=True)
+            parts["redirect_uri"] = [redirect_uri]
+            rp2 = urllib.parse.urlencode({k: (v[0] if isinstance(v, list) and v else v) for k, v in parts.items()})
+            qs["redirect_params"] = [rp2]
+
+        query2 = urllib.parse.urlencode({k: (v[0] if isinstance(v, list) and v else v) for k, v in qs.items()})
+        return urllib.parse.urlunparse(p._replace(query=query2))
+    except Exception:
+        return login_url
 
 
 async def _is_authorized(session, *, probe_tool: str = "get_profile") -> bool:
@@ -140,6 +184,7 @@ async def kite_mcp_status(
 
 @router.get("/auth/start", response_model=KiteMcpAuthStartResponse)
 async def kite_mcp_auth_start(
+    request: Request,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> KiteMcpAuthStartResponse:
@@ -162,7 +207,11 @@ async def kite_mcp_auth_start(
     m = _LOGIN_URL_RE.search(text or "")
     if not m:
         raise HTTPException(status_code=502, detail="Kite MCP login link not found in response.")
-    login_url = m.group(0)
+    raw_login_url = m.group(0)
+
+    base = _infer_backend_base_url(request, settings)
+    redirect_uri = f"{base}/api/mcp/kite/auth/callback"
+    login_url = _rewrite_login_url(raw_login_url, redirect_uri=redirect_uri)
 
     # Extract and store auth session id (best-effort).
     extracted = _extract_auth_session_id(login_url)
@@ -181,6 +230,7 @@ async def kite_mcp_auth_start(
         details={
             "event_type": "KITE_MCP_AUTH_START",
             "server_url": cfg.kite_mcp.server_url,
+            "redirect_uri": redirect_uri,
         },
     )
 
@@ -192,14 +242,15 @@ async def kite_mcp_auth_start(
 
 
 @router.get("/auth/callback", include_in_schema=False)
-def kite_mcp_auth_callback(
+async def kite_mcp_auth_callback(
     session_id: str | None = None,
     sessionId: str | None = None,  # noqa: N803 - upstream naming
     code: str | None = None,
     request_token: str | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> HTMLResponse:
+) -> Response:
     """Optional OAuth callback endpoint.
 
     The current Kite MCP login flow typically completes via Kite's own redirect,
@@ -207,14 +258,43 @@ def kite_mcp_auth_callback(
     into SigmaTrader (e.g., when the MCP server supports custom redirect URLs).
     """
 
+    sid = (session_id or sessionId or "").strip() or None
+    rt = (request_token or code or "").strip() or None
+
+    if not sid or not rt:
+        record_system_event(
+            db,
+            level="WARNING",
+            category="KITE_MCP",
+            message="Kite MCP auth callback missing required parameters.",
+            correlation_id=_corr(),
+            details={
+                "event_type": "KITE_MCP_AUTH_CALLBACK",
+                "has_session_id": bool(sid),
+                "has_request_token": bool(rt),
+                "status": status,
+            },
+        )
+        html = """
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Kite MCP Auth</title></head>
+  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px;">
+    <h2>Kite MCP authorization failed</h2>
+    <p>Missing required parameters (session_id and/or request_token).</p>
+    <p>Close this tab and retry Authorization from SigmaTrader → Settings → AI.</p>
+  </body>
+</html>
+""".strip()
+        return HTMLResponse(content=html, status_code=400)
+
     stored = False
-    sid = (session_id or sessionId or code or request_token or "").strip() or None
-    if sid:
-        try:
-            set_auth_session_id(db, settings, sid)
-            stored = True
-        except Exception:
-            stored = False
+    try:
+        set_auth_session_id(db, settings, sid)
+        set_request_token(db, settings, rt)
+        stored = True
+    except Exception:
+        stored = False
 
     record_system_event(
         db,
@@ -222,28 +302,50 @@ def kite_mcp_auth_callback(
         category="KITE_MCP",
         message="Kite MCP auth callback received.",
         correlation_id=_corr(),
-        details={"event_type": "KITE_MCP_AUTH_CALLBACK", "stored": stored},
+        details={
+            "event_type": "KITE_MCP_AUTH_CALLBACK",
+            "stored": stored,
+            "status": status,
+            "has_session_id": True,
+            "has_request_token": True,
+        },
     )
 
-    html = """
-<!doctype html>
-<html lang="en">
-  <head><meta charset="utf-8"><title>Kite MCP Auth</title></head>
-  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px;">
-    <h2>Kite MCP authorization received</h2>
-    <p>You can close this tab and return to SigmaTrader → Settings → AI, then click “Refresh status”.</p>
-    <script>
-      try {
-        if (window.opener) {
-          window.opener.postMessage({ type: "kite_mcp_auth_complete" }, "*");
-        }
-      } catch (e) {}
-      setTimeout(() => { try { window.close(); } catch (e) {} }, 500);
-    </script>
-  </body>
-</html>
-""".strip()
-    return HTMLResponse(content=html)
+    # Best-effort verify session by reconnecting and listing tools.
+    try:
+        await kite_mcp_sessions.reset()
+        cfg, _src = get_ai_settings_with_source(db, settings)
+        if cfg.feature_flags.kite_mcp_enabled and cfg.kite_mcp.server_url:
+            session = await kite_mcp_sessions.get_session(server_url=cfg.kite_mcp.server_url, auth_session_id=sid)
+            await session.ensure_initialized()
+            tools = await session.tools_list()
+            rows = tools.get("tools") if isinstance(tools, dict) else []
+            tools_count = len(rows) if isinstance(rows, list) else None
+            cfg.kite_mcp.last_status = KiteMcpStatus.connected
+            cfg.kite_mcp.last_error = None
+            cfg.kite_mcp.last_connected_ts = datetime.now(UTC)
+            cfg.kite_mcp.tools_available_count = tools_count
+            set_ai_settings(db, settings, cfg)
+            record_system_event(
+                db,
+                level="INFO",
+                category="KITE_MCP",
+                message="Kite MCP session verified after callback.",
+                correlation_id=_corr(),
+                details={"event_type": "KITE_MCP_SESSION_VERIFIED", "tools_count": tools_count},
+            )
+    except Exception as exc:
+        record_system_event(
+            db,
+            level="WARNING",
+            category="KITE_MCP",
+            message="Kite MCP session verification failed after callback.",
+            correlation_id=_corr(),
+            details={"event_type": "KITE_MCP_SESSION_VERIFY_FAILED", "error": str(exc) or "unknown"},
+        )
+
+    # Redirect back to the UI.
+    return RedirectResponse(url="/settings?tab=ai&kite=connected", status_code=303)
 
 
 #

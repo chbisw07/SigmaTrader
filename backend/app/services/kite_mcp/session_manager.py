@@ -79,12 +79,19 @@ class KiteMcpSessionManager:
             if self._session is None:
                 self._session = KiteMcpSession(server_url=server_url, auth_session_id=auth_session_id)
                 return self._session
-            if self._session.state.server_url != server_url or self._session.state.auth_session_id != auth_session_id:
+            if self._session.state.server_url != server_url:
                 try:
                     await self._session.close()
                 except Exception:
                     pass
                 self._session = KiteMcpSession(server_url=server_url, auth_session_id=auth_session_id)
+                return self._session
+            # Keep the existing session when auth_session_id changes to avoid
+            # breaking the login flow (authorization may be tied to the
+            # underlying MCP transport session). Persist the new value in
+            # state for visibility; the current transport may or may not use it.
+            if self._session.state.auth_session_id != auth_session_id:
+                self._session.state.auth_session_id = auth_session_id
             return self._session
 
     async def reset(self) -> None:
