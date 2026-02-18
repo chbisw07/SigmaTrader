@@ -26,6 +26,12 @@ import {
 } from '../services/aiSettings'
 import { setAiTmFeatureFlag } from '../config/aiFeatures'
 import { AiProviderSettingsPanel } from './ai/AiProviderSettingsPanel'
+import {
+  fetchKiteMcpStatus,
+  startKiteMcpAuth,
+  type KiteMcpStatus,
+} from '../services/kiteMcp'
+import { KiteMcpConsolePanel } from './ai/KiteMcpConsolePanel'
 
 function statusChip(status: string) {
   const s = (status || '').toLowerCase()
@@ -55,6 +61,11 @@ export function AiSettingsPanel() {
   const [auditRows, setAuditRows] = useState<any[]>([])
   const [auditError, setAuditError] = useState<string | null>(null)
 
+  const [mcpStatus, setMcpStatus] = useState<KiteMcpStatus | null>(null)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authWarning, setAuthWarning] = useState<string>('')
+  const [authUrl, setAuthUrl] = useState<string>('')
+
   const connectedForExecution = useMemo(() => {
     if (!settings) return false
     const kite = settings.kite_mcp
@@ -71,6 +82,12 @@ export function AiSettingsPanel() {
       setAiTmFeatureFlag('ai_execution_enabled', Boolean(s.feature_flags.ai_execution_enabled))
       setAiTmFeatureFlag('kite_mcp_enabled', Boolean(s.feature_flags.kite_mcp_enabled))
       setAiTmFeatureFlag('monitoring_enabled', Boolean(s.feature_flags.monitoring_enabled))
+      try {
+        const st = await fetchKiteMcpStatus()
+        setMcpStatus(st)
+      } catch {
+        setMcpStatus(null)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load AI settings')
     }
@@ -144,6 +161,31 @@ export function AiSettingsPanel() {
       setSuccess('Kite MCP test completed.')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to test Kite MCP')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const refreshMcpStatus = async () => {
+    try {
+      const st = await fetchKiteMcpStatus()
+      setMcpStatus(st)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch Kite MCP status')
+    }
+  }
+
+  const startAuth = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await startKiteMcpAuth()
+      setAuthWarning(res.warning_text)
+      setAuthUrl(res.login_url)
+      setAuthOpen(true)
+      await refreshMcpStatus()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to start Kite MCP auth')
     } finally {
       setBusy(false)
     }
@@ -272,6 +314,13 @@ export function AiSettingsPanel() {
             Kite MCP
           </Typography>
           {statusChip(kite.last_status)}
+          {mcpStatus && (
+            <Chip
+              size="small"
+              label={mcpStatus.authorized ? 'Authorized' : 'Not authorized'}
+              color={mcpStatus.authorized ? 'success' : 'default'}
+            />
+          )}
           <Button size="small" variant="outlined" onClick={() => void openAudit()}>
             View Audit Log
           </Button>
@@ -285,6 +334,12 @@ export function AiSettingsPanel() {
         {kite.last_error && (
           <Alert severity="error" sx={{ mt: 1 }}>
             {kite.last_error}
+          </Alert>
+        )}
+
+        {mcpStatus?.last_error && (
+          <Alert severity="warning" sx={{ mt: 1 }}>
+            {mcpStatus.last_error}
           </Alert>
         )}
 
@@ -393,6 +448,17 @@ export function AiSettingsPanel() {
             >
               Fetch Capabilities
             </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={() => void startAuth()}
+              disabled={busy || !kite.server_url || !settings.feature_flags.kite_mcp_enabled}
+            >
+              Authorize
+            </Button>
+            <Button size="small" variant="outlined" onClick={() => void refreshMcpStatus()} disabled={busy}>
+              Refresh status
+            </Button>
           </Stack>
 
           {kite.capabilities_cache && Object.keys(kite.capabilities_cache).length > 0 && (
@@ -407,6 +473,8 @@ export function AiSettingsPanel() {
               </Paper>
             </Box>
           )}
+
+          <KiteMcpConsolePanel disabled={busy || !settings.feature_flags.kite_mcp_enabled} />
         </Stack>
       </Paper>
 
@@ -470,6 +538,46 @@ export function AiSettingsPanel() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setAuditOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={authOpen} onClose={() => setAuthOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Kite MCP Authorization</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 1 }}>
+            This authorization flow is handled by Kite MCP. SigmaTrader never sees your broker password.
+          </Alert>
+          {authWarning ? (
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+              {authWarning}
+            </Typography>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              No details.
+            </Typography>
+          )}
+          {authUrl && (
+            <Box sx={{ pt: 2 }}>
+              <TextField
+                label="Login URL"
+                size="small"
+                value={authUrl}
+                fullWidth
+                inputProps={{ readOnly: true }}
+              />
+              <Stack direction="row" spacing={1} sx={{ pt: 1, flexWrap: 'wrap' }}>
+                <Button size="small" variant="outlined" onClick={() => window.open(authUrl, '_blank', 'noopener')}>
+                  Open login link
+                </Button>
+                <Button size="small" variant="outlined" onClick={() => void refreshMcpStatus()}>
+                  I completed login → check status
+                </Button>
+              </Stack>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAuthOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>
