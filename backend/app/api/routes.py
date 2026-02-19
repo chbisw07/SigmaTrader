@@ -4,6 +4,7 @@ from ..core.config import Settings, get_settings
 from ..core.security import require_admin
 from . import (
     ai_chat,
+    ai_files,
     ai_provider,
     ai_settings,
     ai_trading_manager,
@@ -251,6 +252,13 @@ router.include_router(
     prefix="/api/ai",
     dependencies=[Depends(require_admin)],
     tags=["ai-chat"],
+)
+
+router.include_router(
+    ai_files.router,
+    prefix="/api/ai",
+    dependencies=[Depends(require_admin)],
+    tags=["ai-files"],
 )
 
 router.include_router(

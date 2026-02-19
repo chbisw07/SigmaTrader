@@ -227,6 +227,37 @@ class AiTmChatMessage(Base):
     )
 
 
+class AiTmFile(Base):
+    __tablename__ = "ai_tm_files"
+
+    __table_args__ = (
+        UniqueConstraint("file_id", name="ux_ai_tm_files_file_id"),
+        Index("ix_ai_tm_files_user_ts", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    file_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(128))
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    storage_path: Mapped[str] = mapped_column(Text(), nullable=False)
+    summary_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class AiTmIdempotencyRecord(Base):
     __tablename__ = "ai_tm_idempotency_records"
 
