@@ -22,7 +22,7 @@ def evaluate_market_hours(*, plan: TradePlan, eval_ts: datetime) -> List[dict]:
     start = DEFAULT_MARKET_OPEN.hour * 60 + DEFAULT_MARKET_OPEN.minute
     end = DEFAULT_MARKET_CLOSE.hour * 60 + DEFAULT_MARKET_CLOSE.minute
     if not (start <= minutes <= end):
-        return [{"code": "MARKET_CLOSED", "message": "Market is closed.", "details": {}}]
+        return [{"code": "MARKET_CLOSED", "message": "Market is closed.", "severity": "deny", "details": {}}]
     # MIS has stricter constraints later; Phase 0 keeps a simple guardrail.
     if plan.intent.product == "MIS":
         # Prevent MIS orders too close to close in Phase 0 (coarse).
@@ -31,6 +31,7 @@ def evaluate_market_hours(*, plan: TradePlan, eval_ts: datetime) -> List[dict]:
                 {
                     "code": "MIS_TOO_CLOSE_TO_CLOSE",
                     "message": "MIS order too close to market close.",
+                    "severity": "deny",
                     "details": {},
                 }
             ]

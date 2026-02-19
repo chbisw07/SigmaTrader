@@ -51,6 +51,10 @@ def load_app_config() -> AppConfig:
     """Load global application config from config.json."""
 
     path = get_config_dir() / "config.json"
+    # When config.json is absent we can safely fall back to defaults; this keeps
+    # local dev and pytest runs resilient while still allowing explicit configs.
+    if not path.exists():
+        return AppConfig()
     data = _load_json(path)
     try:
         return AppConfig(**data)

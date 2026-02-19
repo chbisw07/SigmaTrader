@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from typing import Dict, Set, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -168,4 +168,3 @@ def compile_v3_condition(
 
 
 __all__ = ["compile_v3_condition", "CompiledV3Condition"]
-

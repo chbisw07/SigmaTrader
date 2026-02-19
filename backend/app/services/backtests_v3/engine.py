@@ -4,7 +4,7 @@ import math
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Sequence
 
 from app.core.config import Settings
 from app.services.alerts_v3_expression import (

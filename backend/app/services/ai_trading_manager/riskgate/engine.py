@@ -47,6 +47,7 @@ def evaluate_riskgate(
             {
                 "code": str(r.get("code") or ""),
                 "message": str(r.get("message") or ""),
+                "severity": str(r.get("severity") or "deny"),
                 "details": r.get("details") or {},
             }
             for r in reason_rows
@@ -66,7 +67,8 @@ def evaluate_riskgate(
     if plan.intent.risk_budget_pct is not None:
         computed_metrics["risk_budget_pct"] = float(plan.intent.risk_budget_pct)
 
-    outcome = RiskDecisionOutcome.deny if reasons else RiskDecisionOutcome.allow
+    deny_rows = [r for r in reason_rows if str(r.get("severity") or "deny").lower() != "warn"]
+    outcome = RiskDecisionOutcome.deny if deny_rows else RiskDecisionOutcome.allow
     decision = RiskDecision(
         outcome=outcome,
         reasons=reasons,

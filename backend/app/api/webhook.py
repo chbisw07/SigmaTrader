@@ -818,7 +818,8 @@ def tradingview_webhook(
                 bar_time=normalized.bar_time,
                 reason=(
                     f"{(normalized.reason or '').strip()} | "
-                    f"ST: Ignored EXIT (no open position for {normalized.product} {normalized.broker_exchange}:{normalized.broker_symbol})."
+                    "ST: Ignored EXIT (no open position for "
+                    f"{normalized.product} {normalized.broker_exchange}:{normalized.broker_symbol})."
                 ).strip(" |"),
             )
             db.add(alert)

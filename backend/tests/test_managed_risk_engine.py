@@ -483,5 +483,5 @@ def test_tradingview_hint_exits_resolve_distances_from_fill_price() -> None:
         db.refresh(mrp)
 
         assert float(mrp.stop_distance or 0.0) == 10.0
-        assert float(getattr(mrp, "take_profit_distance") or 0.0) == 10.0
+        assert float(mrp.take_profit_distance or 0.0) == 10.0
         assert float(mrp.trail_distance or 0.0) == 2.0

@@ -21,7 +21,9 @@ from app.schemas.ai_trading_manager import (
 from app.services.ai_trading_manager.broker_adapter import BrokerOrderAck, OrderIntent
 from app.services.ai_trading_manager.brokers.stub import StubBrokerAdapter
 from app.services.ai_trading_manager.automation.runner import run_automation_tick
+from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source, set_ai_settings
 from app.models.ai_trading_manager import AiTmExpectedPosition, AiTmPlaybook, AiTmPlaybookRun
+from app.schemas.ai_settings import KiteMcpStatus
 
 client = TestClient(app)
 
@@ -133,6 +135,15 @@ def test_playbook_run_now_execute_path_is_idempotent(monkeypatch: pytest.MonkeyP
     os.environ["ST_KITE_MCP_ENABLED"] = "1"
     get_settings.cache_clear()
 
+    # Ensure execution gating passes (connected MCP status is persisted in DB).
+    with SessionLocal() as db:
+        cfg, _src = get_ai_settings_with_source(db, get_settings())
+        cfg.feature_flags.kite_mcp_enabled = True
+        cfg.feature_flags.ai_execution_enabled = True
+        cfg.kite_mcp.server_url = cfg.kite_mcp.server_url or "https://mcp.kite.trade/sse"
+        cfg.kite_mcp.last_status = KiteMcpStatus.connected
+        set_ai_settings(db, get_settings(), cfg)
+
     fake = FakeBrokerAdapter()
     monkeypatch.setattr("app.api.ai_trading_manager.get_broker_adapter", lambda *_args, **_kwargs: fake)
 
@@ -171,6 +182,13 @@ def test_playbook_run_now_execute_path_is_idempotent(monkeypatch: pytest.MonkeyP
     os.environ["ST_AI_EXECUTION_ENABLED"] = "0"
     os.environ["ST_KITE_MCP_ENABLED"] = "0"
     get_settings.cache_clear()
+
+    with SessionLocal() as db:
+        cfg, _src = get_ai_settings_with_source(db, get_settings())
+        cfg.feature_flags.kite_mcp_enabled = False
+        cfg.feature_flags.ai_execution_enabled = False
+        cfg.kite_mcp.last_status = KiteMcpStatus.unknown
+        set_ai_settings(db, get_settings(), cfg)
 
 
 def test_expected_ledger_resync_populates_expected_positions(monkeypatch: pytest.MonkeyPatch) -> None:

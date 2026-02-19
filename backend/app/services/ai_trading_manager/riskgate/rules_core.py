@@ -17,8 +17,8 @@ def evaluate_core_rules(
 ) -> List[dict]:
     reasons: List[dict] = []
 
-    def _add(code: str, message: str, **details) -> None:
-        reasons.append({"code": code, "message": message, "details": details})
+    def _add(code: str, message: str, *, severity: str = "deny", **details) -> None:
+        reasons.append({"code": code, "message": message, "severity": severity, "details": details})
 
     intent = plan.intent
     symbols = [s.upper() for s in intent.symbols]
@@ -70,7 +70,11 @@ def evaluate_core_rules(
     # Broker snapshot is canonical; if it's clearly stale, deny execution in Phase 0.
     if broker.as_of_ts < ledger.as_of_ts:
         # Not an automatic deny yet, but record as a reason so higher layers can decide.
-        _add("BROKER_SNAPSHOT_OLDER_THAN_LEDGER", "Broker snapshot is older than expected ledger.")
+        _add(
+            "BROKER_SNAPSHOT_OLDER_THAN_LEDGER",
+            "Broker snapshot is older than expected ledger.",
+            severity="warn",
+        )
 
     # Notional / exposure sanity checks (best-effort; requires quotes + equity extraction).
     equity = extract_equity_value(broker.margins or {})

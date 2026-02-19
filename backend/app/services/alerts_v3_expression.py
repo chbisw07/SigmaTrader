@@ -597,13 +597,13 @@ def _rsi_series(values: Sequence[float], length: int) -> list[float]:
     avg_l = _rma_series(losses, length)
     for i in range(n):
         g = avg_g[i]
-        l = avg_l[i]
-        if not isfinite(g) or not isfinite(l):
+        loss = avg_l[i]
+        if not isfinite(g) or not isfinite(loss):
             continue
-        if l == 0:
+        if loss == 0:
             out[i] = 100.0
             continue
-        rs = g / l
+        rs = g / loss
         out[i] = 100.0 - 100.0 / (1.0 + rs)
     return out
 

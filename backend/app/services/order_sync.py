@@ -114,7 +114,9 @@ def sync_order_statuses(
             trigger = None
         return (exch, ts, side, qty, product, otype, price, trigger)
 
-    def _fingerprint_from_broker(entry: Dict[str, object]) -> tuple[str, str, str, int, str, str, float | None, float | None] | None:
+    def _fingerprint_from_broker(
+        entry: Dict[str, object],
+    ) -> tuple[str, str, str, int, str, str, float | None, float | None] | None:
         exch = _as_upper(entry.get("exchange"))
         ts = _as_upper(entry.get("tradingsymbol") or entry.get("trading_symbol"))
         if not exch or not ts:

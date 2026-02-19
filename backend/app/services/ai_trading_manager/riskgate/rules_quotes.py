@@ -24,7 +24,14 @@ def evaluate_quote_rules(
     for sym in [s.upper() for s in plan.intent.symbols]:
         q = quotes.get(sym)
         if q is None:
-            reasons.append({"code": "QUOTE_MISSING", "message": "Quote missing.", "details": {"symbol": sym}})
+            reasons.append(
+                {
+                    "code": "QUOTE_MISSING",
+                    "message": "Quote missing.",
+                    "severity": "deny",
+                    "details": {"symbol": sym},
+                }
+            )
             continue
         last_price, as_of = q
         if policy.require_nonzero_quotes and last_price <= 0:
@@ -32,6 +39,7 @@ def evaluate_quote_rules(
                 {
                     "code": "QUOTE_NONPOSITIVE",
                     "message": "Quote is non-positive.",
+                    "severity": "deny",
                     "details": {"symbol": sym, "last_price": last_price},
                 }
             )
@@ -41,6 +49,7 @@ def evaluate_quote_rules(
                 {
                     "code": "QUOTE_STALE",
                     "message": "Quote is stale.",
+                    "severity": "deny",
                     "details": {"symbol": sym, "age_sec": age_sec},
                 }
             )
