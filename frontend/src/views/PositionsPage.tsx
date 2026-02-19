@@ -24,6 +24,7 @@ import { DataGrid, GridToolbar, type GridCellParams, type GridColDef } from '@mu
 import ClearIcon from '@mui/icons-material/Clear'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import { useNavigate } from 'react-router-dom'
 
 import {
   PriceChart,
@@ -45,6 +46,7 @@ import {
   type ZerodhaPostbackEvent,
   type ZerodhaStatus,
 } from '../services/zerodha'
+import { fetchCoverageUnmanagedCount } from '../services/aiTradingManager'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
 
@@ -99,6 +101,7 @@ function HeaderWithTooltip({ label, tooltip }: { label: string; tooltip: string 
 
 export function PositionsPage() {
   const { displayTimeZone } = useTimeSettings()
+  const navigate = useNavigate()
   const defaults = defaultDateRange()
   type PositionsTab = 'snapshots' | 'analysis' | 'transactions'
   const [activeTab, setActiveTab] = useState<PositionsTab>('snapshots')
@@ -106,6 +109,7 @@ export function PositionsPage() {
   const [loading, setLoading] = useState(true)
   const [polling, setPolling] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [coverageCount, setCoverageCount] = useState<{ unmanaged_open: number; open_total: number } | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [live, setLive] = useState(true)
   const [orderInsights, setOrderInsights] = useState<OrdersInsights | null>(null)
@@ -117,6 +121,23 @@ export function PositionsPage() {
   const positionsKeyRef = useRef<string>('')
   const [lastLiveUpdateAt, setLastLiveUpdateAt] = useState<string | null>(null)
   const symbolApplyTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const c = await fetchCoverageUnmanagedCount({ account_id: 'default' })
+        if (!active) return
+        setCoverageCount({ unmanaged_open: c.unmanaged_open, open_total: c.open_total })
+      } catch {
+        if (!active) return
+        setCoverageCount(null)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
   const symbolAutoApplyMountedRef = useRef(false)
 
   const [startDate, setStartDate] = useState<string>(defaults.from)
@@ -1303,6 +1324,19 @@ export function PositionsPage() {
       <Typography variant="h4" gutterBottom>
         Positions
       </Typography>
+      {coverageCount ? (
+        <Box sx={{ mb: 1 }}>
+          <Tooltip title="Broker-direct holdings/positions without an attached playbook are surfaced as unmanaged. Click to review." arrow>
+            <Chip
+              size="small"
+              color={coverageCount.unmanaged_open > 0 ? 'warning' : 'success'}
+              label={coverageCount.unmanaged_open > 0 ? `Unmanaged: ${coverageCount.unmanaged_open}` : 'Coverage OK'}
+              onClick={() => navigate('/ai?tab=coverage')}
+              sx={{ cursor: 'pointer' }}
+            />
+          </Tooltip>
+        </Box>
+      ) : null}
       <Box
         sx={{
           display: 'flex',

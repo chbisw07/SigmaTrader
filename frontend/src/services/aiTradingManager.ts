@@ -265,6 +265,212 @@ export type DecisionTrace = {
   explanations?: string[]
 }
 
+export type CoverageUnmanagedCount = {
+  account_id: string
+  unmanaged_open: number
+  open_total: number
+}
+
+export type PositionShadow = {
+  shadow_id: string
+  account_id: string
+  symbol: string
+  product: string
+  side: string
+  qty_current: number
+  avg_price?: number | null
+  ltp?: number | null
+  pnl_abs?: number | null
+  pnl_pct?: number | null
+  source: string
+  status: string
+  first_seen_at?: string | null
+  last_seen_at?: string | null
+  managed?: boolean
+  playbook_id?: string | null
+  playbook_mode?: string | null
+  playbook_horizon?: string | null
+}
+
+export type ManagePlaybook = {
+  playbook_id: string
+  scope_type: string
+  scope_key?: string | null
+  enabled: boolean
+  mode: string
+  horizon: string
+  review_cadence_min: number
+  exit_policy: Record<string, unknown>
+  scale_policy: Record<string, unknown>
+  execution_style: string
+  allow_strategy_exits: boolean
+  behavior_on_strategy_exit: string
+  notes?: string | null
+  version: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export async function fetchCoverageUnmanagedCount(params?: { account_id?: string }): Promise<CoverageUnmanagedCount> {
+  const url = new URL('/api/ai/coverage/unmanaged-count', window.location.origin)
+  if (params?.account_id) url.searchParams.set('account_id', params.account_id)
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load unmanaged count (${res.status})`)
+  return (await res.json()) as CoverageUnmanagedCount
+}
+
+export async function fetchCoverageShadows(params?: {
+  account_id?: string
+  status_filter?: string
+  unmanaged_only?: boolean
+  limit?: number
+}): Promise<PositionShadow[]> {
+  const url = new URL('/api/ai/coverage/shadows', window.location.origin)
+  url.searchParams.set('account_id', params?.account_id ?? 'default')
+  if (params?.status_filter) url.searchParams.set('status_filter', params.status_filter)
+  if (params?.unmanaged_only != null) url.searchParams.set('unmanaged_only', String(params.unmanaged_only))
+  if (params?.limit != null) url.searchParams.set('limit', String(params.limit))
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load coverage shadows (${res.status})`)
+  return (await res.json()) as PositionShadow[]
+}
+
+export async function syncCoverageFromLatestSnapshot(params?: { account_id?: string }): Promise<Record<string, unknown>> {
+  const url = new URL('/api/ai/coverage/sync', window.location.origin)
+  url.searchParams.set('account_id', params?.account_id ?? 'default')
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to sync coverage (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as Record<string, unknown>
+}
+
+export async function attachPlaybookToShadow(payload: { shadow_id: string; template?: string }): Promise<ManagePlaybook> {
+  const url = new URL(`/api/ai/position-shadows/${payload.shadow_id}/attach-playbook`, window.location.origin)
+  if (payload.template) url.searchParams.set('template', payload.template)
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to attach playbook (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as ManagePlaybook
+}
+
+export async function updateManagePlaybook(payload: {
+  playbook_id: string
+  patch: Partial<{
+    enabled: boolean
+    mode: string
+    horizon: string
+    review_cadence_min: number
+    exit_policy: Record<string, unknown>
+    scale_policy: Record<string, unknown>
+    execution_style: string
+    allow_strategy_exits: boolean
+    behavior_on_strategy_exit: string
+    notes: string | null
+  }>
+}): Promise<ManagePlaybook> {
+  const res = await fetch(`/api/ai/manage-playbooks/${payload.playbook_id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload.patch),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to update playbook (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as ManagePlaybook
+}
+
+export async function fetchManagePlaybook(payload: { playbook_id: string }): Promise<ManagePlaybook> {
+  const res = await fetch(`/api/ai/manage-playbooks/${payload.playbook_id}`)
+  if (!res.ok) throw new Error(`Failed to load playbook (${res.status})`)
+  return (await res.json()) as ManagePlaybook
+}
+
+export type JournalEvent = {
+  event_id: string
+  position_shadow_id: string
+  ts: string
+  event_type: string
+  source: string
+  intent_payload?: Record<string, unknown>
+  riskgate_result?: Record<string, unknown> | null
+  playbook_result?: Record<string, unknown> | null
+  broker_result?: Record<string, unknown> | null
+  notes?: string | null
+}
+
+export type JournalForecast = {
+  forecast_id: string
+  position_shadow_id: string
+  created_at: string
+  author: string
+  outlook_pct?: number | null
+  horizon_days?: number | null
+  confidence?: number | null
+  rationale_tags?: string[]
+  thesis_text?: string | null
+  invalidation_text?: string | null
+}
+
+export async function fetchJournalEvents(payload: { shadow_id: string; limit?: number }): Promise<JournalEvent[]> {
+  const url = new URL('/api/ai/journal/events', window.location.origin)
+  url.searchParams.set('shadow_id', payload.shadow_id)
+  if (payload.limit != null) url.searchParams.set('limit', String(payload.limit))
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load journal events (${res.status})`)
+  return (await res.json()) as JournalEvent[]
+}
+
+export async function fetchJournalForecasts(payload: { shadow_id: string; limit?: number }): Promise<JournalForecast[]> {
+  const url = new URL('/api/ai/journal/forecasts', window.location.origin)
+  url.searchParams.set('shadow_id', payload.shadow_id)
+  if (payload.limit != null) url.searchParams.set('limit', String(payload.limit))
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load forecasts (${res.status})`)
+  return (await res.json()) as JournalForecast[]
+}
+
+export async function upsertJournalForecast(payload: Partial<JournalForecast> & { position_shadow_id: string }): Promise<JournalForecast> {
+  const res = await fetch('/api/ai/journal/forecasts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to save forecast (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as JournalForecast
+}
+
+export type JournalPostmortem = {
+  postmortem_id: string
+  position_shadow_id: string
+  closed_at: string
+  realized_pnl_abs?: number | null
+  realized_pnl_pct?: number | null
+  mfe_abs?: number | null
+  mfe_pct?: number | null
+  mae_abs?: number | null
+  mae_pct?: number | null
+  peak_price_while_open?: number | null
+  exit_quality: string
+  exit_quality_explanation?: string | null
+  forecast_vs_actual?: Record<string, unknown>
+}
+
+export async function fetchLatestPostmortem(payload: { shadow_id: string }): Promise<JournalPostmortem> {
+  const url = new URL('/api/ai/journal/postmortem', window.location.origin)
+  url.searchParams.set('shadow_id', payload.shadow_id)
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load postmortem (${res.status})`)
+  return (await res.json()) as JournalPostmortem
+}
+
 export async function fetchDecisionTrace(decisionId: string): Promise<DecisionTrace> {
   const res = await fetch(`/api/ai/decision-traces/${encodeURIComponent(decisionId)}`)
   if (!res.ok) throw new Error(`Failed to load DecisionTrace (${res.status})`)

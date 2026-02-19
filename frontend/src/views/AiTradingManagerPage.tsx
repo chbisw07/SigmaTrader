@@ -25,6 +25,9 @@ import Tooltip from '@mui/material/Tooltip'
 import FormControl from '@mui/material/FormControl'
 import MenuItem from '@mui/material/MenuItem'
 import Select from '@mui/material/Select'
+import Tabs from '@mui/material/Tabs'
+import Tab from '@mui/material/Tab'
+import { useSearchParams } from 'react-router-dom'
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -42,6 +45,8 @@ import {
   type AiChatStreamEvent,
   type DecisionTrace,
 } from '../services/aiTradingManager'
+import { AiCoveragePanel } from '../components/ai/AiCoveragePanel'
+import { AiJournalPanel } from '../components/ai/AiJournalPanel'
 
 function MarkdownView({ text }: { text: string }) {
   const components = useMemo(
@@ -368,6 +373,10 @@ function MessageBubble({
 
 export function AiTradingManagerPage() {
   const accountId = 'default'
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = (searchParams.get('tab') || 'chat').toLowerCase()
+  const shadowParam = searchParams.get('shadow') || ''
+
   const [messages, setMessages] = useState<AiTmMessage[]>([])
   const [threads, setThreads] = useState<AiThreadSummary[]>([])
   const [threadId, setThreadId] = useState<string>(() => {
@@ -554,6 +563,18 @@ export function AiTradingManagerPage() {
     setPendingFiles(next)
   }
 
+  const setTab = (next: string, patch?: Record<string, string | null>) => {
+    const sp = new URLSearchParams(searchParams)
+    sp.set('tab', next)
+    if (patch) {
+      for (const [k, v] of Object.entries(patch)) {
+        if (v == null || v === '') sp.delete(k)
+        else sp.set(k, v)
+      }
+    }
+    setSearchParams(sp, { replace: true })
+  }
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 140px)' }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ pb: 1 }}>
@@ -563,81 +584,116 @@ export function AiTradingManagerPage() {
             Ask questions, propose trades, and (when enabled) execute policy‑gated actions with a full audit trail.
           </Typography>
         </Box>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <FormControl size="small" sx={{ minWidth: 220 }}>
-            <Select
-              value={threadId}
-              onChange={(e) => setThreadId(String(e.target.value))}
-              displayEmpty
+        {tab === 'chat' ? (
+          <Stack direction="row" spacing={1} alignItems="center">
+            <FormControl size="small" sx={{ minWidth: 220 }}>
+              <Select value={threadId} onChange={(e) => setThreadId(String(e.target.value))} displayEmpty disabled={busy}>
+                <MenuItem value="default">Default</MenuItem>
+                {threads
+                  .filter((t) => t.thread_id !== 'default')
+                  .map((t) => (
+                    <MenuItem key={t.thread_id} value={t.thread_id}>
+                      {t.title}
+                    </MenuItem>
+                  ))}
+              </Select>
+            </FormControl>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={async () => {
+                const t = await createAiThread({ account_id: accountId })
+                setThreadId(t.thread_id)
+              }}
               disabled={busy}
             >
-              <MenuItem value="default">Default</MenuItem>
-              {threads
-                .filter((t) => t.thread_id !== 'default')
-                .map((t) => (
-                  <MenuItem key={t.thread_id} value={t.thread_id}>
-                    {t.title}
-                  </MenuItem>
-                ))}
-            </Select>
-          </FormControl>
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={async () => {
-              const t = await createAiThread({ account_id: accountId })
-              setThreadId(t.thread_id)
-            }}
-            disabled={busy}
-          >
-            New chat
-          </Button>
-          {!autoscroll && (
-            <Button size="small" variant="outlined" onClick={() => setAutoscroll(true)}>
-              Jump to latest
+              New chat
             </Button>
-          )}
-        </Stack>
-      </Stack>
-
-      <Paper
-        variant="outlined"
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          overflow: 'auto',
-          p: 2,
-          bgcolor: 'background.default',
-        }}
-        ref={scrollRef}
-        onScroll={handleScroll}
-      >
-        {error && (
-          <Typography variant="body2" color="error" sx={{ pb: 1 }}>
-            {error}
-          </Typography>
-        )}
-        {messages.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            No messages yet.
-          </Typography>
+            {!autoscroll && (
+              <Button size="small" variant="outlined" onClick={() => setAutoscroll(true)}>
+                Jump to latest
+              </Button>
+            )}
+          </Stack>
         ) : (
-          <Stack spacing={1.25}>
-            {messages.map((m) => (
-              <MessageBubble
-                key={m.message_id}
-                message={m}
-                onLoadTrace={onLoadTrace}
-                liveToolCalls={m.decision_id ? liveToolCallsByDecision[m.decision_id] : undefined}
-              />
-            ))}
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Button size="small" variant="outlined" onClick={() => setTab('chat', { shadow: null })}>
+              Back to chat
+            </Button>
           </Stack>
         )}
-      </Paper>
+      </Stack>
 
-      <Divider sx={{ my: 1.5 }} />
+      <Tabs
+        value={tab}
+        onChange={(_e, v) => setTab(String(v), { shadow: String(v) === 'journal' ? shadowParam : null })}
+        sx={{ mb: 1 }}
+      >
+        <Tab value="chat" label="Chat" />
+        <Tab value="coverage" label="Coverage" />
+        <Tab value="journal" label="Journal" />
+      </Tabs>
 
-      <Paper
+      {tab !== 'chat' ? (
+        <Paper
+          variant="outlined"
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            overflow: 'auto',
+            bgcolor: 'background.default',
+          }}
+        >
+          {tab === 'coverage' ? (
+            <AiCoveragePanel accountId={accountId} onOpenJournal={(sid) => setTab('journal', { shadow: sid })} />
+          ) : (
+            <AiJournalPanel
+              accountId={accountId}
+              shadowId={shadowParam || null}
+              onShadowChange={(sid) => setTab('journal', { shadow: sid })}
+            />
+          )}
+        </Paper>
+      ) : (
+        <>
+          <Paper
+            variant="outlined"
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'auto',
+              p: 2,
+              bgcolor: 'background.default',
+            }}
+            ref={scrollRef}
+            onScroll={handleScroll}
+          >
+            {error && (
+              <Typography variant="body2" color="error" sx={{ pb: 1 }}>
+                {error}
+              </Typography>
+            )}
+            {messages.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No messages yet.
+              </Typography>
+            ) : (
+              <Stack spacing={1.25}>
+                {messages.map((m) => (
+                  <MessageBubble
+                    key={m.message_id}
+                    message={m}
+                    onLoadTrace={onLoadTrace}
+                    liveToolCalls={m.decision_id ? liveToolCallsByDecision[m.decision_id] : undefined}
+                  />
+                ))}
+              </Stack>
+            )}
+          </Paper>
+
+          <Divider sx={{ my: 1.5 }} />
+
+          <Paper
         variant="outlined"
         sx={{
           p: 1.5,
@@ -733,6 +789,8 @@ export function AiTradingManagerPage() {
           </Stack>
         </Stack>
       </Paper>
+        </>
+      )}
     </Box>
   )
 }

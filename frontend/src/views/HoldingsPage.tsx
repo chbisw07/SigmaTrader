@@ -67,6 +67,7 @@ import { fetchMarketQuotes } from '../services/marketQuotes'
 import { fetchDailyPositions, fetchHoldings, type Holding } from '../services/positions'
 import { fetchAngeloneStatus } from '../services/angelone'
 import { fetchMarginsForBroker } from '../services/brokerRuntime'
+import { fetchCoverageUnmanagedCount } from '../services/aiTradingManager'
 import {
   fetchSymbolCategories,
   upsertSymbolCategory,
@@ -222,6 +223,7 @@ export function HoldingsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [coverageCount, setCoverageCount] = useState<{ unmanaged_open: number; open_total: number } | null>(null)
 
   const [universeId, setUniverseId] = useState<string>('holdings')
   const [angeloneConnected, setAngeloneConnected] = useState(false)
@@ -298,6 +300,20 @@ export function HoldingsPage() {
       active = false
     }
   }, [])
+
+  const loadCoverageCount = useCallback(async () => {
+    try {
+      const c = await fetchCoverageUnmanagedCount({ account_id: 'default' })
+      setCoverageCount({ unmanaged_open: c.unmanaged_open, open_total: c.open_total })
+    } catch {
+      // Coverage is an optional AI feature; don't disrupt Holdings UX.
+      setCoverageCount(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCoverageCount()
+  }, [loadCoverageCount])
 
   const handleSetSymbolCategory = useCallback(
     async (exchangeRaw: string | null | undefined, symbolRaw: string | null | undefined, category: RiskCategory) => {
@@ -5251,6 +5267,23 @@ export function HoldingsPage() {
           <Typography variant="h4" gutterBottom>
             {activeGroup ? activeGroup.name : 'Holdings'}
           </Typography>
+          {coverageCount ? (
+            <Box sx={{ mb: 0.75 }}>
+              <Tooltip title="Broker-direct holdings/positions without an attached playbook are surfaced as unmanaged. Click to review.">
+                <Chip
+                  size="small"
+                  color={coverageCount.unmanaged_open > 0 ? 'warning' : 'success'}
+                  label={
+                    coverageCount.unmanaged_open > 0
+                      ? `Unmanaged: ${coverageCount.unmanaged_open}`
+                      : 'Coverage OK'
+                  }
+                  onClick={() => navigate('/ai?tab=coverage')}
+                  sx={{ cursor: 'pointer' }}
+                />
+              </Tooltip>
+            </Box>
+          ) : null}
           {activeGroup && (
             <Typography color="text.secondary" sx={{ mb: 1 }}>
               {activeGroup.description ? activeGroup.description : 'Symbols loaded from the selected group.'}

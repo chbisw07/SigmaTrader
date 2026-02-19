@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 
 import { AppThemeProvider } from '../themeContext'
 import { AiTradingManagerPage } from './AiTradingManagerPage'
@@ -43,15 +44,61 @@ vi.mock('../services/aiTradingManager', () => {
       },
     ]),
     fetchDecisionTrace: vi.fn(async () => null),
+    fetchCoverageUnmanagedCount: vi.fn(async () => ({ account_id: 'default', unmanaged_open: 0, open_total: 0 })),
+    fetchCoverageShadows: vi.fn(async () => []),
+    syncCoverageFromLatestSnapshot: vi.fn(async () => ({ status: 'ok' })),
+    attachPlaybookToShadow: vi.fn(async () => ({
+      playbook_id: 'pb1',
+      scope_type: 'POSITION',
+      scope_key: 'sh1',
+      enabled: false,
+      mode: 'OBSERVE',
+      horizon: 'SWING',
+      review_cadence_min: 60,
+      exit_policy: {},
+      scale_policy: {},
+      execution_style: 'LIMIT_BBO',
+      allow_strategy_exits: true,
+      behavior_on_strategy_exit: 'ALLOW_AS_IS',
+      version: 1,
+    })),
+    updateManagePlaybook: vi.fn(async () => ({
+      playbook_id: 'pb1',
+      scope_type: 'POSITION',
+      scope_key: 'sh1',
+      enabled: false,
+      mode: 'OBSERVE',
+      horizon: 'SWING',
+      review_cadence_min: 60,
+      exit_policy: {},
+      scale_policy: {},
+      execution_style: 'LIMIT_BBO',
+      allow_strategy_exits: true,
+      behavior_on_strategy_exit: 'ALLOW_AS_IS',
+      version: 1,
+    })),
+    fetchJournalEvents: vi.fn(async () => []),
+    fetchJournalForecasts: vi.fn(async () => []),
+    upsertJournalForecast: vi.fn(async () => ({
+      forecast_id: 'f1',
+      position_shadow_id: 'sh1',
+      created_at: new Date().toISOString(),
+      author: 'USER',
+    })),
+    fetchLatestPostmortem: vi.fn(async () => {
+      throw new Error('not found')
+    }),
   }
 })
 
 describe('AiTradingManagerPage', () => {
   it('renders assistant markdown tables as real tables', async () => {
     render(
-      <AppThemeProvider>
-        <AiTradingManagerPage />
-      </AppThemeProvider>,
+      <MemoryRouter initialEntries={['/ai?tab=chat']}>
+        <AppThemeProvider>
+          <AiTradingManagerPage />
+        </AppThemeProvider>
+      </MemoryRouter>,
     )
 
     expect(await screen.findByText('AI Trading Manager')).toBeTruthy()
@@ -61,9 +108,11 @@ describe('AiTradingManagerPage', () => {
 
   it('supports attaching CSV/XLSX and sends attachment refs on chat', async () => {
     render(
-      <AppThemeProvider>
-        <AiTradingManagerPage />
-      </AppThemeProvider>,
+      <MemoryRouter initialEntries={['/ai?tab=chat']}>
+        <AppThemeProvider>
+          <AiTradingManagerPage />
+        </AppThemeProvider>
+      </MemoryRouter>,
     )
 
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
