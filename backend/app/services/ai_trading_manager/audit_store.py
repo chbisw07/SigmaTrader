@@ -24,10 +24,12 @@ from app.schemas.ai_trading_manager import (
     AiTmMessageRole,
     AiTmThread,
     BrokerSnapshot,
+    DecisionToolCall,
     DecisionTrace,
     LedgerSnapshot,
     MonitorJob,
     ReconciliationDelta,
+    RiskDecision,
 )
 
 
@@ -40,6 +42,17 @@ def _json_loads(raw: str, fallback: Any) -> Any:
         return json.loads(raw)
     except Exception:
         return fallback
+
+
+def _validate_model(model_cls, value):  # noqa: ANN001
+    """Best-effort pydantic v2/v1 validation for stored JSON blobs."""
+    try:
+        return model_cls.model_validate(value)
+    except Exception:
+        try:  # pragma: no cover
+            return model_cls.parse_obj(value)
+        except Exception:
+            raise
 
 
 @dataclass(frozen=True)
@@ -165,6 +178,23 @@ def get_decision_trace(db: Session, *, decision_id: str) -> Optional[DecisionTra
     row = db.execute(select(AiTmDecisionTrace).where(AiTmDecisionTrace.decision_id == decision_id)).scalar_one_or_none()
     if row is None:
         return None
+    tools_raw = _json_loads(row.tools_json, [])
+    tools_called: list[DecisionToolCall] = []
+    if isinstance(tools_raw, list):
+        for t in tools_raw:
+            if isinstance(t, dict):
+                try:
+                    tools_called.append(_validate_model(DecisionToolCall, t))
+                except Exception:
+                    continue
+    risk_obj = None
+    if row.riskgate_json:
+        try:
+            risk_raw = _json_loads(row.riskgate_json, None)
+            if isinstance(risk_raw, dict):
+                risk_obj = _validate_model(RiskDecision, risk_raw)
+        except Exception:
+            risk_obj = None
     return DecisionTrace(
         decision_id=row.decision_id,
         correlation_id=row.correlation_id,
@@ -172,8 +202,8 @@ def get_decision_trace(db: Session, *, decision_id: str) -> Optional[DecisionTra
         account_id=row.account_id,
         user_message=row.user_message,
         inputs_used=_json_loads(row.inputs_json, {}),
-        tools_called=[],
-        riskgate_result=None,
+        tools_called=tools_called,
+        riskgate_result=risk_obj,
         final_outcome=_json_loads(row.outcome_json, {}),
         explanations=_json_loads(row.explanations_json, []),
     )

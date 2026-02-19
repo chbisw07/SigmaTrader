@@ -109,11 +109,26 @@ class RiskDecision(BaseModel):
     policy_hash: Optional[str] = None
 
 
+class OperatorPayloadMeta(BaseModel):
+    payload_id: str
+    payload_bytes: int = 0
+    items_count: int = 0
+
+
 class DecisionToolCall(BaseModel):
     tool_name: str
     input_summary: Dict[str, Any] = Field(default_factory=dict)
     output_summary: Dict[str, Any] = Field(default_factory=dict)
     duration_ms: Optional[int] = None
+    # Operator View: raw tool payload stored locally (never sent to remote LLMs).
+    operator_payload_meta: Optional[OperatorPayloadMeta] = None
+    # LLM View: safe, whitelisted summary that is allowed to be sent to remote LLMs.
+    llm_summary: Optional[Dict[str, Any]] = None
+    # Debug counters to avoid "partial-by-default" confusion.
+    broker_raw_count: Optional[int] = None
+    ui_rendered_count: Optional[int] = None
+    llm_summary_count: Optional[int] = None
+    truncation_reason: Optional[str] = None
 
 
 class DecisionTrace(BaseModel):

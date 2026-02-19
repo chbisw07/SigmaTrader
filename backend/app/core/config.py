@@ -90,6 +90,8 @@ class Settings(BaseSettings):
     # Public-facing base URL for backend (used to build OAuth callback URLs).
     # Example: https://sigmatrader.in
     backend_base_url: str | None = None
+    # Salt used for hashing broker identifiers (order ids, etc.) for LLM-safe summaries.
+    hash_salt: str | None = None
 
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.
@@ -142,6 +144,10 @@ def get_settings() -> Settings:
     raw_admin_pass = os.getenv("ST_ADMIN_PASSWORD")
     if raw_admin_pass is not None:
         settings.admin_password = str(raw_admin_pass).strip() or None
+
+    raw_hash_salt = os.getenv("ST_HASH_SALT")
+    if raw_hash_salt is not None:
+        settings.hash_salt = str(raw_hash_salt).strip() or None
 
     raw_holdings_exit = os.getenv("ST_HOLDINGS_EXIT_ENABLED")
     if raw_holdings_exit is not None:
@@ -214,6 +220,7 @@ def get_settings() -> Settings:
         # Ensure auth/session signing works under pytest even when
         # pydantic-settings is unavailable (env loading disabled in fallback).
         settings.crypto_key = settings.crypto_key or "pytest-crypto-key"
+        settings.hash_salt = settings.hash_salt or "pytest-hash-salt"
         # Keep legacy indicator-alert APIs available under pytest so existing
         # tests can exercise that code path while the product migrates to v3.
         settings.enable_legacy_alerts = True

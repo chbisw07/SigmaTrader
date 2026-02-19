@@ -259,6 +259,32 @@ class AiTmFile(Base):
     )
 
 
+class AiTmOperatorPayload(Base):
+    __tablename__ = "ai_tm_operator_payloads"
+
+    __table_args__ = (
+        UniqueConstraint("payload_id", name="ux_ai_tm_operator_payloads_payload_id"),
+        Index("ix_ai_tm_operator_payloads_decision_ts", "decision_id", "created_at"),
+        Index("ix_ai_tm_operator_payloads_user_ts", "user_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_call_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    payload_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+    payload_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    items_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 class AiTmIdempotencyRecord(Base):
     __tablename__ = "ai_tm_idempotency_records"
 
