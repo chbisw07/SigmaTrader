@@ -57,7 +57,7 @@ def test_riskgate_denies_stale_quote() -> None:
 
     decision = evaluate_riskgate(plan=plan, broker=broker, ledger=ledger, policy=policy, eval_ts=ts).decision
     assert decision.outcome.value == "deny"
-    assert any(r.startswith("QUOTE_STALE:SBIN") for r in decision.reasons)
+    assert any(str(r.get("code")) == "QUOTE_STALE" for r in (decision.reason_codes or []))
 
 
 def test_riskgate_denies_risk_budget_over_max() -> None:
@@ -78,5 +78,25 @@ def test_riskgate_denies_risk_budget_over_max() -> None:
 
     decision = evaluate_riskgate(plan=plan, broker=broker, ledger=ledger, policy=policy, eval_ts=ts).decision
     assert decision.outcome.value == "deny"
-    assert "RISK_BUDGET_EXCEEDS_MAX" in decision.reasons
+    assert any(str(r.get("code")) == "RISK_BUDGET_EXCEEDS_MAX" for r in (decision.reason_codes or []))
 
+
+def test_riskgate_denies_disallowed_product() -> None:
+    ts = _fixed_ts()
+    plan = TradePlan(
+        plan_id="p4",
+        intent=TradeIntent(symbols=["INFY"], side="BUY", product="CNC", constraints={}, risk_budget_pct=0.5),
+        order_skeleton={"order_type": "MARKET"},
+    )
+    broker = BrokerSnapshot(
+        as_of_ts=ts,
+        account_id="default",
+        source="stub",
+        quotes_cache=[Quote(symbol="INFY", last_price=1500.0, as_of_ts=ts)],
+    )
+    ledger = LedgerSnapshot(as_of_ts=ts, account_id="default")
+    policy = RiskPolicyConfig(allowed_products=["MIS"])
+
+    decision = evaluate_riskgate(plan=plan, broker=broker, ledger=ledger, policy=policy, eval_ts=ts).decision
+    assert decision.outcome.value == "deny"
+    assert any(str(r.get("code")) == "PRODUCT_NOT_ALLOWED" for r in (decision.reason_codes or []))

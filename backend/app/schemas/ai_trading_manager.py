@@ -103,6 +103,7 @@ class RiskDecision(BaseModel):
     schema_version: AiTmSchemaVersion = AiTmSchemaVersion.v1
     outcome: RiskDecisionOutcome
     reasons: List[str] = Field(default_factory=list)
+    reason_codes: List[Dict[str, Any]] = Field(default_factory=list)
     computed_risk_metrics: Dict[str, Any] = Field(default_factory=dict)
     policy_version: str = "v1"
     policy_hash: Optional[str] = None

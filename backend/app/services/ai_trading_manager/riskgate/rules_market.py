@@ -16,17 +16,22 @@ def _to_ist_naive(ts: datetime) -> datetime:
     return (ts.astimezone(UTC) + IST_OFFSET).replace(tzinfo=None)
 
 
-def evaluate_market_hours(*, plan: TradePlan, eval_ts: datetime) -> List[str]:
+def evaluate_market_hours(*, plan: TradePlan, eval_ts: datetime) -> List[dict]:
     now_ist = _to_ist_naive(eval_ts)
     minutes = now_ist.hour * 60 + now_ist.minute
     start = DEFAULT_MARKET_OPEN.hour * 60 + DEFAULT_MARKET_OPEN.minute
     end = DEFAULT_MARKET_CLOSE.hour * 60 + DEFAULT_MARKET_CLOSE.minute
     if not (start <= minutes <= end):
-        return ["MARKET_CLOSED"]
+        return [{"code": "MARKET_CLOSED", "message": "Market is closed.", "details": {}}]
     # MIS has stricter constraints later; Phase 0 keeps a simple guardrail.
     if plan.intent.product == "MIS":
         # Prevent MIS orders too close to close in Phase 0 (coarse).
         if minutes > (end - 5):
-            return ["MIS_TOO_CLOSE_TO_CLOSE"]
+            return [
+                {
+                    "code": "MIS_TOO_CLOSE_TO_CLOSE",
+                    "message": "MIS order too close to market close.",
+                    "details": {},
+                }
+            ]
     return []
-
