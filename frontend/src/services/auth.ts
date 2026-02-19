@@ -7,7 +7,7 @@ export type CurrentUser = {
 }
 
 export async function fetchCurrentUser(): Promise<CurrentUser | null> {
-  const res = await fetch('/api/auth/me')
+  const res = await fetch('/api/auth/me', { credentials: 'include' })
   if (res.status === 401) {
     return null
   }
@@ -28,6 +28,7 @@ export async function login(
 ): Promise<CurrentUser> {
   const res = await fetch('/api/auth/login', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
   })
@@ -47,6 +48,7 @@ export async function register(
 ): Promise<CurrentUser> {
   const res = await fetch('/api/auth/register', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       username,
@@ -64,7 +66,7 @@ export async function register(
 }
 
 export async function logout(): Promise<void> {
-  const res = await fetch('/api/auth/logout', { method: 'POST' })
+  const res = await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
   if (!res.ok && res.status !== 204) {
     const body = await res.text()
     throw new Error(
@@ -76,6 +78,7 @@ export async function logout(): Promise<void> {
 export async function updateTheme(themeId: string): Promise<CurrentUser> {
   const res = await fetch('/api/auth/theme', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ theme_id: themeId }),
   })
@@ -104,6 +107,7 @@ export async function changePassword(
 ): Promise<void> {
   const res = await fetch('/api/auth/change-password', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       current_password: currentPassword,

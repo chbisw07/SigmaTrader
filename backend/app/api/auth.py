@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
@@ -44,11 +46,15 @@ def _user_to_schema(user: User) -> UserRead:
 
 
 def _set_session_cookie(
+    request: Request,
     response: Response,
     token: str,
     settings: Settings,
 ) -> None:
-    secure = settings.environment.lower() == "prod"
+    # Prefer proxy-provided scheme (common in prod behind a reverse proxy).
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    scheme = forwarded_proto or request.url.scheme
+    secure = scheme.lower() == "https"
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
@@ -61,6 +67,64 @@ def _set_session_cookie(
 
 def _clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+
+
+def _ensure_env_admin_user(
+    db: Session,
+    settings: Settings,
+    *,
+    username: str,
+    password: str,
+) -> User | None:
+    """Allow logging in with ST_ADMIN_USERNAME/PASSWORD even if no DB user exists.
+
+    SigmaTrader supports a legacy HTTP Basic admin mode (ST_ADMIN_*). The web UI
+    uses the session-based auth APIs. To keep setup simple and avoid "can't
+    login" surprises, we bootstrap (or update) a matching ADMIN user record on
+    successful env-admin authentication.
+    """
+
+    admin_username = (settings.admin_username or "").strip()
+    admin_password = settings.admin_password or ""
+    if not admin_username:
+        return None
+
+    if username != admin_username:
+        return None
+
+    # Do not accept empty admin passwords.
+    if not admin_password:
+        return None
+
+    if not secrets.compare_digest(password, admin_password):
+        return None
+
+    user = _get_user_by_username(db, admin_username)
+    if user is None:
+        user = User(
+            username=admin_username,
+            password_hash=hash_password(password),
+            role="ADMIN",
+            display_name="Administrator",
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user
+
+    # Keep role/password aligned with env-admin credentials.
+    changed = False
+    if user.role != "ADMIN":
+        user.role = "ADMIN"
+        changed = True
+    if not verify_password(password, user.password_hash):
+        user.password_hash = hash_password(password)
+        changed = True
+    if changed:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    return user
 
 
 def get_current_user(
@@ -142,6 +206,7 @@ def register_user(
 @router.post("/login", response_model=UserRead)
 def login(
     payload: LoginRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -150,13 +215,20 @@ def login(
 
     user = _get_user_by_username(db, payload.username)
     if user is None or not verify_password(payload.password, user.password_hash):
+        user = _ensure_env_admin_user(
+            db,
+            settings,
+            username=payload.username,
+            password=payload.password,
+        )
+    if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password.",
         )
 
     token = create_session_token(settings, user_id=user.id)
-    _set_session_cookie(response, token, settings)
+    _set_session_cookie(request, response, token, settings)
 
     return _user_to_schema(user)
 
