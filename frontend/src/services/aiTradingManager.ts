@@ -87,6 +87,21 @@ export type DecisionTrace = {
   created_at: string
   account_id: string
   user_message: string
+  inputs_used?: Record<string, unknown>
+  tools_called?: Array<{
+    tool_name: string
+    input_summary?: Record<string, unknown>
+    output_summary?: Record<string, unknown>
+    duration_ms?: number | null
+  }>
+  riskgate_result?: {
+    outcome: string
+    reasons?: string[]
+    reason_codes?: Array<Record<string, unknown>>
+    computed_risk_metrics?: Record<string, unknown>
+    policy_version?: string
+    policy_hash?: string | null
+  } | null
   final_outcome?: Record<string, unknown>
   explanations?: string[]
 }

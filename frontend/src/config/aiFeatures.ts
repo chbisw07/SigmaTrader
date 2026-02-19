@@ -73,6 +73,18 @@ export function isAiAssistantEnabled(): boolean {
   return getAiTmFeatureFlags().ai_assistant_enabled
 }
 
+export function isAiExecutionEnabled(): boolean {
+  return getAiTmFeatureFlags().ai_execution_enabled
+}
+
+export function isKiteMcpEnabled(): boolean {
+  return getAiTmFeatureFlags().kite_mcp_enabled
+}
+
+export function isMonitoringEnabled(): boolean {
+  return getAiTmFeatureFlags().monitoring_enabled
+}
+
 export function setAiTmFeatureFlag(name: keyof AiTmFeatureFlags, enabled: boolean): void {
   writeBoolLS(name, enabled)
 }

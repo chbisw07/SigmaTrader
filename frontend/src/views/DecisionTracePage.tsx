@@ -4,6 +4,7 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Divider from '@mui/material/Divider'
 import Stack from '@mui/material/Stack'
+import Paper from '@mui/material/Paper'
 
 import { fetchDecisionTrace, type DecisionTrace } from '../services/aiTradingManager'
 import { isAiAssistantEnabled } from '../config/aiFeatures'
@@ -66,6 +67,43 @@ export function DecisionTracePage() {
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
             {trace.user_message}
           </Typography>
+          {trace.inputs_used && (
+            <>
+              <Divider />
+              <Typography variant="subtitle2">Inputs</Typography>
+              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                {JSON.stringify(trace.inputs_used ?? {}, null, 2)}
+              </Typography>
+            </>
+          )}
+          {trace.riskgate_result && (
+            <>
+              <Divider />
+              <Typography variant="subtitle2">RiskGate</Typography>
+              <Paper variant="outlined" sx={{ p: 1 }}>
+                <Typography variant="body2">Outcome: {trace.riskgate_result.outcome}</Typography>
+                {Array.isArray(trace.riskgate_result.reason_codes) && trace.riskgate_result.reason_codes.length > 0 && (
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                    {JSON.stringify(trace.riskgate_result.reason_codes, null, 2)}
+                  </Typography>
+                )}
+                {Array.isArray(trace.riskgate_result.reasons) && trace.riskgate_result.reasons.length > 0 && (
+                  <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                    {JSON.stringify(trace.riskgate_result.reasons, null, 2)}
+                  </Typography>
+                )}
+              </Paper>
+            </>
+          )}
+          {Array.isArray(trace.tools_called) && trace.tools_called.length > 0 && (
+            <>
+              <Divider />
+              <Typography variant="subtitle2">Tool Calls</Typography>
+              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                {JSON.stringify(trace.tools_called ?? [], null, 2)}
+              </Typography>
+            </>
+          )}
           <Divider />
           <Typography variant="subtitle2">Outcome</Typography>
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
@@ -76,4 +114,3 @@ export function DecisionTracePage() {
     </Box>
   )
 }
-
