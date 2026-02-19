@@ -73,6 +73,7 @@ class _DirectPortfolioRequest:
     want_holdings: bool
     want_positions: bool
     want_summary: bool
+    top_n: int | None = None
 
 
 def _corr() -> str:
@@ -132,8 +133,8 @@ def _parse_direct_portfolio_request(msg: str) -> _DirectPortfolioRequest | None:
     if not m:
         return None
 
-    # Trigger only on explicit "show/list" style requests.
-    if not any(x in m for x in ("show", "list", "display")):
+    # Trigger only on explicit "show/list/fetch" style requests.
+    if not any(x in m for x in ("show", "list", "display", "fetch")):
         return None
 
     want_holdings = any(x in m for x in ("holding", "cnc", "delivery", "portfolio"))
@@ -152,10 +153,21 @@ def _parse_direct_portfolio_request(msg: str) -> _DirectPortfolioRequest | None:
         want_holdings = True
         want_positions = True
 
+    top_n = None
+    mt = re.search(r"\\btop\\s+(\\d{1,3})\\b", m)
+    if mt:
+        try:
+            n = int(mt.group(1))
+            if 1 <= n <= 50:
+                top_n = n
+        except Exception:
+            top_n = None
+
     return _DirectPortfolioRequest(
         want_holdings=bool(want_holdings),
         want_positions=bool(want_positions),
         want_summary=bool(want_summary),
+        top_n=top_n,
     )
 
 
@@ -199,6 +211,7 @@ def _holdings_rows(payload: Any) -> list[dict[str, Any]]:
         qty = _as_float(r.get("quantity")) or _as_float(r.get("qty")) or 0.0
         avg = _as_float(r.get("average_price")) or _as_float(r.get("avg_price"))
         ltp = _as_float(r.get("last_price")) or _as_float(r.get("ltp"))
+        value = (ltp or 0.0) * qty if ltp is not None else None
         invested = (avg or 0.0) * qty if avg is not None else None
         current = (ltp or 0.0) * qty if ltp is not None else None
         pnl = _as_float(r.get("pnl"))
@@ -209,6 +222,7 @@ def _holdings_rows(payload: Any) -> list[dict[str, Any]]:
                 "symbol": sym,
                 "product": str(r.get("product") or "CNC").strip().upper(),
                 "qty": int(qty) if float(qty).is_integer() else qty,
+                "value": f"{value:.2f}" if isinstance(value, (int, float)) else ("" if value is None else str(value)),
                 "avg": f"{avg:.2f}" if isinstance(avg, (int, float)) else ("" if avg is None else str(avg)),
                 "ltp": f"{ltp:.2f}" if isinstance(ltp, (int, float)) else ("" if ltp is None else str(ltp)),
                 "pnl": f"{pnl:.2f}" if isinstance(pnl, (int, float)) else ("" if pnl is None else str(pnl)),
@@ -231,12 +245,18 @@ def _positions_rows(payload: Any) -> list[dict[str, Any]]:
             continue
         avg = _as_float(r.get("average_price")) or _as_float(r.get("avg_price"))
         ltp = _as_float(r.get("last_price")) or _as_float(r.get("ltp"))
+        notional = abs(qty) * (ltp if ltp is not None else (avg or 0.0))
         pnl = _as_float(r.get("pnl")) or _as_float(r.get("pnl_unrealised")) or _as_float(r.get("pnl_unrealized"))
         out.append(
             {
                 "symbol": sym,
                 "product": str(r.get("product") or "CNC").strip().upper(),
                 "qty": int(qty) if float(qty).is_integer() else qty,
+                "value": (
+                    f"{notional:.2f}"
+                    if isinstance(notional, (int, float))
+                    else ("" if notional is None else str(notional))
+                ),
                 "avg": f"{avg:.2f}" if isinstance(avg, (int, float)) else ("" if avg is None else str(avg)),
                 "ltp": f"{ltp:.2f}" if isinstance(ltp, (int, float)) else ("" if ltp is None else str(ltp)),
                 "pnl": f"{pnl:.2f}" if isinstance(pnl, (int, float)) else ("" if pnl is None else str(pnl)),
@@ -544,23 +564,51 @@ async def run_chat(
 
         parts: list[str] = []
         if direct_req.want_holdings:
-            parts.append(f"## Holdings (Delivery/CNC) — {len(holdings_rows)}")
+            used_holdings = holdings_rows
+            if direct_req.top_n:
+                def _val(r: dict[str, Any]) -> float:
+                    try:
+                        return float(str(r.get("value") or 0.0))
+                    except Exception:
+                        return 0.0
+
+                used_holdings = sorted(holdings_rows, key=_val, reverse=True)[: int(direct_req.top_n)]
+            suffix = f" — top {direct_req.top_n}" if direct_req.top_n else ""
+            parts.append(f"## Holdings (Delivery/CNC){suffix} — {len(used_holdings)}")
             parts.append(
                 _md_table(
-                    holdings_rows,
-                    [("Symbol", "symbol"), ("Qty", "qty"), ("Avg", "avg"), ("LTP", "ltp"), ("P&L", "pnl")],
+                    used_holdings,
+                    [
+                        ("Symbol", "symbol"),
+                        ("Qty", "qty"),
+                        ("Value", "value"),
+                        ("Avg", "avg"),
+                        ("LTP", "ltp"),
+                        ("P&L", "pnl"),
+                    ],
                     limit=500,
                 )
             )
         if direct_req.want_positions:
-            parts.append(f"## Positions (Net) — {len(positions_rows)}")
+            used_positions = positions_rows
+            if direct_req.top_n:
+                def _val2(r: dict[str, Any]) -> float:
+                    try:
+                        return float(str(r.get("value") or 0.0))
+                    except Exception:
+                        return 0.0
+
+                used_positions = sorted(positions_rows, key=_val2, reverse=True)[: int(direct_req.top_n)]
+            suffix2 = f" — top {direct_req.top_n}" if direct_req.top_n else ""
+            parts.append(f"## Positions (Net){suffix2} — {len(used_positions)}")
             parts.append(
                 _md_table(
-                    positions_rows,
+                    used_positions,
                     [
                         ("Symbol", "symbol"),
                         ("Product", "product"),
                         ("Qty", "qty"),
+                        ("Value", "value"),
                         ("Avg", "avg"),
                         ("LTP", "ltp"),
                         ("P&L", "pnl"),

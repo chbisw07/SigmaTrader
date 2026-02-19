@@ -43,6 +43,12 @@ def _normalize_holdings(payload: Any) -> list[dict[str, Any]]:
         rows = [r for r in payload if isinstance(r, dict)]
     elif isinstance(payload, dict) and isinstance(payload.get("holdings"), list):
         rows = [r for r in payload.get("holdings") if isinstance(r, dict)]
+    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        rows = [r for r in payload.get("data") if isinstance(r, dict)]
+    elif isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        inner = payload.get("data") or {}
+        if isinstance(inner, dict) and isinstance(inner.get("holdings"), list):
+            rows = [r for r in inner.get("holdings") if isinstance(r, dict)]
     out: list[dict[str, Any]] = []
     for r in rows:
         sym = str(r.get("tradingsymbol") or r.get("symbol") or "").strip().upper()
@@ -115,6 +121,12 @@ def _normalize_positions(payload: Any) -> list[dict[str, Any]]:
         rows = [r for r in payload.get("net") if isinstance(r, dict)]
     elif isinstance(payload, list):
         rows = [r for r in payload if isinstance(r, dict)]
+    elif isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        inner = payload.get("data") or {}
+        if isinstance(inner, dict) and isinstance(inner.get("net"), list):
+            rows = [r for r in inner.get("net") if isinstance(r, dict)]
+    elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        rows = [r for r in payload.get("data") if isinstance(r, dict)]
     out: list[dict[str, Any]] = []
     for r in rows:
         sym = str(r.get("tradingsymbol") or r.get("symbol") or "").strip().upper()
@@ -181,6 +193,8 @@ def positions_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, An
 
 def margins_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
     payload = raw_payload if isinstance(raw_payload, dict) else {}
+    if isinstance(payload.get("data"), dict):
+        payload = payload.get("data") or payload
     # Best-effort: different MCP servers shape margins differently.
     available = _as_float(payload.get("available")) or _as_float(payload.get("cash")) or 0.0
     utilized = _as_float(payload.get("utilised")) or _as_float(payload.get("utilized")) or 0.0
@@ -198,8 +212,11 @@ def margins_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]
 
 
 def orders_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:
-    rows = raw_payload if isinstance(raw_payload, list) else []
-    if not isinstance(rows, list):
+    if isinstance(raw_payload, list):
+        rows = raw_payload
+    elif isinstance(raw_payload, dict) and isinstance(raw_payload.get("data"), list):
+        rows = raw_payload.get("data") or []
+    else:
         rows = []
     counts: dict[str, int] = {}
     recent: list[dict[str, Any]] = []

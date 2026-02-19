@@ -141,17 +141,20 @@ def fake_kite_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_safe_summaries_are_inspector_clean() -> None:
     settings = get_settings()
-    holdings_op = [
-        {
-            "tradingsymbol": "INFY",
-            "quantity": 14,
-            "average_price": 1384.2,
-            "last_price": 1370.5,
-            "pnl": -191.8,
-            "instrument_token": 123,
-            "user_id": "CZC754",
-        }
-    ]
+    holdings_op = {
+        "status": "success",
+        "data": [
+            {
+                "tradingsymbol": "INFY",
+                "quantity": 14,
+                "average_price": 1384.2,
+                "last_price": 1370.5,
+                "pnl": -191.8,
+                "instrument_token": 123,
+                "user_id": "CZC754",
+            }
+        ],
+    }
     summary = summarize_tool_for_llm(settings, tool_name="get_holdings", operator_payload=holdings_op)
     # Must not contain forbidden keys/patterns.
     inspect_llm_payload(summary, fail_closed=True)
@@ -200,7 +203,8 @@ def test_orchestrator_never_sends_operator_payload_to_remote_llm(
 
     monkeypatch.setattr(orch, "openai_chat_with_tools", fake_openai_chat_with_tools)
 
-    resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "fetch my top holdings"})
+    # Use a prompt that does NOT trigger the deterministic "show/list/fetch" direct path.
+    resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "what are my top holdings?"})
     assert resp.status_code == 200
     assert len(calls) >= 2  # tool call + final response
 

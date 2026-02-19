@@ -202,7 +202,8 @@ def _seed_candles(symbol: str, *, days: int = 20) -> None:
 def test_chat_fetch_holdings(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
     _enable_ai_provider(monkeypatch)
 
-    resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "fetch my top 5 holdings"})
+    # Use a prompt that exercises the LLM tool-calling path (not the deterministic "show/list/fetch" display path).
+    resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "what are my top 5 holdings?"})
     assert resp.status_code == 200
     body = resp.json()
     assert "Top 5 holdings" in body["assistant_message"]
@@ -211,7 +212,7 @@ def test_chat_fetch_holdings(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> 
 
     tr = client.get(f"/api/ai/decision-traces/{body['decision_id']}")
     assert tr.status_code == 200
-    assert tr.json()["user_message"] == "fetch my top 5 holdings"
+    assert tr.json()["user_message"] == "what are my top 5 holdings?"
 
 
 def test_chat_stream_emits_events(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
