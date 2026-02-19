@@ -23,6 +23,7 @@ from app.schemas.auth import (
     ThemeUpdateRequest,
     UserRead,
 )
+from app.services.ai_trading_manager.coverage import sync_position_shadows_from_latest_snapshot
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
 
@@ -229,6 +230,12 @@ def login(
 
     token = create_session_token(settings, user_id=user.id)
     _set_session_cookie(request, response, token, settings)
+
+    # Best-effort: update unmanaged coverage view on login (never blocks login).
+    try:
+        sync_position_shadows_from_latest_snapshot(db, settings, account_id="default", user_id=user.id)
+    except Exception:
+        pass
 
     return _user_to_schema(user)
 

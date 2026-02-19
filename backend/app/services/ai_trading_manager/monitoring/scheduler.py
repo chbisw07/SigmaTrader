@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
+from app.services.ai_trading_manager.coverage import sync_position_shadows_from_latest_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 class SchedulerState:
     running: bool = False
     last_tick_at: datetime | None = None
+    last_coverage_sync_at: datetime | None = None
 
 
 _state = SchedulerState()
@@ -34,12 +36,30 @@ def _loop() -> None:
             with SessionLocal() as db:
                 cfg, _src = get_ai_settings_with_source(db, settings)
                 enabled = bool(cfg.feature_flags.monitoring_enabled)
+                kite_enabled = bool(cfg.feature_flags.kite_mcp_enabled)
             if not enabled:
                 _state.last_tick_at = datetime.now(UTC)
                 time.sleep(1.0)
                 continue
             _state.last_tick_at = datetime.now(UTC)
-            # Phase 0: store + API only. Evaluation/triggering arrives in Phase 1.
+            # Coverage engine runs periodically to surface broker-direct positions
+            # as "unmanaged" (deterministic; uses latest stored snapshot).
+            try:
+                now = datetime.now(UTC)
+                last = _state.last_coverage_sync_at
+                if kite_enabled and (last is None or (now - last).total_seconds() >= 900):
+                    with SessionLocal() as db2:
+                        sync_position_shadows_from_latest_snapshot(
+                            db2,
+                            settings,
+                            account_id="default",
+                            user_id=None,
+                        )
+                    _state.last_coverage_sync_at = now
+            except Exception:
+                logger.exception("AI TM coverage sync tick failed.")
+
+            # Phase 0+: monitoring evaluation/triggering arrives in later phases.
             time.sleep(1.0)
     finally:
         _state.running = False

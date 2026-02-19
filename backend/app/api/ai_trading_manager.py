@@ -57,6 +57,12 @@ from app.services.ai_trading_manager.portfolio_diagnostics import build_portfoli
 from app.services.ai_trading_manager.reconciler import run_reconciler
 from app.services.ai_trading_manager.riskgate.engine import evaluate_riskgate
 from app.services.ai_trading_manager.sizing import extract_equity_value, suggest_qty
+from app.services.ai_trading_manager.coverage import (
+    get_unmanaged_count,
+    list_position_shadows,
+    sync_position_shadows_from_latest_snapshot,
+    sync_position_shadows_from_snapshot,
+)
 from app.models.ai_trading_manager import AiTmChatMessage
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
 
@@ -272,6 +278,10 @@ async def reconcile_now(
 
     broker_row = audit_store.persist_broker_snapshot(db, broker_snapshot, user_id=user_id)
     ledger_row = audit_store.persist_ledger_snapshot(db, ledger_snapshot, user_id=user_id)
+    try:
+        sync_position_shadows_from_snapshot(db, settings, snapshot=broker_snapshot, user_id=user_id)
+    except Exception:
+        pass
 
     result = run_reconciler(broker=broker_snapshot, ledger=ledger_snapshot)
     run_row = audit_store.persist_reconciliation_run(
@@ -324,6 +334,87 @@ async def reconcile_now(
         "severity_counts": result.severity_counts,
         "decision_id": trace.decision_id,
     }
+
+
+@router.post("/coverage/sync")
+def coverage_sync(
+    request: Request,
+    account_id: str = "default",
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+    user: Optional[User] = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    corr = _correlation_id(request)
+    user_id = user.id if user is not None else None
+    res = sync_position_shadows_from_latest_snapshot(db, settings, account_id=account_id, user_id=user_id)
+    if res is None:
+        return {"status": "no_snapshot", "account_id": account_id}
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.coverage.sync",
+        account_id=account_id,
+        correlation_id=corr,
+        created=res.created,
+        updated=res.updated,
+        closed=res.closed,
+        unmanaged_open=res.unmanaged_open,
+    )
+    return {
+        "status": "ok",
+        "account_id": account_id,
+        "as_of_ts": res.as_of_ts,
+        "created": res.created,
+        "updated": res.updated,
+        "closed": res.closed,
+        "open_total": res.open_total,
+        "unmanaged_open": res.unmanaged_open,
+    }
+
+
+@router.get("/coverage/unmanaged-count")
+def coverage_unmanaged_count(
+    request: Request,
+    account_id: str = "default",
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    c = get_unmanaged_count(db, account_id=account_id)
+    log_with_correlation(logger, request, logging.INFO, "ai_tm.coverage.unmanaged", account_id=account_id, **c)
+    return {"account_id": account_id, **c}
+
+
+@router.get("/coverage/shadows")
+def coverage_list_shadows(
+    request: Request,
+    account_id: str = "default",
+    status_filter: str | None = "OPEN",
+    unmanaged_only: bool = False,
+    limit: int = 200,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    require_ai_assistant_enabled(db, settings)
+    rows = list_position_shadows(
+        db,
+        account_id=account_id,
+        status=status_filter,
+        unmanaged_only=bool(unmanaged_only),
+        limit=limit,
+    )
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.coverage.shadows.list",
+        account_id=account_id,
+        returned=len(rows),
+        unmanaged_only=unmanaged_only,
+    )
+    return rows
 
 
 @router.get("/exceptions")

@@ -30,6 +30,7 @@ from app.services.kite_mcp.legacy_cache import hydrate_legacy_caches_from_kite_m
 from app.services.kite_mcp.secrets import get_auth_session_id, set_auth_session_id, set_request_token
 from app.services.kite_mcp.session_manager import kite_mcp_sessions
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
+from app.services.ai_trading_manager.coverage import sync_position_shadows_from_snapshot
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -441,6 +442,11 @@ async def kite_mcp_fetch_snapshot(
     _require_kite_mcp_enabled(db, settings)
     snap = await fetch_kite_mcp_snapshot(db, settings, account_id=account_id)
     audit_store.persist_broker_snapshot(db, snap, user_id=None)
+    try:
+        sync_position_shadows_from_snapshot(db, settings, snapshot=snap, user_id=user.id if user else None)
+    except Exception:
+        # Coverage sync must never block snapshot fetch.
+        pass
     legacy = hydrate_legacy_caches_from_kite_mcp_snapshot(db, snapshot=snap, user=user)
     record_system_event(
         db,
