@@ -24,6 +24,7 @@ from app.services.system_events import record_system_event
 from .mcp_tools import tool_result_preview
 from .openai_toolcaller import OpenAiChatError, openai_chat_with_tools
 from .policy import evaluate_tool_policy, tool_lookup_map
+from .redaction import redact_for_llm
 from .tools_cache import get_tools_cached
 
 
@@ -140,7 +141,7 @@ async def run_chat(
         {"role": "system", "content": system_prompt},
     ]
     if ui_context:
-        messages.append({"role": "system", "content": f"UI context (json): {ui_context}"})
+        messages.append({"role": "system", "content": f"UI context (json): {redact_for_llm(ui_context)}"})
     messages.append({"role": "user", "content": user_message})
 
     tool_logs: List[ToolCallLog] = []
@@ -185,7 +186,10 @@ async def run_chat(
                     {
                         "id": tc.tool_call_id,
                         "type": "function",
-                        "function": {"name": tc.name, "arguments": tool_result_preview(tc.arguments, max_chars=4000)},
+                        "function": {
+                            "name": tc.name,
+                            "arguments": tool_result_preview(redact_for_llm(tc.arguments or {}), max_chars=4000),
+                        },
                     }
                     for tc in turn.tool_calls
                 ],
@@ -204,20 +208,21 @@ async def run_chat(
             if not pol.allowed:
                 out = {"isError": True, "blocked": True, "reason": pol.reason, "tool": tc.name}
                 duration_ms = int((time.perf_counter() - t0) * 1000)
+                safe_args = redact_for_llm(tc.arguments or {})
                 tool_logs.append(
                     ToolCallLog(
                         name=tc.name,
-                        arguments=tc.arguments,
+                        arguments=safe_args,
                         status="blocked",
                         duration_ms=duration_ms,
-                        result_preview=tool_result_preview(out),
+                        result_preview=tool_result_preview(redact_for_llm(out)),
                         error=pol.reason,
                     )
                 )
                 trace.tools_called.append(
                     DecisionToolCall(
                         tool_name=tc.name,
-                        input_summary={"arguments": tc.arguments},
+                        input_summary={"arguments": safe_args},
                         output_summary={"blocked": True, "reason": pol.reason},
                         duration_ms=duration_ms,
                     )
@@ -230,7 +235,13 @@ async def run_chat(
                     correlation_id=corr,
                     details={"event_type": "AI_TOOL_BLOCKED", "tool": tc.name, "reason": pol.reason},
                 )
-                messages.append({"role": "tool", "tool_call_id": tc.tool_call_id, "content": tool_result_preview(out)})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.tool_call_id,
+                        "content": tool_result_preview(redact_for_llm(out)),
+                    }
+                )
                 continue
 
             try:
@@ -243,11 +254,13 @@ async def run_chat(
                 if status_s == "error":
                     err = str(((res.get("content") or [{}])[0] or {}).get("text") or "tool error")
                 duration_ms = int((time.perf_counter() - t0) * 1000)
-                preview = tool_result_preview(res)
+                safe_args = redact_for_llm(tc.arguments or {})
+                safe_res = redact_for_llm(res)
+                preview = tool_result_preview(safe_res)
                 tool_logs.append(
                     ToolCallLog(
                         name=tc.name,
-                        arguments=tc.arguments,
+                        arguments=safe_args,
                         status=status_s,
                         duration_ms=duration_ms,
                         result_preview=preview,
@@ -257,7 +270,7 @@ async def run_chat(
                 trace.tools_called.append(
                     DecisionToolCall(
                         tool_name=tc.name,
-                        input_summary={"arguments": tc.arguments},
+                        input_summary={"arguments": safe_args},
                         output_summary={"status": status_s, "preview": preview},
                         duration_ms=duration_ms,
                     )
@@ -279,11 +292,12 @@ async def run_chat(
             except Exception as exc:
                 duration_ms = int((time.perf_counter() - t0) * 1000)
                 out = {"isError": True, "error": str(exc) or "tool call failed", "tool": tc.name}
-                preview = tool_result_preview(out)
+                safe_args = redact_for_llm(tc.arguments or {})
+                preview = tool_result_preview(redact_for_llm(out))
                 tool_logs.append(
                     ToolCallLog(
                         name=tc.name,
-                        arguments=tc.arguments,
+                        arguments=safe_args,
                         status="error",
                         duration_ms=duration_ms,
                         result_preview=preview,
@@ -293,7 +307,7 @@ async def run_chat(
                 trace.tools_called.append(
                     DecisionToolCall(
                         tool_name=tc.name,
-                        input_summary={"arguments": tc.arguments},
+                        input_summary={"arguments": safe_args},
                         output_summary={"status": "error", "error": str(exc) or "tool call failed"},
                         duration_ms=duration_ms,
                     )

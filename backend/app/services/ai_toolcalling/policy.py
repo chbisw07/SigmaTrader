@@ -9,7 +9,6 @@ SAFE_READ_TOOL_ALLOWLIST: Set[str] = {
     "get_positions",
     "get_orders",
     "get_margins",
-    "get_profile",
 }
 
 
