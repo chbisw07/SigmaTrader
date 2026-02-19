@@ -15,9 +15,10 @@ The `/ai` page is the primary AI UX.
 - **Conversation (top):** scrollable, full height, messages grouped by role.
 - **Composer (bottom):** sticky/pinned with:
   - multiline input (`Shift+Enter` newline, `Enter` to send)
-  - send + stop (cancel) button
+  - send + stop (cancel) button (streams output while generating)
   - drag‑and‑drop file upload for `.csv` / `.xlsx`
   - attachment chips with remove action
+- **Conversations:** thread selector + “New chat” to start a fresh saved conversation.
 - **Assistant messages:** rendered as **Markdown** (GFM), including real HTML tables.
 - **Per message trace:** expandable **Tool calls & DecisionTrace** section with:
   - tool call list
@@ -52,6 +53,7 @@ When an attachment is included in a chat:
 1) Start SigmaTrader backend + frontend as usual.
 2) Log in to the web UI.
 3) Go to `/ai`.
+4) Try “New chat” to create a separate conversation.
 4) Drag a small CSV (example):
    - `symbol,pnl`
    - `ABC,10`
