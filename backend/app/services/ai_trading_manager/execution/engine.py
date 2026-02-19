@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional
 
@@ -11,7 +12,7 @@ from app.schemas.ai_trading_manager import DecisionToolCall, TradePlan
 
 from .idempotency_store import IdempotencyStore
 from .translator import translate_plan_to_order_intents
-from ..broker_adapter import BrokerAdapter, BrokerOrderAck
+from ..broker_adapter import BrokerAdapter, BrokerOrderAck, OrderIntent
 
 
 def _payload_hash(value: Any) -> str:
@@ -29,6 +30,56 @@ class DryRunExecutionResult:
 class ExecutionEngine:
     def __init__(self, *, idempotency: Optional[IdempotencyStore] = None) -> None:
         self._idempotency = idempotency or IdempotencyStore()
+
+    def plan_to_order_intents(self, *, plan: TradePlan, correlation_id: str) -> list[OrderIntent]:
+        return translate_plan_to_order_intents(plan=plan, correlation_id=correlation_id)
+
+    def _poll_orders_until_converged(
+        self,
+        *,
+        broker: BrokerAdapter,
+        account_id: str,
+        broker_order_ids: list[str],
+        timeout_seconds: float = 8.0,
+        poll_interval_seconds: float = 0.5,
+    ) -> dict[str, Any]:
+        """Best-effort poll for final states.
+
+        Not all broker adapters expose rich order state; this keeps a conservative
+        implementation for Phase 1 while maintaining idempotency guarantees.
+        """
+        t0 = time.perf_counter()
+        wanted = {str(x) for x in broker_order_ids if str(x).strip()}
+        if not wanted:
+            return {"status": "skipped", "reason": "no_order_ids"}
+
+        last_seen: dict[str, dict[str, Any]] = {}
+        while (time.perf_counter() - t0) < float(timeout_seconds):
+            try:
+                rows = broker.get_orders(account_id=account_id) or []
+            except Exception as exc:
+                return {"status": "error", "error": str(exc) or "get_orders_failed", "orders": list(last_seen.values())}
+
+            for o in rows:
+                oid = str(getattr(o, "broker_order_id", None) or getattr(o, "broker_orderid", None) or "")
+                if oid in wanted:
+                    last_seen[oid] = {
+                        "broker_order_id": oid,
+                        "status": str(getattr(o, "status", "") or "").upper() or "UNKNOWN",
+                        "symbol": getattr(o, "symbol", None),
+                        "side": getattr(o, "side", None),
+                        "product": getattr(o, "product", None),
+                        "qty": getattr(o, "qty", None),
+                    }
+
+            if len(last_seen) >= len(wanted):
+                terminal = {"COMPLETE", "COMPLETED", "REJECTED", "CANCELLED", "CANCELED"}
+                if all(str(v.get("status") or "").upper() in terminal for v in last_seen.values()):
+                    return {"status": "converged", "orders": list(last_seen.values())}
+
+            time.sleep(float(poll_interval_seconds))
+
+        return {"status": "timeout", "orders": list(last_seen.values())}
 
     def dry_run_execute(
         self,
@@ -96,17 +147,47 @@ class ExecutionEngine:
             key=idempotency_key,
             payload_hash=payload_hash,
         )
-        # If we didn't create it and it is completed, return prior result.
-        if not begin.created and str(begin.record.status).upper() == "COMPLETED":
-            return self._idempotency.read_result(begin.record)
+        # If we didn't create it, return prior outcome (idempotency guarantee).
+        if not begin.created:
+            prev = self._idempotency.read_result(begin.record)
+            if prev:
+                return prev
+            # Fall through if record exists but has empty payload (rare).
 
-        intents = translate_plan_to_order_intents(plan=plan, correlation_id=correlation_id)
+        # Safety: do not execute if payload hash mismatches an existing record.
+        if not begin.created and str(begin.record.payload_hash or "") != str(payload_hash):
+            self._idempotency.mark_status(
+                db,
+                record_id=begin.record.id,
+                status=self._idempotency.STATUS_FAILED,
+                result_patch={"error": "IDEMPOTENCY_PAYLOAD_MISMATCH"},
+            )
+            return {"mode": "execute", "executed": False, "error": "IDEMPOTENCY_PAYLOAD_MISMATCH"}
+
+        intents = self.plan_to_order_intents(plan=plan, correlation_id=correlation_id)
+        self._idempotency.mark_status(
+            db,
+            record_id=begin.record.id,
+            status=self._idempotency.STATUS_SUBMITTED,
+            result_patch={"mode": "execute", "plan_id": plan.plan_id, "order_intents": [i.__dict__ for i in intents]},
+        )
+
         acks: list[dict[str, Any]] = []
         for intent in intents:
             intent2 = replace(intent, idempotency_key=idempotency_key)
             ack: BrokerOrderAck = broker.place_order(account_id=account_id, intent=intent2)
             acks.append({"symbol": intent.symbol, "broker_order_id": ack.broker_order_id, "status": ack.status})
 
-        result = {"mode": "execute", "plan_id": plan.plan_id, "orders": acks}
-        self._idempotency.mark_completed(db, record_id=begin.record.id, result=result)
+        poll = self._poll_orders_until_converged(
+            broker=broker,
+            account_id=account_id,
+            broker_order_ids=[a.get("broker_order_id", "") for a in acks],
+        )
+        result = {"mode": "execute", "plan_id": plan.plan_id, "orders": acks, "poll": poll}
+        self._idempotency.mark_status(
+            db,
+            record_id=begin.record.id,
+            status=self._idempotency.STATUS_CONFIRMED,
+            result_patch=result,
+        )
         return result

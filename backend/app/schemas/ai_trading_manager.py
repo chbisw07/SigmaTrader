@@ -131,7 +131,11 @@ class DecisionTrace(BaseModel):
 
 
 class IdempotencyStatus(str, Enum):
+    new = "NEW"
     started = "STARTED"
+    submitted = "SUBMITTED"
+    confirmed = "CONFIRMED"
+    reconciled = "RECONCILED"
     completed = "COMPLETED"
     failed = "FAILED"
 
