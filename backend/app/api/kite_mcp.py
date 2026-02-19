@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import urllib.parse
 from datetime import UTC, datetime
@@ -102,8 +103,11 @@ def _rewrite_login_url(login_url: str, *, redirect_uri: str) -> str:
             decoded = urllib.parse.unquote_plus(str(rp))
             parts = urllib.parse.parse_qs(decoded, keep_blank_values=True)
             parts["redirect_uri"] = [redirect_uri]
-            rp2 = urllib.parse.urlencode({k: (v[0] if isinstance(v, list) and v else v) for k, v in parts.items()})
-            qs["redirect_params"] = [rp2]
+            # IMPORTANT: Avoid double-encoding. Store redirect_params as a raw
+            # querystring; the outer urlencode will encode it exactly once.
+            sid = (parts.get("session_id") or [None])[0]
+            if sid:
+                qs["redirect_params"] = [f"session_id={sid}&redirect_uri={redirect_uri}"]
 
         query2 = urllib.parse.urlencode({k: (v[0] if isinstance(v, list) and v else v) for k, v in qs.items()})
         return urllib.parse.urlunparse(p._replace(query=query2))
@@ -209,9 +213,15 @@ async def kite_mcp_auth_start(
         raise HTTPException(status_code=502, detail="Kite MCP login link not found in response.")
     raw_login_url = m.group(0)
 
-    base = _infer_backend_base_url(request, settings)
-    redirect_uri = f"{base}/api/mcp/kite/auth/callback"
-    login_url = _rewrite_login_url(raw_login_url, redirect_uri=redirect_uri)
+    # NOTE: Kite MCP's `kitemcp` app may not honor dynamic redirect_uri. We
+    # keep this behind an explicit env flag because rewriting redirect_params
+    # can break the upstream callback.
+    redirect_uri: str | None = None
+    login_url = raw_login_url
+    if str(os.getenv("ST_KITE_MCP_FORCE_REDIRECT_URI") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        base = _infer_backend_base_url(request, settings)
+        redirect_uri = f"{base}/api/mcp/kite/auth/callback"
+        login_url = _rewrite_login_url(raw_login_url, redirect_uri=redirect_uri)
 
     # Extract and store auth session id (best-effort).
     extracted = _extract_auth_session_id(login_url)

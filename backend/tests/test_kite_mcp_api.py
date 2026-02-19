@@ -111,7 +111,6 @@ def test_auth_start_stores_session_id(fake_kite_mcp) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["login_url"].startswith("https://kite.zerodha.com/connect/login")
-    assert "redirect_uri=" in data["login_url"]
 
     with SessionLocal() as db:
         row = (
