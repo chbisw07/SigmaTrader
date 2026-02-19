@@ -13,6 +13,7 @@ from app.core.logging import log_with_correlation
 from app.db.session import get_db
 from app.schemas.ai_chat import AiChatRequest, AiChatResponse, AiToolCallRow
 from app.schemas.ai_trading_manager import AiTmAttachmentRef, AiTmMessage, AiTmMessageRole
+from app.services.ai.active_config import get_active_config
 from app.services.ai.files_store import get_file_meta
 from app.services.ai_toolcalling.orchestrator import run_chat
 from app.services.ai_trading_manager import audit_store
@@ -39,6 +40,8 @@ async def ai_chat(
     log_with_correlation(logger, request, logging.INFO, "ai.chat.requested", account_id=payload.account_id)
 
     # Resolve attachment metadata (and enforce access control).
+    ai_cfg, _ai_src = get_active_config(db, settings)
+    include_preview_rows = not bool(ai_cfg.do_not_send_pii)
     attachments_for_llm: list[dict[str, object]] = []
     attachments_for_thread: list[AiTmAttachmentRef] = []
     if payload.attachments:
@@ -49,8 +52,7 @@ async def ai_chat(
             if meta is None:
                 raise HTTPException(status_code=404, detail=f"Attachment not found: {a.file_id}")
             # For remote providers, only include summaries (no raw file contents).
-            # In PII-safe mode, caller can decide to omit preview rows; we default
-            # to schema-only here for safety.
+            # In PII-safe mode, omit preview rows from the LLM payload.
             attachments_for_llm.append(
                 {
                     "file_id": meta.file_id,
@@ -61,6 +63,7 @@ async def ai_chat(
                         "kind": meta.summary.kind,
                         "columns": meta.summary.columns,
                         "row_count": meta.summary.row_count,
+                        "preview_rows": meta.summary.preview_rows if include_preview_rows else [],
                         "sheets": meta.summary.sheets,
                         "active_sheet": meta.summary.active_sheet,
                     },

@@ -51,7 +51,7 @@ def _upload_root(settings: Settings) -> Path:
     if override:
         return Path(override)
     # Keep runtime artifacts inside backend/ by default.
-    backend_root = Path(__file__).resolve().parents[2]
+    backend_root = Path(__file__).resolve().parents[3]
     return backend_root / "data" / "ai_uploads"
 
 

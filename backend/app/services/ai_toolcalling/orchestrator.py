@@ -205,9 +205,20 @@ async def run_chat(
         {"role": "system", "content": system_prompt},
     ]
     if ui_context:
-        messages.append({"role": "system", "content": f"UI context (json): {redact_for_llm(ui_context)}"})
+        messages.append(
+            {
+                "role": "system",
+                "content": f"UI context (json): {json.dumps(redact_for_llm(ui_context), ensure_ascii=False)}",
+            }
+        )
     if attachments:
-        messages.append({"role": "system", "content": f"Attachments (summaries json): {redact_for_llm(attachments)}"})
+        attachments_json = json.dumps(redact_for_llm(attachments), ensure_ascii=False)
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Attachments (summaries json): {attachments_json}",
+            }
+        )
     messages.append({"role": "user", "content": user_message})
 
     tool_logs: List[ToolCallLog] = []

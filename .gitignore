@@ -66,3 +66,7 @@ build/
 # Backend config (keep examples only)
 backend/config/*.json
 !backend/config/*.json.example
+
+# Runtime artifacts (AI uploads)
+backend/data/ai_uploads/
+backend/app/data/ai_uploads/
