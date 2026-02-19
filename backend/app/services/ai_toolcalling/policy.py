@@ -9,6 +9,12 @@ SAFE_READ_TOOL_ALLOWLIST: Set[str] = {
     "get_positions",
     "get_orders",
     "get_margins",
+    # Market data helpers (read-only).
+    "get_ltp",
+    "get_ohlc",
+    "get_quotes",
+    "get_historical_data",
+    "search_instruments",
 }
 
 

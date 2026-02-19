@@ -35,18 +35,20 @@ async def ai_chat(
     corr = _correlation_id(request)
     log_with_correlation(logger, request, logging.INFO, "ai.chat.requested", account_id=payload.account_id)
 
+    auth_message_id = uuid4().hex
     result = await run_chat(
         db,
         settings,
         account_id=payload.account_id,
         user_message=payload.message,
+        authorization_message_id=auth_message_id,
         ui_context=payload.context or {},
         correlation_id=corr,
     )
 
     # Persist chat messages to the same assistant thread for continuity in UI.
     user_msg = AiTmMessage(
-        message_id=uuid4().hex,
+        message_id=auth_message_id,
         role=AiTmMessageRole.user,
         content=payload.message,
         created_at=datetime.now(UTC),
@@ -88,4 +90,3 @@ async def ai_chat(
 
 
 __all__ = ["router"]
-

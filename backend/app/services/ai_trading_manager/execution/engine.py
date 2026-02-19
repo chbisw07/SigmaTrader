@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import asyncio
+import inspect
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional
@@ -40,7 +42,7 @@ class ExecutionEngine:
         broker: BrokerAdapter,
         account_id: str,
         broker_order_ids: list[str],
-        timeout_seconds: float = 8.0,
+        timeout_seconds: float = 3.0,
         poll_interval_seconds: float = 0.5,
     ) -> dict[str, Any]:
         """Best-effort poll for final states.
@@ -54,11 +56,17 @@ class ExecutionEngine:
             return {"status": "skipped", "reason": "no_order_ids"}
 
         last_seen: dict[str, dict[str, Any]] = {}
+        empty_polls = 0
         while (time.perf_counter() - t0) < float(timeout_seconds):
             try:
                 rows = broker.get_orders(account_id=account_id) or []
             except Exception as exc:
                 return {"status": "error", "error": str(exc) or "get_orders_failed", "orders": list(last_seen.values())}
+
+            if not rows and not last_seen:
+                empty_polls += 1
+                if empty_polls >= 2:
+                    return {"status": "unavailable", "orders": []}
 
             for o in rows:
                 oid = str(getattr(o, "broker_order_id", None) or getattr(o, "broker_orderid", None) or "")
@@ -78,6 +86,55 @@ class ExecutionEngine:
                     return {"status": "converged", "orders": list(last_seen.values())}
 
             time.sleep(float(poll_interval_seconds))
+
+        return {"status": "timeout", "orders": list(last_seen.values())}
+
+    async def _poll_orders_until_converged_async(
+        self,
+        *,
+        broker: Any,
+        account_id: str,
+        broker_order_ids: list[str],
+        timeout_seconds: float = 4.0,
+        poll_interval_seconds: float = 0.6,
+    ) -> dict[str, Any]:
+        t0 = time.perf_counter()
+        wanted = {str(x) for x in broker_order_ids if str(x).strip()}
+        if not wanted:
+            return {"status": "skipped", "reason": "no_order_ids"}
+
+        last_seen: dict[str, dict[str, Any]] = {}
+        empty_polls = 0
+        while (time.perf_counter() - t0) < float(timeout_seconds):
+            try:
+                maybe = broker.get_orders(account_id=account_id)
+                rows = await maybe if inspect.isawaitable(maybe) else (maybe or [])
+            except Exception as exc:
+                return {"status": "error", "error": str(exc) or "get_orders_failed", "orders": list(last_seen.values())}
+
+            if not rows and not last_seen:
+                empty_polls += 1
+                if empty_polls >= 2:
+                    return {"status": "unavailable", "orders": []}
+
+            for o in rows:
+                oid = str(getattr(o, "broker_order_id", "") or "")
+                if oid in wanted:
+                    last_seen[oid] = {
+                        "broker_order_id": oid,
+                        "status": str(getattr(o, "status", "") or "").upper() or "UNKNOWN",
+                        "symbol": getattr(o, "symbol", None),
+                        "side": getattr(o, "side", None),
+                        "product": getattr(o, "product", None),
+                        "qty": getattr(o, "qty", None),
+                    }
+
+            if len(last_seen) >= len(wanted):
+                terminal = {"COMPLETE", "COMPLETED", "REJECTED", "CANCELLED", "CANCELED"}
+                if all(str(v.get("status") or "").upper() in terminal for v in last_seen.values()):
+                    return {"status": "converged", "orders": list(last_seen.values())}
+
+            await asyncio.sleep(float(poll_interval_seconds))
 
         return {"status": "timeout", "orders": list(last_seen.values())}
 
@@ -169,7 +226,12 @@ class ExecutionEngine:
             db,
             record_id=begin.record.id,
             status=self._idempotency.STATUS_SUBMITTED,
-            result_patch={"mode": "execute", "plan_id": plan.plan_id, "order_intents": [i.__dict__ for i in intents]},
+            result_patch={
+                "mode": "execute",
+                "plan_id": plan.plan_id,
+                "idempotency_record_id": begin.record.id,
+                "order_intents": [i.__dict__ for i in intents],
+            },
         )
 
         acks: list[dict[str, Any]] = []
@@ -183,7 +245,87 @@ class ExecutionEngine:
             account_id=account_id,
             broker_order_ids=[a.get("broker_order_id", "") for a in acks],
         )
-        result = {"mode": "execute", "plan_id": plan.plan_id, "orders": acks, "poll": poll}
+        result = {
+            "mode": "execute",
+            "plan_id": plan.plan_id,
+            "idempotency_record_id": begin.record.id,
+            "orders": acks,
+            "poll": poll,
+        }
+        self._idempotency.mark_status(
+            db,
+            record_id=begin.record.id,
+            status=self._idempotency.STATUS_CONFIRMED,
+            result_patch=result,
+        )
+        return result
+
+    async def execute_to_broker_async(
+        self,
+        db: Session,
+        *,
+        user_id: Optional[int],
+        account_id: str,
+        correlation_id: str,
+        plan: TradePlan,
+        idempotency_key: str,
+        broker: Any,
+    ) -> Dict[str, Any]:
+        payload = plan.model_dump(mode="json")
+        payload_hash = _payload_hash(payload)
+        begin = self._idempotency.begin(
+            db,
+            user_id=user_id,
+            account_id=account_id,
+            key=idempotency_key,
+            payload_hash=payload_hash,
+        )
+        if not begin.created:
+            prev = self._idempotency.read_result(begin.record)
+            if prev:
+                return prev
+
+        if not begin.created and str(begin.record.payload_hash or "") != str(payload_hash):
+            self._idempotency.mark_status(
+                db,
+                record_id=begin.record.id,
+                status=self._idempotency.STATUS_FAILED,
+                result_patch={"error": "IDEMPOTENCY_PAYLOAD_MISMATCH"},
+            )
+            return {"mode": "execute", "executed": False, "error": "IDEMPOTENCY_PAYLOAD_MISMATCH"}
+
+        intents = self.plan_to_order_intents(plan=plan, correlation_id=correlation_id)
+        self._idempotency.mark_status(
+            db,
+            record_id=begin.record.id,
+            status=self._idempotency.STATUS_SUBMITTED,
+            result_patch={
+                "mode": "execute",
+                "plan_id": plan.plan_id,
+                "idempotency_record_id": begin.record.id,
+                "order_intents": [i.__dict__ for i in intents],
+            },
+        )
+
+        acks: list[dict[str, Any]] = []
+        for intent in intents:
+            intent2 = replace(intent, idempotency_key=idempotency_key)
+            maybe = broker.place_order(account_id=account_id, intent=intent2)
+            ack: BrokerOrderAck = await maybe if inspect.isawaitable(maybe) else maybe
+            acks.append({"symbol": intent.symbol, "broker_order_id": ack.broker_order_id, "status": ack.status})
+
+        poll = await self._poll_orders_until_converged_async(
+            broker=broker,
+            account_id=account_id,
+            broker_order_ids=[a.get("broker_order_id", "") for a in acks],
+        )
+        result = {
+            "mode": "execute",
+            "plan_id": plan.plan_id,
+            "idempotency_record_id": begin.record.id,
+            "orders": acks,
+            "poll": poll,
+        }
         self._idempotency.mark_status(
             db,
             record_id=begin.record.id,

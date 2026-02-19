@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -7,7 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.db.base import Base
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
+from app.models import Candle
 from app.main import app
 
 client = TestClient(app)
@@ -88,6 +90,24 @@ def fake_kite_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
                         "annotations": {"readOnlyHint": True, "destructiveHint": False},
                     },
                     {
+                        "name": "get_positions",
+                        "description": "Return positions",
+                        "inputSchema": {"type": "object", "properties": {}},
+                        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                    },
+                    {
+                        "name": "get_orders",
+                        "description": "Return orders",
+                        "inputSchema": {"type": "object", "properties": {}},
+                        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                    },
+                    {
+                        "name": "get_margins",
+                        "description": "Return margins",
+                        "inputSchema": {"type": "object", "properties": {}},
+                        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                    },
+                    {
                         "name": "cancel_order",
                         "description": "Cancel order",
                         "inputSchema": {"type": "object", "properties": {"order_id": {"type": "string"}}},
@@ -97,16 +117,61 @@ def fake_kite_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
             }
 
         async def tools_call(self, *, name: str, arguments: dict):  # noqa: ARG002
+            if name == "get_profile":
+                return {"content": [{"type": "text", "text": "{\"user_id\":\"CZC754\"}"}], "isError": False}
             if name == "get_holdings":
                 return {"content": [{"type": "text", "text": "[{\"tradingsymbol\":\"INFY\"}]"}], "isError": False}
+            if name == "get_positions":
+                return {"content": [{"type": "text", "text": "{\"net\": []}"}], "isError": False}
+            if name == "get_orders":
+                return {"content": [{"type": "text", "text": "[]"}], "isError": False}
+            if name == "get_margins":
+                # Provide equity for sizing.
+                return {"content": [{"type": "text", "text": "{\"equity\": 100000}"}], "isError": False}
+            if name == "place_order":
+                return {"content": [{"type": "text", "text": "{\"order_id\":\"oid-1\"}"}], "isError": False}
             return {"content": [{"type": "text", "text": "nope"}], "isError": True}
 
     class FakeManager:
         async def get_session(self, *, server_url: str, auth_session_id: str | None):  # noqa: ARG002
             return FakeSession()
 
-    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.kite_mcp_sessions", FakeManager())
+    mgr = FakeManager()
+    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.kite_mcp_sessions", mgr)
     monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.kite_mcp.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.api.kite_mcp.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.get_auth_session_id", lambda *a, **k: None)
+
+
+def _seed_candles(symbol: str, *, days: int = 20) -> None:
+    # Seed deterministic daily candles so ATR sizing works.
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 2, 18, 10, 0, 0, tzinfo=UTC)
+    with SessionLocal() as db:
+        for i in range(days):
+            ts = now - timedelta(days=(days - i))
+            # Simple rising candles.
+            o = 700.0 + i
+            h = o + 5.0
+            low = o - 5.0
+            c = o + 1.0
+            db.add(
+                Candle(
+                    symbol=symbol,
+                    exchange="NSE",
+                    timeframe="1d",
+                    ts=ts,
+                    open=o,
+                    high=h,
+                    low=low,
+                    close=c,
+                    volume=1000.0,
+                )
+            )
+        db.commit()
 
 
 def test_chat_fetch_holdings(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
@@ -152,3 +217,85 @@ def test_chat_blocks_trade_tool(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) 
     assert resp.status_code == 200
     body = resp.json()
     assert body["tool_calls"] and body["tool_calls"][0]["status"] == "blocked"
+
+
+def test_chat_trade_propose_then_execute(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
+    _enable_ai_provider(monkeypatch)
+    _seed_candles("SBIN", days=20)
+
+    # Mark MCP connected (required to enable execution).
+    st = client.get("/api/mcp/kite/status")
+    assert st.status_code == 200
+
+    # Enable execution flag now that MCP is connected.
+    upd = client.put("/api/settings/ai", json={"feature_flags": {"ai_execution_enabled": True}})
+    assert upd.status_code == 200
+
+    from app.services.ai_toolcalling import orchestrator as orch
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn, OpenAiToolCall
+
+    calls = {"n": 0}
+
+    async def fake_openai_chat_with_tools(*, api_key, model, messages, tools, **kwargs):  # noqa: ANN001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return OpenAiAssistantTurn(
+                content="",
+                tool_calls=[
+                    OpenAiToolCall(
+                        tool_call_id="tp1",
+                        name="propose_trade_plan",
+                        arguments={
+                            "symbols": ["SBIN"],
+                            "side": "BUY",
+                            "product": "MIS",
+                            "risk_budget_pct": 0.5,
+                            "atr_period": 14,
+                            "atr_multiplier": 2.0,
+                        },
+                    )
+                ],
+                raw={},
+            )
+        if calls["n"] == 2:
+            # Pull plan_id from the last tool response content.
+            plan_id = None
+            for m in reversed(messages):
+                if m.get("role") == "tool":
+                    try:
+                        payload = json.loads(m.get("content") or "{}")
+                        plan_id = ((payload.get("plan") or {}) or {}).get("plan_id")
+                    except Exception:
+                        pass
+                    break
+            return OpenAiAssistantTurn(
+                content="",
+                tool_calls=[
+                    OpenAiToolCall(
+                        tool_call_id="ex1",
+                        name="execute_trade_plan",
+                        arguments={"plan_id": plan_id},
+                    )
+                ],
+                raw={},
+            )
+        return OpenAiAssistantTurn(
+            content="Executed. Order placed and reconciled.",
+            tool_calls=[],
+            raw={},
+        )
+
+    monkeypatch.setattr(orch, "openai_chat_with_tools", fake_openai_chat_with_tools)
+
+    resp = client.post(
+        "/api/ai/chat",
+        json={"account_id": "default", "message": "Buy SBIN MIS risk 0.5% with ATR stop"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["decision_id"]
+    tr = client.get(f"/api/ai/decision-traces/{body['decision_id']}")
+    assert tr.status_code == 200
+    trace = tr.json()
+    assert trace["final_outcome"].get("trade_plan")
+    assert trace["final_outcome"].get("execution")
