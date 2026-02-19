@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
+import os
+import sys
+import threading
 from typing import Iterator
 
 from sqlalchemy import event
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -12,6 +17,10 @@ from app.core.config import get_settings
 from .base import Base
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+_SCHEMA_ENSURED = False
+_SCHEMA_LOCK = threading.Lock()
 
 connect_args: dict[str, object] = {}
 if settings.database_url.startswith("sqlite"):
@@ -55,9 +64,50 @@ SessionLocal = sessionmaker(
 )
 
 
+def _ensure_sqlite_schema_if_missing() -> None:
+    """Bootstrap missing tables for SQLite deployments.
+
+    If the app starts without running migrations (or lifespan hooks are
+    disabled), core endpoints can crash with `no such table: users`. For SQLite
+    we can safely create missing tables using SQLAlchemy metadata.
+    """
+
+    global _SCHEMA_ENSURED
+    if _SCHEMA_ENSURED:
+        return
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    if not settings.database_url.startswith("sqlite"):
+        return
+
+    with _SCHEMA_LOCK:
+        if _SCHEMA_ENSURED:
+            return
+        try:
+            inspector = inspect(engine)
+            tables = set(inspector.get_table_names())
+            if "users" in tables:
+                _SCHEMA_ENSURED = True
+                return
+
+            # Ensure all model modules are imported so Base.metadata is complete.
+            from app import models  # noqa: F401
+
+            logger.warning(
+                "SQLite schema missing core tables; creating tables with create_all(checkfirst=True).",
+                extra={"extra": {"missing_table": "users"}},
+            )
+            Base.metadata.create_all(bind=engine, checkfirst=True)
+        except Exception:
+            logger.exception("Failed to ensure SQLite schema.")
+        finally:
+            _SCHEMA_ENSURED = True
+
+
 def get_db() -> Iterator[Session]:
     """FastAPI dependency that yields a database session."""
 
+    _ensure_sqlite_schema_if_missing()
     db = SessionLocal()
     try:
         yield db
