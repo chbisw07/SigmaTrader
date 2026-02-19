@@ -14,6 +14,7 @@ class OrderIntent:
     product: str = "CNC"
     order_type: str = "MARKET"
     limit_price: float | None = None
+    trigger_price: float | None = None
     correlation_id: str | None = None
     idempotency_key: str | None = None
 
@@ -34,4 +35,3 @@ class BrokerAdapter(Protocol):
     def place_order(self, *, account_id: str, intent: OrderIntent) -> BrokerOrderAck: ...
 
     def get_orders(self, *, account_id: str) -> List[BrokerOrder]: ...
-
