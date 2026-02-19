@@ -60,6 +60,12 @@ class ChatResult:
     decision_id: str
     tool_calls: List[ToolCallLog]
 
+@dataclass(frozen=True)
+class _DirectPortfolioRequest:
+    want_holdings: bool
+    want_positions: bool
+    want_summary: bool
+
 
 def _corr() -> str:
     return uuid4().hex
@@ -74,6 +80,144 @@ def _safe_prompt_audit(prompt: str, *, do_not_send_pii: bool) -> dict[str, Any]:
     if len(preview) > 120:
         preview = preview[:120] + "…"
     return {"prompt_hash": h, "prompt_len": len(p), "prompt_preview": preview}
+
+
+def _parse_direct_portfolio_request(msg: str) -> _DirectPortfolioRequest | None:
+    m = (msg or "").strip().lower()
+    if not m:
+        return None
+
+    # Trigger only on explicit "show/list" style requests.
+    if not any(x in m for x in ("show", "list", "display")):
+        return None
+
+    want_holdings = any(x in m for x in ("holding", "cnc", "delivery", "portfolio"))
+    want_positions = any(x in m for x in ("position", "net"))
+    want_summary = any(x in m for x in ("summarize", "summary", "exposure", "risk"))
+
+    if "holdings" in m and "positions" in m:
+        want_holdings = True
+        want_positions = True
+
+    if not (want_holdings or want_positions):
+        return None
+
+    # "portfolio" implies both unless user narrowed explicitly.
+    if "portfolio" in m and not ("holding" in m or "position" in m or "net" in m):
+        want_holdings = True
+        want_positions = True
+
+    return _DirectPortfolioRequest(
+        want_holdings=bool(want_holdings),
+        want_positions=bool(want_positions),
+        want_summary=bool(want_summary),
+    )
+
+
+def _extract_tool_text(res: dict[str, Any]) -> str:
+    content = res.get("content")
+    if isinstance(content, list) and content:
+        first = content[0]
+        if isinstance(first, dict):
+            return str(first.get("text") or "")
+    return ""
+
+
+def _extract_tool_json(res: dict[str, Any]) -> Any:
+    text = _extract_tool_text(res)
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return text
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _holdings_rows(payload: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        rows = [r for r in payload if isinstance(r, dict)]
+    elif isinstance(payload, dict) and isinstance(payload.get("holdings"), list):
+        rows = [r for r in payload.get("holdings") if isinstance(r, dict)]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sym = str(r.get("tradingsymbol") or r.get("symbol") or "").strip().upper()
+        qty = _as_float(r.get("quantity")) or _as_float(r.get("qty")) or 0.0
+        avg = _as_float(r.get("average_price")) or _as_float(r.get("avg_price"))
+        ltp = _as_float(r.get("last_price")) or _as_float(r.get("ltp"))
+        invested = (avg or 0.0) * qty if avg is not None else None
+        current = (ltp or 0.0) * qty if ltp is not None else None
+        pnl = _as_float(r.get("pnl"))
+        if pnl is None and invested is not None and current is not None:
+            pnl = current - invested
+        out.append(
+            {
+                "symbol": sym,
+                "product": str(r.get("product") or "CNC").strip().upper(),
+                "qty": int(qty) if float(qty).is_integer() else qty,
+                "avg": f"{avg:.2f}" if isinstance(avg, (int, float)) else ("" if avg is None else str(avg)),
+                "ltp": f"{ltp:.2f}" if isinstance(ltp, (int, float)) else ("" if ltp is None else str(ltp)),
+                "pnl": f"{pnl:.2f}" if isinstance(pnl, (int, float)) else ("" if pnl is None else str(pnl)),
+            }
+        )
+    return [r for r in out if r.get("symbol")]
+
+
+def _positions_rows(payload: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if isinstance(payload, dict) and isinstance(payload.get("net"), list):
+        rows = [r for r in payload.get("net") if isinstance(r, dict)]
+    elif isinstance(payload, list):
+        rows = [r for r in payload if isinstance(r, dict)]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        sym = str(r.get("tradingsymbol") or r.get("symbol") or "").strip().upper()
+        qty = _as_float(r.get("quantity")) or _as_float(r.get("qty")) or 0.0
+        if qty == 0:
+            continue
+        avg = _as_float(r.get("average_price")) or _as_float(r.get("avg_price"))
+        ltp = _as_float(r.get("last_price")) or _as_float(r.get("ltp"))
+        pnl = _as_float(r.get("pnl")) or _as_float(r.get("pnl_unrealised")) or _as_float(r.get("pnl_unrealized"))
+        out.append(
+            {
+                "symbol": sym,
+                "product": str(r.get("product") or "CNC").strip().upper(),
+                "qty": int(qty) if float(qty).is_integer() else qty,
+                "avg": f"{avg:.2f}" if isinstance(avg, (int, float)) else ("" if avg is None else str(avg)),
+                "ltp": f"{ltp:.2f}" if isinstance(ltp, (int, float)) else ("" if ltp is None else str(ltp)),
+                "pnl": f"{pnl:.2f}" if isinstance(pnl, (int, float)) else ("" if pnl is None else str(pnl)),
+            }
+        )
+    return [r for r in out if r.get("symbol")]
+
+
+def _md_table(rows: list[dict[str, Any]], columns: list[tuple[str, str]], *, limit: int = 500) -> str:
+    used = rows[:limit]
+    header = "| " + " | ".join([c[0] for c in columns]) + " |"
+    sep = "| " + " | ".join(["---" for _ in columns]) + " |"
+    lines = [header, sep]
+    for r in used:
+        vals: list[str] = []
+        for _label, key in columns:
+            v = r.get(key)
+            s = "" if v is None else str(v)
+            s = s.replace("\n", " ").strip()
+            vals.append(s)
+        lines.append("| " + " | ".join(vals) + " |")
+    extra = len(rows) - len(used)
+    if extra > 0:
+        lines.append("")
+        lines.append(f"_({extra} more rows not shown)_")
+    return "\n".join(lines)
 
 
 async def run_chat(
@@ -91,6 +235,7 @@ async def run_chat(
 ) -> ChatResult:
     require_ai_assistant_enabled(db, settings)
     corr = correlation_id or _corr()
+    direct_req = _parse_direct_portfolio_request(user_message)
 
     ai_cfg, _src = get_active_config(db, settings)
     if not ai_cfg.enabled:
@@ -254,6 +399,126 @@ async def run_chat(
             await event_cb({"type": "decision", "decision_id": trace.decision_id, "correlation_id": corr})
         except Exception:
             pass
+
+    if direct_req is not None:
+        async def _call_json(name: str) -> Any:
+            t0 = time.perf_counter()
+            res = await session.tools_call(name=name, arguments={})
+            if isinstance(res, dict) and res.get("isError") is True:
+                raise RuntimeError(_extract_tool_text(res) or f"{name} failed.")
+            payload = _extract_tool_json(res) if isinstance(res, dict) else None
+            duration_ms = int((time.perf_counter() - t0) * 1000)
+            preview = tool_result_preview(redact_for_llm(payload), max_chars=1200)
+            tool_logs.append(
+                ToolCallLog(
+                    name=name,
+                    arguments={},
+                    status="ok",
+                    duration_ms=duration_ms,
+                    result_preview=preview,
+                )
+            )
+            trace.tools_called.append(
+                DecisionToolCall(
+                    tool_name=name,
+                    input_summary={},
+                    output_summary={"preview": preview},
+                    duration_ms=duration_ms,
+                )
+            )
+            if event_cb is not None:
+                try:
+                    await event_cb(
+                        {
+                            "type": "tool_call",
+                            "name": name,
+                            "arguments": {},
+                            "status": "ok",
+                            "duration_ms": duration_ms,
+                            "result_preview": preview,
+                        }
+                    )
+                except Exception:
+                    pass
+            return payload
+
+        holdings_payload = None
+        positions_payload = None
+        try:
+            if direct_req.want_holdings:
+                holdings_payload = await _call_json("get_holdings")
+            if direct_req.want_positions:
+                positions_payload = await _call_json("get_positions")
+        except Exception as exc:
+            final_text = f"Failed to fetch portfolio data from Kite MCP: {str(exc) or 'unknown error'}"
+            trace.final_outcome = {"assistant_message": final_text, "tool_calls": [t.__dict__ for t in tool_logs]}
+            trace.explanations = []
+            audit_store.persist_decision_trace(db, trace, user_id=None)
+            return ChatResult(assistant_message=final_text, decision_id=trace.decision_id, tool_calls=tool_logs)
+
+        holdings_rows = _holdings_rows(holdings_payload) if holdings_payload is not None else []
+        positions_rows = _positions_rows(positions_payload) if positions_payload is not None else []
+
+        parts: list[str] = []
+        if direct_req.want_holdings:
+            parts.append(f"## Holdings (Delivery/CNC) — {len(holdings_rows)}")
+            parts.append(
+                _md_table(
+                    holdings_rows,
+                    [("Symbol", "symbol"), ("Qty", "qty"), ("Avg", "avg"), ("LTP", "ltp"), ("P&L", "pnl")],
+                    limit=500,
+                )
+            )
+        if direct_req.want_positions:
+            parts.append(f"## Positions (Net) — {len(positions_rows)}")
+            parts.append(
+                _md_table(
+                    positions_rows,
+                    [
+                        ("Symbol", "symbol"),
+                        ("Product", "product"),
+                        ("Qty", "qty"),
+                        ("Avg", "avg"),
+                        ("LTP", "ltp"),
+                        ("P&L", "pnl"),
+                    ],
+                    limit=500,
+                )
+            )
+
+        if direct_req.want_summary:
+            def _sum_pnl(rows: list[dict[str, Any]]) -> float:
+                tot = 0.0
+                for r in rows:
+                    v = _as_float(r.get("pnl"))
+                    if v is not None:
+                        tot += float(v)
+                return tot
+
+            parts.append("## Exposure summary (deterministic)")
+            parts.append(f"- Holdings count: {len(holdings_rows)}")
+            parts.append(f"- Positions count: {len(positions_rows)}")
+            if holdings_rows:
+                parts.append(f"- Holdings P&L (sum): {_sum_pnl(holdings_rows):.2f}")
+            if positions_rows:
+                parts.append(f"- Positions P&L (sum): {_sum_pnl(positions_rows):.2f}")
+
+        final_text = "\n\n".join(parts).strip() or "No data returned."
+        if event_cb is not None and stream_assistant:
+            try:
+                chunk_size = 120
+                for i in range(0, len(final_text), chunk_size):
+                    await event_cb({"type": "assistant_delta", "text": final_text[i : i + chunk_size]})
+            except Exception:
+                pass
+        trace.final_outcome = {
+            "assistant_message": final_text,
+            "tool_calls": [t.__dict__ for t in tool_logs],
+            "portfolio": {"holdings_count": len(holdings_rows), "positions_count": len(positions_rows)},
+        }
+        trace.explanations = []
+        audit_store.persist_decision_trace(db, trace, user_id=None)
+        return ChatResult(assistant_message=final_text, decision_id=trace.decision_id, tool_calls=tool_logs)
 
     structured: dict[str, Any] = {}
     if authorization_message_id:

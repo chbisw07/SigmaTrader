@@ -131,7 +131,21 @@ def fake_kite_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
             if name == "get_profile":
                 return {"content": [{"type": "text", "text": "{\"user_id\":\"CZC754\"}"}], "isError": False}
             if name == "get_holdings":
-                return {"content": [{"type": "text", "text": "[{\"tradingsymbol\":\"INFY\"}]"}], "isError": False}
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "["
+                                "{\"tradingsymbol\":\"INFY\",\"quantity\":14,\"average_price\":1384.2,\"last_price\":1370.5,\"pnl\":-191.8},"
+                                "{\"tradingsymbol\":\"TCS\",\"quantity\":4,\"average_price\":4000,\"last_price\":4050,\"pnl\":200},"
+                                "{\"tradingsymbol\":\"RELIANCE\",\"quantity\":14,\"average_price\":1415.6,\"last_price\":1409.5,\"pnl\":-85.4}"
+                                "]"
+                            ),
+                        }
+                    ],
+                    "isError": False,
+                }
             if name == "get_positions":
                 return {"content": [{"type": "text", "text": "{\"net\": []}"}], "isError": False}
             if name == "get_orders":
@@ -256,6 +270,26 @@ def test_chat_with_attachments_records_trace(monkeypatch: pytest.MonkeyPatch, fa
     msgs = thread.json().get("messages") or []
     user_msgs = [m for m in msgs if m.get("role") == "user"]
     assert user_msgs and any((m.get("attachments") or []) for m in user_msgs)
+
+
+def test_chat_direct_show_holdings_returns_full_table(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
+    _enable_ai_provider(monkeypatch)
+
+    # Ensure LLM isn't called for direct portfolio display.
+    from app.services.ai_toolcalling import orchestrator as orch
+
+    async def _boom(*a, **k):  # noqa: ANN001
+        raise AssertionError("openai_chat_with_tools should not be called for direct show holdings")
+
+    monkeypatch.setattr(orch, "openai_chat_with_tools", _boom)
+
+    resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "Show my holdings (CNC)"})
+    assert resp.status_code == 200
+    body = resp.json()
+    text = body["assistant_message"]
+    assert "Holdings (Delivery/CNC) — 3" in text
+    assert "| Symbol |" in text
+    assert "INFY" in text and "TCS" in text and "RELIANCE" in text
 
 
 def test_chat_blocks_trade_tool(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
