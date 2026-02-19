@@ -5,7 +5,7 @@ import hmac
 import json
 import re
 from typing import Any, Dict
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -89,6 +89,45 @@ def _as_float(v: object) -> float | None:
         return float(v)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_request_token(raw: str) -> str:
+    """Accept either a bare token or a full redirect URL/query string.
+
+    Users often paste the entire redirect URL from Kite, which contains
+    `request_token=...&status=success...`. This helper extracts the token.
+    """
+
+    s = (raw or "").strip()
+    if not s:
+        return ""
+
+    # If user pasted a full URL, parse its querystring.
+    if s.lower().startswith("http://") or s.lower().startswith("https://"):
+        try:
+            p = urlparse(s)
+            qs = parse_qs(p.query or "")
+            tok = (qs.get("request_token") or [None])[0]
+            if tok:
+                return str(tok).strip()
+        except Exception:
+            pass
+
+    # If user pasted a query string or key=value pairs, parse that.
+    if "request_token=" in s or "&" in s:
+        try:
+            q = s
+            if q.startswith("?"):
+                q = q[1:]
+            qs = parse_qs(q)
+            tok = (qs.get("request_token") or [None])[0]
+            if tok:
+                return str(tok).strip()
+        except Exception:
+            pass
+
+    # Otherwise assume they pasted the raw token.
+    return s
 
 
 def _map_postback_status(status_raw: str) -> str | None:
@@ -491,14 +530,22 @@ def connect_zerodha(
         ) from exc
 
     kite = KiteConnect(api_key=api_key)
+    request_token = _normalize_request_token(payload.request_token)
+    if not request_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request_token is required.")
     try:
         session_data = kite.generate_session(
-            payload.request_token,
+            request_token,
             api_secret=api_secret,
         )
     except Exception as exc:
         # Common case: request_token already used/expired or credentials mismatch.
-        msg = str(exc)
+        msg = str(exc) or "Unknown error"
+        if "invalid" in msg.lower() and "token" in msg.lower():
+            msg = (
+                f"{msg} (Tip: request_token is one-time and expires quickly. "
+                "Open Zerodha Login again and paste the fresh request_token or the full redirect URL.)"
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Zerodha connect failed: {msg}",

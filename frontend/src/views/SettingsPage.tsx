@@ -740,13 +740,35 @@ export function SettingsPage() {
   }
 
   const handleConnectZerodha = async () => {
-    if (!requestToken.trim()) {
+    const raw = requestToken.trim()
+    if (!raw) {
       setZerodhaError('Please paste the request_token from Zerodha.')
       return
     }
+    // Accept the full redirect URL (it includes request_token=...&status=success).
+    const extractToken = (value: string) => {
+      try {
+        if (value.startsWith('http://') || value.startsWith('https://')) {
+          const u = new URL(value)
+          return u.searchParams.get('request_token') || ''
+        }
+      } catch {
+        // ignore
+      }
+      if (value.includes('request_token=')) {
+        const qs = value.startsWith('?') ? value.slice(1) : value
+        const p = new URLSearchParams(qs)
+        return p.get('request_token') || ''
+      }
+      return value
+    }
+    const token = extractToken(raw).trim()
+    if (token && token !== raw) {
+      setRequestToken(token)
+    }
     setIsConnecting(true)
     try {
-      await connectZerodha(requestToken.trim())
+      await connectZerodha(token)
       const status = await fetchZerodhaStatus()
       setBrokerStatus(status)
       setZerodhaError(null)
