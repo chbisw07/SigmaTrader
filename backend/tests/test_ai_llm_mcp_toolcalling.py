@@ -64,6 +64,17 @@ def _enable_ai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(orch, "openai_chat_with_tools", fake_openai_chat_with_tools)
 
 
+def _login_user() -> None:
+    # Create a real session cookie so attachment endpoints can validate access.
+    client.post(
+        "/api/auth/register",
+        json={"username": "att_user", "password": "pw12345", "display_name": "Att"},
+    )
+    resp = client.post("/api/auth/login", json={"username": "att_user", "password": "pw12345"})
+    client.cookies.clear()
+    client.cookies.update(resp.cookies)
+
+
 @pytest.fixture()
 def fake_kite_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
     # Enable Kite MCP in settings.
@@ -187,6 +198,41 @@ def test_chat_fetch_holdings(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> 
     tr = client.get(f"/api/ai/decision-traces/{body['decision_id']}")
     assert tr.status_code == 200
     assert tr.json()["user_message"] == "fetch my top 5 holdings"
+
+
+def test_chat_with_attachments_records_trace(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
+    _enable_ai_provider(monkeypatch)
+    _login_user()
+
+    # Upload a tiny CSV attachment.
+    files = [("files", ("pnl.csv", b"symbol,pnl\nABC,10\n", "text/csv"))]
+    up = client.post("/api/ai/files", files=files)
+    assert up.status_code == 200
+    file_id = up.json()["files"][0]["file_id"]
+
+    resp = client.post(
+        "/api/ai/chat",
+        json={
+            "account_id": "default",
+            "message": "fetch my top 5 holdings",
+            "attachments": [{"file_id": file_id, "how": "auto"}],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    tr = client.get(f"/api/ai/decision-traces/{body['decision_id']}")
+    assert tr.status_code == 200
+    inputs = tr.json().get("inputs_used") or {}
+    atts = inputs.get("attachments") or []
+    assert isinstance(atts, list)
+    assert any(a.get("file_id") == file_id for a in atts)
+
+    thread = client.get("/api/ai/thread?account_id=default&thread_id=default")
+    assert thread.status_code == 200
+    msgs = thread.json().get("messages") or []
+    user_msgs = [m for m in msgs if m.get("role") == "user"]
+    assert user_msgs and any((m.get("attachments") or []) for m in user_msgs)
 
 
 def test_chat_blocks_trade_tool(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
