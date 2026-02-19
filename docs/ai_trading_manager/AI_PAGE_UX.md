@@ -8,7 +8,7 @@ SigmaTrader now has a dedicated **AI Trading Manager** page with a ChatGPT‑sty
 - Route: `/ai`
 - Settings remain in **Settings → AI** (`/settings?tab=ai`)
 
-The always‑present assistant panel remains available, but includes a link to open the full `/ai` page.
+The `/ai` page is the primary AI UX.
 
 ## UI Layout
 
@@ -65,4 +65,3 @@ When an attachment is included in a chat:
 
 - Attachments are access‑controlled: only the uploading user can fetch meta/download.
 - The current “attachments to LLM” path is intentionally conservative; future phases can add deterministic server‑side tools for computing aggregates over full file contents without sending raw data to remote models.
-

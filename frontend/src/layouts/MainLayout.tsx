@@ -44,8 +44,6 @@ import {
   DESKTOP_NOTIFICATIONS_CHANGED_EVENT,
   getDesktopAlertNotificationsEnabled,
 } from '../services/desktopNotifications'
-import { AI_TM_FLAGS_CHANGED_EVENT, isAiAssistantEnabled } from '../config/aiFeatures'
-import { AssistantPanelShell } from '../components/ai/AssistantPanelShell'
 
 const drawerWidth = 220
 const collapsedDrawerWidth = 64
@@ -102,7 +100,6 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
   const [desktopAlertsEnabled, setDesktopAlertsEnabled] = useState<boolean>(() =>
     getDesktopAlertNotificationsEnabled(),
   )
-  const [aiEnabled, setAiEnabled] = useState<boolean>(() => isAiAssistantEnabled())
 
   useDesktopAlertNotifications({ enabled: desktopAlertsEnabled })
 
@@ -148,13 +145,6 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
     const handler = () => setDesktopAlertsEnabled(getDesktopAlertNotificationsEnabled())
     window.addEventListener(DESKTOP_NOTIFICATIONS_CHANGED_EVENT, handler)
     return () => window.removeEventListener(DESKTOP_NOTIFICATIONS_CHANGED_EVENT, handler)
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const handler = () => setAiEnabled(isAiAssistantEnabled())
-    window.addEventListener(AI_TM_FLAGS_CHANGED_EVENT, handler)
-    return () => window.removeEventListener(AI_TM_FLAGS_CHANGED_EVENT, handler)
   }, [])
 
   const effectiveDrawerWidth = sidebarCollapsed
@@ -391,7 +381,6 @@ export function MainLayout({ children, currentUser, onAuthChange }: MainLayoutPr
       >
         {children}
       </Box>
-      {aiEnabled && <AssistantPanelShell />}
     </Box>
   )
 }
