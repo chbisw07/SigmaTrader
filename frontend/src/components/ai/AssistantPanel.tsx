@@ -47,6 +47,14 @@ export function AssistantPanel() {
   const [lastToolCalls, setLastToolCalls] = useState<AiChatToolCall[]>([])
   const [lastTrace, setLastTrace] = useState<DecisionTrace | null>(null)
 
+  const lastFinalOutcome = useMemo(() => (lastTrace?.final_outcome ?? null) as any, [lastTrace])
+  const lastTradePlan = useMemo(() => lastFinalOutcome?.trade_plan ?? null, [lastFinalOutcome])
+  const lastRiskGate = useMemo(
+    () => lastTrace?.riskgate_result ?? lastFinalOutcome?.riskgate ?? null,
+    [lastFinalOutcome, lastTrace],
+  )
+  const lastExecution = useMemo(() => lastFinalOutcome?.execution ?? null, [lastFinalOutcome])
+
   useEffect(() => {
     let active = true
     const run = async () => {
@@ -131,7 +139,7 @@ export function AssistantPanel() {
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <Box sx={{ flex: 1, overflow: 'auto', px: 2, py: 1.5 }}>
         {!isAiExecutionEnabled() && (
           <Alert severity="info" sx={{ mb: 1 }}>
@@ -177,31 +185,27 @@ export function AssistantPanel() {
                 View trace
               </Button>
             </Stack>
-            {lastTrace?.final_outcome && (lastTrace.final_outcome as any)['trade_plan'] && (
+            {lastTradePlan && (
               <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
                 <Typography variant="subtitle2">Trade Plan</Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-                  {JSON.stringify((lastTrace.final_outcome as any)['trade_plan'], null, 2)}
+                  {JSON.stringify(lastTradePlan, null, 2)}
                 </Typography>
               </Paper>
             )}
-            {(lastTrace?.riskgate_result || (lastTrace?.final_outcome as any)?.['riskgate']) && (
+            {lastRiskGate && (
               <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
                 <Typography variant="subtitle2">RiskGate</Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-                  {JSON.stringify(
-                    lastTrace.riskgate_result ?? ((lastTrace?.final_outcome as any)?.['riskgate'] ?? {}),
-                    null,
-                    2
-                  )}
+                  {JSON.stringify(lastRiskGate, null, 2)}
                 </Typography>
               </Paper>
             )}
-            {lastTrace?.final_outcome && (lastTrace.final_outcome as any)['execution'] && (
+            {lastExecution && (
               <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
                 <Typography variant="subtitle2">Execution</Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-                  {JSON.stringify((lastTrace.final_outcome as any)['execution'], null, 2)}
+                  {JSON.stringify(lastExecution, null, 2)}
                 </Typography>
               </Paper>
             )}

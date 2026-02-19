@@ -17,6 +17,18 @@ export function AssistantPanelShell() {
   const [minimized, setMinimized] = useState(false)
   const width = useMemo(() => 440, [])
 
+  const height = useMemo(
+    () =>
+      minimized
+        ? (72 as const)
+        : ({
+            // top offset (app bar + padding) + bottom padding
+            xs: 'calc(100vh - 80px)', // (56 + 12) + 12
+            sm: 'calc(100vh - 88px)', // (64 + 12) + 12
+          } as const),
+    [minimized],
+  )
+
   return (
     <>
       <Tooltip title={open ? 'Hide assistant' : 'Show assistant'}>
@@ -49,10 +61,12 @@ export function AssistantPanelShell() {
             // slightly shorter than full height to avoid a cramped look
             top: { xs: 56 + 12, sm: 64 + 12 },
             bottom: minimized ? 'auto' : 12,
-            height: minimized ? 72 : 'auto',
+            height,
             right: 12,
             borderRadius: 2,
             overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
           },
         }}
       >
@@ -91,7 +105,9 @@ export function AssistantPanelShell() {
         {!minimized && (
           <>
             <Divider />
-            <AssistantPanel />
+            <Box sx={{ flex: 1, minHeight: 0 }}>
+              <AssistantPanel />
+            </Box>
           </>
         )}
       </Drawer>
