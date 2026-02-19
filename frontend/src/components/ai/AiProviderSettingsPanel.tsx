@@ -417,8 +417,12 @@ export function AiProviderSettingsPanel() {
               disabled={busy}
             />
           }
-          label="Do not send PII (audit logs store only prompt hash)"
+          label="PII-safe mode (remote LLM sees summaries only)"
         />
+        <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
+          Remote providers never receive raw broker payloads. Local providers may support deeper context later behind an
+          explicit toggle.
+        </Typography>
 
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <TextField
@@ -545,4 +549,3 @@ export function AiProviderSettingsPanel() {
     </Paper>
   )
 }
-

@@ -242,6 +242,16 @@ export type DecisionTrace = {
     input_summary?: Record<string, unknown>
     output_summary?: Record<string, unknown>
     duration_ms?: number | null
+    operator_payload_meta?: {
+      payload_id: string
+      payload_bytes?: number
+      items_count?: number
+    } | null
+    llm_summary?: Record<string, unknown> | null
+    broker_raw_count?: number | null
+    ui_rendered_count?: number | null
+    llm_summary_count?: number | null
+    truncation_reason?: string | null
   }>
   riskgate_result?: {
     outcome: string

@@ -308,24 +308,46 @@ function MessageBubble({
                   {trace?.tools_called?.length ? (
                     <Paper variant="outlined" sx={{ p: 1 }}>
                       <Typography variant="subtitle2">Tool calls</Typography>
-                      <TableContainer sx={{ mt: 0.5 }}>
-                        <Table size="small">
-                          <TableHead>
-                            <TableRow>
-                              <TableCell>Tool</TableCell>
-                              <TableCell align="right">Duration (ms)</TableCell>
-                            </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {trace.tools_called.map((t, idx) => (
-                              <TableRow key={`${t.tool_name}-${idx}`}>
-                                <TableCell>{t.tool_name}</TableCell>
-                                <TableCell align="right">{t.duration_ms ?? '—'}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </TableContainer>
+                      <Stack spacing={0.75} sx={{ mt: 0.5 }}>
+                        {trace.tools_called.map((t, idx) => (
+                          <Accordion
+                            key={`${t.tool_name}-${idx}`}
+                            disableGutters
+                            elevation={0}
+                            sx={{ bgcolor: 'transparent', '&:before': { display: 'none' } }}
+                          >
+                            <AccordionSummary expandIcon={<ExpandMoreIcon fontSize="small" />}>
+                              <Stack
+                                direction="row"
+                                spacing={1}
+                                alignItems="center"
+                                sx={{ width: '100%', justifyContent: 'space-between' }}
+                              >
+                                <Typography variant="body2">{t.tool_name}</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {t.duration_ms ?? '—'} ms
+                                </Typography>
+                              </Stack>
+                            </AccordionSummary>
+                            <AccordionDetails sx={{ pt: 0 }}>
+                              <Stack spacing={0.75}>
+                                <Typography variant="caption" color="text.secondary">
+                                  Operator payload stored locally:{' '}
+                                  {String(t.operator_payload_meta?.items_count ?? t.broker_raw_count ?? 0)} items •{' '}
+                                  {String(t.operator_payload_meta?.payload_bytes ?? 0)} bytes
+                                  {t.ui_rendered_count != null ? ` • UI rendered ${t.ui_rendered_count}` : ''}
+                                  {t.llm_summary_count != null ? ` • Summary count ${t.llm_summary_count}` : ''}
+                                  {t.truncation_reason ? ` • ${t.truncation_reason}` : ''}
+                                </Typography>
+                                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                  Summary sent to LLM
+                                </Typography>
+                                <JsonBlock value={(t.llm_summary as any) ?? t.output_summary ?? {}} />
+                              </Stack>
+                            </AccordionDetails>
+                          </Accordion>
+                        ))}
+                      </Stack>
                     </Paper>
                   ) : null}
                   {trace?.final_outcome && !((trace.final_outcome as any)?.trade_plan || (trace.final_outcome as any)?.execution) ? (
