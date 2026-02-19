@@ -88,6 +88,77 @@ function MarkdownView({ text }: { text: string }) {
   )
 }
 
+function JsonBlock({ value }: { value: unknown }) {
+  return (
+    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+      {JSON.stringify(value, null, 2)}
+    </Typography>
+  )
+}
+
+function RiskGateSummary({ trace }: { trace: DecisionTrace }) {
+  const rg = trace.riskgate_result
+  if (!rg) return null
+  const outcome = (rg.outcome || '').toUpperCase()
+  const color: 'success' | 'error' | 'default' = outcome === 'ALLOW' ? 'success' : outcome === 'DENY' ? 'error' : 'default'
+  return (
+    <Paper variant="outlined" sx={{ p: 1 }}>
+      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+        <Typography variant="subtitle2">RiskGate</Typography>
+        <Chip size="small" color={color} label={outcome || 'UNKNOWN'} />
+      </Stack>
+      {rg.policy_version ? (
+        <Typography variant="caption" color="text.secondary">
+          Policy: {rg.policy_version}
+          {rg.policy_hash ? ` • ${rg.policy_hash}` : ''}
+        </Typography>
+      ) : null}
+      {rg.reasons?.length ? (
+        <Box sx={{ mt: 0.5 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            Reasons
+          </Typography>
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+            {rg.reasons.map((r) => `• ${r}`).join('\n')}
+          </Typography>
+        </Box>
+      ) : null}
+    </Paper>
+  )
+}
+
+function TradePlanSummary({ trace }: { trace: DecisionTrace }) {
+  const plan: any = (trace.final_outcome as any)?.trade_plan
+  if (!plan) return null
+  const intent = (plan.intent || {}) as any
+  return (
+    <Paper variant="outlined" sx={{ p: 1 }}>
+      <Typography variant="subtitle2">TradePlan</Typography>
+      <Stack spacing={0.25}>
+        <Typography variant="caption" color="text.secondary">
+          Plan ID: {plan.plan_id || '—'}
+        </Typography>
+        <Typography variant="body2">
+          {String(intent.side || '—')} {Array.isArray(intent.symbols) ? intent.symbols.join(', ') : '—'} •{' '}
+          {String(intent.product || '—')}
+          {intent.risk_budget_pct != null ? ` • risk ${intent.risk_budget_pct}%` : ''}
+        </Typography>
+      </Stack>
+    </Paper>
+  )
+}
+
+function ExecutionSummary({ trace }: { trace: DecisionTrace }) {
+  const exec: any = (trace.final_outcome as any)?.execution
+  if (!exec) return null
+  return (
+    <Paper variant="outlined" sx={{ p: 1 }}>
+      <Typography variant="subtitle2">Execution</Typography>
+      <JsonBlock value={exec} />
+    </Paper>
+  )
+}
+
 function MessageBubble({
   message,
   onLoadTrace,
@@ -174,20 +245,36 @@ function MessageBubble({
                       </Typography>
                     </Stack>
                   )}
+                  {trace ? <RiskGateSummary trace={trace} /> : null}
+                  {trace ? <TradePlanSummary trace={trace} /> : null}
+                  {trace ? <ExecutionSummary trace={trace} /> : null}
                   {trace?.tools_called?.length ? (
                     <Paper variant="outlined" sx={{ p: 1 }}>
                       <Typography variant="subtitle2">Tool calls</Typography>
-                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-                        {JSON.stringify(trace.tools_called, null, 2)}
-                      </Typography>
+                      <TableContainer sx={{ mt: 0.5 }}>
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>Tool</TableCell>
+                              <TableCell align="right">Duration (ms)</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {trace.tools_called.map((t, idx) => (
+                              <TableRow key={`${t.tool_name}-${idx}`}>
+                                <TableCell>{t.tool_name}</TableCell>
+                                <TableCell align="right">{t.duration_ms ?? '—'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
                     </Paper>
                   ) : null}
-                  {trace?.final_outcome ? (
+                  {trace?.final_outcome && !((trace.final_outcome as any)?.trade_plan || (trace.final_outcome as any)?.execution) ? (
                     <Paper variant="outlined" sx={{ p: 1 }}>
                       <Typography variant="subtitle2">Final outcome</Typography>
-                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-                        {JSON.stringify(trace.final_outcome, null, 2)}
-                      </Typography>
+                      <JsonBlock value={trace.final_outcome} />
                     </Paper>
                   ) : null}
                 </Stack>

@@ -1,0 +1,84 @@
+import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+
+import { AppThemeProvider } from '../themeContext'
+import { AiTradingManagerPage } from './AiTradingManagerPage'
+
+vi.mock('../services/aiTradingManager', () => {
+  return {
+    fetchAiThread: vi.fn(async () => ({
+      thread_id: 'default',
+      account_id: 'default',
+      messages: [
+        {
+          message_id: 'm1',
+          role: 'assistant',
+          content: '| A | B |\n|---|---|\n| 1 | 2 |',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    })),
+    chatAi: vi.fn(async () => ({
+      assistant_message: 'ok',
+      decision_id: 'd1',
+      tool_calls: [],
+      thread: null,
+    })),
+    uploadAiFiles: vi.fn(async () => [
+      {
+        file_id: 'f1',
+        filename: 'pnl.csv',
+        size: 12,
+        mime: 'text/csv',
+        created_at: new Date().toISOString(),
+        summary: { kind: 'csv', columns: ['symbol', 'pnl'], row_count: 1, preview_rows: [] },
+      },
+    ]),
+    fetchDecisionTrace: vi.fn(async () => null),
+  }
+})
+
+describe('AiTradingManagerPage', () => {
+  it('renders assistant markdown tables as real tables', async () => {
+    render(
+      <AppThemeProvider>
+        <AiTradingManagerPage />
+      </AppThemeProvider>,
+    )
+
+    expect(await screen.findByText('AI Trading Manager')).toBeTruthy()
+    // The markdown table should render as a table element.
+    expect(await screen.findByRole('table')).toBeTruthy()
+  })
+
+  it('supports attaching CSV/XLSX and sends attachment refs on chat', async () => {
+    render(
+      <AppThemeProvider>
+        <AiTradingManagerPage />
+      </AppThemeProvider>,
+    )
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    expect(fileInput).toBeTruthy()
+
+    const f = new File(['symbol,pnl\nABC,10\n'], 'pnl.csv', { type: 'text/csv' })
+    fireEvent.change(fileInput, { target: { files: [f] } })
+
+    expect(await screen.findByText(/pnl\.csv/i)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'What columns are in the file?' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    })
+
+    const mod = await import('../services/aiTradingManager')
+    await waitFor(() => expect(mod.uploadAiFiles).toHaveBeenCalled())
+    await waitFor(() => expect(mod.chatAi).toHaveBeenCalled())
+
+    expect(mod.chatAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [{ file_id: 'f1', how: 'auto' }],
+      }),
+    )
+  })
+})
