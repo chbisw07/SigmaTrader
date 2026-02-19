@@ -31,6 +31,30 @@ export async function fetchAiThread(params?: {
   return (await res.json()) as AiTmThread
 }
 
+export type AiThreadSummary = {
+  thread_id: string
+  title: string
+  updated_at: string
+  message_count: number
+}
+
+export async function fetchAiThreads(params?: { account_id?: string; limit?: number }): Promise<AiThreadSummary[]> {
+  const url = new URL('/api/ai/threads', window.location.origin)
+  if (params?.account_id) url.searchParams.set('account_id', params.account_id)
+  if (params?.limit != null) url.searchParams.set('limit', String(params.limit))
+  const res = await fetch(url.toString())
+  if (!res.ok) throw new Error(`Failed to load AI threads (${res.status})`)
+  return (await res.json()) as AiThreadSummary[]
+}
+
+export async function createAiThread(payload?: { account_id?: string }): Promise<{ thread_id: string; account_id: string }> {
+  const url = new URL('/api/ai/threads', window.location.origin)
+  if (payload?.account_id) url.searchParams.set('account_id', payload.account_id)
+  const res = await fetch(url.toString(), { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to create AI thread (${res.status})`)
+  return (await res.json()) as { thread_id: string; account_id: string }
+}
+
 export async function postAiMessage(payload: {
   account_id?: string
   content: string
@@ -58,6 +82,7 @@ export type AiChatToolCall = {
 
 export async function chatAi(payload: {
   account_id?: string
+  thread_id?: string
   message: string
   context?: Record<string, unknown>
   attachments?: Array<{ file_id: string; how?: string }>
@@ -77,6 +102,7 @@ export async function chatAi(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       account_id: payload.account_id ?? 'default',
+      thread_id: payload.thread_id ?? 'default',
       message: payload.message,
       context: payload.context ?? {},
       attachments: payload.attachments ?? [],
@@ -95,6 +121,83 @@ export async function chatAi(payload: {
     attachments_used?: Array<Record<string, unknown>>
     thread?: AiTmThread | null
   }
+}
+
+export type AiChatStreamEvent =
+  | { type: 'decision'; decision_id: string; correlation_id?: string }
+  | { type: 'tool_call'; name: string; arguments?: Record<string, unknown>; status: string; duration_ms?: number; result_preview?: string; error?: string | null }
+  | { type: 'assistant_delta'; text: string }
+  | { type: 'done'; assistant_message: string; decision_id: string }
+  | { type: 'error'; error: string }
+
+export async function chatAiStream(payload: {
+  account_id?: string
+  thread_id?: string
+  message: string
+  context?: Record<string, unknown>
+  attachments?: Array<{ file_id: string; how?: string }>
+  ui_context?: Record<string, unknown>
+  signal?: AbortSignal
+  onEvent?: (ev: AiChatStreamEvent) => void
+}): Promise<{ assistant_message: string; decision_id: string }> {
+  const res = await fetch('/api/ai/chat/stream', {
+    method: 'POST',
+    signal: payload.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_id: payload.account_id ?? 'default',
+      thread_id: payload.thread_id ?? 'default',
+      message: payload.message,
+      context: payload.context ?? {},
+      attachments: payload.attachments ?? [],
+      ui_context: payload.ui_context ?? null,
+    }),
+  })
+
+  // Fallback to non-streaming if endpoint isn't available.
+  if (res.status === 404 || res.status === 405) {
+    const out = await chatAi(payload)
+    payload.onEvent?.({ type: 'decision', decision_id: out.decision_id })
+    payload.onEvent?.({ type: 'assistant_delta', text: out.assistant_message })
+    payload.onEvent?.({ type: 'done', assistant_message: out.assistant_message, decision_id: out.decision_id })
+    return { assistant_message: out.assistant_message, decision_id: out.decision_id }
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to chat stream (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  if (!res.body) throw new Error('No response body for streaming chat')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let final: { assistant_message: string; decision_id: string } | null = null
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    while (true) {
+      const idx = buf.indexOf('\n')
+      if (idx < 0) break
+      const line = buf.slice(0, idx).trim()
+      buf = buf.slice(idx + 1)
+      if (!line) continue
+      let ev: AiChatStreamEvent | null = null
+      try {
+        ev = JSON.parse(line) as AiChatStreamEvent
+      } catch {
+        continue
+      }
+      payload.onEvent?.(ev)
+      if (ev.type === 'done') final = { assistant_message: ev.assistant_message, decision_id: ev.decision_id }
+      if (ev.type === 'error') throw new Error(ev.error || 'chat_stream_error')
+    }
+  }
+
+  if (!final) throw new Error('Streaming chat ended without done event')
+  return final
 }
 
 export type AiFileSummary = {

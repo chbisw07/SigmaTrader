@@ -22,17 +22,24 @@ import Chip from '@mui/material/Chip'
 import AttachFileIcon from '@mui/icons-material/AttachFile'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
+import FormControl from '@mui/material/FormControl'
+import MenuItem from '@mui/material/MenuItem'
+import Select from '@mui/material/Select'
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import {
-  chatAi,
+  chatAiStream,
+  createAiThread,
+  fetchAiThreads,
   fetchAiThread,
   fetchDecisionTrace,
   uploadAiFiles,
   type AiFileMeta,
   type AiTmMessage,
+  type AiThreadSummary,
+  type AiChatStreamEvent,
   type DecisionTrace,
 } from '../services/aiTradingManager'
 
@@ -131,6 +138,7 @@ function TradePlanSummary({ trace }: { trace: DecisionTrace }) {
   const plan: any = (trace.final_outcome as any)?.trade_plan
   if (!plan) return null
   const intent = (plan.intent || {}) as any
+  const rm = (plan.risk_model || {}) as any
   return (
     <Paper variant="outlined" sx={{ p: 1 }}>
       <Typography variant="subtitle2">TradePlan</Typography>
@@ -143,6 +151,11 @@ function TradePlanSummary({ trace }: { trace: DecisionTrace }) {
           {String(intent.product || '—')}
           {intent.risk_budget_pct != null ? ` • risk ${intent.risk_budget_pct}%` : ''}
         </Typography>
+        {rm.entry_price != null || rm.stop_price != null || rm.qty != null ? (
+          <Typography variant="body2" color="text.secondary">
+            entry {rm.entry_price ?? '—'} • stop {rm.stop_price ?? '—'} • qty {rm.qty ?? '—'}
+          </Typography>
+        ) : null}
       </Stack>
     </Paper>
   )
@@ -151,10 +164,46 @@ function TradePlanSummary({ trace }: { trace: DecisionTrace }) {
 function ExecutionSummary({ trace }: { trace: DecisionTrace }) {
   const exec: any = (trace.final_outcome as any)?.execution
   if (!exec) return null
+  const executed = Boolean(exec.executed)
+  const veto = Boolean(exec.veto)
+  const reason = exec.reason ? String(exec.reason) : null
+  const pollStatus = exec.execution?.poll?.status ? String(exec.execution.poll.status) : null
+  const orders = Array.isArray(exec.execution?.orders) ? exec.execution.orders : []
   return (
     <Paper variant="outlined" sx={{ p: 1 }}>
-      <Typography variant="subtitle2">Execution</Typography>
-      <JsonBlock value={exec} />
+      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+        <Typography variant="subtitle2">Execution</Typography>
+        <Chip
+          size="small"
+          color={executed ? 'success' : veto ? 'error' : 'default'}
+          label={executed ? 'EXECUTED' : veto ? 'VETO' : 'PENDING'}
+        />
+      </Stack>
+      {reason ? (
+        <Typography variant="caption" color="text.secondary">
+          Reason: {reason}
+        </Typography>
+      ) : null}
+      {pollStatus ? (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          Poll: {pollStatus}
+        </Typography>
+      ) : null}
+      {orders.length ? (
+        <Typography variant="body2" sx={{ mt: 0.5 }}>
+          Orders: {orders.map((o: any) => o.broker_order_id || o.order_id || '—').join(', ')}
+        </Typography>
+      ) : null}
+      <Box sx={{ mt: 0.5 }}>
+        <Accordion disableGutters elevation={0} sx={{ bgcolor: 'transparent', '&:before': { display: 'none' } }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon fontSize="small" />}>
+            <Typography variant="body2">Raw execution</Typography>
+          </AccordionSummary>
+          <AccordionDetails sx={{ pt: 0 }}>
+            <JsonBlock value={exec} />
+          </AccordionDetails>
+        </Accordion>
+      </Box>
     </Paper>
   )
 }
@@ -162,9 +211,11 @@ function ExecutionSummary({ trace }: { trace: DecisionTrace }) {
 function MessageBubble({
   message,
   onLoadTrace,
+  liveToolCalls,
 }: {
   message: AiTmMessage
   onLoadTrace: (decisionId: string) => Promise<DecisionTrace | null>
+  liveToolCalls?: Array<Record<string, unknown>>
 }) {
   const isUser = message.role === 'user'
   const [trace, setTrace] = useState<DecisionTrace | null>(null)
@@ -237,6 +288,12 @@ function MessageBubble({
                   >
                     Open trace viewer
                   </Button>
+                  {!trace && liveToolCalls?.length ? (
+                    <Paper variant="outlined" sx={{ p: 1 }}>
+                      <Typography variant="subtitle2">Tool calls (live)</Typography>
+                      <JsonBlock value={liveToolCalls} />
+                    </Paper>
+                  ) : null}
                   {traceLoading && (
                     <Stack direction="row" spacing={1} alignItems="center">
                       <CircularProgress size={16} />
@@ -288,12 +345,23 @@ function MessageBubble({
 }
 
 export function AiTradingManagerPage() {
+  const accountId = 'default'
   const [messages, setMessages] = useState<AiTmMessage[]>([])
+  const [threads, setThreads] = useState<AiThreadSummary[]>([])
+  const [threadId, setThreadId] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'default'
+    try {
+      return window.localStorage.getItem('st_ai_thread_id_v1') || 'default'
+    } catch {
+      return 'default'
+    }
+  })
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [autoscroll, setAutoscroll] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
+  const [liveToolCallsByDecision, setLiveToolCallsByDecision] = useState<Record<string, any[]>>({})
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
@@ -301,8 +369,13 @@ export function AiTradingManagerPage() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
-  const loadThread = async () => {
-    const thread = await fetchAiThread({ account_id: 'default', thread_id: 'default' })
+  const loadThreads = async () => {
+    const out = await fetchAiThreads({ account_id: accountId, limit: 50 })
+    setThreads(out)
+  }
+
+  const loadThread = async (tid?: string) => {
+    const thread = await fetchAiThread({ account_id: accountId, thread_id: tid ?? threadId })
     setMessages(thread.messages ?? [])
   }
 
@@ -310,6 +383,7 @@ export function AiTradingManagerPage() {
     let active = true
     const run = async () => {
       try {
+        await loadThreads()
         await loadThread()
       } catch (e) {
         if (!active) return
@@ -322,6 +396,17 @@ export function AiTradingManagerPage() {
       abortRef.current?.abort()
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem('st_ai_thread_id_v1', threadId)
+    } catch {
+      // ignore
+    }
+    void loadThread(threadId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId])
 
   useEffect(() => {
     if (!autoscroll) return
@@ -350,17 +435,61 @@ export function AiTradingManagerPage() {
       if (pendingFiles.length) {
         uploaded = await uploadAiFiles(pendingFiles)
       }
-      await chatAi({
-        account_id: 'default',
+
+      const localUserId = `local-${Date.now()}-u`
+      const localAsstId = `local-${Date.now()}-a`
+      const nowIso = new Date().toISOString()
+      setMessages((prev) => [
+        ...prev,
+        {
+          message_id: localUserId,
+          role: 'user',
+          content,
+          created_at: nowIso,
+          attachments: uploaded.map((m) => ({ file_id: m.file_id, filename: m.filename, size: m.size, mime: m.mime })),
+        },
+        {
+          message_id: localAsstId,
+          role: 'assistant',
+          content: '',
+          created_at: nowIso,
+        },
+      ])
+
+      let currentDecisionId: string | null = null
+      const onEvent = (ev: AiChatStreamEvent) => {
+        if (ev.type === 'decision') {
+          currentDecisionId = ev.decision_id
+          setMessages((prev) =>
+            prev.map((m) => (m.message_id === localAsstId ? { ...m, decision_id: ev.decision_id } : m)),
+          )
+        } else if (ev.type === 'assistant_delta') {
+          setMessages((prev) =>
+            prev.map((m) => (m.message_id === localAsstId ? { ...m, content: (m.content || '') + ev.text } : m)),
+          )
+        } else if (ev.type === 'tool_call') {
+          const did = currentDecisionId
+          if (!did) return
+          setLiveToolCallsByDecision((prev) => ({ ...prev, [did]: [...(prev[did] ?? []), ev as any] }))
+        }
+      }
+
+      await chatAiStream({
+        account_id: accountId,
+        thread_id: threadId,
         message: content,
         context: {},
         attachments: uploaded.map((m) => ({ file_id: m.file_id, how: 'auto' })),
         ui_context: { page: 'ai' },
         signal: controller.signal as any,
+        onEvent,
       })
+
+      await loadThreads()
       await loadThread()
       setInput('')
       setPendingFiles([])
+      setLiveToolCallsByDecision({})
       setAutoscroll(true)
     } catch (e) {
       if (controller.signal.aborted) {
@@ -412,11 +541,41 @@ export function AiTradingManagerPage() {
             Ask questions, propose trades, and (when enabled) execute policy‑gated actions with a full audit trail.
           </Typography>
         </Box>
-        {!autoscroll && (
-          <Button size="small" variant="outlined" onClick={() => setAutoscroll(true)}>
-            Jump to latest
+        <Stack direction="row" spacing={1} alignItems="center">
+          <FormControl size="small" sx={{ minWidth: 220 }}>
+            <Select
+              value={threadId}
+              onChange={(e) => setThreadId(String(e.target.value))}
+              displayEmpty
+              disabled={busy}
+            >
+              <MenuItem value="default">Default</MenuItem>
+              {threads
+                .filter((t) => t.thread_id !== 'default')
+                .map((t) => (
+                  <MenuItem key={t.thread_id} value={t.thread_id}>
+                    {t.title}
+                  </MenuItem>
+                ))}
+            </Select>
+          </FormControl>
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={async () => {
+              const t = await createAiThread({ account_id: accountId })
+              setThreadId(t.thread_id)
+            }}
+            disabled={busy}
+          >
+            New chat
           </Button>
-        )}
+          {!autoscroll && (
+            <Button size="small" variant="outlined" onClick={() => setAutoscroll(true)}>
+              Jump to latest
+            </Button>
+          )}
+        </Stack>
       </Stack>
 
       <Paper
@@ -443,7 +602,12 @@ export function AiTradingManagerPage() {
         ) : (
           <Stack spacing={1.25}>
             {messages.map((m) => (
-              <MessageBubble key={m.message_id} message={m} onLoadTrace={onLoadTrace} />
+              <MessageBubble
+                key={m.message_id}
+                message={m}
+                onLoadTrace={onLoadTrace}
+                liveToolCalls={m.decision_id ? liveToolCallsByDecision[m.decision_id] : undefined}
+              />
             ))}
           </Stack>
         )}

@@ -6,6 +6,8 @@ import { AiTradingManagerPage } from './AiTradingManagerPage'
 
 vi.mock('../services/aiTradingManager', () => {
   return {
+    fetchAiThreads: vi.fn(async () => []),
+    createAiThread: vi.fn(async () => ({ thread_id: 't2', account_id: 'default' })),
     fetchAiThread: vi.fn(async () => ({
       thread_id: 'default',
       account_id: 'default',
@@ -24,6 +26,12 @@ vi.mock('../services/aiTradingManager', () => {
       tool_calls: [],
       thread: null,
     })),
+    chatAiStream: vi.fn(async ({ onEvent }: any) => {
+      onEvent?.({ type: 'decision', decision_id: 'd1' })
+      onEvent?.({ type: 'assistant_delta', text: 'ok' })
+      onEvent?.({ type: 'done', assistant_message: 'ok', decision_id: 'd1' })
+      return { assistant_message: 'ok', decision_id: 'd1' }
+    }),
     uploadAiFiles: vi.fn(async () => [
       {
         file_id: 'f1',
@@ -73,9 +81,9 @@ describe('AiTradingManagerPage', () => {
 
     const mod = await import('../services/aiTradingManager')
     await waitFor(() => expect(mod.uploadAiFiles).toHaveBeenCalled())
-    await waitFor(() => expect(mod.chatAi).toHaveBeenCalled())
+    await waitFor(() => expect(mod.chatAiStream).toHaveBeenCalled())
 
-    expect(mod.chatAi).toHaveBeenCalledWith(
+    expect(mod.chatAiStream).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: [{ file_id: 'f1', how: 'auto' }],
       }),
