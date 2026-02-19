@@ -231,6 +231,103 @@ class AiTmUserMessageResponse(BaseModel):
     decision_id: str
 
 
+class PositionShadowStatus(str, Enum):
+    open = "OPEN"
+    closed = "CLOSED"
+
+
+class PositionShadowSource(str, Enum):
+    st = "ST"
+    broker_direct = "BROKER_DIRECT"
+    unknown = "UNKNOWN"
+
+
+class PositionShadowRead(BaseModel):
+    shadow_id: str
+    account_id: str = "default"
+    symbol: str
+    product: str = "CNC"
+    side: str = "LONG"
+    qty_current: float = 0.0
+    avg_price: Optional[float] = None
+    ltp: Optional[float] = None
+    pnl_abs: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    source: str = "UNKNOWN"
+    status: str = "OPEN"
+    first_seen_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+    managed: bool = False
+    playbook_id: Optional[str] = None
+    playbook_mode: Optional[str] = None
+    playbook_horizon: Optional[str] = None
+
+
+class PlaybookScopeType(str, Enum):
+    position = "POSITION"
+    symbol = "SYMBOL"
+    portfolio_default = "PORTFOLIO_DEFAULT"
+
+
+class PlaybookMode(str, Enum):
+    observe = "OBSERVE"
+    propose = "PROPOSE"
+    execute = "EXECUTE"
+
+
+class PlaybookHorizon(str, Enum):
+    intraday = "INTRADAY"
+    swing = "SWING"
+    longterm = "LONGTERM"
+
+
+class ManagePlaybookRead(BaseModel):
+    playbook_id: str
+    scope_type: str
+    scope_key: Optional[str] = None
+    enabled: bool = False
+    mode: str = "OBSERVE"
+    horizon: str = "SWING"
+    review_cadence_min: int = 60
+    exit_policy: Dict[str, Any] = Field(default_factory=dict)
+    scale_policy: Dict[str, Any] = Field(default_factory=dict)
+    execution_style: str = "LIMIT_BBO"
+    allow_strategy_exits: bool = True
+    behavior_on_strategy_exit: str = "ALLOW_AS_IS"
+    notes: Optional[str] = None
+    version: int = 1
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ManagePlaybookUpsertRequest(BaseModel):
+    scope_type: str = "POSITION"
+    scope_key: Optional[str] = None
+    enabled: Optional[bool] = None
+    mode: Optional[str] = None
+    horizon: Optional[str] = None
+    review_cadence_min: Optional[int] = None
+    exit_policy: Optional[Dict[str, Any]] = None
+    scale_policy: Optional[Dict[str, Any]] = None
+    execution_style: Optional[str] = None
+    allow_strategy_exits: Optional[bool] = None
+    behavior_on_strategy_exit: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PlaybookDecisionKind(str, Enum):
+    allow = "ALLOW"
+    warn = "WARN"
+    adjust = "ADJUST"
+    block = "BLOCK"
+
+
+class PlaybookDecision(BaseModel):
+    decision: PlaybookDecisionKind
+    adjustments: Dict[str, Any] = Field(default_factory=dict)
+    rationale: str = ""
+
+
 class TradePlanCreateRequest(BaseModel):
     account_id: str = "default"
     intent: TradeIntent

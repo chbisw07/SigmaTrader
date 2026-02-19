@@ -13,6 +13,7 @@ from app.ai.safety.safe_summary_registry import hash_identifier
 from app.core.config import Settings
 from app.models.ai_trading_manager import AiTmBrokerSnapshot, AiTmManagePlaybook, AiTmPositionShadow
 from app.schemas.ai_trading_manager import BrokerSnapshot
+from app.services.ai_trading_manager.journal import append_journal_event, create_postmortem_for_shadow
 
 
 def _json_loads(raw: str, fallback: Any) -> Any:
@@ -130,6 +131,7 @@ def sync_position_shadows_from_snapshot(
     snapshot: BrokerSnapshot,
     user_id: int | None,
 ) -> CoverageSyncResult:
+    _ = user_id
     now = snapshot.as_of_ts or datetime.now(UTC)
     account = str(snapshot.account_id or "default")
     rows = _holding_rows(snapshot) + _position_rows(snapshot)
@@ -137,6 +139,8 @@ def sync_position_shadows_from_snapshot(
     seen: set[str] = set()
     created = 0
     updated = 0
+    created_shadows: list[AiTmPositionShadow] = []
+    reopened_shadows: list[AiTmPositionShadow] = []
     for r in rows:
         symbol = str(r.get("symbol") or "").upper()
         product = str(r.get("product") or "CNC").upper()
@@ -179,8 +183,10 @@ def sync_position_shadows_from_snapshot(
             )
             db.add(shadow)
             created += 1
+            created_shadows.append(shadow)
             continue
 
+        prev_status = str(existing.status or "")
         existing.qty_current = float(r.get("qty") or 0.0)
         existing.avg_price = r.get("avg")
         existing.last_seen_at = now
@@ -190,10 +196,13 @@ def sync_position_shadows_from_snapshot(
         existing.pnl_pct = r.get("pnl_pct")
         if existing.status != "OPEN":
             existing.status = "OPEN"
+        if prev_status and prev_status != "OPEN" and existing.status == "OPEN":
+            reopened_shadows.append(existing)
         updated += 1
 
     # Close any open shadows not present in this snapshot.
     closed = 0
+    closed_shadows: list[AiTmPositionShadow] = []
     open_rows = db.execute(
         select(AiTmPositionShadow).where(
             AiTmPositionShadow.broker_account_id == account,
@@ -206,8 +215,56 @@ def sync_position_shadows_from_snapshot(
             s.qty_current = 0.0
             s.last_seen_at = now
             closed += 1
+            closed_shadows.append(s)
 
     db.commit()
+
+    # Journal: best-effort entry/exit events + postmortems for broker-direct coverage.
+    for s in created_shadows + reopened_shadows:
+        try:
+            append_journal_event(
+                db,
+                shadow_id=s.shadow_id,
+                ts=s.first_seen_at or now,
+                event_type="ENTRY",
+                source=str(s.source or "UNKNOWN"),
+                intent_payload={
+                    "symbol": s.symbol,
+                    "product": s.product,
+                    "side": s.side,
+                    "qty": s.qty_current,
+                    "avg_price": s.avg_price,
+                    "detected": True,
+                },
+                notes="Detected broker-direct position/holding.",
+            )
+        except Exception:
+            pass
+
+    for s in closed_shadows:
+        try:
+            append_journal_event(
+                db,
+                shadow_id=s.shadow_id,
+                ts=s.last_seen_at or now,
+                event_type="EXIT",
+                source="SYSTEM",
+                intent_payload={
+                    "symbol": s.symbol,
+                    "product": s.product,
+                    "side": s.side,
+                    "qty": 0,
+                    "avg_price": s.avg_price,
+                    "detected_close": True,
+                },
+                notes="Detected broker-direct close (qty=0).",
+            )
+        except Exception:
+            pass
+        try:
+            create_postmortem_for_shadow(db, settings, shadow=s, closed_at=s.last_seen_at or now)
+        except Exception:
+            pass
 
     # Compute unmanaged open count.
     open_rows2 = db.execute(

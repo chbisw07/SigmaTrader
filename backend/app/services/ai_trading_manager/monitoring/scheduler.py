@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
 from app.services.ai_trading_manager.coverage import sync_position_shadows_from_latest_snapshot
+from app.services.ai_trading_manager.manage_playbook_reviews import run_manage_playbook_reviews
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class SchedulerState:
     running: bool = False
     last_tick_at: datetime | None = None
     last_coverage_sync_at: datetime | None = None
+    last_playbook_review_at: datetime | None = None
 
 
 _state = SchedulerState()
@@ -59,7 +61,17 @@ def _loop() -> None:
             except Exception:
                 logger.exception("AI TM coverage sync tick failed.")
 
-            # Phase 0+: monitoring evaluation/triggering arrives in later phases.
+            # Playbook reviews (deterministic; proposals only).
+            try:
+                now2 = datetime.now(UTC)
+                last2 = _state.last_playbook_review_at
+                if last2 is None or (now2 - last2).total_seconds() >= 60:
+                    with SessionLocal() as db3:
+                        run_manage_playbook_reviews(db3, settings, account_id="default")
+                    _state.last_playbook_review_at = now2
+            except Exception:
+                logger.exception("AI TM playbook review tick failed.")
+
             time.sleep(1.0)
     finally:
         _state.running = False

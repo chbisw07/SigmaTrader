@@ -62,6 +62,11 @@ def test_coverage_sync_creates_and_closes_shadows() -> None:
     syms = sorted([r["symbol"] for r in rows])
     assert syms == ["INFY", "SBIN"]
 
+    # Coverage sync should create ENTRY journal events for new shadows.
+    for r in rows:
+        evs = client.get(f"/api/ai/journal/events?shadow_id={r['shadow_id']}").json()
+        assert any(e.get("event_type") == "ENTRY" for e in evs)
+
     # New snapshot missing SBIN should close that shadow.
     now2 = datetime(2026, 2, 19, 12, 5, 0, tzinfo=UTC)
     with SessionLocal() as db:
@@ -94,3 +99,12 @@ def test_coverage_sync_creates_and_closes_shadows() -> None:
     assert len(open_rows) == 1
     assert open_rows[0]["symbol"] == "INFY"
 
+    closed_rows = client.get("/api/ai/coverage/shadows?account_id=default&status_filter=CLOSED").json()
+    assert any(r.get("symbol") == "SBIN" for r in closed_rows)
+    sbin_shadow = next(r for r in closed_rows if r.get("symbol") == "SBIN")
+
+    # Closed shadows should have EXIT + a best-effort postmortem.
+    evs2 = client.get(f"/api/ai/journal/events?shadow_id={sbin_shadow['shadow_id']}").json()
+    assert any(e.get("event_type") == "EXIT" for e in evs2)
+    pm = client.get(f"/api/ai/journal/postmortem?shadow_id={sbin_shadow['shadow_id']}")
+    assert pm.status_code == 200

@@ -27,6 +27,8 @@ from app.schemas.ai_trading_manager import (
     SizingSuggestRequest,
     SizingSuggestResponse,
     TradePlanCreateRequest,
+    ManagePlaybookRead,
+    ManagePlaybookUpsertRequest,
 )
 from app.services.ai_trading_manager import audit_store
 from app.services.ai_trading_manager.broker_factory import get_broker_adapter
@@ -63,6 +65,18 @@ from app.services.ai_trading_manager.coverage import (
     sync_position_shadows_from_latest_snapshot,
     sync_position_shadows_from_snapshot,
 )
+from app.services.ai_trading_manager.manage_playbooks import (
+    delete_manage_playbook,
+    get_manage_playbook,
+    list_manage_playbooks,
+    upsert_manage_playbook,
+)
+from app.services.ai_trading_manager.journal import (
+    get_latest_postmortem,
+    list_journal_events,
+    list_journal_forecasts,
+    upsert_journal_forecast,
+ )
 from app.models.ai_trading_manager import AiTmChatMessage
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
 
@@ -415,6 +429,260 @@ def coverage_list_shadows(
         unmanaged_only=unmanaged_only,
     )
     return rows
+
+
+@router.get("/manage-playbooks", response_model=List[ManagePlaybookRead])
+def api_list_manage_playbooks(
+    request: Request,
+    scope_type: str | None = None,
+    scope_key: str | None = None,
+    enabled_only: bool | None = None,
+    limit: int = 200,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> List[ManagePlaybookRead]:
+    require_ai_assistant_enabled(db, settings)
+    rows = list_manage_playbooks(
+        db,
+        scope_type=scope_type.upper() if scope_type else None,
+        scope_key=scope_key,
+        enabled_only=enabled_only,
+        limit=limit,
+    )
+    log_with_correlation(logger, request, logging.INFO, "ai_tm.manage_playbooks.list", returned=len(rows))
+    return rows
+
+
+@router.get("/manage-playbooks/{playbook_id}", response_model=ManagePlaybookRead)
+def api_get_manage_playbook(
+    playbook_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> ManagePlaybookRead:
+    require_ai_assistant_enabled(db, settings)
+    pb = get_manage_playbook(db, playbook_id=playbook_id)
+    if pb is None:
+        raise HTTPException(status_code=404, detail="Playbook not found.")
+    log_with_correlation(logger, request, logging.INFO, "ai_tm.manage_playbooks.get", playbook_id=playbook_id)
+    return pb
+
+
+@router.post("/manage-playbooks", response_model=ManagePlaybookRead, status_code=status.HTTP_201_CREATED)
+def api_create_manage_playbook(
+    payload: ManagePlaybookUpsertRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> ManagePlaybookRead:
+    require_ai_assistant_enabled(db, settings)
+    pb = upsert_manage_playbook(db, playbook_id=None, payload=payload)
+    log_with_correlation(logger, request, logging.INFO, "ai_tm.manage_playbooks.create", playbook_id=pb.playbook_id)
+    return pb
+
+
+@router.put("/manage-playbooks/{playbook_id}", response_model=ManagePlaybookRead)
+def api_update_manage_playbook(
+    playbook_id: str,
+    payload: ManagePlaybookUpsertRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> ManagePlaybookRead:
+    require_ai_assistant_enabled(db, settings)
+    pb = upsert_manage_playbook(db, playbook_id=playbook_id, payload=payload)
+    log_with_correlation(logger, request, logging.INFO, "ai_tm.manage_playbooks.update", playbook_id=pb.playbook_id)
+    return pb
+
+
+@router.delete("/manage-playbooks/{playbook_id}")
+def api_delete_manage_playbook(
+    playbook_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    ok = delete_manage_playbook(db, playbook_id=playbook_id)
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.manage_playbooks.delete",
+        playbook_id=playbook_id,
+        ok=ok,
+    )
+    return {"deleted": bool(ok), "playbook_id": playbook_id}
+
+
+@router.post("/position-shadows/{shadow_id}/attach-playbook", response_model=ManagePlaybookRead)
+def api_attach_playbook_to_shadow(
+    shadow_id: str,
+    request: Request,
+    template: str = "swing_cnc_atr_ladder",
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> ManagePlaybookRead:
+    """Attach a playbook to a broker-direct shadow position.
+
+    Default is passive: enabled=false, mode=OBSERVE.
+    """
+    require_ai_assistant_enabled(db, settings)
+    t = (template or "").strip().lower()
+
+    exit_policy: Dict[str, Any] = {}
+    scale_policy: Dict[str, Any] = {}
+    horizon = "SWING"
+    review_cadence_min = 60
+
+    if t in {"mis_intraday", "intraday_mis"}:
+        horizon = "INTRADAY"
+        review_cadence_min = 15
+        exit_policy = {
+            "schema": "exit_policy.v1",
+            "protective_stop": {"type": "FIXED_PCT", "pct": 0.5},
+            "time_stop": {"exit_at_time": "15:15", "mis_squareoff": True},
+        }
+    elif t in {"longterm", "longterm_review"}:
+        horizon = "LONGTERM"
+        review_cadence_min = 1440
+        exit_policy = {"schema": "exit_policy.v1", "review_only": True}
+    else:
+        horizon = "SWING"
+        review_cadence_min = 60
+        exit_policy = {
+            "schema": "exit_policy.v1",
+            "protective_stop": {"type": "ATR", "period": 14, "mult": 2.0},
+            "take_profit": {
+                "type": "LADDER",
+                "steps": [{"pct": 3.0, "exit_pct": 33}, {"pct": 6.0, "exit_pct": 33}],
+            },
+        }
+        scale_policy = {
+            "schema": "scale_policy.v1",
+            "strategy_exit_partial_pct": 0.5,
+            "max_adds_per_day": 1,
+        }
+
+    pb = upsert_manage_playbook(
+        db,
+        playbook_id=None,
+        payload=ManagePlaybookUpsertRequest(
+            scope_type="POSITION",
+            scope_key=shadow_id,
+            enabled=False,
+            mode="OBSERVE",
+            horizon=horizon,
+            review_cadence_min=review_cadence_min,
+            exit_policy=exit_policy,
+            scale_policy=scale_policy,
+            execution_style="LIMIT_BBO",
+            allow_strategy_exits=True,
+            behavior_on_strategy_exit="ALLOW_AS_IS",
+        ),
+    )
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.manage_playbooks.attach",
+        shadow_id=shadow_id,
+        playbook_id=pb.playbook_id,
+        template=template,
+    )
+    return pb
+
+
+@router.get("/journal/events")
+def api_list_journal_events(
+    request: Request,
+    shadow_id: str,
+    limit: int = 200,
+    offset: int = 0,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    require_ai_assistant_enabled(db, settings)
+    rows = list_journal_events(db, shadow_id=shadow_id, limit=limit, offset=offset)
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.journal.events.list",
+        shadow_id=shadow_id,
+        returned=len(rows),
+    )
+    return rows
+
+
+@router.get("/journal/forecasts")
+def api_list_journal_forecasts(
+    request: Request,
+    shadow_id: str,
+    limit: int = 50,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    require_ai_assistant_enabled(db, settings)
+    rows = list_journal_forecasts(db, shadow_id=shadow_id, limit=limit)
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.journal.forecasts.list",
+        shadow_id=shadow_id,
+        returned=len(rows),
+    )
+    return rows
+
+
+@router.post("/journal/forecasts")
+def api_upsert_journal_forecast(
+    request: Request,
+    payload: Dict[str, Any],
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    shadow_id = str(payload.get("position_shadow_id") or payload.get("shadow_id") or "").strip()
+    if not shadow_id:
+        raise HTTPException(status_code=400, detail="position_shadow_id required")
+    out = upsert_journal_forecast(
+        db,
+        forecast_id=str(payload.get("forecast_id") or "").strip() or None,
+        shadow_id=shadow_id,
+        author=str(payload.get("author") or "USER"),
+        outlook_pct=payload.get("outlook_pct"),
+        horizon_days=payload.get("horizon_days"),
+        confidence=payload.get("confidence"),
+        rationale_tags=payload.get("rationale_tags") if isinstance(payload.get("rationale_tags"), list) else None,
+        thesis_text=payload.get("thesis_text"),
+        invalidation_text=payload.get("invalidation_text"),
+    )
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.journal.forecast.upsert",
+        shadow_id=shadow_id,
+        forecast_id=out.get("forecast_id"),
+    )
+    return out
+
+
+@router.get("/journal/postmortem")
+def api_get_latest_postmortem(
+    request: Request,
+    shadow_id: str,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    row = get_latest_postmortem(db, shadow_id=shadow_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Postmortem not found.")
+    log_with_correlation(logger, request, logging.INFO, "ai_tm.journal.postmortem.get", shadow_id=shadow_id)
+    return row
 
 
 @router.get("/exceptions")

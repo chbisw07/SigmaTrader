@@ -37,6 +37,7 @@ from app.services.ai_trading_manager.ledger_snapshot import build_ledger_snapsho
 from app.services.ai_trading_manager.operator_payload_store import persist_operator_payload
 from app.services.ai_trading_manager.plan_engine import new_plan_from_intent, normalize_trade_plan
 from app.services.ai_trading_manager.playbooks import get_trade_plan, upsert_trade_plan
+from app.services.ai_trading_manager.manage_playbook_engine import IntentContext, evaluate_playbook_pretrade
 from app.services.ai_trading_manager.riskgate.engine import evaluate_riskgate
 from app.services.ai_trading_manager.sizing import extract_equity_value, suggest_qty
 from app.services.kite_mcp.secrets import get_auth_session_id
@@ -44,6 +45,7 @@ from app.services.kite_mcp.session_manager import kite_mcp_sessions
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
 from app.services.kite_mcp.trade import KiteMcpTradeClient
 from app.services.system_events import record_system_event
+from app.models.ai_trading_manager import AiTmPositionShadow
 
 from .mcp_tools import hash_tool_definitions, mcp_tools_to_openai_tools, tool_result_preview
 from .openai_toolcaller import OpenAiChatError, openai_chat_with_tools
@@ -910,102 +912,194 @@ async def run_chat(
                         elif str(tm_cfg.kite_mcp.last_status or "").lower() != "connected":
                             out = {"executed": False, "veto": True, "reason": "MCP_NOT_CONNECTED"}
                         else:
-                            # Build broker snapshot + quotes cache from DB for RiskGate.
-                            broker_snap = await fetch_kite_mcp_snapshot(db, settings, account_id=account_id)
-                            qrows: list[Quote] = []
-                            now = datetime.now(UTC)
-                            for sym in plan.intent.symbols:
-                                px = _latest_close(str(sym).upper())
-                                if px is not None:
-                                    qrows.append(Quote(symbol=str(sym).upper(), last_price=float(px), as_of_ts=now))
-                            broker_snap = broker_snap.model_copy(update={"quotes_cache": qrows})
-                            ledger_snapshot = build_ledger_snapshot(db, account_id=account_id)
+                            # Playbook pre-trade decision (passive by default; enabled=false).
+                            shadow = None
+                            try:
+                                sym0 = str((plan.intent.symbols or [""])[0] or "").strip().upper()
+                                prod0 = str(plan.intent.product or "CNC").strip().upper()
+                                if sym0:
+                                    shadow = (
+                                        db.execute(
+                                            select(AiTmPositionShadow)
+                                            .where(
+                                                AiTmPositionShadow.broker_account_id == account_id,
+                                                AiTmPositionShadow.symbol == sym0,
+                                                AiTmPositionShadow.product == prod0,
+                                                AiTmPositionShadow.status == "OPEN",
+                                            )
+                                            .order_by(desc(AiTmPositionShadow.last_seen_at))
+                                            .limit(1)
+                                        )
+                                        .scalars()
+                                        .first()
+                                    )
+                            except Exception:
+                                shadow = None
 
-                            risk = evaluate_riskgate(
-                                plan=plan,
-                                broker=broker_snap,
-                                ledger=ledger_snapshot,
-                                eval_ts=broker_snap.as_of_ts,
-                            ).decision
-                            trace.riskgate_result = risk
-                            structured["riskgate"] = risk.model_dump(mode="json")
-                            if risk.outcome.value != "allow":
+                            intent_type = (
+                                "ADD"
+                                if (shadow is not None and float(shadow.qty_current or 0.0) > 0)
+                                else "ENTRY"
+                            )
+                            pb_dec = evaluate_playbook_pretrade(
+                                db,
+                                shadow=shadow,
+                                intent=IntentContext(
+                                    intent_type=intent_type,
+                                    source="AI_ASSISTANT",
+                                    symbol=str((plan.intent.symbols or [""])[0] or "").strip().upper(),
+                                    product=str(plan.intent.product or "CNC").strip().upper(),
+                                    qty=float((plan.intent.constraints or {}).get("qty") or 0.0)
+                                    if isinstance(plan.intent.constraints, dict)
+                                    else None,
+                                ),
+                            )
+                            structured["playbook_pretrade"] = pb_dec.model_dump(mode="json")
+                            record_system_event(
+                                db,
+                                level="INFO",
+                                category="AI_ORCH",
+                                message="Playbook pre-trade evaluated.",
+                                correlation_id=corr,
+                                details={
+                                    "event_type": "PLAYBOOK_PRETRADE",
+                                    "decision": pb_dec.decision.value,
+                                    "symbol": str((plan.intent.symbols or [""])[0] or ""),
+                                    "product": str(plan.intent.product or ""),
+                                },
+                            )
+                            if pb_dec.decision.value == "BLOCK":
                                 out = {
                                     "executed": False,
                                     "veto": True,
-                                    "reason": "RISK_DENY",
-                                    "risk": risk.model_dump(mode="json"),
+                                    "reason": "PLAYBOOK_BLOCKED",
+                                    "playbook": pb_dec.model_dump(mode="json"),
                                 }
-                                record_system_event(
-                                    db,
-                                    level="WARNING",
-                                    category="AI_ORCH",
-                                    message="RiskGate denied execution.",
-                                    correlation_id=corr,
-                                    details={"event_type": "RISK_CHECK_DENIED", "policy_hash": risk.policy_hash},
-                                )
                             else:
-                                record_system_event(
-                                    db,
-                                    level="INFO",
-                                    category="AI_ORCH",
-                                    message="RiskGate passed.",
-                                    correlation_id=corr,
-                                    details={"event_type": "RISK_CHECK_PASSED", "policy_hash": risk.policy_hash},
-                                )
-                                plan_hash = _hash_payload(plan.model_dump(mode="json"))
-                                idem_key = _hash_payload(
-                                    {
-                                        "authorization_message_id": authorization_message_id,
-                                        "plan_hash": plan_hash,
-                                        "broker": "kite_mcp",
-                                        "account_id": account_id,
-                                    }
-                                )
-
-                                trade_client = KiteMcpTradeClient(session=session)
-
-                                class _Broker:
-                                    name = "kite_mcp"
-
-                                    def __init__(self, tc: KiteMcpTradeClient) -> None:
-                                        self._tc = tc
-
-                                    async def place_order(self, *, account_id: str, intent: Any):
-                                        return await self._tc.place_order(account_id=account_id, intent=intent)
-
-                                    async def get_orders(self, *, account_id: str):
-                                        _ = account_id
-                                        return await self._tc.get_orders()
-
-                                engine = ExecutionEngine()
-                                exec_res = await engine.execute_to_broker_async(
-                                    db,
-                                    user_id=None,
-                                    account_id=account_id,
-                                    correlation_id=corr,
-                                    plan=plan,
-                                    idempotency_key=idem_key,
-                                    broker=_Broker(trade_client),
-                                )
-                                # Post-trade reconcile.
-                                rec = await post_trade_reconcile(db, settings, account_id=account_id, user_id=None)
-                                # Mark idempotency as reconciled.
-                                rec_id = int(exec_res.get("idempotency_record_id") or 0)
-                                if rec_id:
-                                    IdempotencyStore().mark_status(
-                                        db,
-                                        record_id=rec_id,
-                                        status=IdempotencyStore.STATUS_RECONCILED,
-                                        result_patch={"reconciliation": rec},
+                                # Apply safe deterministic adjustments (e.g., qty) before RiskGate.
+                                if pb_dec.decision.value == "ADJUST":
+                                    adj_qty = (
+                                        pb_dec.adjustments.get("qty")
+                                        if isinstance(pb_dec.adjustments, dict)
+                                        else None
                                     )
-                                out = {
-                                    "executed": True,
-                                    "execution": exec_res,
-                                    "reconciliation": rec,
-                                    "idempotency_key": idem_key,
-                                }
-                                structured["execution"] = out
+                                    if adj_qty is not None and isinstance(plan.intent.constraints, dict):
+                                        try:
+                                            q = float(adj_qty)
+                                            if q > 0:
+                                                new_constraints = dict(plan.intent.constraints or {})
+                                                new_constraints["qty"] = int(q) if float(q).is_integer() else float(q)
+                                                plan = plan.model_copy(
+                                                    update={
+                                                        "intent": plan.intent.model_copy(
+                                                            update={"constraints": new_constraints}
+                                                        )
+                                                    }
+                                                )
+                                        except Exception:
+                                            pass
+
+                            if pb_dec.decision.value != "BLOCK":
+                                # Build broker snapshot + quotes cache from DB for RiskGate.
+                                broker_snap = await fetch_kite_mcp_snapshot(db, settings, account_id=account_id)
+                                qrows: list[Quote] = []
+                                now = datetime.now(UTC)
+                                for sym in plan.intent.symbols:
+                                    px = _latest_close(str(sym).upper())
+                                    if px is not None:
+                                        qrows.append(
+                                            Quote(symbol=str(sym).upper(), last_price=float(px), as_of_ts=now)
+                                        )
+                                broker_snap = broker_snap.model_copy(update={"quotes_cache": qrows})
+                                ledger_snapshot = build_ledger_snapshot(db, account_id=account_id)
+
+                                risk = evaluate_riskgate(
+                                    plan=plan,
+                                    broker=broker_snap,
+                                    ledger=ledger_snapshot,
+                                    eval_ts=broker_snap.as_of_ts,
+                                ).decision
+                                trace.riskgate_result = risk
+                                structured["riskgate"] = risk.model_dump(mode="json")
+                                if risk.outcome.value != "allow":
+                                    out = {
+                                        "executed": False,
+                                        "veto": True,
+                                        "reason": "RISK_DENY",
+                                        "risk": risk.model_dump(mode="json"),
+                                    }
+                                    record_system_event(
+                                        db,
+                                        level="WARNING",
+                                        category="AI_ORCH",
+                                        message="RiskGate denied execution.",
+                                        correlation_id=corr,
+                                        details={"event_type": "RISK_CHECK_DENIED", "policy_hash": risk.policy_hash},
+                                    )
+                                else:
+                                    record_system_event(
+                                        db,
+                                        level="INFO",
+                                        category="AI_ORCH",
+                                        message="RiskGate passed.",
+                                        correlation_id=corr,
+                                        details={"event_type": "RISK_CHECK_PASSED", "policy_hash": risk.policy_hash},
+                                    )
+                                    plan_hash = _hash_payload(plan.model_dump(mode="json"))
+                                    idem_key = _hash_payload(
+                                        {
+                                            "authorization_message_id": authorization_message_id,
+                                            "plan_hash": plan_hash,
+                                            "broker": "kite_mcp",
+                                            "account_id": account_id,
+                                        }
+                                    )
+
+                                    trade_client = KiteMcpTradeClient(session=session)
+
+                                    class _Broker:
+                                        name = "kite_mcp"
+
+                                        def __init__(self, tc: KiteMcpTradeClient) -> None:
+                                            self._tc = tc
+
+                                        async def place_order(self, *, account_id: str, intent: Any):
+                                            return await self._tc.place_order(account_id=account_id, intent=intent)
+
+                                        async def get_orders(self, *, account_id: str):
+                                            _ = account_id
+                                            return await self._tc.get_orders()
+
+                                    engine = ExecutionEngine()
+                                    exec_res = await engine.execute_to_broker_async(
+                                        db,
+                                        user_id=None,
+                                        account_id=account_id,
+                                        correlation_id=corr,
+                                        plan=plan,
+                                        idempotency_key=idem_key,
+                                        broker=_Broker(trade_client),
+                                    )
+                                    # Post-trade reconcile.
+                                    rec = await post_trade_reconcile(
+                                        db, settings, account_id=account_id, user_id=None
+                                    )
+                                    # Mark idempotency as reconciled.
+                                    rec_id = int(exec_res.get("idempotency_record_id") or 0)
+                                    if rec_id:
+                                        IdempotencyStore().mark_status(
+                                            db,
+                                            record_id=rec_id,
+                                            status=IdempotencyStore.STATUS_RECONCILED,
+                                            result_patch={"reconciliation": rec},
+                                        )
+                                    out = {
+                                        "executed": True,
+                                        "execution": exec_res,
+                                        "reconciliation": rec,
+                                        "idempotency_key": idem_key,
+                                    }
+                                    structured["execution"] = out
 
                         # Always persist the execution evaluation for trace/UI.
                         if "execution" not in structured:
