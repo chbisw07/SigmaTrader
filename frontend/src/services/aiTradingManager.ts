@@ -5,6 +5,12 @@ export type AiTmMessage = {
   created_at: string
   correlation_id?: string | null
   decision_id?: string | null
+  attachments?: Array<{
+    file_id: string
+    filename: string
+    size?: number | null
+    mime?: string | null
+  }>
 }
 
 export type AiTmThread = {
@@ -61,6 +67,8 @@ export async function chatAi(payload: {
   assistant_message: string
   decision_id: string
   tool_calls: AiChatToolCall[]
+  render_blocks?: Array<Record<string, unknown>>
+  attachments_used?: Array<Record<string, unknown>>
   thread?: AiTmThread | null
 }> {
   const res = await fetch('/api/ai/chat', {
@@ -83,8 +91,40 @@ export async function chatAi(payload: {
     assistant_message: string
     decision_id: string
     tool_calls: AiChatToolCall[]
+    render_blocks?: Array<Record<string, unknown>>
+    attachments_used?: Array<Record<string, unknown>>
     thread?: AiTmThread | null
   }
+}
+
+export type AiFileSummary = {
+  kind: 'csv' | 'xlsx' | 'unknown' | string
+  columns: string[]
+  row_count: number
+  preview_rows: Array<Record<string, unknown>>
+  sheets?: string[]
+  active_sheet?: string | null
+}
+
+export type AiFileMeta = {
+  file_id: string
+  filename: string
+  size: number
+  mime?: string | null
+  created_at: string
+  summary: AiFileSummary
+}
+
+export async function uploadAiFiles(files: File[]): Promise<AiFileMeta[]> {
+  const form = new FormData()
+  for (const f of files) form.append('files', f)
+  const res = await fetch('/api/ai/files', { method: 'POST', body: form })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to upload file(s) (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  const data = (await res.json()) as { files: AiFileMeta[] }
+  return data.files ?? []
 }
 
 export type DecisionTrace = {

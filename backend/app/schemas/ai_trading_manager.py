@@ -183,6 +183,13 @@ class AiTmMessageRole(str, Enum):
     system = "system"
 
 
+class AiTmAttachmentRef(BaseModel):
+    file_id: str
+    filename: str
+    size: Optional[int] = None
+    mime: Optional[str] = None
+
+
 class AiTmMessage(BaseModel):
     message_id: str
     role: AiTmMessageRole
@@ -190,6 +197,7 @@ class AiTmMessage(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     correlation_id: Optional[str] = None
     decision_id: Optional[str] = None
+    attachments: List[AiTmAttachmentRef] = Field(default_factory=list)
 
 
 class AiTmThread(BaseModel):

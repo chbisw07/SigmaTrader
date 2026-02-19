@@ -18,11 +18,23 @@ import TableHead from '@mui/material/TableHead'
 import TableRow from '@mui/material/TableRow'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import Link from '@mui/material/Link'
+import Chip from '@mui/material/Chip'
+import AttachFileIcon from '@mui/icons-material/AttachFile'
+import IconButton from '@mui/material/IconButton'
+import Tooltip from '@mui/material/Tooltip'
 
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import { chatAi, fetchAiThread, fetchDecisionTrace, type AiTmMessage, type DecisionTrace } from '../services/aiTradingManager'
+import {
+  chatAi,
+  fetchAiThread,
+  fetchDecisionTrace,
+  uploadAiFiles,
+  type AiFileMeta,
+  type AiTmMessage,
+  type DecisionTrace,
+} from '../services/aiTradingManager'
 
 function MarkdownView({ text }: { text: string }) {
   const components = useMemo(
@@ -125,6 +137,11 @@ function MessageBubble({
               <MarkdownView text={message.content} />
             </Box>
           )}
+          {isUser && message.attachments?.length ? (
+            <Typography variant="caption" color="text.secondary">
+              Attachments: {message.attachments.map((a) => a.filename).join(', ')}
+            </Typography>
+          ) : null}
 
           {message.decision_id && (
             <Accordion
@@ -191,6 +208,10 @@ export function AiTradingManagerPage() {
   const [autoscroll, setAutoscroll] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
 
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
   const loadThread = async () => {
@@ -238,9 +259,21 @@ export function AiTradingManagerPage() {
     const controller = new AbortController()
     abortRef.current = controller
     try {
-      await chatAi({ account_id: 'default', message: content, context: {}, signal: controller.signal as any })
+      let uploaded: AiFileMeta[] = []
+      if (pendingFiles.length) {
+        uploaded = await uploadAiFiles(pendingFiles)
+      }
+      await chatAi({
+        account_id: 'default',
+        message: content,
+        context: {},
+        attachments: uploaded.map((m) => ({ file_id: m.file_id, how: 'auto' })),
+        ui_context: { page: 'ai' },
+        signal: controller.signal as any,
+      })
       await loadThread()
       setInput('')
+      setPendingFiles([])
       setAutoscroll(true)
     } catch (e) {
       if (controller.signal.aborted) {
@@ -270,6 +303,17 @@ export function AiTradingManagerPage() {
     } catch {
       return null
     }
+  }
+
+  const addFiles = (files: FileList | File[]) => {
+    const next = [...pendingFiles]
+    const list: File[] = Array.isArray(files) ? files : Array.from(files)
+    for (const f of list) {
+      const ext = f.name.split('.').pop()?.toLowerCase()
+      if (ext !== 'csv' && ext !== 'xlsx') continue
+      next.push(f)
+    }
+    setPendingFiles(next)
   }
 
   return (
@@ -327,9 +371,71 @@ export function AiTradingManagerPage() {
           position: 'sticky',
           bottom: 12,
           bgcolor: 'background.paper',
+          borderColor: isDragging ? 'primary.main' : 'divider',
+        }}
+        onDragEnter={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setIsDragging(true)
+        }}
+        onDragOver={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setIsDragging(true)
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setIsDragging(false)
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setIsDragging(false)
+          if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files)
         }}
       >
         <Stack spacing={1}>
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+            <Typography variant="caption" color="text.secondary">
+              Drag & drop CSV/XLSX here, or attach files.
+            </Typography>
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".csv,.xlsx"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  if (e.target.files?.length) addFiles(e.target.files)
+                  e.target.value = ''
+                }}
+              />
+              <Tooltip title="Attach files">
+                <IconButton size="small" onClick={() => fileInputRef.current?.click()} disabled={busy}>
+                  <AttachFileIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+          </Stack>
+          {pendingFiles.length ? (
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+              {pendingFiles.map((f, idx) => (
+                <Chip
+                  key={`${f.name}-${idx}`}
+                  label={`${f.name} (${Math.round(f.size / 1024)}KB)`}
+                  onDelete={
+                    busy
+                      ? undefined
+                      : () => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))
+                  }
+                  size="small"
+                  variant="outlined"
+                />
+              ))}
+            </Stack>
+          ) : null}
           <TextField
             label="Message"
             placeholder="Ask about holdings, positions, margins…"
@@ -357,4 +463,3 @@ export function AiTradingManagerPage() {
     </Box>
   )
 }
-

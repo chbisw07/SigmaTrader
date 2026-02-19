@@ -4,14 +4,16 @@ import logging
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.api.auth import get_current_user_optional
 from app.core.config import Settings, get_settings
 from app.core.logging import log_with_correlation
 from app.db.session import get_db
 from app.schemas.ai_chat import AiChatRequest, AiChatResponse, AiToolCallRow
-from app.schemas.ai_trading_manager import AiTmMessage, AiTmMessageRole
+from app.schemas.ai_trading_manager import AiTmAttachmentRef, AiTmMessage, AiTmMessageRole
+from app.services.ai.files_store import get_file_meta
 from app.services.ai_toolcalling.orchestrator import run_chat
 from app.services.ai_trading_manager import audit_store
 
@@ -31,9 +33,47 @@ async def ai_chat(
     request: Request,
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
+    user=Depends(get_current_user_optional),
 ) -> AiChatResponse:
     corr = _correlation_id(request)
     log_with_correlation(logger, request, logging.INFO, "ai.chat.requested", account_id=payload.account_id)
+
+    # Resolve attachment metadata (and enforce access control).
+    attachments_for_llm: list[dict[str, object]] = []
+    attachments_for_thread: list[AiTmAttachmentRef] = []
+    if payload.attachments:
+        if user is None:
+            raise HTTPException(status_code=400, detail="Attachments require a logged-in session.")
+        for a in payload.attachments:
+            meta = get_file_meta(db, file_id=a.file_id, user_id=int(user.id))
+            if meta is None:
+                raise HTTPException(status_code=404, detail=f"Attachment not found: {a.file_id}")
+            # For remote providers, only include summaries (no raw file contents).
+            # In PII-safe mode, caller can decide to omit preview rows; we default
+            # to schema-only here for safety.
+            attachments_for_llm.append(
+                {
+                    "file_id": meta.file_id,
+                    "filename": meta.filename,
+                    "size": meta.size,
+                    "mime": meta.mime,
+                    "summary": {
+                        "kind": meta.summary.kind,
+                        "columns": meta.summary.columns,
+                        "row_count": meta.summary.row_count,
+                        "sheets": meta.summary.sheets,
+                        "active_sheet": meta.summary.active_sheet,
+                    },
+                }
+            )
+            attachments_for_thread.append(
+                AiTmAttachmentRef(
+                    file_id=meta.file_id,
+                    filename=meta.filename,
+                    size=meta.size,
+                    mime=meta.mime,
+                )
+            )
 
     auth_message_id = uuid4().hex
     result = await run_chat(
@@ -42,7 +82,8 @@ async def ai_chat(
         account_id=payload.account_id,
         user_message=payload.message,
         authorization_message_id=auth_message_id,
-        ui_context=payload.context or {},
+        attachments=attachments_for_llm,
+        ui_context=payload.ui_context or payload.context or {},
         correlation_id=corr,
     )
 
@@ -53,6 +94,7 @@ async def ai_chat(
         content=payload.message,
         created_at=datetime.now(UTC),
         correlation_id=corr,
+        attachments=attachments_for_thread,
     )
     assistant_msg = AiTmMessage(
         message_id=uuid4().hex,
@@ -84,6 +126,10 @@ async def ai_chat(
                 error=t.error,
             )
             for t in result.tool_calls
+        ],
+        render_blocks=[],
+        attachments_used=[
+            {"file_id": a.file_id, "summary_used": True} for a in (payload.attachments or [])
         ],
         thread=thread,
     )

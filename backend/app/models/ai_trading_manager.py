@@ -222,6 +222,7 @@ class AiTmChatMessage(Base):
     content: Mapped[str] = mapped_column(Text(), nullable=False)
     correlation_id: Mapped[Optional[str]] = mapped_column(String(64))
     decision_id: Mapped[Optional[str]] = mapped_column(String(64))
+    attachments_json: Mapped[str] = mapped_column(Text(), nullable=False, default="[]")
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
     )

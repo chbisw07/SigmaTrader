@@ -83,6 +83,7 @@ async def run_chat(
     account_id: str,
     user_message: str,
     authorization_message_id: str | None = None,
+    attachments: List[Dict[str, Any]] | None = None,
     ui_context: Dict[str, Any] | None = None,
     correlation_id: str | None = None,
 ) -> ChatResult:
@@ -205,6 +206,8 @@ async def run_chat(
     ]
     if ui_context:
         messages.append({"role": "system", "content": f"UI context (json): {redact_for_llm(ui_context)}"})
+    if attachments:
+        messages.append({"role": "system", "content": f"Attachments (summaries json): {redact_for_llm(attachments)}"})
     messages.append({"role": "user", "content": user_message})
 
     tool_logs: List[ToolCallLog] = []
@@ -218,6 +221,17 @@ async def run_chat(
             "tools_hash": tools_hash,
             "kite_mcp_server_url": tm_cfg.kite_mcp.server_url,
             "authorization_message_id": authorization_message_id,
+            "attachments": [
+                {
+                    "file_id": str(a.get("file_id") or ""),
+                    "filename": str(a.get("filename") or ""),
+                    "kind": str((a.get("summary") or {}).get("kind") or ""),
+                    "row_count": int((a.get("summary") or {}).get("row_count") or 0),
+                    "columns_count": len((a.get("summary") or {}).get("columns") or []),
+                }
+                for a in (attachments or [])
+                if isinstance(a, dict)
+            ],
         },
     )
 

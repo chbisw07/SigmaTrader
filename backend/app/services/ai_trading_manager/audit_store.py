@@ -187,6 +187,11 @@ def append_chat_messages(
     messages: Iterable[AiTmMessage],
 ) -> None:
     for m in messages:
+        attachments = []
+        try:
+            attachments = [a.model_dump(mode="json") for a in (m.attachments or [])]
+        except Exception:
+            attachments = []
         db.add(
             AiTmChatMessage(
                 message_id=m.message_id,
@@ -197,6 +202,7 @@ def append_chat_messages(
                 content=m.content,
                 correlation_id=m.correlation_id,
                 decision_id=m.decision_id,
+                attachments_json=_json_dumps(attachments),
                 created_at=m.created_at,
             )
         )
@@ -217,6 +223,9 @@ def get_thread(db: Session, *, account_id: str, thread_id: str = "default", limi
             role = AiTmMessageRole(r.role)
         except Exception:
             role = AiTmMessageRole.system
+        attachments = _json_loads(getattr(r, "attachments_json", "[]") or "[]", [])
+        if not isinstance(attachments, list):
+            attachments = []
         msgs.append(
             AiTmMessage(
                 message_id=r.message_id,
@@ -225,6 +234,7 @@ def get_thread(db: Session, *, account_id: str, thread_id: str = "default", limi
                 created_at=r.created_at,
                 correlation_id=r.correlation_id,
                 decision_id=r.decision_id,
+                attachments=attachments,  # type: ignore[arg-type]
             )
         )
     return AiTmThread(thread_id=thread_id, account_id=account_id, messages=msgs)
