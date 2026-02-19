@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user_optional
@@ -111,10 +114,10 @@ async def ai_chat(
         db,
         user_id=None,
         account_id=payload.account_id,
-        thread_id="default",
+        thread_id=payload.thread_id or "default",
         messages=[user_msg, assistant_msg],
     )
-    thread = audit_store.get_thread(db, account_id=payload.account_id, thread_id="default")
+    thread = audit_store.get_thread(db, account_id=payload.account_id, thread_id=payload.thread_id or "default")
 
     return AiChatResponse(
         assistant_message=result.assistant_message,
@@ -136,6 +139,140 @@ async def ai_chat(
         ],
         thread=thread,
     )
+
+
+@router.post("/chat/stream")
+async def ai_chat_stream(
+    payload: AiChatRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_optional),
+):
+    """
+    Stream chat events as NDJSON.
+
+    Events (one JSON object per line):
+      - {type:"decision", decision_id, correlation_id}
+      - {type:"tool_call", ...}
+      - {type:"assistant_delta", text}
+      - {type:"done", assistant_message, decision_id}
+      - {type:"error", error}
+    """
+    corr = _correlation_id(request)
+    log_with_correlation(logger, request, logging.INFO, "ai.chat.stream.requested", account_id=payload.account_id)
+
+    # Resolve attachment metadata (and enforce access control).
+    ai_cfg, _ai_src = get_active_config(db, settings)
+    include_preview_rows = not bool(ai_cfg.do_not_send_pii)
+    attachments_for_llm: list[dict[str, object]] = []
+    attachments_for_thread: list[AiTmAttachmentRef] = []
+    if payload.attachments:
+        if user is None:
+            raise HTTPException(status_code=400, detail="Attachments require a logged-in session.")
+        for a in payload.attachments:
+            meta = get_file_meta(db, file_id=a.file_id, user_id=int(user.id))
+            if meta is None:
+                raise HTTPException(status_code=404, detail=f"Attachment not found: {a.file_id}")
+            attachments_for_llm.append(
+                {
+                    "file_id": meta.file_id,
+                    "filename": meta.filename,
+                    "size": meta.size,
+                    "mime": meta.mime,
+                    "summary": {
+                        "kind": meta.summary.kind,
+                        "columns": meta.summary.columns,
+                        "row_count": meta.summary.row_count,
+                        "preview_rows": meta.summary.preview_rows if include_preview_rows else [],
+                        "sheets": meta.summary.sheets,
+                        "active_sheet": meta.summary.active_sheet,
+                    },
+                }
+            )
+            attachments_for_thread.append(
+                AiTmAttachmentRef(
+                    file_id=meta.file_id,
+                    filename=meta.filename,
+                    size=meta.size,
+                    mime=meta.mime,
+                )
+            )
+
+    queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue(maxsize=200)
+
+    async def _emit(ev: dict[str, object]) -> None:
+        try:
+            queue.put_nowait(ev)
+        except Exception:
+            # Best-effort: if the client is slow, drop events rather than blocking.
+            return
+
+    auth_message_id = uuid4().hex
+
+    async def _runner() -> None:
+        try:
+            result = await run_chat(
+                db,
+                settings,
+                account_id=payload.account_id,
+                user_message=payload.message,
+                authorization_message_id=auth_message_id,
+                attachments=attachments_for_llm,
+                ui_context=payload.ui_context or payload.context or {},
+                correlation_id=corr,
+                event_cb=_emit,
+                stream_assistant=True,
+            )
+
+            user_msg = AiTmMessage(
+                message_id=auth_message_id,
+                role=AiTmMessageRole.user,
+                content=payload.message,
+                created_at=datetime.now(UTC),
+                correlation_id=corr,
+                attachments=attachments_for_thread,
+            )
+            assistant_msg = AiTmMessage(
+                message_id=uuid4().hex,
+                role=AiTmMessageRole.assistant,
+                content=result.assistant_message,
+                created_at=datetime.now(UTC),
+                correlation_id=corr,
+                decision_id=result.decision_id,
+            )
+            audit_store.append_chat_messages(
+                db,
+                user_id=None,
+                account_id=payload.account_id,
+                thread_id=payload.thread_id or "default",
+                messages=[user_msg, assistant_msg],
+            )
+            await _emit(
+                {
+                    "type": "done",
+                    "assistant_message": result.assistant_message,
+                    "decision_id": result.decision_id,
+                }
+            )
+        except Exception as exc:
+            await _emit({"type": "error", "error": str(exc) or "chat_failed"})
+        finally:
+            try:
+                queue.put_nowait(None)
+            except Exception:
+                return
+
+    asyncio.create_task(_runner())
+
+    async def _gen():
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield json.dumps(item, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(_gen(), media_type="application/x-ndjson")
 
 
 __all__ = ["router"]

@@ -39,6 +39,19 @@ def test_post_message_persists_thread_and_trace() -> None:
     assert trace["decision_id"] == decision_id
     assert trace["user_message"] == "hello"
 
+    threads = client.get("/api/ai/threads?account_id=default&limit=50")
+    assert threads.status_code == 200
+    rows = threads.json()
+    assert any(r.get("thread_id") == "default" for r in rows)
+    default_row = next(r for r in rows if r.get("thread_id") == "default")
+    assert default_row.get("message_count", 0) >= 2
+    assert "hello" in str(default_row.get("title") or "").lower()
+
+    created = client.post("/api/ai/threads?account_id=default")
+    assert created.status_code == 200
+    payload = created.json()
+    assert payload.get("thread_id")
+
 
 def test_reconcile_creates_exception_for_position_mismatch() -> None:
     # Seed an expected position in the ST ledger (DB) so stub broker snapshot (empty)
@@ -71,4 +84,3 @@ def test_reconcile_creates_exception_for_position_mismatch() -> None:
     ex_rows = ex_resp.json()
     assert len(ex_rows) >= 1
     assert any(r["exception_type"].startswith("POSITION_") for r in ex_rows)
-

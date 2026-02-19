@@ -7,7 +7,7 @@ import hashlib
 from datetime import UTC, datetime
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -86,6 +86,8 @@ async def run_chat(
     attachments: List[Dict[str, Any]] | None = None,
     ui_context: Dict[str, Any] | None = None,
     correlation_id: str | None = None,
+    event_cb: Callable[[dict[str, object]], Awaitable[None]] | None = None,
+    stream_assistant: bool = False,
 ) -> ChatResult:
     require_ai_assistant_enabled(db, settings)
     corr = correlation_id or _corr()
@@ -245,6 +247,11 @@ async def run_chat(
             ],
         },
     )
+    if event_cb is not None:
+        try:
+            await event_cb({"type": "decision", "decision_id": trace.decision_id, "correlation_id": corr})
+        except Exception:
+            pass
 
     structured: dict[str, Any] = {}
     if authorization_message_id:
@@ -591,6 +598,20 @@ async def run_chat(
                             result_preview=preview,
                         )
                     )
+                    if event_cb is not None:
+                        try:
+                            await event_cb(
+                                {
+                                    "type": "tool_call",
+                                    "name": tc.name,
+                                    "arguments": safe_args,
+                                    "status": "ok",
+                                    "duration_ms": duration_ms,
+                                    "result_preview": preview,
+                                }
+                            )
+                        except Exception:
+                            pass
                     trace.tools_called.append(
                         DecisionToolCall(
                             tool_name=tc.name,
@@ -616,6 +637,21 @@ async def run_chat(
                             error=str(exc) or "internal tool failed",
                         )
                     )
+                    if event_cb is not None:
+                        try:
+                            await event_cb(
+                                {
+                                    "type": "tool_call",
+                                    "name": tc.name,
+                                    "arguments": safe_args,
+                                    "status": "error",
+                                    "duration_ms": duration_ms,
+                                    "result_preview": preview,
+                                    "error": str(exc) or "internal tool failed",
+                                }
+                            )
+                        except Exception:
+                            pass
                     trace.tools_called.append(
                         DecisionToolCall(
                             tool_name=tc.name,
@@ -648,6 +684,21 @@ async def run_chat(
                         error=pol.reason,
                     )
                 )
+                if event_cb is not None:
+                    try:
+                        await event_cb(
+                            {
+                                "type": "tool_call",
+                                "name": tc.name,
+                                "arguments": safe_args,
+                                "status": "blocked",
+                                "duration_ms": duration_ms,
+                                "result_preview": tool_result_preview(redact_for_llm(out)),
+                                "error": pol.reason,
+                            }
+                        )
+                    except Exception:
+                        pass
                 trace.tools_called.append(
                     DecisionToolCall(
                         tool_name=tc.name,
@@ -696,6 +747,21 @@ async def run_chat(
                         error=err,
                     )
                 )
+                if event_cb is not None:
+                    try:
+                        await event_cb(
+                            {
+                                "type": "tool_call",
+                                "name": tc.name,
+                                "arguments": safe_args,
+                                "status": status_s,
+                                "duration_ms": duration_ms,
+                                "result_preview": preview,
+                                "error": err,
+                            }
+                        )
+                    except Exception:
+                        pass
                 trace.tools_called.append(
                     DecisionToolCall(
                         tool_name=tc.name,
@@ -733,6 +799,21 @@ async def run_chat(
                         error=str(exc) or "tool call failed",
                     )
                 )
+                if event_cb is not None:
+                    try:
+                        await event_cb(
+                            {
+                                "type": "tool_call",
+                                "name": tc.name,
+                                "arguments": safe_args,
+                                "status": "error",
+                                "duration_ms": duration_ms,
+                                "result_preview": preview,
+                                "error": str(exc) or "tool call failed",
+                            }
+                        )
+                    except Exception:
+                        pass
                 trace.tools_called.append(
                     DecisionToolCall(
                         tool_name=tc.name,
@@ -753,6 +834,14 @@ async def run_chat(
 
     if not final_text:
         final_text = "I couldn't complete that request right now."
+
+    if event_cb is not None and stream_assistant:
+        try:
+            chunk_size = 80
+            for i in range(0, len(final_text), chunk_size):
+                await event_cb({"type": "assistant_delta", "text": final_text[i : i + chunk_size]})
+        except Exception:
+            pass
 
     trace.final_outcome = {
         "assistant_message": final_text,

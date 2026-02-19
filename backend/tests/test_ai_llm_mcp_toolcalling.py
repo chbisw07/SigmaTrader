@@ -200,6 +200,29 @@ def test_chat_fetch_holdings(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> 
     assert tr.json()["user_message"] == "fetch my top 5 holdings"
 
 
+def test_chat_stream_emits_events(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
+    _enable_ai_provider(monkeypatch)
+
+    events: list[dict] = []
+    with client.stream(
+        "POST",
+        "/api/ai/chat/stream",
+        json={"account_id": "default", "thread_id": "default", "message": "fetch my top 5 holdings"},
+    ) as resp:
+        assert resp.status_code == 200
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            ev = json.loads(line)
+            events.append(ev)
+            if ev.get("type") in {"done", "error"}:
+                break
+
+    assert any(e.get("type") == "decision" and e.get("decision_id") for e in events)
+    assert any(e.get("type") == "assistant_delta" for e in events)
+    assert any(e.get("type") == "done" and e.get("assistant_message") for e in events)
+
+
 def test_chat_with_attachments_records_trace(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp) -> None:
     _enable_ai_provider(monkeypatch)
     _login_user()

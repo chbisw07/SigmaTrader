@@ -14,6 +14,7 @@ class AiChatAttachment(BaseModel):
 
 class AiChatRequest(BaseModel):
     account_id: str = "default"
+    thread_id: str = "default"
     message: str = Field(min_length=1, max_length=10_000)
     context: Dict[str, Any] = Field(default_factory=dict)
     attachments: List[AiChatAttachment] = Field(default_factory=list)

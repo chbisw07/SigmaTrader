@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
 from sqlalchemy import desc, select
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.ai_trading_manager import (
@@ -238,6 +239,51 @@ def get_thread(db: Session, *, account_id: str, thread_id: str = "default", limi
             )
         )
     return AiTmThread(thread_id=thread_id, account_id=account_id, messages=msgs)
+
+
+def list_threads(db: Session, *, account_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    stmt = (
+        select(
+            AiTmChatMessage.thread_id,
+            func.max(AiTmChatMessage.created_at).label("updated_at"),
+            func.count(AiTmChatMessage.id).label("message_count"),
+        )
+        .where(AiTmChatMessage.account_id == account_id)
+        .group_by(AiTmChatMessage.thread_id)
+        .order_by(desc(func.max(AiTmChatMessage.created_at)))
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = db.execute(stmt).all()
+
+    out: list[dict[str, Any]] = []
+    for thread_id, updated_at, message_count in rows:
+        first_user = (
+            db.execute(
+                select(AiTmChatMessage.content)
+                .where(
+                    AiTmChatMessage.account_id == account_id,
+                    AiTmChatMessage.thread_id == thread_id,
+                    AiTmChatMessage.role == "user",
+                )
+                .order_by(AiTmChatMessage.created_at)
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        title = (first_user or "").strip().replace("\n", " ")
+        if len(title) > 48:
+            title = title[:48] + "…"
+        out.append(
+            {
+                "thread_id": thread_id,
+                "title": title or f"Conversation {thread_id}",
+                "updated_at": updated_at,
+                "message_count": int(message_count or 0),
+            }
+        )
+    return out
 
 
 def persist_reconciliation_run(

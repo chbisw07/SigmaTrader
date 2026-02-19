@@ -105,6 +105,48 @@ def get_thread(
     return audit_store.get_thread(db, account_id=account_id, thread_id=thread_id)
 
 
+@router.get("/threads")
+def list_threads(
+    request: Request,
+    account_id: str = "default",
+    limit: int = 50,
+    offset: int = 0,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    require_ai_assistant_enabled(db, settings)
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.threads.list",
+        account_id=account_id,
+        limit=limit,
+        offset=offset,
+    )
+    return audit_store.list_threads(db, account_id=account_id, limit=min(limit, 200), offset=max(offset, 0))
+
+
+@router.post("/threads")
+def create_thread(
+    request: Request,
+    account_id: str = "default",
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    thread_id = uuid4().hex
+    log_with_correlation(
+        logger,
+        request,
+        logging.INFO,
+        "ai_tm.threads.create",
+        account_id=account_id,
+        thread_id=thread_id,
+    )
+    return {"thread_id": thread_id, "account_id": account_id}
+
+
 @router.post("/messages", response_model=AiTmUserMessageResponse)
 def post_message(
     payload: AiTmUserMessageRequest,
