@@ -54,6 +54,9 @@ export async function chatAi(payload: {
   account_id?: string
   message: string
   context?: Record<string, unknown>
+  attachments?: Array<{ file_id: string; how?: string }>
+  ui_context?: Record<string, unknown>
+  signal?: AbortSignal
 }): Promise<{
   assistant_message: string
   decision_id: string
@@ -62,11 +65,14 @@ export async function chatAi(payload: {
 }> {
   const res = await fetch('/api/ai/chat', {
     method: 'POST',
+    signal: payload.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       account_id: payload.account_id ?? 'default',
       message: payload.message,
       context: payload.context ?? {},
+      attachments: payload.attachments ?? [],
+      ui_context: payload.ui_context ?? null,
     }),
   })
   if (!res.ok) {

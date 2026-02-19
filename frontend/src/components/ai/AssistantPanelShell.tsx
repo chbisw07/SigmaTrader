@@ -9,10 +9,15 @@ import ChatIcon from '@mui/icons-material/Chat'
 import CloseIcon from '@mui/icons-material/Close'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import Button from '@mui/material/Button'
+import Stack from '@mui/material/Stack'
+import { useNavigate } from 'react-router-dom'
 
 import { AssistantPanel } from './AssistantPanel'
 
 export function AssistantPanelShell() {
+  const navigate = useNavigate()
   const [open, setOpen] = useState(true)
   const [minimized, setMinimized] = useState(false)
   const width = useMemo(() => 440, [])
@@ -79,6 +84,17 @@ export function AssistantPanelShell() {
               Phase 3 (proto)
             </Typography>
           </Box>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Button
+              size="small"
+              variant="text"
+              onClick={() => navigate('/ai')}
+              startIcon={<OpenInNewIcon fontSize="small" />}
+              sx={{ textTransform: 'none', minWidth: 0, px: 1 }}
+            >
+              Open
+            </Button>
+          </Stack>
           <Tooltip title={minimized ? 'Restore' : 'Minimize'}>
             <IconButton
               size="small"

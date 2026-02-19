@@ -69,6 +69,7 @@ const mainNavItems: NavItem[] = [
   { label: 'Holdings', to: '/holdings', icon: <AccountBalanceWalletIcon /> },
   { label: 'Positions', to: '/positions', icon: <ShowChartIcon /> },
   { label: 'Queue', to: '/queue', icon: <ListAltIcon /> },
+  { label: 'AI Trading Manager', to: '/ai', icon: <SmartToyIcon /> },
   { label: 'Groups', to: '/groups', icon: <ViewListIcon /> },
   { label: 'Screener', to: '/screener', icon: <ManageSearchIcon /> },
   { label: 'Alerts', to: '/alerts', icon: <NotificationsActiveIcon /> },

@@ -18,6 +18,7 @@ import { RiskManagementGuidePage } from '../views/RiskManagementGuidePage'
 import { ExceptionsCenterPage } from '../views/ExceptionsCenterPage'
 import { DecisionTracePage } from '../views/DecisionTracePage'
 import { PlaybooksPage } from '../views/PlaybooksPage'
+import { AiTradingManagerPage } from '../views/AiTradingManagerPage'
 
 export function AppRoutes() {
   return (
@@ -41,6 +42,7 @@ export function AppRoutes() {
       <Route path="/appearance" element={<AppearancePage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/risk-guide" element={<RiskManagementGuidePage />} />
+      <Route path="/ai" element={<AiTradingManagerPage />} />
       <Route path="/ai/exceptions" element={<ExceptionsCenterPage />} />
       <Route path="/ai/decision-traces/:decisionId" element={<DecisionTracePage />} />
       <Route path="/ai/playbooks" element={<PlaybooksPage />} />
