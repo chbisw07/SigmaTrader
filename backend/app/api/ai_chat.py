@@ -14,6 +14,7 @@ from app.api.auth import get_current_user_optional
 from app.core.config import Settings, get_settings
 from app.core.logging import log_with_correlation
 from app.db.session import get_db
+from app.db.session import SessionLocal
 from app.schemas.ai_chat import AiChatRequest, AiChatResponse, AiToolCallRow
 from app.schemas.ai_trading_manager import AiTmAttachmentRef, AiTmMessage, AiTmMessageRole
 from app.services.ai.active_config import get_active_config
@@ -212,49 +213,52 @@ async def ai_chat_stream(
 
     async def _runner() -> None:
         try:
-            result = await run_chat(
-                db,
-                settings,
-                account_id=payload.account_id,
-                user_message=payload.message,
-                authorization_message_id=auth_message_id,
-                attachments=attachments_for_llm,
-                ui_context=payload.ui_context or payload.context or {},
-                correlation_id=corr,
-                event_cb=_emit,
-                stream_assistant=True,
-            )
+            # Use a dedicated DB session for the background task so request-scoped
+            # session cleanup doesn't race with streaming or client disconnects.
+            with SessionLocal() as db2:
+                result = await run_chat(
+                    db2,
+                    settings,
+                    account_id=payload.account_id,
+                    user_message=payload.message,
+                    authorization_message_id=auth_message_id,
+                    attachments=attachments_for_llm,
+                    ui_context=payload.ui_context or payload.context or {},
+                    correlation_id=corr,
+                    event_cb=_emit,
+                    stream_assistant=True,
+                )
 
-            user_msg = AiTmMessage(
-                message_id=auth_message_id,
-                role=AiTmMessageRole.user,
-                content=payload.message,
-                created_at=datetime.now(UTC),
-                correlation_id=corr,
-                attachments=attachments_for_thread,
-            )
-            assistant_msg = AiTmMessage(
-                message_id=uuid4().hex,
-                role=AiTmMessageRole.assistant,
-                content=result.assistant_message,
-                created_at=datetime.now(UTC),
-                correlation_id=corr,
-                decision_id=result.decision_id,
-            )
-            audit_store.append_chat_messages(
-                db,
-                user_id=None,
-                account_id=payload.account_id,
-                thread_id=payload.thread_id or "default",
-                messages=[user_msg, assistant_msg],
-            )
-            await _emit(
-                {
-                    "type": "done",
-                    "assistant_message": result.assistant_message,
-                    "decision_id": result.decision_id,
-                }
-            )
+                user_msg = AiTmMessage(
+                    message_id=auth_message_id,
+                    role=AiTmMessageRole.user,
+                    content=payload.message,
+                    created_at=datetime.now(UTC),
+                    correlation_id=corr,
+                    attachments=attachments_for_thread,
+                )
+                assistant_msg = AiTmMessage(
+                    message_id=uuid4().hex,
+                    role=AiTmMessageRole.assistant,
+                    content=result.assistant_message,
+                    created_at=datetime.now(UTC),
+                    correlation_id=corr,
+                    decision_id=result.decision_id,
+                )
+                audit_store.append_chat_messages(
+                    db2,
+                    user_id=None,
+                    account_id=payload.account_id,
+                    thread_id=payload.thread_id or "default",
+                    messages=[user_msg, assistant_msg],
+                )
+                await _emit(
+                    {
+                        "type": "done",
+                        "assistant_message": result.assistant_message,
+                        "decision_id": result.decision_id,
+                    }
+                )
         except Exception as exc:
             await _emit({"type": "error", "error": str(exc) or "chat_failed"})
         finally:
