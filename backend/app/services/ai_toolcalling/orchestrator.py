@@ -14,9 +14,16 @@ from fastapi import HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from app.ai.safety.payload_inspector import PayloadInspectionError, inspect_llm_payload
+from app.ai.safety.safe_summary_registry import (
+    SafeSummaryError,
+    summarize_tool_for_llm,
+    tool_has_safe_summary,
+)
 from app.core.config import Settings
 from app.models import Candle
 from app.schemas.ai_trading_manager import DecisionToolCall, Quote, TradeIntent
+from app.services.ai.provider_registry import get_provider
 from app.services.ai.active_config import get_active_config
 from app.services.ai.provider_keys import decrypt_key_value, get_key
 from app.services.ai_trading_manager import audit_store
@@ -27,6 +34,7 @@ from app.services.ai_trading_manager.execution.idempotency_store import Idempote
 from app.services.ai_trading_manager.execution.post_trade_reconcile import post_trade_reconcile
 from app.services.ai_trading_manager.feature_flags import require_ai_assistant_enabled
 from app.services.ai_trading_manager.ledger_snapshot import build_ledger_snapshot
+from app.services.ai_trading_manager.operator_payload_store import persist_operator_payload
 from app.services.ai_trading_manager.plan_engine import new_plan_from_intent, normalize_trade_plan
 from app.services.ai_trading_manager.playbooks import get_trade_plan, upsert_trade_plan
 from app.services.ai_trading_manager.riskgate.engine import evaluate_riskgate
@@ -80,6 +88,43 @@ def _safe_prompt_audit(prompt: str, *, do_not_send_pii: bool) -> dict[str, Any]:
     if len(preview) > 120:
         preview = preview[:120] + "…"
     return {"prompt_hash": h, "prompt_len": len(p), "prompt_preview": preview}
+
+
+def _minimal_llm_context(ui_context: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """Whitelisted UI context for the LLM (least-data-by-design)."""
+    if not isinstance(ui_context, dict):
+        return None
+    out: dict[str, Any] = {}
+    page = ui_context.get("page")
+    if isinstance(page, str) and page.strip():
+        out["page"] = page.strip()
+    # Intentionally omit identifiers, broker ids, auth/session info, and raw UI state.
+    return out or None
+
+
+def _minimal_attachments_for_llm(attachments: List[Dict[str, Any]] | None) -> List[Dict[str, Any]]:
+    """Whitelisted attachment summaries for the LLM."""
+    out: list[dict[str, Any]] = []
+    for a in attachments or []:
+        if not isinstance(a, dict):
+            continue
+        summary = a.get("summary") if isinstance(a.get("summary"), dict) else {}
+        out.append(
+            {
+                "file_id": str(a.get("file_id") or ""),
+                "filename": str(a.get("filename") or ""),
+                "summary": {
+                    "kind": str(summary.get("kind") or ""),
+                    "row_count": int(summary.get("row_count") or 0),
+                    "columns": list(summary.get("columns") or []),
+                    # preview_rows may contain PII; payload inspector will fail-closed if present.
+                    "preview_rows": summary.get("preview_rows") or [],
+                    "sheets": list(summary.get("sheets") or []) if summary.get("sheets") else None,
+                    "active_sheet": summary.get("active_sheet"),
+                },
+            }
+        )
+    return out
 
 
 def _parse_direct_portfolio_request(msg: str) -> _DirectPortfolioRequest | None:
@@ -220,6 +265,24 @@ def _md_table(rows: list[dict[str, Any]], columns: list[tuple[str, str]], *, lim
     return "\n".join(lines)
 
 
+def _llm_summary_count(summary: Any) -> int | None:
+    if not isinstance(summary, dict):
+        return None
+    totals = summary.get("totals")
+    if isinstance(totals, dict) and isinstance(totals.get("count"), int):
+        return int(totals.get("count") or 0)
+    if isinstance(summary.get("count"), int):
+        return int(summary.get("count") or 0)
+    return None
+
+
+def _compact_json(value: Any, *, max_chars: int) -> str:
+    s = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
+    if len(s) > max_chars:
+        return s[:max_chars] + "…"
+    return s
+
+
 async def run_chat(
     db: Session,
     settings: Settings,
@@ -267,6 +330,8 @@ async def run_chat(
     # Only expose safe (read-only) MCP tools to the LLM; trade tools are routed
     # exclusively through ST internal execution, gated by policy + flags.
     safe_mcp_tools = [t for t in cached.mcp_tools if classify_tool(str(t.get("name") or ""), t) == "read"]
+    # PII Safety Layer: only expose tools that have deterministic safe summaries.
+    llm_mcp_tools = [t for t in safe_mcp_tools if tool_has_safe_summary(str(t.get("name") or ""))]
 
     internal_tools: list[dict[str, Any]] = [
         {
@@ -302,9 +367,10 @@ async def run_chat(
         },
     ]
 
-    openai_tools = mcp_tools_to_openai_tools(safe_mcp_tools) + internal_tools
+    openai_tools = mcp_tools_to_openai_tools(llm_mcp_tools) + internal_tools
     tools_hash = hash_tool_definitions(openai_tools)
-    tools_by_name = tool_lookup_map(safe_mcp_tools)
+    # Keep full lookup for policy checks; models may still hallucinate names.
+    tools_by_name = tool_lookup_map(cached.mcp_tools)
 
     if refreshed:
         record_system_event(
@@ -316,7 +382,7 @@ async def run_chat(
             details={
                 "event_type": "AI_TOOL_LIST_REFRESHED",
                 "tools_hash": tools_hash,
-                "safe_count": len(safe_mcp_tools),
+                "safe_count": len(llm_mcp_tools),
                 "total_count": len(cached.mcp_tools),
             },
         )
@@ -353,15 +419,11 @@ async def run_chat(
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
     ]
-    if ui_context:
-        messages.append(
-            {
-                "role": "system",
-                "content": f"UI context (json): {json.dumps(redact_for_llm(ui_context), ensure_ascii=False)}",
-            }
-        )
+    llm_ctx = _minimal_llm_context(ui_context)
+    if llm_ctx:
+        messages.append({"role": "system", "content": f"Context (json): {json.dumps(llm_ctx, ensure_ascii=False)}"})
     if attachments:
-        attachments_json = json.dumps(redact_for_llm(attachments), ensure_ascii=False)
+        attachments_json = json.dumps(_minimal_attachments_for_llm(attachments), ensure_ascii=False)
         messages.append(
             {
                 "role": "system",
@@ -403,12 +465,23 @@ async def run_chat(
     if direct_req is not None:
         async def _call_json(name: str) -> Any:
             t0 = time.perf_counter()
+            tool_call_id = uuid4().hex
             res = await session.tools_call(name=name, arguments={})
             if isinstance(res, dict) and res.get("isError") is True:
                 raise RuntimeError(_extract_tool_text(res) or f"{name} failed.")
             payload = _extract_tool_json(res) if isinstance(res, dict) else None
             duration_ms = int((time.perf_counter() - t0) * 1000)
-            preview = tool_result_preview(redact_for_llm(payload), max_chars=1200)
+            meta = persist_operator_payload(
+                db,
+                decision_id=trace.decision_id,
+                tool_name=name,
+                tool_call_id=tool_call_id,
+                account_id=account_id,
+                user_id=None,
+                payload=payload,
+            )
+            llm_summary = summarize_tool_for_llm(settings, tool_name=name, operator_payload=payload)
+            preview = tool_result_preview(llm_summary, max_chars=1200)
             tool_logs.append(
                 ToolCallLog(
                     name=name,
@@ -424,6 +497,10 @@ async def run_chat(
                     input_summary={},
                     output_summary={"preview": preview},
                     duration_ms=duration_ms,
+                    operator_payload_meta=meta,
+                    llm_summary=llm_summary,
+                    broker_raw_count=int(meta.get("items_count") or 0),
+                    llm_summary_count=_llm_summary_count(llm_summary),
                 )
             )
             if event_cb is not None:
@@ -458,6 +535,12 @@ async def run_chat(
 
         holdings_rows = _holdings_rows(holdings_payload) if holdings_payload is not None else []
         positions_rows = _positions_rows(positions_payload) if positions_payload is not None else []
+        # Update trace counters so UI can show "broker raw vs UI rendered vs LLM summary" clearly.
+        for t in trace.tools_called:
+            if t.tool_name == "get_holdings" and t.ui_rendered_count is None:
+                t.ui_rendered_count = len(holdings_rows)
+            if t.tool_name == "get_positions" and t.ui_rendered_count is None:
+                t.ui_rendered_count = len(positions_rows)
 
         parts: list[str] = []
         if direct_req.want_holdings:
@@ -576,9 +659,44 @@ async def run_chat(
             return None
         return float(sum(trs) / float(len(trs)))
 
+    prov = get_provider(str(ai_cfg.provider or ""))
+    provider_kind = str(getattr(prov, "kind", "") or "remote").lower()
+    is_remote_provider = provider_kind == "remote"
+
     final_text = ""
     max_iters = 6
     for _i in range(max_iters):
+        # Enforce PII-safe outbound payload for remote providers (fail-closed).
+        if is_remote_provider:
+            try:
+                inspect_llm_payload({"model": str(ai_cfg.model), "messages": messages, "tools": openai_tools})
+            except PayloadInspectionError as exc:
+                # Do not attempt a remote call if payload contains forbidden keys/patterns.
+                findings = [{"path": f.path, "kind": f.kind, "detail": f.detail} for f in (exc.findings or [])][:10]
+                final_text = (
+                    "Blocked sending sensitive data to a remote LLM by PII safety policy. "
+                    "Use a local provider (Ollama/LM Studio) or remove sensitive content and retry."
+                )
+                trace.final_outcome = {
+                    "assistant_message": final_text,
+                    "blocked_by": "PII_POLICY",
+                    "findings": findings,
+                }
+                trace.explanations = ["PII_POLICY_BLOCKED_OUTBOUND_LLM_PAYLOAD"]
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="AI_ORCH",
+                    message="Outbound LLM request blocked by PII policy.",
+                    correlation_id=corr,
+                    details={
+                        "event_type": "AI_PII_BLOCKED",
+                        "provider": str(ai_cfg.provider),
+                        "model": str(ai_cfg.model),
+                        "findings": findings,
+                    },
+                )
+                break
         try:
             turn = await openai_chat_with_tools(
                 api_key=api_key,
@@ -607,7 +725,7 @@ async def run_chat(
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": tool_result_preview(redact_for_llm(tc.arguments or {}), max_chars=4000),
+                            "arguments": _compact_json(redact_for_llm(tc.arguments or {}), max_chars=4000),
                         },
                     }
                     for tc in turn.tool_calls
@@ -615,6 +733,7 @@ async def run_chat(
             }
         )
 
+        pii_abort_message: str | None = None
         for tc in turn.tool_calls:
             t0 = time.perf_counter()
             # Internal tools: handled by SigmaTrader (not MCP).
@@ -855,7 +974,20 @@ async def run_chat(
 
                     duration_ms = int((time.perf_counter() - t0) * 1000)
                     safe_args = redact_for_llm(tc.arguments or {})
-                    preview = tool_result_preview(redact_for_llm(out))
+                    meta = persist_operator_payload(
+                        db,
+                        decision_id=trace.decision_id,
+                        tool_name=tc.name,
+                        tool_call_id=tc.tool_call_id,
+                        account_id=account_id,
+                        user_id=None,
+                        payload=out,
+                    )
+                    try:
+                        llm_summary = summarize_tool_for_llm(settings, tool_name=tc.name, operator_payload=out)
+                    except SafeSummaryError:
+                        llm_summary = {"schema": "tool_error.v1", "tool": tc.name, "isError": True}
+                    preview = tool_result_preview(llm_summary)
                     tool_logs.append(
                         ToolCallLog(
                             name=tc.name,
@@ -885,15 +1017,41 @@ async def run_chat(
                             input_summary={"arguments": safe_args},
                             output_summary={"preview": preview},
                             duration_ms=duration_ms,
+                            operator_payload_meta=meta,
+                            llm_summary=llm_summary,
+                            broker_raw_count=int(meta.get("items_count") or 0),
+                            llm_summary_count=_llm_summary_count(llm_summary),
                         )
                     )
-                    messages.append({"role": "tool", "tool_call_id": tc.tool_call_id, "content": preview})
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.tool_call_id,
+                            "content": json.dumps(
+                                llm_summary,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                default=str,
+                            ),
+                        }
+                    )
                     continue
                 except Exception as exc:
                     duration_ms = int((time.perf_counter() - t0) * 1000)
                     out_err = {"isError": True, "error": str(exc) or "internal tool failed", "tool": tc.name}
                     safe_args = redact_for_llm(tc.arguments or {})
-                    preview = tool_result_preview(redact_for_llm(out_err))
+                    meta = persist_operator_payload(
+                        db,
+                        decision_id=trace.decision_id,
+                        tool_name=tc.name,
+                        tool_call_id=tc.tool_call_id,
+                        account_id=account_id,
+                        user_id=None,
+                        payload=out_err,
+                    )
+                    llm_summary = {"schema": "tool_error.v1", "tool": tc.name, "isError": True, "error": str(exc) or ""}
+                    preview = tool_result_preview(llm_summary)
                     tool_logs.append(
                         ToolCallLog(
                             name=tc.name,
@@ -925,9 +1083,25 @@ async def run_chat(
                             input_summary={"arguments": safe_args},
                             output_summary={"status": "error", "error": str(exc) or "internal tool failed"},
                             duration_ms=duration_ms,
+                            operator_payload_meta=meta,
+                            llm_summary=llm_summary,
+                            broker_raw_count=int(meta.get("items_count") or 0),
+                            llm_summary_count=_llm_summary_count(llm_summary),
                         )
                     )
-                    messages.append({"role": "tool", "tool_call_id": tc.tool_call_id, "content": preview})
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.tool_call_id,
+                            "content": json.dumps(
+                                llm_summary,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                default=str,
+                            ),
+                        }
+                    )
                     continue
 
             meta = tools_by_name.get(tc.name)
@@ -941,13 +1115,24 @@ async def run_chat(
                 out = {"isError": True, "blocked": True, "reason": pol.reason, "tool": tc.name}
                 duration_ms = int((time.perf_counter() - t0) * 1000)
                 safe_args = redact_for_llm(tc.arguments or {})
+                meta2 = persist_operator_payload(
+                    db,
+                    decision_id=trace.decision_id,
+                    tool_name=tc.name,
+                    tool_call_id=tc.tool_call_id,
+                    account_id=account_id,
+                    user_id=None,
+                    payload=out,
+                )
+                llm_summary2: dict[str, Any] = dict(out)
+                preview2 = tool_result_preview(llm_summary2)
                 tool_logs.append(
                     ToolCallLog(
                         name=tc.name,
                         arguments=safe_args,
                         status="blocked",
                         duration_ms=duration_ms,
-                        result_preview=tool_result_preview(redact_for_llm(out)),
+                        result_preview=preview2,
                         error=pol.reason,
                     )
                 )
@@ -960,7 +1145,7 @@ async def run_chat(
                                 "arguments": safe_args,
                                 "status": "blocked",
                                 "duration_ms": duration_ms,
-                                "result_preview": tool_result_preview(redact_for_llm(out)),
+                                "result_preview": preview2,
                                 "error": pol.reason,
                             }
                         )
@@ -972,6 +1157,10 @@ async def run_chat(
                         input_summary={"arguments": safe_args},
                         output_summary={"blocked": True, "reason": pol.reason},
                         duration_ms=duration_ms,
+                        operator_payload_meta=meta2,
+                        llm_summary=llm_summary2,
+                        broker_raw_count=int(meta2.get("items_count") or 0),
+                        llm_summary_count=_llm_summary_count(llm_summary2),
                     )
                 )
                 record_system_event(
@@ -986,7 +1175,83 @@ async def run_chat(
                     {
                         "role": "tool",
                         "tool_call_id": tc.tool_call_id,
-                        "content": tool_result_preview(redact_for_llm(out)),
+                        "content": json.dumps(
+                            llm_summary2,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                            default=str,
+                        ),
+                    }
+                )
+                continue
+
+            # PII safety: do not execute tools for remote LLMs unless we have a deterministic safe summary.
+            if is_remote_provider and not tool_has_safe_summary(tc.name):
+                out_ns = {
+                    "isError": True,
+                    "blocked": True,
+                    "reason": "NO_SAFE_SUMMARY_REGISTERED",
+                    "tool": tc.name,
+                }
+                duration_ms = int((time.perf_counter() - t0) * 1000)
+                safe_args = redact_for_llm(tc.arguments or {})
+                meta_ns = persist_operator_payload(
+                    db,
+                    decision_id=trace.decision_id,
+                    tool_name=tc.name,
+                    tool_call_id=tc.tool_call_id,
+                    account_id=account_id,
+                    user_id=None,
+                    payload=out_ns,
+                )
+                preview_ns = tool_result_preview(out_ns)
+                tool_logs.append(
+                    ToolCallLog(
+                        name=tc.name,
+                        arguments=safe_args,
+                        status="blocked",
+                        duration_ms=duration_ms,
+                        result_preview=preview_ns,
+                        error="no safe summary registered",
+                    )
+                )
+                trace.tools_called.append(
+                    DecisionToolCall(
+                        tool_name=tc.name,
+                        input_summary={"arguments": safe_args},
+                        output_summary={"blocked": True, "reason": "NO_SAFE_SUMMARY_REGISTERED"},
+                        duration_ms=duration_ms,
+                        operator_payload_meta=meta_ns,
+                        llm_summary=out_ns,
+                        broker_raw_count=int(meta_ns.get("items_count") or 0),
+                        llm_summary_count=_llm_summary_count(out_ns),
+                        truncation_reason="blocked_no_safe_summary",
+                    )
+                )
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="AI_ORCH",
+                    message="AI tool blocked (no safe summary).",
+                    correlation_id=corr,
+                    details={
+                        "event_type": "AI_TOOL_BLOCKED",
+                        "tool": tc.name,
+                        "reason": "NO_SAFE_SUMMARY_REGISTERED",
+                    },
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.tool_call_id,
+                        "content": json.dumps(
+                            out_ns,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                            default=str,
+                        ),
                     }
                 )
                 continue
@@ -1002,8 +1267,49 @@ async def run_chat(
                     err = str(((res.get("content") or [{}])[0] or {}).get("text") or "tool error")
                 duration_ms = int((time.perf_counter() - t0) * 1000)
                 safe_args = redact_for_llm(tc.arguments or {})
-                safe_res = redact_for_llm(res)
-                preview = tool_result_preview(safe_res)
+                operator_payload = _extract_tool_json(res) if isinstance(res, dict) else res
+                meta3 = persist_operator_payload(
+                    db,
+                    decision_id=trace.decision_id,
+                    tool_name=tc.name,
+                    tool_call_id=tc.tool_call_id,
+                    account_id=account_id,
+                    user_id=None,
+                    payload=operator_payload,
+                )
+                if status_s == "ok":
+                    try:
+                        llm_summary3 = summarize_tool_for_llm(
+                            settings,
+                            tool_name=tc.name,
+                            operator_payload=operator_payload,
+                        )
+                    except SafeSummaryError as exc:
+                        # Fail closed for remote providers: do not proceed if we cannot safely summarize.
+                        pii_abort_message = (
+                            f"Blocked sending broker data to remote LLM: no safe summary for tool '{tc.name}'. "
+                            f"({str(exc) or 'missing summarizer'})"
+                        )
+                        final_text = pii_abort_message
+                        trace.final_outcome = {
+                            "assistant_message": final_text,
+                            "blocked_by": "PII_POLICY",
+                            "reason": "NO_SAFE_SUMMARY",
+                            "tool": tc.name,
+                        }
+                        trace.explanations = ["PII_POLICY_NO_SAFE_SUMMARY"]
+                        record_system_event(
+                            db,
+                            level="WARNING",
+                            category="AI_ORCH",
+                            message="Tool result blocked (no safe summary).",
+                            correlation_id=corr,
+                            details={"event_type": "AI_PII_BLOCKED", "tool": tc.name},
+                        )
+                        break
+                else:
+                    llm_summary3 = {"schema": "tool_error.v1", "tool": tc.name, "isError": True, "error": err or ""}
+                preview = tool_result_preview(llm_summary3)
                 tool_logs.append(
                     ToolCallLog(
                         name=tc.name,
@@ -1035,6 +1341,10 @@ async def run_chat(
                         input_summary={"arguments": safe_args},
                         output_summary={"status": status_s, "preview": preview},
                         duration_ms=duration_ms,
+                        operator_payload_meta=meta3,
+                        llm_summary=llm_summary3,
+                        broker_raw_count=int(meta3.get("items_count") or 0),
+                        llm_summary_count=_llm_summary_count(llm_summary3),
                     )
                 )
                 record_system_event(
@@ -1050,12 +1360,34 @@ async def run_chat(
                         "duration_ms": duration_ms,
                     },
                 )
-                messages.append({"role": "tool", "tool_call_id": tc.tool_call_id, "content": preview})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.tool_call_id,
+                        "content": json.dumps(
+                            llm_summary3,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                            default=str,
+                        ),
+                    }
+                )
             except Exception as exc:
                 duration_ms = int((time.perf_counter() - t0) * 1000)
                 out = {"isError": True, "error": str(exc) or "tool call failed", "tool": tc.name}
                 safe_args = redact_for_llm(tc.arguments or {})
-                preview = tool_result_preview(redact_for_llm(out))
+                meta4 = persist_operator_payload(
+                    db,
+                    decision_id=trace.decision_id,
+                    tool_name=tc.name,
+                    tool_call_id=tc.tool_call_id,
+                    account_id=account_id,
+                    user_id=None,
+                    payload=out,
+                )
+                llm_summary4 = {"schema": "tool_error.v1", "tool": tc.name, "isError": True, "error": str(exc) or ""}
+                preview = tool_result_preview(llm_summary4)
                 tool_logs.append(
                     ToolCallLog(
                         name=tc.name,
@@ -1087,6 +1419,10 @@ async def run_chat(
                         input_summary={"arguments": safe_args},
                         output_summary={"status": "error", "error": str(exc) or "tool call failed"},
                         duration_ms=duration_ms,
+                        operator_payload_meta=meta4,
+                        llm_summary=llm_summary4,
+                        broker_raw_count=int(meta4.get("items_count") or 0),
+                        llm_summary_count=_llm_summary_count(llm_summary4),
                     )
                 )
                 record_system_event(
@@ -1097,7 +1433,21 @@ async def run_chat(
                     correlation_id=corr,
                     details={"event_type": "AI_TOOL_ERROR", "tool": tc.name, "error": str(exc) or "unknown"},
                 )
-                messages.append({"role": "tool", "tool_call_id": tc.tool_call_id, "content": preview})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.tool_call_id,
+                        "content": json.dumps(
+                            llm_summary4,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                            default=str,
+                        ),
+                    }
+                )
+        if pii_abort_message:
+            break
 
     if not final_text:
         final_text = "I couldn't complete that request right now."
@@ -1110,7 +1460,9 @@ async def run_chat(
         except Exception:
             pass
 
+    prior = trace.final_outcome if isinstance(trace.final_outcome, dict) else {}
     trace.final_outcome = {
+        **prior,
         "assistant_message": final_text,
         "tool_calls": [t.__dict__ for t in tool_logs],
         **structured,
