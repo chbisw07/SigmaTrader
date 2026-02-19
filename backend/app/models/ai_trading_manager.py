@@ -285,6 +285,186 @@ class AiTmOperatorPayload(Base):
     )
 
 
+class AiTmPositionShadow(Base):
+    """Broker-originated position/holding coverage (unmanaged detector).
+
+    Stored locally (Operator View). Never sent directly to remote LLMs.
+    """
+
+    __tablename__ = "ai_tm_position_shadows"
+
+    __table_args__ = (
+        UniqueConstraint("shadow_id", name="ux_ai_tm_position_shadows_shadow_id"),
+        Index("ix_ai_tm_position_shadows_account_status", "broker_account_id", "status"),
+        Index("ix_ai_tm_position_shadows_symbol_product", "symbol", "product"),
+        Index("ix_ai_tm_position_shadows_last_seen", "last_seen_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    shadow_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    broker_account_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    symbol: Mapped[str] = mapped_column(String(128), nullable=False)
+    product: Mapped[str] = mapped_column(String(16), nullable=False, default="CNC")  # CNC/MIS
+    side: Mapped[str] = mapped_column(String(8), nullable=False, default="LONG")  # LONG only for now
+
+    qty_current: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    avg_price: Mapped[Optional[float]] = mapped_column(Float)
+
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN")  # ST/BROKER_DIRECT/UNKNOWN
+    status: Mapped[str] = mapped_column(String(8), nullable=False, default="OPEN")  # OPEN/CLOSED
+
+    st_trade_id: Mapped[Optional[str]] = mapped_column(String(64))
+
+    # Dedupe / linkage keys stored as hashes (avoid raw broker identifiers).
+    broker_position_key_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    broker_instrument_id_hash: Mapped[Optional[str]] = mapped_column(String(64))
+
+    # Cached computed fields for UI convenience (best-effort).
+    ltp: Mapped[Optional[float]] = mapped_column(Float)
+    pnl_abs: Mapped[Optional[float]] = mapped_column(Float)
+    pnl_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class AiTmManagePlaybook(Base):
+    """Position management playbook (passive by default; enabled=false)."""
+
+    __tablename__ = "ai_tm_manage_playbooks"
+
+    __table_args__ = (
+        UniqueConstraint("playbook_id", name="ux_ai_tm_manage_playbooks_playbook_id"),
+        Index("ix_ai_tm_manage_playbooks_scope", "scope_type", "scope_key"),
+        Index("ix_ai_tm_manage_playbooks_enabled", "enabled"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    playbook_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # POSITION/SYMBOL/PORTFOLIO_DEFAULT
+    scope_type: Mapped[str] = mapped_column(String(24), nullable=False, default="POSITION")
+    scope_key: Mapped[Optional[str]] = mapped_column(String(128))
+
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="OBSERVE")  # OBSERVE/PROPOSE/EXECUTE
+    horizon: Mapped[str] = mapped_column(String(16), nullable=False, default="SWING")  # INTRADAY/SWING/LONGTERM
+    review_cadence_min: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+
+    exit_policy_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+    scale_policy_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+
+    execution_style: Mapped[str] = mapped_column(String(24), nullable=False, default="LIMIT_BBO")
+    allow_strategy_exits: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    behavior_on_strategy_exit: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="ALLOW_AS_IS"
+    )
+
+    notes: Mapped[Optional[str]] = mapped_column(Text())
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class AiTmJournalForecast(Base):
+    __tablename__ = "ai_tm_journal_forecasts"
+
+    __table_args__ = (
+        UniqueConstraint("forecast_id", name="ux_ai_tm_journal_forecasts_forecast_id"),
+        Index("ix_ai_tm_journal_forecasts_shadow_ts", "position_shadow_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    forecast_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    position_shadow_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+    author: Mapped[str] = mapped_column(String(8), nullable=False, default="USER")  # USER/AI
+    outlook_pct: Mapped[Optional[float]] = mapped_column(Float)
+    horizon_days: Mapped[Optional[int]] = mapped_column(Integer)
+    confidence: Mapped[Optional[int]] = mapped_column(Integer)
+
+    rationale_tags_json: Mapped[str] = mapped_column(Text(), nullable=False, default="[]")
+    thesis_text: Mapped[Optional[str]] = mapped_column(Text())
+    invalidation_text: Mapped[Optional[str]] = mapped_column(Text())
+
+
+class AiTmJournalEvent(Base):
+    __tablename__ = "ai_tm_journal_events"
+
+    __table_args__ = (
+        UniqueConstraint("event_id", name="ux_ai_tm_journal_events_event_id"),
+        Index("ix_ai_tm_journal_events_shadow_ts", "position_shadow_id", "ts"),
+        Index("ix_ai_tm_journal_events_type", "event_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    position_shadow_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+    event_type: Mapped[str] = mapped_column(
+        String(24), nullable=False
+    )  # ENTRY/ADD/REDUCE/EXIT/STOP_PLACED/STOP_UPDATED/OVERRIDE/REVIEW
+    # MANUAL_UI/TV_ALERT/AI_ASSISTANT/SYSTEM
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="SYSTEM")
+
+    intent_payload_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+    riskgate_result_json: Mapped[Optional[str]] = mapped_column(Text())
+    playbook_result_json: Mapped[Optional[str]] = mapped_column(Text())
+    broker_result_json: Mapped[Optional[str]] = mapped_column(Text())
+
+    notes: Mapped[Optional[str]] = mapped_column(Text())
+
+
+class AiTmJournalPostmortem(Base):
+    __tablename__ = "ai_tm_journal_postmortems"
+
+    __table_args__ = (
+        UniqueConstraint("postmortem_id", name="ux_ai_tm_journal_postmortems_postmortem_id"),
+        Index("ix_ai_tm_journal_postmortems_shadow", "position_shadow_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    postmortem_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    position_shadow_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    closed_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    realized_pnl_abs: Mapped[Optional[float]] = mapped_column(Float)
+    realized_pnl_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+    mfe_abs: Mapped[Optional[float]] = mapped_column(Float)
+    mfe_pct: Mapped[Optional[float]] = mapped_column(Float)
+    mae_abs: Mapped[Optional[float]] = mapped_column(Float)
+    mae_pct: Mapped[Optional[float]] = mapped_column(Float)
+
+    peak_price_while_open: Mapped[Optional[float]] = mapped_column(Float)
+
+    exit_quality: Mapped[str] = mapped_column(String(24), nullable=False, default="UNKNOWN")
+    exit_quality_explanation: Mapped[Optional[str]] = mapped_column(Text())
+
+    forecast_vs_actual_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+
+
 class AiTmIdempotencyRecord(Base):
     __tablename__ = "ai_tm_idempotency_records"
 
