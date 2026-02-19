@@ -11,8 +11,10 @@ from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.api.auth import get_current_user_optional
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
+from app.models import User
 from app.schemas.ai_trading_manager import BrokerSnapshot
 from app.schemas.ai_settings import KiteMcpStatus
 from app.schemas.kite_mcp import (
@@ -24,6 +26,7 @@ from app.schemas.kite_mcp import (
 )
 from app.services.ai_trading_manager import audit_store
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source, set_ai_settings
+from app.services.kite_mcp.legacy_cache import hydrate_legacy_caches_from_kite_mcp_snapshot
 from app.services.kite_mcp.secrets import get_auth_session_id, set_auth_session_id, set_request_token
 from app.services.kite_mcp.session_manager import kite_mcp_sessions
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
@@ -433,10 +436,12 @@ async def kite_mcp_fetch_snapshot(
     account_id: str = "default",
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user: User | None = Depends(get_current_user_optional),
 ) -> BrokerSnapshot:
     _require_kite_mcp_enabled(db, settings)
     snap = await fetch_kite_mcp_snapshot(db, settings, account_id=account_id)
     audit_store.persist_broker_snapshot(db, snap, user_id=None)
+    legacy = hydrate_legacy_caches_from_kite_mcp_snapshot(db, snapshot=snap, user=user)
     record_system_event(
         db,
         level="INFO",
@@ -449,6 +454,7 @@ async def kite_mcp_fetch_snapshot(
             "holdings": len(snap.holdings),
             "positions": len(snap.positions),
             "orders": len(snap.orders),
+            "legacy_cache": legacy,
         },
     )
     return snap
