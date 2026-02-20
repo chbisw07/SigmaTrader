@@ -40,6 +40,7 @@ from app.services.ai.provider_keys import (
 from app.services.ai.provider_registry import ProviderInfo, get_provider, list_providers
 from app.services.ai.providers.base import ProviderAuthError, ProviderConfigError, ProviderError
 from app.services.ai.providers.factory import build_provider_client
+from app.services.ai.temperature import effective_temperature
 from app.services.system_events import record_system_event
 
 # ruff: noqa: B008  # FastAPI dependency injection pattern
@@ -457,7 +458,15 @@ def run_ai_test(
     try:
         client = build_provider_client(provider_id=info.id, api_key=api_key, base_url=base_url)
         try:
-            res = client.run_test(model=model, prompt=payload.prompt)
+            res = client.run_test(
+                model=model,
+                prompt=payload.prompt,
+                temperature=effective_temperature(
+                    provider_id=info.id,
+                    model=model,
+                    configured=getattr(cfg, "temperature", None),
+                ),
+            )
             latency_ms_for_audit = int(res.latency_ms)
         finally:
             close = getattr(client, "close", None)

@@ -60,6 +60,7 @@ async def openai_chat_with_tools(
     base_url: str = "https://api.openai.com/v1",
     timeout_seconds: float = 30,
     max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> OpenAiAssistantTurn:
     url = f"{base_url.rstrip('/')}/chat/completions"
     body: Dict[str, Any] = {
@@ -67,8 +68,9 @@ async def openai_chat_with_tools(
         "messages": messages,
         "tools": tools,
         "tool_choice": "auto",
-        "temperature": 0,
     }
+    if temperature is not None:
+        body["temperature"] = float(temperature)
     if max_tokens is not None:
         body["max_tokens"] = int(max_tokens)
     headers = {

@@ -96,9 +96,10 @@ def apply_config_update(
     update: AiActiveConfigUpdate,
 ) -> AiActiveConfig:
     base = existing.model_dump(mode="json")
-    patch = model_to_dict(update)
+    patch = model_to_dict(update, exclude_unset=True)
 
-    merged = {**base, **{k: v for k, v in patch.items() if v is not None}}
+    # Patch semantics: explicitly provided keys overwrite existing values (including null).
+    merged = {**base, **patch}
     if isinstance(patch.get("limits"), dict) and isinstance(base.get("limits"), dict):
         merged["limits"] = {**base["limits"], **{k: v for k, v in patch["limits"].items() if v is not None}}
 

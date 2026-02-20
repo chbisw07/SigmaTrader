@@ -50,6 +50,7 @@ class AiActiveConfig(BaseModel):
     provider: str = "openai"
     model: Optional[str] = None
     base_url: Optional[str] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
     active_key_id: Optional[int] = None
     do_not_send_pii: bool = True
     limits: AiLimits = Field(default_factory=AiLimits)
@@ -63,6 +64,7 @@ class AiActiveConfigUpdate(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     base_url: Optional[str] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
     active_key_id: Optional[int] = None
     do_not_send_pii: Optional[bool] = None
     limits: Optional[AiLimits] = None
@@ -119,4 +121,3 @@ __all__ = [
     "ModelEntry",
     "ProviderDescriptor",
 ]
-

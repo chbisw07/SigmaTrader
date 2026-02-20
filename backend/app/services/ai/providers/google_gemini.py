@@ -64,12 +64,15 @@ class GoogleGeminiClient:
         out.sort(key=lambda m: m.id)
         return out
 
-    def run_test(self, *, model: str, prompt: str) -> TestResult:
+    def run_test(self, *, model: str, prompt: str, temperature: float | None = None) -> TestResult:
         model_name = self._normalize_model_id(model)
         if not model_name:
             raise ProviderError("model is required.")
         url = self._url(f"/{model_name}:generateContent")
-        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+        body: Dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+        if temperature is not None:
+            # Gemini supports temperature under generationConfig.
+            body["generationConfig"] = {"temperature": float(temperature)}
 
         t0 = time.perf_counter()
         try:

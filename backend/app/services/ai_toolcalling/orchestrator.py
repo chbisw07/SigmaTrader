@@ -26,6 +26,7 @@ from app.schemas.ai_trading_manager import DecisionToolCall, Quote, TradeIntent
 from app.services.ai.provider_registry import get_provider
 from app.services.ai.active_config import get_active_config
 from app.services.ai.provider_keys import decrypt_key_value, get_key
+from app.services.ai.temperature import effective_temperature
 from app.services.ai_trading_manager import audit_store
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
 from app.services.ai_trading_manager.ai_settings_config import is_execution_hard_disabled
@@ -755,6 +756,11 @@ async def run_chat(
                 tools=openai_tools,
                 timeout_seconds=30,
                 max_tokens=ai_cfg.limits.max_tokens_per_request,
+                temperature=effective_temperature(
+                    provider_id=str(ai_cfg.provider),
+                    model=str(ai_cfg.model),
+                    configured=getattr(ai_cfg, "temperature", None),
+                ),
             )
         except OpenAiChatError as exc:
             final_text = f"AI provider error: {exc}"

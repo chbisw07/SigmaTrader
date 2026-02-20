@@ -23,6 +23,7 @@ export type AiActiveConfig = {
   provider: string
   model?: string | null
   base_url?: string | null
+  temperature?: number | null
   active_key_id?: number | null
   do_not_send_pii: boolean
   limits: {
@@ -38,6 +39,7 @@ export type AiActiveConfigUpdate = Partial<{
   provider: string
   model: string | null
   base_url: string | null
+  temperature: number | null
   active_key_id: number | null
   do_not_send_pii: boolean
   limits: AiActiveConfig['limits']
@@ -175,4 +177,3 @@ export async function runAiTest(payload: {
   }
   return (await res.json()) as { text: string; latency_ms: number; usage: any; raw_metadata: any }
 }
-

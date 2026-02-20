@@ -41,9 +41,11 @@ class OllamaClient:
         out.sort(key=lambda m: m.id)
         return out
 
-    def run_test(self, *, model: str, prompt: str) -> TestResult:
+    def run_test(self, *, model: str, prompt: str, temperature: float | None = None) -> TestResult:
         url = f"{self.base_url}/api/generate"
-        body = {"model": model, "prompt": prompt, "stream": False}
+        body: Dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
+        if temperature is not None:
+            body["options"] = {"temperature": float(temperature)}
         t0 = time.perf_counter()
         try:
             resp = self._client.post(

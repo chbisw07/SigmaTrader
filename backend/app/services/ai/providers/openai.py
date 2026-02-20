@@ -54,13 +54,14 @@ class OpenAIClient:
         out.sort(key=lambda m: m.id)
         return out
 
-    def run_test(self, *, model: str, prompt: str) -> TestResult:
+    def run_test(self, *, model: str, prompt: str, temperature: float | None = None) -> TestResult:
         url = f"{self.base_url}/chat/completions"
         body = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
         }
+        if temperature is not None:
+            body["temperature"] = float(temperature)
         t0 = time.perf_counter()
         try:
             resp = self._client.post(url, headers=self._headers(), json=body)

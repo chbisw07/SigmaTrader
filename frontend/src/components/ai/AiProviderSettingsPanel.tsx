@@ -478,6 +478,20 @@ export function AiProviderSettingsPanel() {
 
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <TextField
+            label="Temperature (0–2)"
+            type="number"
+            size="small"
+            value={cfg.temperature ?? ''}
+            onChange={(e) => {
+              const raw = e.target.value
+              const next = raw === '' ? null : Number(raw)
+              void patch({ temperature: raw === '' ? null : Number.isFinite(next) ? next : null } as any)
+            }}
+            helperText="Leave blank for Auto (recommended). Some models (e.g. gpt-5*) only support the default temperature."
+            sx={{ minWidth: 260, flex: 1 }}
+            inputProps={{ step: 0.1, min: 0, max: 2 }}
+          />
+          <TextField
             label="Max tokens / request"
             type="number"
             size="small"
