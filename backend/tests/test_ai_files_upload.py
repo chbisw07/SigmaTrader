@@ -71,3 +71,14 @@ def test_upload_xlsx_returns_summary() -> None:
     assert "Sheet1" in meta["summary"]["sheets"]
     assert meta["summary"]["columns"] == ["sym", "qty"]
     assert meta["summary"]["row_count"] == 2
+
+
+def test_upload_png_image_is_accepted() -> None:
+    # Minimal PNG header bytes; we don't parse it yet, just ensure upload works.
+    payload = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 64)
+    files = [("files", ("chart.png", payload, "image/png"))]
+    resp = client.post("/api/ai/files", files=files)
+    assert resp.status_code == 200
+    meta = resp.json()["files"][0]
+    assert meta["filename"] == "chart.png"
+    assert meta["summary"]["kind"] == "image"

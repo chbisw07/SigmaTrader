@@ -66,5 +66,26 @@ def download_ai_file(
     return FileResponse(path, filename=filename)
 
 
-__all__ = ["router"]
+@router.get("/files/{file_id}/raw")
+def view_ai_file_raw(
+    file_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+) -> FileResponse:
+    meta = get_file_meta(db, file_id=file_id, user_id=int(user.id))
+    if meta is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+    mime = (meta.mime or "").strip().lower()
+    if not mime.startswith("image/"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only image files can be viewed inline.")
+    res = get_file_path(db, file_id=file_id, user_id=int(user.id))
+    if res is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+    _filename, path = res
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing on disk.")
+    # Don't set filename => avoid Content-Disposition: attachment for inline display.
+    return FileResponse(path, media_type=mime)
 
+
+__all__ = ["router"]

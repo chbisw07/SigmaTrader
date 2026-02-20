@@ -7,6 +7,7 @@ import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import Alert from '@mui/material/Alert'
 import Accordion from '@mui/material/Accordion'
 import AccordionSummary from '@mui/material/AccordionSummary'
 import AccordionDetails from '@mui/material/AccordionDetails'
@@ -22,6 +23,12 @@ import Chip from '@mui/material/Chip'
 import AttachFileIcon from '@mui/icons-material/AttachFile'
 import IconButton from '@mui/material/IconButton'
 import Tooltip from '@mui/material/Tooltip'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import EditIcon from '@mui/icons-material/Edit'
+import FormatQuoteIcon from '@mui/icons-material/FormatQuote'
+import ReplayIcon from '@mui/icons-material/Replay'
+import ImageIcon from '@mui/icons-material/Image'
+import DescriptionIcon from '@mui/icons-material/Description'
 import FormControl from '@mui/material/FormControl'
 import MenuItem from '@mui/material/MenuItem'
 import Select from '@mui/material/Select'
@@ -48,14 +55,214 @@ import {
 import { AiCoveragePanel } from '../components/ai/AiCoveragePanel'
 import { AiJournalPanel } from '../components/ai/AiJournalPanel'
 
+type AttachmentRef = NonNullable<AiTmMessage['attachments']>[number]
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const raw = String(text ?? '')
+  try {
+    await navigator.clipboard.writeText(raw)
+    return true
+  } catch {
+    // Fallback for older browsers / denied permissions.
+    try {
+      const el = document.createElement('textarea')
+      el.value = raw
+      el.style.position = 'fixed'
+      el.style.left = '-9999px'
+      document.body.appendChild(el)
+      el.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(el)
+      return ok
+    } catch {
+      return false
+    }
+  }
+}
+
+function isImageLike(name: string, mime?: string | null): boolean {
+  const mt = (mime || '').toLowerCase()
+  if (mt.startsWith('image/')) return true
+  const ext = (name.split('.').pop() || '').toLowerCase()
+  return ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)
+}
+
+function formatBytes(n?: number | null): string {
+  const b = Number(n || 0)
+  if (!Number.isFinite(b) || b <= 0) return '0B'
+  if (b < 1024) return `${b}B`
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)}KB`
+  return `${(b / (1024 * 1024)).toFixed(1)}MB`
+}
+
+function cellText(node: Element | null): string {
+  const t = (node?.textContent ?? '').trim()
+  return t.replace(/\r?\n+/g, '<br>').replace(/\s+/g, ' ')
+}
+
+function escapeMdCell(text: string): string {
+  return text.replace(/\|/g, '\\|')
+}
+
+function tableToMarkdown(tableEl: HTMLTableElement): string {
+  const headRows = Array.from(tableEl.querySelectorAll('thead tr'))
+  const bodyRows = Array.from(tableEl.querySelectorAll('tbody tr'))
+  const allRows = headRows.length ? [...headRows, ...bodyRows] : Array.from(tableEl.querySelectorAll('tr'))
+
+  const grid = allRows.map((tr) => Array.from(tr.querySelectorAll('th,td')).map((c) => escapeMdCell(cellText(c))))
+  if (!grid.length) return ''
+
+  const colCount = Math.max(...grid.map((r) => r.length))
+  const norm = grid.map((r) => (r.length === colCount ? r : [...r, ...Array.from({ length: colCount - r.length }, () => '')]))
+
+  const header = headRows.length ? norm[0] : norm[0]
+  const body = headRows.length ? norm.slice(1) : norm.slice(1)
+
+  const headerLine = `| ${header.join(' | ')} |`
+  const sepLine = `| ${Array.from({ length: colCount }, () => '---').join(' | ')} |`
+  const bodyLines = body.map((r) => `| ${r.join(' | ')} |`)
+
+  return [headerLine, sepLine, ...bodyLines].join('\n')
+}
+
+function CopyableMarkdownTable({ children }: { children: any }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const doCopy = async () => {
+    const tableEl = wrapRef.current?.querySelector('table') as HTMLTableElement | null
+    if (!tableEl) return
+    const md = tableToMarkdown(tableEl)
+    if (!md) return
+    const ok = await copyTextToClipboard(md)
+    if (!ok) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <Box ref={wrapRef} sx={{ position: 'relative', my: 1 }}>
+      <Tooltip title={copied ? 'Copied' : 'Copy table as Markdown'}>
+        <IconButton
+          size="small"
+          onClick={() => void doCopy()}
+          sx={{
+            position: 'absolute',
+            right: 8,
+            top: 8,
+            bgcolor: 'background.paper',
+            border: 1,
+            borderColor: 'divider',
+            '&:hover': { bgcolor: 'action.hover' },
+            zIndex: 1,
+          }}
+        >
+          <ContentCopyIcon fontSize="inherit" />
+        </IconButton>
+      </Tooltip>
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">{children}</Table>
+      </TableContainer>
+    </Box>
+  )
+}
+
+function PendingAttachmentPill({
+  file,
+  attachmentRef,
+  onRemove,
+}: {
+  file?: File | null
+  attachmentRef?: AttachmentRef | null
+  onRemove: () => void
+}) {
+  const name = file?.name ?? attachmentRef?.filename ?? 'attachment'
+  const mime = file?.type ?? attachmentRef?.mime ?? null
+  const size = file?.size ?? attachmentRef?.size ?? null
+  const image = isImageLike(name, mime)
+
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!file || !image) {
+      setBlobUrl(null)
+      return
+    }
+    const mk = (URL as any)?.createObjectURL as ((f: Blob) => string) | undefined
+    const rv = (URL as any)?.revokeObjectURL as ((u: string) => void) | undefined
+    if (typeof mk !== 'function') return
+    const u = mk(file)
+    setBlobUrl(u)
+    return () => {
+      if (typeof rv === 'function') rv(u)
+    }
+  }, [file, image])
+
+  const inlineUrl = attachmentRef?.file_id && image ? `/api/ai/files/${encodeURIComponent(attachmentRef.file_id)}/raw` : null
+
+  return (
+    <Paper
+      variant="outlined"
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        px: 1,
+        py: 0.5,
+        borderRadius: 2,
+      }}
+    >
+      {image ? (
+        <Box
+          sx={{
+            width: 44,
+            height: 44,
+            borderRadius: 1,
+            overflow: 'hidden',
+            bgcolor: 'action.hover',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Box
+            component="img"
+            src={blobUrl || inlineUrl || undefined}
+            alt={name}
+            sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            onError={(e) => {
+              ;(e.currentTarget as any).style.display = 'none'
+            }}
+          />
+          {!blobUrl && !inlineUrl ? <ImageIcon fontSize="small" /> : null}
+        </Box>
+      ) : (
+        <DescriptionIcon fontSize="small" />
+      )}
+      <Box sx={{ minWidth: 120, maxWidth: 280 }}>
+        <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap title={name}>
+          {name}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" noWrap>
+          {mime || 'file'} • {formatBytes(size)}
+          {attachmentRef?.file_id ? ' • saved' : ''}
+        </Typography>
+      </Box>
+      <Box sx={{ flex: 1 }} />
+      <Tooltip title="Remove">
+        <IconButton size="small" onClick={onRemove}>
+          <Box component="span" sx={{ fontSize: 14, lineHeight: 1 }}>
+            ×
+          </Box>
+        </IconButton>
+      </Tooltip>
+    </Paper>
+  )
+}
+
 function MarkdownView({ text }: { text: string }) {
   const components = useMemo(
     () => ({
-      table: ({ children }: any) => (
-        <TableContainer component={Paper} variant="outlined" sx={{ my: 1 }}>
-          <Table size="small">{children}</Table>
-        </TableContainer>
-      ),
+      table: ({ children }: any) => <CopyableMarkdownTable>{children}</CopyableMarkdownTable>,
       thead: ({ children }: any) => <TableHead>{children}</TableHead>,
       tbody: ({ children }: any) => <TableBody>{children}</TableBody>,
       tr: ({ children }: any) => <TableRow>{children}</TableRow>,
@@ -215,16 +422,25 @@ function ExecutionSummary({ trace }: { trace: DecisionTrace }) {
 
 function MessageBubble({
   message,
+  canRetry,
+  onRetry,
+  onQuote,
+  onEdit,
   onLoadTrace,
   liveToolCalls,
 }: {
   message: AiTmMessage
+  canRetry: boolean
+  onRetry: () => void
+  onQuote: (m: AiTmMessage) => void
+  onEdit: (m: AiTmMessage) => void
   onLoadTrace: (decisionId: string) => Promise<DecisionTrace | null>
   liveToolCalls?: Array<Record<string, unknown>>
 }) {
   const isUser = message.role === 'user'
   const [trace, setTrace] = useState<DecisionTrace | null>(null)
   const [traceLoading, setTraceLoading] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const handleExpand = async (expanded: boolean) => {
     if (!expanded) return
@@ -236,6 +452,19 @@ function MessageBubble({
     } finally {
       setTraceLoading(false)
     }
+  }
+
+  const handleCopy = async () => {
+    const base = String(message.content ?? '')
+    const attachments = isUser && message.attachments?.length ? message.attachments : []
+    const md =
+      attachments.length > 0
+        ? `${base}\n\nAttachments:\n${attachments.map((a) => `- ${a.filename} (${a.mime || 'file'}, ${a.size} bytes)`).join('\n')}`
+        : base
+    const ok = await copyTextToClipboard(md)
+    if (!ok) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
   }
 
   return (
@@ -251,10 +480,38 @@ function MessageBubble({
         }}
       >
         <Stack spacing={0.5}>
-          <Typography variant="caption" color="text.secondary">
-            {isUser ? 'You' : 'Assistant'}
-            {message.decision_id ? ` • trace ${message.decision_id}` : ''}
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+            <Typography variant="caption" color="text.secondary">
+              {isUser ? 'You' : 'Assistant'}
+              {message.decision_id ? ` • trace ${message.decision_id}` : ''}
+            </Typography>
+            <Stack direction="row" spacing={0.25} alignItems="center">
+              {!isUser && canRetry ? (
+                <Tooltip title="Retry (resend last user message)">
+                  <IconButton size="small" onClick={onRetry}>
+                    <ReplayIcon fontSize="inherit" />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              <Tooltip title="Quote into prompt">
+                <IconButton size="small" onClick={() => onQuote(message)}>
+                  <FormatQuoteIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
+              {isUser ? (
+                <Tooltip title="Edit & resend">
+                  <IconButton size="small" onClick={() => onEdit(message)}>
+                    <EditIcon fontSize="inherit" />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              <Tooltip title={copied ? 'Copied' : 'Copy as Markdown'}>
+                <IconButton size="small" onClick={() => void handleCopy()}>
+                  <ContentCopyIcon fontSize="inherit" />
+                </IconButton>
+              </Tooltip>
+            </Stack>
+          </Stack>
           {isUser ? (
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
               {message.content}
@@ -265,9 +522,61 @@ function MessageBubble({
             </Box>
           )}
           {isUser && message.attachments?.length ? (
-            <Typography variant="caption" color="text.secondary">
-              Attachments: {message.attachments.map((a) => a.filename).join(', ')}
-            </Typography>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', pt: 0.25 }}>
+              {message.attachments.map((a) => {
+                const img = isImageLike(a.filename, a.mime)
+                const inlineUrl = img ? `/api/ai/files/${encodeURIComponent(a.file_id)}/raw` : null
+                return (
+                  <Paper
+                    key={a.file_id}
+                    variant="outlined"
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      px: 1,
+                      py: 0.5,
+                      borderRadius: 2,
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => window.open(`/api/ai/files/${encodeURIComponent(a.file_id)}/download`, '_blank')}
+                    title="Open attachment"
+                  >
+                    {img ? (
+                      <Box
+                        sx={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: 1,
+                          overflow: 'hidden',
+                          bgcolor: 'action.hover',
+                        }}
+                      >
+                        <Box
+                          component="img"
+                          src={inlineUrl || undefined}
+                          alt={a.filename}
+                          sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          onError={(e) => {
+                            ;(e.currentTarget as any).style.display = 'none'
+                          }}
+                        />
+                      </Box>
+                    ) : (
+                      <DescriptionIcon fontSize="small" />
+                    )}
+                    <Box sx={{ minWidth: 120, maxWidth: 300 }}>
+                      <Typography variant="caption" sx={{ fontWeight: 600 }} noWrap>
+                        {a.filename}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap>
+                        {a.mime || 'file'} • {formatBytes(a.size)}
+                      </Typography>
+                    </Box>
+                  </Paper>
+                )
+              })}
+            </Stack>
           ) : null}
 
           {message.decision_id && (
@@ -296,7 +605,24 @@ function MessageBubble({
                   {!trace && liveToolCalls?.length ? (
                     <Paper variant="outlined" sx={{ p: 1 }}>
                       <Typography variant="subtitle2">Tool calls (live)</Typography>
-                      <JsonBlock value={liveToolCalls} />
+                      <Table size="small" sx={{ mt: 0.5 }}>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Tool</TableCell>
+                            <TableCell>Status</TableCell>
+                            <TableCell>Duration</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {liveToolCalls.slice(-20).map((t: any, idx: number) => (
+                            <TableRow key={`${String(t?.name || 'tool')}-${idx}`}>
+                              <TableCell sx={{ fontFamily: 'monospace' }}>{String(t?.name || '—')}</TableCell>
+                              <TableCell>{String(t?.status || '—')}</TableCell>
+                              <TableCell>{t?.duration_ms != null ? `${t.duration_ms}ms` : '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
                     </Paper>
                   ) : null}
                   {traceLoading && (
@@ -313,7 +639,30 @@ function MessageBubble({
                   {trace?.tools_called?.length ? (
                     <Paper variant="outlined" sx={{ p: 1 }}>
                       <Typography variant="subtitle2">Tool calls</Typography>
-                      <Stack spacing={0.75} sx={{ mt: 0.5 }}>
+                      <Table size="small" sx={{ mt: 0.5 }}>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Tool</TableCell>
+                            <TableCell>Duration</TableCell>
+                            <TableCell>Payload</TableCell>
+                            <TableCell>Notes</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {trace.tools_called.map((t, idx) => (
+                            <TableRow key={`${t.tool_name}-${idx}`}>
+                              <TableCell sx={{ fontFamily: 'monospace' }}>{t.tool_name}</TableCell>
+                              <TableCell>{t.duration_ms != null ? `${t.duration_ms}ms` : '—'}</TableCell>
+                              <TableCell>
+                                {t.operator_payload_meta?.items_count ?? t.broker_raw_count ?? 0} items •{' '}
+                                {t.operator_payload_meta?.payload_bytes ?? 0} bytes
+                              </TableCell>
+                              <TableCell>{t.truncation_reason || '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      <Stack spacing={0.75} sx={{ mt: 1 }}>
                         {trace.tools_called.map((t, idx) => (
                           <Accordion
                             key={`${t.tool_name}-${idx}`}
@@ -395,8 +744,10 @@ export function AiTradingManagerPage() {
   const [liveToolCallsByDecision, setLiveToolCallsByDecision] = useState<Record<string, any[]>>({})
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [pendingAttachmentRefs, setPendingAttachmentRefs] = useState<AttachmentRef[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const promptRef = useRef<HTMLTextAreaElement | null>(null)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
@@ -453,8 +804,13 @@ export function AiTradingManagerPage() {
     setAutoscroll(atBottom)
   }
 
-  const handleSend = async () => {
-    const content = input.trim()
+  const sendMessage = async (opts: {
+    content: string
+    files?: File[]
+    attachmentRefs?: AttachmentRef[]
+    clearDraft?: boolean
+  }) => {
+    const content = opts.content.trim()
     if (!content || busy) return
     setBusy(true)
     setError(null)
@@ -462,9 +818,19 @@ export function AiTradingManagerPage() {
     const controller = new AbortController()
     abortRef.current = controller
     try {
+      const files = opts.files ?? pendingFiles
+      const refs = opts.attachmentRefs ?? pendingAttachmentRefs
       let uploaded: AiFileMeta[] = []
-      if (pendingFiles.length) {
-        uploaded = await uploadAiFiles(pendingFiles)
+      if (files.length) {
+        uploaded = await uploadAiFiles(files)
+      }
+
+      const attachmentRows: AttachmentRef[] = []
+      const seen = new Set<string>()
+      for (const a of [...uploaded.map((m) => ({ file_id: m.file_id, filename: m.filename, size: m.size, mime: m.mime })), ...refs]) {
+        if (!a?.file_id || seen.has(a.file_id)) continue
+        seen.add(a.file_id)
+        attachmentRows.push(a)
       }
 
       const localUserId = `local-${Date.now()}-u`
@@ -477,7 +843,7 @@ export function AiTradingManagerPage() {
           role: 'user',
           content,
           created_at: nowIso,
-          attachments: uploaded.map((m) => ({ file_id: m.file_id, filename: m.filename, size: m.size, mime: m.mime })),
+          attachments: attachmentRows,
         },
         {
           message_id: localAsstId,
@@ -510,7 +876,7 @@ export function AiTradingManagerPage() {
         thread_id: threadId,
         message: content,
         context: {},
-        attachments: uploaded.map((m) => ({ file_id: m.file_id, how: 'auto' })),
+        attachments: attachmentRows.map((a) => ({ file_id: a.file_id, how: 'auto' })),
         ui_context: { page: 'ai' },
         signal: controller.signal as any,
         onEvent,
@@ -518,8 +884,11 @@ export function AiTradingManagerPage() {
 
       await loadThreads()
       await loadThread()
-      setInput('')
-      setPendingFiles([])
+      if (opts.clearDraft !== false) {
+        setInput('')
+        setPendingFiles([])
+        setPendingAttachmentRefs([])
+      }
       setLiveToolCallsByDecision({})
       setAutoscroll(true)
     } catch (e) {
@@ -533,7 +902,37 @@ export function AiTradingManagerPage() {
     }
   }
 
+  const handleSend = async () => {
+    return sendMessage({ content: input, clearDraft: true })
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      if (busy) {
+        handleStop()
+      } else {
+        setInput('')
+        setPendingFiles([])
+        setPendingAttachmentRefs([])
+        setError(null)
+      }
+      return
+    }
+    if (e.key === 'ArrowUp' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !busy && !input.trim()) {
+      const ta = e.target as HTMLTextAreaElement
+      if (ta?.selectionStart === 0 && ta?.selectionEnd === 0) {
+        const last = [...messages].reverse().find((m) => m.role === 'user' && String(m.content || '').trim())
+        if (last) {
+          e.preventDefault()
+          setInput(last.content)
+          setPendingFiles([])
+          setPendingAttachmentRefs(last.attachments ?? [])
+          window.setTimeout(() => promptRef.current?.focus(), 0)
+        }
+      }
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void handleSend()
@@ -553,14 +952,66 @@ export function AiTradingManagerPage() {
   }
 
   const addFiles = (files: FileList | File[]) => {
-    const next = [...pendingFiles]
     const list: File[] = Array.isArray(files) ? files : Array.from(files)
-    for (const f of list) {
-      const ext = f.name.split('.').pop()?.toLowerCase()
-      if (ext !== 'csv' && ext !== 'xlsx') continue
-      next.push(f)
+    const rejected: string[] = []
+    setPendingFiles((prev) => {
+      const next = [...prev]
+      for (const f of list) {
+        const ext = f.name.split('.').pop()?.toLowerCase() || ''
+        const isCsv = ext === 'csv'
+        const isXlsx = ext === 'xlsx'
+        const isImage = (f.type || '').toLowerCase().startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(ext)
+        if (!isCsv && !isXlsx && !isImage) {
+          rejected.push(f.name || 'file')
+          continue
+        }
+        const key = `${f.name}:${f.size}:${f.lastModified}`
+        const exists = next.some((x) => `${x.name}:${x.size}:${x.lastModified}` === key)
+        if (!exists) next.push(f)
+      }
+      return next
+    })
+    if (rejected.length) {
+      setError(`Unsupported attachment(s): ${rejected.join(', ')}. Supported: .csv, .xlsx, images.`)
     }
-    setPendingFiles(next)
+  }
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const files: File[] = []
+    for (const it of items) {
+      if (it.kind !== 'file') continue
+      const f = it.getAsFile()
+      if (f) files.push(f)
+    }
+    if (files.length) addFiles(files)
+  }
+
+  const handleQuote = (m: AiTmMessage) => {
+    const raw = String(m.content || '').trim()
+    if (!raw) return
+    const block = `\n\n\`\`\`md\n${raw}\n\`\`\`\n`
+    setInput((prev) => (prev ? `${prev}${block}` : block.trimStart()))
+    window.setTimeout(() => promptRef.current?.focus(), 0)
+  }
+
+  const handleEdit = (m: AiTmMessage) => {
+    if (m.role !== 'user') return
+    setInput(String(m.content || ''))
+    setPendingFiles([])
+    setPendingAttachmentRefs(m.attachments ?? [])
+    window.setTimeout(() => promptRef.current?.focus(), 0)
+  }
+
+  const retryFromAssistantIndex = (idx: number) => {
+    for (let i = idx - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m?.role === 'user' && String(m.content || '').trim()) {
+        void sendMessage({ content: m.content, files: [], attachmentRefs: m.attachments ?? [], clearDraft: false })
+        return
+      }
+    }
+    setError('Nothing to retry.')
   }
 
   const setTab = (next: string, patch?: Record<string, string | null>) => {
@@ -679,14 +1130,23 @@ export function AiTradingManagerPage() {
               </Typography>
             ) : (
               <Stack spacing={1.25}>
-                {messages.map((m) => (
-                  <MessageBubble
-                    key={m.message_id}
-                    message={m}
-                    onLoadTrace={onLoadTrace}
-                    liveToolCalls={m.decision_id ? liveToolCallsByDecision[m.decision_id] : undefined}
-                  />
-                ))}
+                {messages.map((m, idx) => {
+                  const canRetry =
+                    m.role === 'assistant' &&
+                    messages.slice(0, idx).some((p) => p.role === 'user' && String(p.content || '').trim())
+                  return (
+                    <MessageBubble
+                      key={m.message_id}
+                      message={m}
+                      canRetry={canRetry}
+                      onRetry={() => retryFromAssistantIndex(idx)}
+                      onQuote={handleQuote}
+                      onEdit={handleEdit}
+                      onLoadTrace={onLoadTrace}
+                      liveToolCalls={m.decision_id ? liveToolCallsByDecision[m.decision_id] : undefined}
+                    />
+                  )
+                })}
               </Stack>
             )}
           </Paper>
@@ -725,16 +1185,17 @@ export function AiTradingManagerPage() {
         }}
       >
         <Stack spacing={1}>
+          {error && <Alert severity="error">{error}</Alert>}
           <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
             <Typography variant="caption" color="text.secondary">
-              Drag & drop CSV/XLSX here, or attach files.
+              Drag & drop files here, paste images (Ctrl+V), or attach.
             </Typography>
             <Stack direction="row" spacing={0.5} alignItems="center">
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".csv,.xlsx"
+                accept=".csv,.xlsx,image/*"
                 style={{ display: 'none' }}
                 onChange={(e) => {
                   if (e.target.files?.length) addFiles(e.target.files)
@@ -748,19 +1209,26 @@ export function AiTradingManagerPage() {
               </Tooltip>
             </Stack>
           </Stack>
-          {pendingFiles.length ? (
+          {pendingAttachmentRefs.length || pendingFiles.length ? (
             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+              {pendingAttachmentRefs.map((a) => (
+                <PendingAttachmentPill
+                  key={a.file_id}
+                  attachmentRef={a}
+                  onRemove={() => {
+                    if (busy) return
+                    setPendingAttachmentRefs((prev) => prev.filter((x) => x.file_id !== a.file_id))
+                  }}
+                />
+              ))}
               {pendingFiles.map((f, idx) => (
-                <Chip
+                <PendingAttachmentPill
                   key={`${f.name}-${idx}`}
-                  label={`${f.name} (${Math.round(f.size / 1024)}KB)`}
-                  onDelete={
-                    busy
-                      ? undefined
-                      : () => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))
-                  }
-                  size="small"
-                  variant="outlined"
+                  file={f}
+                  onRemove={() => {
+                    if (busy) return
+                    setPendingFiles((prev) => prev.filter((_, i) => i !== idx))
+                  }}
                 />
               ))}
             </Stack>
@@ -770,7 +1238,9 @@ export function AiTradingManagerPage() {
             placeholder="Ask about holdings, positions, margins…"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={handlePaste}
             onKeyDown={handleKeyDown}
+            inputRef={promptRef as any}
             multiline
             minRows={3}
             maxRows={10}

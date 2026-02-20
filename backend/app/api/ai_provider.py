@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 from typing import List
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -35,7 +37,7 @@ from app.services.ai.provider_keys import (
     list_keys,
     update_key,
 )
-from app.services.ai.provider_registry import get_provider, list_providers
+from app.services.ai.provider_registry import ProviderInfo, get_provider, list_providers
 from app.services.ai.providers.base import ProviderAuthError, ProviderConfigError, ProviderError
 from app.services.ai.providers.factory import build_provider_client
 from app.services.system_events import record_system_event
@@ -79,6 +81,102 @@ def _safe_prompt_audit(prompt: str, *, do_not_send_pii: bool) -> dict:
     if len(preview) > 120:
         preview = preview[:120] + "…"
     return {"prompt_hash": h, "prompt_len": len(p), "prompt_preview": preview}
+
+
+def _is_localhost_base_url(base_url: str | None) -> bool:
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    try:
+        host = urlparse(raw).hostname
+    except Exception:
+        return False
+    if not host:
+        return False
+    return host.lower() in {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_private_ip_base_url(base_url: str | None) -> bool:
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    try:
+        host = urlparse(raw).hostname
+    except Exception:
+        return False
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(ip.is_private or ip.is_link_local)
+
+
+def _enhance_provider_error(*, info: ProviderInfo, base_url: str | None, err: str) -> str:
+    msg = (err or "").strip() or "Provider error."
+    lower = msg.lower()
+
+    if info.kind != "local":
+        return msg
+
+    is_conn_refused = "connection refused" in lower or "failed to connect" in lower
+    is_timeout = "timed out" in lower or "timeout" in lower
+    is_localish = _is_localhost_base_url(base_url) or _is_private_ip_base_url(base_url)
+
+    if is_localish and (is_conn_refused or is_timeout):
+        network_hint = (
+            "Network troubleshooting:\n"
+            "- The Base URL is resolved by the SigmaTrader backend (not your browser).\n"
+            "- If SigmaTrader runs in Docker, localhost points to the container; try host.docker.internal (Docker Desktop) or your host IP.\n"
+            "- If SigmaTrader is deployed on a remote server, it cannot reach your home/office private IPs (e.g. 192.168.x.x) without a tunnel/VPN."
+        )
+        if info.id == "local_lmstudio":
+            curl_url = f"{(base_url or '').rstrip('/')}/models" if base_url else "http://localhost:1234/v1/models"
+            return (
+                f"{msg}\n\n"
+                "LM Studio troubleshooting:\n"
+                "- Ensure LM Studio's OpenAI-compatible server is running and a model is loaded.\n"
+                "- If you set Base URL to a LAN IP (e.g. 192.168.x.x), ensure LM Studio is listening on that interface (bind 0.0.0.0).\n"
+                f"- From the backend host, try: curl {curl_url}\n\n"
+                f"{network_hint}"
+            )
+        if info.id == "local_ollama":
+            curl_url = f"{(base_url or '').rstrip('/')}/api/tags" if base_url else "http://localhost:11434/api/tags"
+            return (
+                f"{msg}\n\n"
+                "Ollama troubleshooting:\n"
+                "- Ensure Ollama is running.\n"
+                f"- From the backend host, try: curl {curl_url}\n\n"
+                f"{network_hint}"
+            )
+        return f"{msg}\n\n{network_hint}"
+
+    if _is_localhost_base_url(base_url) and is_conn_refused:
+        if info.id == "local_lmstudio":
+            return (
+                f"{msg}\n\n"
+                "LM Studio troubleshooting:\n"
+                "- Ensure LM Studio's OpenAI-compatible server is running.\n"
+                "- From the same machine running the SigmaTrader backend, try: curl http://localhost:1234/v1/models\n"
+                "- If SigmaTrader runs in Docker, localhost points to the container; try http://host.docker.internal:1234/v1 (or your host IP)."
+            )
+        if info.id == "local_ollama":
+            return (
+                f"{msg}\n\n"
+                "Ollama troubleshooting:\n"
+                "- Ensure Ollama is running.\n"
+                "- From the same machine running the SigmaTrader backend, try: curl http://localhost:11434/api/tags\n"
+                "- If SigmaTrader runs in Docker, localhost points to the container; try http://host.docker.internal:11434 (or your host IP)."
+            )
+
+    if _is_localhost_base_url(base_url) and is_timeout:
+        return (
+            f"{msg}\n\n"
+            "If this is a local provider and SigmaTrader runs in Docker, localhost points to the container; use host.docker.internal (Docker Desktop) or your host IP."
+        )
+
+    return msg
 
 
 @router.get("/providers", response_model=List[ProviderDescriptor])
@@ -306,7 +404,10 @@ def discover_models(
     except ProviderConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProviderError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=_enhance_provider_error(info=info, base_url=base_url, err=str(exc)),
+        ) from exc
 
     return DiscoverModelsResponse(
         models=[
@@ -370,7 +471,10 @@ def run_ai_test(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProviderError as exc:
         status = "error"
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=_enhance_provider_error(info=info, base_url=base_url, err=str(exc)),
+        ) from exc
     finally:
         record_system_event(
             db,

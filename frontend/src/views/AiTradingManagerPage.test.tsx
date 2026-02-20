@@ -138,4 +138,37 @@ describe('AiTradingManagerPage', () => {
       }),
     )
   })
+
+  it('supports pasting an image into the prompt as an attachment', async () => {
+    render(
+      <MemoryRouter initialEntries={['/ai?tab=chat']}>
+        <AppThemeProvider>
+          <AiTradingManagerPage />
+        </AppThemeProvider>
+      </MemoryRouter>,
+    )
+
+    const img = new File(['fake'], 'chart.png', { type: 'image/png' })
+    fireEvent.paste(screen.getByLabelText('Message'), {
+      clipboardData: {
+        items: [
+          {
+            kind: 'file',
+            getAsFile: () => img,
+          },
+        ],
+      },
+    })
+
+    expect(await screen.findByText(/chart\.png/i)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Analyze this chart.' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    })
+
+    const mod = await import('../services/aiTradingManager')
+    await waitFor(() => expect(mod.uploadAiFiles).toHaveBeenCalled())
+    expect(mod.uploadAiFiles).toHaveBeenCalledWith([img])
+  })
 })

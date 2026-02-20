@@ -37,12 +37,16 @@ def _detect_kind(filename: str, content_type: str | None) -> str:
         return "csv"
     if ext in {"xlsx"}:
         return "xlsx"
+    if ext in {"png", "jpg", "jpeg", "webp", "gif"}:
+        return "image"
     # Content-type fallbacks
     ct = (content_type or "").lower()
     if "csv" in ct:
         return "csv"
     if "spreadsheetml" in ct or "excel" in ct:
         return "xlsx"
+    if ct.startswith("image/"):
+        return "image"
     return "unknown"
 
 
@@ -190,10 +194,10 @@ def create_file(
 ) -> AiFileMeta:
     filename = _safe_filename(upload.filename or "upload")
     kind = _detect_kind(filename, upload.content_type)
-    if kind not in {"csv", "xlsx"}:
+    if kind not in {"csv", "xlsx", "image"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Only .csv and .xlsx are supported.",
+            detail="Unsupported file type. Only .csv, .xlsx, and images are supported.",
         )
 
     root = _upload_root(settings) / f"user_{user_id}"
@@ -201,7 +205,7 @@ def create_file(
 
     file_id = uuid4().hex
     # Preserve extension for convenience.
-    ext = Path(filename).suffix.lower() or (".csv" if kind == "csv" else ".xlsx")
+    ext = Path(filename).suffix.lower() or (".csv" if kind == "csv" else ".xlsx" if kind == "xlsx" else ".png")
     storage_name = f"{file_id}{ext}"
     path = root / storage_name
 

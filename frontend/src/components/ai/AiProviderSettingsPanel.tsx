@@ -47,6 +47,42 @@ function canRunTest(cfg: AiActiveConfig, p?: ProviderDescriptor | null): { ok: b
   return { ok: true }
 }
 
+function hostnameFromUrl(raw: string | null | undefined): string | null {
+  const s = (raw ?? '').trim()
+  if (!s) return null
+  try {
+    return new URL(s).hostname
+  } catch {
+    const m = s.match(/\/\/([^/:?#]+)(?::\d+)?(?:[/?#]|$)/)
+    if (m?.[1]) return m[1].replace(/^\[|\]$/g, '')
+    return null
+  }
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const m = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!m) return false
+  const a = Number(m[1])
+  const b = Number(m[2])
+  const c = Number(m[3])
+  const d = Number(m[4])
+  if ([a, b, c, d].some((n) => Number.isNaN(n) || n < 0 || n > 255)) return false
+  if (a === 10) return true
+  if (a === 192 && b === 168) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 169 && b === 254) return true
+  // Carrier-grade NAT range (RFC 6598) - still not publicly routable.
+  if (a === 100 && b >= 64 && b <= 127) return true
+  return false
+}
+
+function isLocalNetworkUrl(raw: string | null | undefined): boolean {
+  const host = (hostnameFromUrl(raw) ?? '').toLowerCase()
+  if (!host) return false
+  if (['localhost', '127.0.0.1', '::1'].includes(host)) return true
+  return isPrivateIpv4(host)
+}
+
 export function AiProviderSettingsPanel() {
   const [providers, setProviders] = useState<ProviderDescriptor[]>([])
   const [cfg, setCfg] = useState<AiActiveConfig | null>(null)
@@ -74,6 +110,12 @@ export function AiProviderSettingsPanel() {
     if (!cfg) return null
     return providers.find((p) => p.id === cfg.provider) ?? null
   }, [providers, cfg])
+
+  const showLocalBaseUrlHint = useMemo(() => {
+    if (!cfg || !providerInfo?.supports_base_url || providerInfo.kind !== 'local') return false
+    const candidate = cfg.base_url ?? providerInfo.default_base_url ?? ''
+    return isLocalNetworkUrl(candidate)
+  }, [cfg, providerInfo])
 
   const load = async () => {
     setError(null)
@@ -320,15 +362,25 @@ export function AiProviderSettingsPanel() {
           </TextField>
 
           {providerInfo?.supports_base_url && (
-            <TextField
-              label="Base URL"
-              size="small"
-              value={cfg.base_url ?? ''}
-              onChange={(e) => setCfg((prev) => (prev ? { ...prev, base_url: e.target.value } : prev))}
-              onBlur={() => void patch({ base_url: cfg.base_url ?? null } as any)}
-              sx={{ minWidth: 320, flex: 1 }}
-              placeholder={providerInfo.default_base_url ?? ''}
-            />
+            <Box sx={{ minWidth: 320, flex: 1 }}>
+              <TextField
+                label="Base URL"
+                size="small"
+                value={cfg.base_url ?? ''}
+                onChange={(e) => setCfg((prev) => (prev ? { ...prev, base_url: e.target.value } : prev))}
+                onBlur={() => void patch({ base_url: cfg.base_url ?? null } as any)}
+                placeholder={providerInfo.default_base_url ?? ''}
+                fullWidth
+              />
+              {showLocalBaseUrlHint && (
+                <Typography variant="caption" color="text.secondary">
+                  Tip: Base URL is resolved by the SigmaTrader backend. If SigmaTrader runs in Docker, `localhost` /
+                  `192.168.x.x` refers to the container/LAN from the backend host. For Docker, try
+                  `http://host.docker.internal:1234/v1` (LM Studio) or `http://host.docker.internal:11434` (Ollama).
+                  If SigmaTrader is deployed remotely, it can’t reach your private IPs without a tunnel/VPN.
+                </Typography>
+              )}
+            </Box>
           )}
         </Stack>
 

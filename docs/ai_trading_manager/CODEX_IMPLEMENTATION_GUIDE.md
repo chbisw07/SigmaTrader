@@ -204,6 +204,12 @@ LM Studio:
 4. Fetch models
 5. Choose a model and Run Test
 
+Tip: Model discovery happens from the SigmaTrader backend. If SigmaTrader is running in Docker or on another machine,
+`localhost` refers to that backend host (not your laptop). Use a reachable base URL (e.g. `http://host.docker.internal:1234/v1`
+from Docker Desktop, or your host LAN IP) or run LM Studio on the same host as SigmaTrader. If you use a LAN IP (e.g.
+`http://192.168.x.x:1234/v1`), ensure LM Studio is listening on that interface (bind `0.0.0.0`) and your firewall allows
+port `1234`. A remotely deployed SigmaTrader server cannot reach your private IPs without a tunnel/VPN.
+
 Notes:
 * Kite MCP requires HTTP/2 multiplexing for the SSE stream + message POST endpoint to share a session. Backend includes `h2` to enable httpx HTTP/2 support.
   - If you see an error about missing `h2`, reinstall backend deps: `pip install -r backend/requirements.txt`.
