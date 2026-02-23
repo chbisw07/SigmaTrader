@@ -49,6 +49,8 @@ import type { Theme } from '@mui/material/styles'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
 import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
+import { useMarketTicksWs } from '../hooks/useMarketTicksWs'
+import { isMarketOpen } from '../utils/marketHours'
 import { useSensitiveVisibility } from '../utils/sensitiveVisibility'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
@@ -225,6 +227,12 @@ export function HoldingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [coverageCount, setCoverageCount] = useState<{ unmanaged_open: number; open_total: number } | null>(null)
 
+  const [marketOpenNow, setMarketOpenNow] = useState(() => isMarketOpen(new Date()))
+  useEffect(() => {
+    const id = window.setInterval(() => setMarketOpenNow(isMarketOpen(new Date())), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
+
   const [universeId, setUniverseId] = useState<string>('holdings')
   const [angeloneConnected, setAngeloneConnected] = useState(false)
   const [angeloneStatusLoaded, setAngeloneStatusLoaded] = useState(false)
@@ -310,6 +318,59 @@ export function HoldingsPage() {
       setCoverageCount(null)
     }
   }, [])
+
+  const liveTicksEnabled = useMemo(() => {
+    if (universeId !== 'holdings') return false
+    if (!marketOpenNow) return false
+    if (holdings.length === 0) return false
+    return true
+  }, [holdings.length, marketOpenNow, universeId])
+
+  const liveTicksSymbols = useMemo(
+    () => holdings.map((h) => ({ symbol: h.symbol, exchange: h.exchange })),
+    [holdings],
+  )
+
+  const {
+    connected: liveTicksConnected,
+    lastTickTs: liveTicksLastTickTs,
+    stale: liveTicksStale,
+    error: liveTicksError,
+  } = useMarketTicksWs({
+    enabled: liveTicksEnabled,
+    symbols: liveTicksSymbols,
+    flushMs: 1000,
+    staleMs: 10_000,
+    onFlush: (ticksByKey) => {
+      setHoldings((prev) => {
+        let changed = false
+        const next = prev.map((h) => {
+          const sym = (h.symbol || '').trim().toUpperCase()
+          const exch = (h.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+          const key = `${exch}:${sym}`
+          const t = ticksByKey.get(key)
+          if (!t) return h
+          const current = h.last_price != null ? Number(h.last_price) : null
+          if (current != null && Number.isFinite(current) && current === t.ltp) return h
+          changed = true
+          return { ...h, last_price: t.ltp }
+        })
+        return changed ? next : prev
+      })
+    },
+  })
+
+  const liveStatusLabel = useMemo(() => {
+    const liveOn = marketOpenNow && liveTicksConnected && universeId === 'holdings'
+    const ts = liveTicksLastTickTs ? new Date(liveTicksLastTickTs) : null
+    const timeLabel =
+      ts && Number.isFinite(ts.getTime())
+        ? ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : null
+    if (!liveOn) return { label: 'Live: OFF', color: 'default' as const, timeLabel }
+    if (liveTicksStale) return { label: 'Live: ON (stale)', color: 'warning' as const, timeLabel }
+    return { label: 'Live: ON', color: 'success' as const, timeLabel }
+  }, [liveTicksConnected, liveTicksLastTickTs, liveTicksStale, marketOpenNow, universeId])
 
   useEffect(() => {
     void loadCoverageCount()
@@ -7037,13 +7098,34 @@ export function HoldingsPage() {
           <MenuItem value="365">1Y</MenuItem>
           <MenuItem value="730">2Y</MenuItem>
         </Select>
-      </Box> */}
+	      </Box> */}
 
-      {error && (
-        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
-          {error}
-        </Typography>
-      )}
+	      {universeId === 'holdings' && (
+	        <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+	          <Chip
+	            size="small"
+	            variant="outlined"
+	            color={liveStatusLabel.color}
+	            label={liveStatusLabel.label}
+	          />
+	          {liveStatusLabel.timeLabel && (
+	            <Typography variant="caption" color="text.secondary">
+	              Last tick: {liveStatusLabel.timeLabel}
+	            </Typography>
+	          )}
+	          {liveTicksError && (
+	            <Typography variant="caption" color="error">
+	              {liveTicksError}
+	            </Typography>
+	          )}
+	        </Box>
+	      )}
+
+	      {error && (
+	        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
+	          {error}
+	        </Typography>
+	      )}
       {symbolCategoryError && (
         <Typography variant="body2" color="error" sx={{ mb: 1 }}>
           {symbolCategoryError}
