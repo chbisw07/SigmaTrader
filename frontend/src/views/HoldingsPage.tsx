@@ -351,9 +351,58 @@ export function HoldingsPage() {
           const t = ticksByKey.get(key)
           if (!t) return h
           const current = h.last_price != null ? Number(h.last_price) : null
-          if (current != null && Number.isFinite(current) && current === t.ltp) return h
+          const qty = h.quantity != null ? Number(h.quantity) : null
+          const avg = h.average_price != null ? Number(h.average_price) : null
+          const prevClose = t.prevClose != null ? Number(t.prevClose) : null
+
+          const nextPnl =
+            qty != null &&
+            avg != null &&
+            Number.isFinite(qty) &&
+            Number.isFinite(avg) &&
+            avg > 0
+              ? (t.ltp - avg) * qty
+              : null
+          const nextPnlPct =
+            qty != null &&
+            avg != null &&
+            Number.isFinite(qty) &&
+            Number.isFinite(avg) &&
+            avg > 0
+              ? (t.ltp / avg - 1) * 100
+              : null
+          const nextTodayPct =
+            prevClose != null && Number.isFinite(prevClose) && prevClose > 0
+              ? (t.ltp / prevClose - 1) * 100
+              : null
+
+          const maybeSameLtp =
+            current != null && Number.isFinite(current) && current === t.ltp
+          const maybeSameToday =
+            nextTodayPct == null ||
+            (h.today_pnl_percent != null &&
+              Number.isFinite(Number(h.today_pnl_percent)) &&
+              Number(h.today_pnl_percent) === nextTodayPct)
+          const maybeSamePnl =
+            nextPnl == null ||
+            (h.pnl != null &&
+              Number.isFinite(Number(h.pnl)) &&
+              Number(h.pnl) === nextPnl)
+          const maybeSamePnlPct =
+            nextPnlPct == null ||
+            (h.total_pnl_percent != null &&
+              Number.isFinite(Number(h.total_pnl_percent)) &&
+              Number(h.total_pnl_percent) === nextPnlPct)
+
+          if (maybeSameLtp && maybeSameToday && maybeSamePnl && maybeSamePnlPct) return h
           changed = true
-          return { ...h, last_price: t.ltp }
+          return {
+            ...h,
+            last_price: t.ltp,
+            pnl: nextPnl ?? h.pnl ?? null,
+            total_pnl_percent: nextPnlPct ?? h.total_pnl_percent ?? null,
+            today_pnl_percent: nextTodayPct ?? h.today_pnl_percent ?? null,
+          }
         })
         return changed ? next : prev
       })
