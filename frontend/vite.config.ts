@@ -22,8 +22,13 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/ws': {
+        target: 'ws://localhost:8000',
+        ws: true,
+        changeOrigin: true,
+      },
     },
-	host: '127.0.0.1',
-	port: 5173,
+    host: '127.0.0.1',
+    port: 5173,
   },
 })
