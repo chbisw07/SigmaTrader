@@ -421,6 +421,8 @@ export function HoldingsPage() {
     return { label: 'Live: ON', color: 'success' as const, timeLabel }
   }, [liveTicksConnected, liveTicksLastTickTs, liveTicksStale, marketOpenNow, universeId])
 
+  const liveOn = universeId === 'holdings' && marketOpenNow && liveTicksConnected
+
   useEffect(() => {
     void loadCoverageCount()
   }, [loadCoverageCount])
@@ -526,6 +528,42 @@ export function HoldingsPage() {
   const [chartPeriodDays, setChartPeriodDays] = useState<number>(30)
 
   const [viewId, setViewId] = useState<HoldingsViewId>('default')
+  const lastProgrammaticSortFieldRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (universeId !== 'holdings') return
+    if (viewId !== 'default') return
+    const api = gridApiRef.current
+    const setSortModel = (api as unknown as { setSortModel?: (m: any) => void }).setSortModel
+    if (!setSortModel) return
+
+    const desiredField = liveOn ? 'today_pnl_percent' : 'total_pnl_percent'
+    const currentModel = (
+      (api as unknown as { state?: any })?.state?.sorting?.sortModel ?? []
+    ) as Array<{ field?: string; sort?: 'asc' | 'desc' }>
+    const currentField = currentModel?.[0]?.field ?? null
+    const currentSort = currentModel?.[0]?.sort ?? null
+
+    // If the user has changed sort away from the last auto-set field, do not override it.
+    const lastAuto = lastProgrammaticSortFieldRef.current
+    const userHasCustomSort =
+      currentField != null && lastAuto != null && currentField !== lastAuto
+    if (userHasCustomSort) return
+
+    const desiredSort: Array<{ field: string; sort: 'desc' }> = [
+      { field: desiredField, sort: 'desc' },
+    ]
+    const alreadyDesired = currentField === desiredField && currentSort === 'desc'
+    if (alreadyDesired) {
+      lastProgrammaticSortFieldRef.current = desiredField
+      return
+    }
+
+    // Only auto-apply when no sort is set, or when the current sort matches the previous auto sort.
+    if (currentField == null || currentField === lastAuto) {
+      setSortModel(desiredSort)
+      lastProgrammaticSortFieldRef.current = desiredField
+    }
+  }, [gridApiRef, liveOn, universeId, viewId])
   const { visible: showMoneyValues, toggle: toggleShowMoneyValues } = useSensitiveVisibility(
     'privacy.show_money',
     false,
@@ -4320,7 +4358,7 @@ export function HoldingsPage() {
     },
     {
       field: 'last_price',
-      headerName: 'Last Price',
+      headerName: 'LTP',
       type: 'number',
       width: 130,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
@@ -4848,12 +4886,12 @@ export function HoldingsPage() {
     },
     {
       field: 'pnl',
-      headerName: 'Unrealized P&L',
+      headerName: 'P&L ₹',
       type: 'number',
       width: 150,
       renderHeader: () => (
         <SensitiveToggle
-          label="Unrealized P&L"
+          label="P&L ₹"
           visible={showMoneyValues}
           onToggle={toggleShowMoneyValues}
           ariaLabel={showMoneyValues ? 'Hide money values' : 'Show money values'}
@@ -4936,7 +4974,7 @@ export function HoldingsPage() {
     },
     {
       field: 'today_pnl_percent',
-      headerName: 'Today P&L %',
+      headerName: 'Day %',
       type: 'number',
       width: 130,
       valueFormatter: (value) => (value != null ? `${Number(value).toFixed(2)}%` : '-'),
@@ -5087,7 +5125,7 @@ export function HoldingsPage() {
 
     const universeKey = encodeURIComponent(universeId)
     const viewKey = encodeURIComponent(viewId)
-    const visibilityKeyVersion = viewId === 'default' ? 'v3' : 'v2'
+    const visibilityKeyVersion = viewId === 'default' ? 'v4' : 'v2'
     const perUniverseKeyV2 = `st_holdings_column_visibility_${viewKey}_${universeKey}_${visibilityKeyVersion}`
     const globalKeyV2 = `st_holdings_column_visibility_${viewKey}_${visibilityKeyVersion}`
 
@@ -5119,15 +5157,15 @@ export function HoldingsPage() {
     const defaultModel: GridColumnVisibilityModel = buildShowOnlyModel(
       [
         'symbol',
-        'risk_category',
-        'chart',
+        'quantity',
         'average_price',
         'last_price',
+        'today_pnl_percent',
+        'total_pnl_percent',
+        'pnl',
         'invested',
         'current_value',
         'weight',
-        'total_pnl_percent',
-        'today_pnl_percent',
         'alerts',
         'actions',
       ],
@@ -5278,7 +5316,7 @@ export function HoldingsPage() {
       try {
         const universeKey = encodeURIComponent(universeId)
         const viewKey = encodeURIComponent(viewId)
-        const visibilityKeyVersion = viewId === 'default' ? 'v3' : 'v2'
+        const visibilityKeyVersion = viewId === 'default' ? 'v4' : 'v2'
         const perUniverseKey = `st_holdings_column_visibility_${viewKey}_${universeKey}_${visibilityKeyVersion}`
         const globalKey = `st_holdings_column_visibility_${viewKey}_${visibilityKeyVersion}`
         window.localStorage.setItem(perUniverseKey, JSON.stringify(model))
@@ -6124,19 +6162,27 @@ export function HoldingsPage() {
                 >
                   View settings
                 </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => {
-                    if (!hasLoadedOnce) {
-                      void load()
-                      return
-                    }
-                    void refreshHoldingsInPlace('manual')
-                  }}
+                <Tooltip
+                  title={
+                    liveOn
+                      ? 'Fetch a holdings snapshot (qty/avg/last). Live ticks keep updating LTP.'
+                      : 'Fetch a holdings snapshot (qty/avg/last).'
+                  }
                 >
-                  Refresh now
-                </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      if (!hasLoadedOnce) {
+                        void load()
+                        return
+                      }
+                      void refreshHoldingsInPlace('manual')
+                    }}
+                  >
+                    Fetch snapshot
+                  </Button>
+                </Tooltip>
                 <Box
                   sx={{
                     flex: '1 1 240px',
