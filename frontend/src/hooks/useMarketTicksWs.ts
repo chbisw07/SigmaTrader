@@ -80,6 +80,7 @@ export function useMarketTicksWs(opts: {
 
   const wsRef = useRef<WebSocket | null>(null)
   const ticksRef = useRef<Map<string, MarketTick>>(new Map())
+  const connectedAtMsRef = useRef<number | null>(null)
 
   const sendSubscribe = useCallback(() => {
     const ws = wsRef.current
@@ -113,10 +114,12 @@ export function useMarketTicksWs(opts: {
 
     ws.onopen = () => {
       setConnected(true)
+      connectedAtMsRef.current = Date.now()
       sendSubscribe()
     }
     ws.onclose = () => {
       setConnected(false)
+      connectedAtMsRef.current = null
     }
     ws.onerror = () => {
       setError('Live ticks websocket error')
@@ -157,6 +160,7 @@ export function useMarketTicksWs(opts: {
         // ignore
       }
       setConnected(false)
+      connectedAtMsRef.current = null
     }
   }, [enabled, sendSubscribe])
 
@@ -173,8 +177,12 @@ export function useMarketTicksWs(opts: {
     return () => window.clearInterval(id)
   }, [enabled, flushMs, lastTickTs])
 
-  const stale =
-    connected && lastMessageAtMs != null ? Date.now() - lastMessageAtMs > staleMs : false
+  const stale = useMemo(() => {
+    if (!connected) return false
+    const base = lastMessageAtMs ?? connectedAtMsRef.current
+    if (base == null) return true
+    return Date.now() - base > staleMs
+  }, [connected, lastMessageAtMs, staleMs])
 
   return { connected, lastTickTs, lastMessageAtMs, stale, error }
 }

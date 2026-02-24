@@ -4,7 +4,7 @@ import asyncio
 import base64
 import os
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import APIRouter, WebSocket
 from sqlalchemy.orm import Session
@@ -17,6 +17,8 @@ from app.models import BrokerConnection, User
 from app.services.broker_secrets import get_broker_secret
 
 router = APIRouter()
+
+T = TypeVar("T")
 
 
 def _now_ist_iso() -> str:
@@ -135,6 +137,12 @@ def _normalize_subscription(payload: Any) -> list[tuple[str, str]]:
     return uniq[:300]
 
 
+def _chunked(items: list[T], *, size: int) -> list[list[T]]:
+    if size <= 0:
+        return [items]
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
 @router.websocket("/ws/market/ticks")
 async def market_ticks_ws(websocket: WebSocket) -> None:
     """Best-effort 1s quote stream for holdings live prices.
@@ -170,6 +178,8 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
                 subscribed = sub
 
     async def _send_loop() -> None:
+        last_error_sent_at: float | None = None
+        consecutive_failures = 0
         while True:
             await asyncio.sleep(1.0)
             async with lock:
@@ -188,7 +198,31 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
                     mapped.append(mapped_key)
                     back[mapped_key] = (exch, sym)
 
-                quotes = client.get_quote_bulk(mapped)
+                quotes: dict[tuple[str, str], dict[str, float | None]] = {}
+                errors: list[str] = []
+
+                # Fetch quotes in batches so that a single bad instrument does not
+                # prevent all holdings from getting updates.
+                for batch in _chunked(mapped, size=50):
+                    try:
+                        quotes.update(client.get_quote_bulk(batch))
+                    except Exception as exc:
+                        # Fall back to LTP for the batch. If that also fails, do
+                        # per-instrument to keep partial progress.
+                        errors.append(str(exc))
+                        try:
+                            quotes.update(client.get_ltp_bulk(batch))
+                        except Exception as exc2:
+                            errors.append(str(exc2))
+                            for exch, broker_sym in batch:
+                                try:
+                                    ltp = client.get_ltp(exchange=exch, tradingsymbol=broker_sym)
+                                except Exception:
+                                    continue
+                                quotes[(exch, broker_sym)] = {
+                                    "last_price": float(ltp),
+                                    "prev_close": None,
+                                }
                 rows: list[dict[str, Any]] = []
                 for mapped_key, q in quotes.items():
                     orig = back.get(mapped_key)
@@ -215,8 +249,29 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
                             "prevClose": prev_f,
                         }
                     )
-            except Exception:
-                # Avoid killing the socket on transient broker errors.
+                consecutive_failures = 0
+                if errors:
+                    # Best-effort signal that some instruments could not be quoted.
+                    # Throttle to avoid spamming the UI.
+                    now = asyncio.get_running_loop().time()
+                    if last_error_sent_at is None or now - last_error_sent_at > 10.0:
+                        last_error_sent_at = now
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "error": "Some live quotes failed; showing partial updates.",
+                            }
+                        )
+            except Exception as exc:
+                # Avoid killing the socket on transient broker errors, but
+                # surface persistent failures to the UI.
+                consecutive_failures += 1
+                now = asyncio.get_running_loop().time()
+                if consecutive_failures >= 3 and (
+                    last_error_sent_at is None or now - last_error_sent_at > 10.0
+                ):
+                    last_error_sent_at = now
+                    await websocket.send_json({"type": "error", "error": str(exc)})
                 continue
 
             if rows:

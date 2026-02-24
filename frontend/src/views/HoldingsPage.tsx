@@ -49,7 +49,7 @@ import type { Theme } from '@mui/material/styles'
 
 import { UniverseGrid } from '../components/UniverseGrid/UniverseGrid'
 import { getPaginatedRowNumber } from '../components/UniverseGrid/getPaginatedRowNumber'
-import { useMarketTicksWs } from '../hooks/useMarketTicksWs'
+import { useMarketTicksWs, type MarketTick } from '../hooks/useMarketTicksWs'
 import { isMarketOpen } from '../utils/marketHours'
 import { useSensitiveVisibility } from '../utils/sensitiveVisibility'
 import VisibilityIcon from '@mui/icons-material/Visibility'
@@ -330,6 +330,134 @@ export function HoldingsPage() {
     () => holdings.map((h) => ({ symbol: h.symbol, exchange: h.exchange })),
     [holdings],
   )
+  const liveTicksSymbolsRef = useRef(liveTicksSymbols)
+  liveTicksSymbolsRef.current = liveTicksSymbols
+  const liveTicksSymbolsKey = useMemo(() => {
+    const keys: string[] = []
+    for (const it of liveTicksSymbols) {
+      const sym = (it.symbol || '').trim().toUpperCase()
+      if (!sym) continue
+      const exch = (it.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+      keys.push(`${exch}:${sym}`)
+    }
+    return keys.join('|')
+  }, [liveTicksSymbols])
+
+  const livePulseByKeyRef = useRef<Map<string, { dir: 'up' | 'down'; at: number }>>(new Map())
+  const [, bumpLivePulseNonce] = useState(0)
+
+  const upsertLivePulses = useCallback((updates: Array<{ key: string; dir: 'up' | 'down' }>) => {
+    if (!updates.length) return
+    const now = Date.now()
+    const pulses = livePulseByKeyRef.current
+    for (const u of updates) pulses.set(u.key, { dir: u.dir, at: now })
+    bumpLivePulseNonce((n) => n + 1)
+  }, [])
+
+  const applyMarketTicks = useCallback((ticksByKey: Map<string, MarketTick>) => {
+    const pulseUpdates: Array<{ key: string; dir: 'up' | 'down' }> = []
+    setHoldings((prev) => {
+      let changed = false
+      const next = prev.map((h) => {
+        const sym = (h.symbol || '').trim().toUpperCase()
+        const exch = (h.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+        const key = `${exch}:${sym}`
+        const t = ticksByKey.get(key)
+        if (!t) return h
+        const current = h.last_price != null ? Number(h.last_price) : null
+        const qty = h.quantity != null ? Number(h.quantity) : null
+        const avg = h.average_price != null ? Number(h.average_price) : null
+        const prevClose = t.prevClose != null ? Number(t.prevClose) : null
+
+        const nextPnl =
+          qty != null &&
+          avg != null &&
+          Number.isFinite(qty) &&
+          Number.isFinite(avg) &&
+          avg > 0
+            ? (t.ltp - avg) * qty
+            : null
+        const nextPnlPct =
+          qty != null &&
+          avg != null &&
+          Number.isFinite(qty) &&
+          Number.isFinite(avg) &&
+          avg > 0
+            ? (t.ltp / avg - 1) * 100
+            : null
+        const nextTodayPct =
+          prevClose != null && Number.isFinite(prevClose) && prevClose > 0
+            ? (t.ltp / prevClose - 1) * 100
+            : null
+
+        const maybeSameLtp =
+          current != null && Number.isFinite(current) && current === t.ltp
+        const maybeSameToday =
+          nextTodayPct == null ||
+          (h.today_pnl_percent != null &&
+            Number.isFinite(Number(h.today_pnl_percent)) &&
+            Number(h.today_pnl_percent) === nextTodayPct)
+        const maybeSamePnl =
+          nextPnl == null ||
+          (h.pnl != null && Number.isFinite(Number(h.pnl)) && Number(h.pnl) === nextPnl)
+        const maybeSamePnlPct =
+          nextPnlPct == null ||
+          (h.total_pnl_percent != null &&
+            Number.isFinite(Number(h.total_pnl_percent)) &&
+            Number(h.total_pnl_percent) === nextPnlPct)
+
+        if (maybeSameLtp && maybeSameToday && maybeSamePnl && maybeSamePnlPct) return h
+
+        if (
+          current != null &&
+          Number.isFinite(current) &&
+          current > 0 &&
+          Number.isFinite(t.ltp) &&
+          t.ltp > 0 &&
+          t.ltp !== current
+        ) {
+          pulseUpdates.push({ key, dir: t.ltp > current ? 'up' : 'down' })
+        }
+
+        changed = true
+        return {
+          ...h,
+          last_price: t.ltp,
+          pnl: nextPnl ?? h.pnl ?? null,
+          total_pnl_percent: nextPnlPct ?? h.total_pnl_percent ?? null,
+          today_pnl_percent: nextTodayPct ?? h.today_pnl_percent ?? null,
+        }
+      })
+      return changed ? next : prev
+    })
+    upsertLivePulses(pulseUpdates)
+  }, [upsertLivePulses])
+
+  useEffect(() => {
+    const ttlMs = 900
+    const id = window.setInterval(() => {
+      const now = Date.now()
+      const pulses = livePulseByKeyRef.current
+      let changed = false
+      for (const [k, v] of pulses) {
+        if (now - v.at > ttlMs) {
+          pulses.delete(k)
+          changed = true
+        }
+      }
+      if (changed) bumpLivePulseNonce((n) => n + 1)
+    }, 200)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const getLivePulseClassName = useCallback((row: HoldingRow) => {
+    const sym = (row.symbol || '').trim().toUpperCase()
+    if (!sym) return ''
+    const exch = (row.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+    const pulse = livePulseByKeyRef.current.get(`${exch}:${sym}`)
+    if (!pulse) return ''
+    return pulse.dir === 'up' ? 'st-flash-up' : 'st-flash-down'
+  }, [])
 
   const {
     connected: liveTicksConnected,
@@ -342,72 +470,61 @@ export function HoldingsPage() {
     flushMs: 1000,
     staleMs: 10_000,
     onFlush: (ticksByKey) => {
-      setHoldings((prev) => {
-        let changed = false
-        const next = prev.map((h) => {
-          const sym = (h.symbol || '').trim().toUpperCase()
-          const exch = (h.exchange || 'NSE').trim().toUpperCase() || 'NSE'
-          const key = `${exch}:${sym}`
-          const t = ticksByKey.get(key)
-          if (!t) return h
-          const current = h.last_price != null ? Number(h.last_price) : null
-          const qty = h.quantity != null ? Number(h.quantity) : null
-          const avg = h.average_price != null ? Number(h.average_price) : null
-          const prevClose = t.prevClose != null ? Number(t.prevClose) : null
-
-          const nextPnl =
-            qty != null &&
-            avg != null &&
-            Number.isFinite(qty) &&
-            Number.isFinite(avg) &&
-            avg > 0
-              ? (t.ltp - avg) * qty
-              : null
-          const nextPnlPct =
-            qty != null &&
-            avg != null &&
-            Number.isFinite(qty) &&
-            Number.isFinite(avg) &&
-            avg > 0
-              ? (t.ltp / avg - 1) * 100
-              : null
-          const nextTodayPct =
-            prevClose != null && Number.isFinite(prevClose) && prevClose > 0
-              ? (t.ltp / prevClose - 1) * 100
-              : null
-
-          const maybeSameLtp =
-            current != null && Number.isFinite(current) && current === t.ltp
-          const maybeSameToday =
-            nextTodayPct == null ||
-            (h.today_pnl_percent != null &&
-              Number.isFinite(Number(h.today_pnl_percent)) &&
-              Number(h.today_pnl_percent) === nextTodayPct)
-          const maybeSamePnl =
-            nextPnl == null ||
-            (h.pnl != null &&
-              Number.isFinite(Number(h.pnl)) &&
-              Number(h.pnl) === nextPnl)
-          const maybeSamePnlPct =
-            nextPnlPct == null ||
-            (h.total_pnl_percent != null &&
-              Number.isFinite(Number(h.total_pnl_percent)) &&
-              Number(h.total_pnl_percent) === nextPnlPct)
-
-          if (maybeSameLtp && maybeSameToday && maybeSamePnl && maybeSamePnlPct) return h
-          changed = true
-          return {
-            ...h,
-            last_price: t.ltp,
-            pnl: nextPnl ?? h.pnl ?? null,
-            total_pnl_percent: nextPnlPct ?? h.total_pnl_percent ?? null,
-            today_pnl_percent: nextTodayPct ?? h.today_pnl_percent ?? null,
-          }
-        })
-        return changed ? next : prev
-      })
+      applyMarketTicks(ticksByKey)
     },
   })
+
+  const [liveFallbackLastUpdateAtMs, setLiveFallbackLastUpdateAtMs] = useState<number | null>(null)
+  const [liveFallbackError, setLiveFallbackError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!liveTicksEnabled || !liveTicksConnected || !liveTicksStale) {
+      setLiveFallbackLastUpdateAtMs(null)
+      setLiveFallbackError(null)
+      return
+    }
+    if (!liveTicksSymbolsKey) return
+
+    let cancelled = false
+    const pollOnce = async () => {
+      try {
+        const quotes = await fetchMarketQuotes(liveTicksSymbolsRef.current)
+        if (cancelled) return
+        const ticks = new Map<string, MarketTick>()
+        for (const q of quotes) {
+          const sym = (q.symbol || '').trim().toUpperCase()
+          if (!sym) continue
+          const exch = (q.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+          const ltp = q.ltp != null ? Number(q.ltp) : null
+          if (ltp == null || !Number.isFinite(ltp) || ltp <= 0) continue
+          const prevClose =
+            q.prev_close != null && Number.isFinite(Number(q.prev_close))
+              ? Number(q.prev_close)
+              : null
+          ticks.set(`${exch}:${sym}`, { exchange: exch, symbol: sym, ltp, prevClose })
+        }
+        applyMarketTicks(ticks)
+        setLiveFallbackLastUpdateAtMs(Date.now())
+        setLiveFallbackError(null)
+      } catch (err) {
+        if (cancelled) return
+        setLiveFallbackError(err instanceof Error ? err.message : 'Fallback quotes failed')
+      }
+    }
+
+    void pollOnce()
+    const id = window.setInterval(() => void pollOnce(), 5_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [
+    applyMarketTicks,
+    liveTicksConnected,
+    liveTicksEnabled,
+    liveTicksStale,
+    liveTicksSymbolsKey,
+  ])
 
   const liveStatusLabel = useMemo(() => {
     const liveOn = marketOpenNow && liveTicksConnected && universeId === 'holdings'
@@ -417,9 +534,30 @@ export function HoldingsPage() {
         ? ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
         : null
     if (!liveOn) return { label: 'Live: OFF', color: 'default' as const, timeLabel }
-    if (liveTicksStale) return { label: 'Live: ON (stale)', color: 'warning' as const, timeLabel }
+    const fallbackFresh =
+      liveFallbackLastUpdateAtMs != null && Date.now() - liveFallbackLastUpdateAtMs < 12_000
+    if (liveTicksStale && !fallbackFresh) {
+      return { label: 'Live: ON (stale)', color: 'warning' as const, timeLabel }
+    }
+    if (liveTicksStale && fallbackFresh) {
+      return { label: 'Live: ON (fallback)', color: 'warning' as const, timeLabel }
+    }
     return { label: 'Live: ON', color: 'success' as const, timeLabel }
-  }, [liveTicksConnected, liveTicksLastTickTs, liveTicksStale, marketOpenNow, universeId])
+  }, [
+    liveFallbackLastUpdateAtMs,
+    liveTicksConnected,
+    liveTicksLastTickTs,
+    liveTicksStale,
+    marketOpenNow,
+    universeId,
+  ])
+
+  const liveFallbackTimeLabel = useMemo(() => {
+    if (liveFallbackLastUpdateAtMs == null) return null
+    const ts = new Date(liveFallbackLastUpdateAtMs)
+    if (!Number.isFinite(ts.getTime())) return null
+    return ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  }, [liveFallbackLastUpdateAtMs])
 
   const liveOn = universeId === 'holdings' && marketOpenNow && liveTicksConnected
 
@@ -4362,6 +4500,7 @@ export function HoldingsPage() {
       type: 'number',
       width: 130,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
+      cellClassName: (params: GridCellParams) => getLivePulseClassName(params.row as HoldingRow),
     },
     {
       field: 'gap_pct',
@@ -4508,6 +4647,7 @@ export function HoldingsPage() {
         ) : (
           <span>₹••••</span>
         ),
+      cellClassName: (params: GridCellParams) => getLivePulseClassName(params.row as HoldingRow),
     },
     {
       field: 'weight',
@@ -5347,6 +5487,38 @@ export function HoldingsPage() {
 
   const gridSx = useMemo(
     () => ({
+      '@keyframes stFlashUp': {
+        '0%': {
+          backgroundColor: (theme: Theme) =>
+            theme.palette.mode === 'dark'
+              ? 'rgba(46, 125, 50, 0.25)'
+              : 'rgba(46, 125, 50, 0.18)',
+          color: (theme: Theme) => theme.palette.success.main,
+        },
+        '100%': {
+          backgroundColor: 'transparent',
+          color: 'inherit',
+        },
+      },
+      '@keyframes stFlashDown': {
+        '0%': {
+          backgroundColor: (theme: Theme) =>
+            theme.palette.mode === 'dark'
+              ? 'rgba(211, 47, 47, 0.22)'
+              : 'rgba(211, 47, 47, 0.14)',
+          color: (theme: Theme) => theme.palette.error.main,
+        },
+        '100%': {
+          backgroundColor: 'transparent',
+          color: 'inherit',
+        },
+      },
+      '& .st-flash-up': {
+        animation: 'stFlashUp 900ms ease-out',
+      },
+      '& .st-flash-down': {
+        animation: 'stFlashDown 900ms ease-out',
+      },
       '& .pnl-negative': {
         color: 'error.main',
       },
@@ -7203,18 +7375,28 @@ export function HoldingsPage() {
 	            color={liveStatusLabel.color}
 	            label={liveStatusLabel.label}
 	          />
-	          {liveStatusLabel.timeLabel && (
-	            <Typography variant="caption" color="text.secondary">
-	              Last tick: {liveStatusLabel.timeLabel}
-	            </Typography>
-	          )}
-	          {liveTicksError && (
-	            <Typography variant="caption" color="error">
-	              {liveTicksError}
-	            </Typography>
-	          )}
-	        </Box>
-	      )}
+		          {liveStatusLabel.timeLabel && (
+		            <Typography variant="caption" color="text.secondary">
+		              Last tick: {liveStatusLabel.timeLabel}
+		            </Typography>
+		          )}
+		          {liveTicksStale && liveFallbackTimeLabel && (
+		            <Typography variant="caption" color="text.secondary">
+		              Fallback: {liveFallbackTimeLabel}
+		            </Typography>
+		          )}
+		          {liveTicksError && (
+		            <Typography variant="caption" color="error">
+		              {liveTicksError}
+		            </Typography>
+		          )}
+		          {liveTicksStale && liveFallbackError && (
+		            <Typography variant="caption" color="error">
+		              {liveFallbackError}
+		            </Typography>
+		          )}
+		        </Box>
+		      )}
 
 	      {error && (
 	        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
