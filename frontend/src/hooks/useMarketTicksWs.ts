@@ -57,11 +57,15 @@ export function useMarketTicksWs(opts: {
   symbols: Array<{ symbol: string; exchange?: string | null }>
   flushMs?: number
   staleMs?: number
+  reconnectOnStale?: boolean
   onFlush?: (ticksByKey: Map<string, MarketTick>, ts: string | null) => void
 }): MarketTicksWsState {
   const enabled = opts.enabled
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
   const flushMs = opts.flushMs ?? 1000
   const staleMs = opts.staleMs ?? 10_000
+  const reconnectOnStale = opts.reconnectOnStale ?? true
 
   const normalized = useMemo(() => normalizeKeys(opts.symbols), [opts.symbols])
   const subscriptionKey = useMemo(
@@ -81,6 +85,9 @@ export function useMarketTicksWs(opts: {
   const wsRef = useRef<WebSocket | null>(null)
   const ticksRef = useRef<Map<string, MarketTick>>(new Map())
   const connectedAtMsRef = useRef<number | null>(null)
+  const reconnectTimerRef = useRef<number | null>(null)
+  const reconnectAttemptsRef = useRef(0)
+  const closingRef = useRef(false)
 
   const sendSubscribe = useCallback(() => {
     const ws = wsRef.current
@@ -92,82 +99,157 @@ export function useMarketTicksWs(opts: {
     ws.send(JSON.stringify(payload))
   }, [])
 
+  const closeWs = useCallback(() => {
+    const ws = wsRef.current
+    wsRef.current = null
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      try {
+        ws.close()
+      } catch {
+        // ignore
+      }
+    }
+  }, [])
+
+  const connectRef = useRef<(() => void) | null>(null)
+
+  const scheduleReconnect = useCallback(() => {
+    if (!enabledRef.current) return
+    if (reconnectTimerRef.current != null) return
+    const attempt = reconnectAttemptsRef.current
+    const base = Math.min(30_000, 500 * Math.pow(2, attempt))
+    const jitter = Math.floor(Math.random() * 250)
+    const delay = Math.max(500, base + jitter)
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null
+      if (!enabledRef.current) return
+      connectRef.current?.()
+    }, delay)
+  }, [])
+
   useEffect(() => {
     if (!enabled) {
       setConnected(false)
       setError(null)
-      const ws = wsRef.current
-      wsRef.current = null
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      closingRef.current = true
+      reconnectAttemptsRef.current = 0
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+      closeWs()
+      return
+    }
+
+    const connect = () => {
+      if (!enabledRef.current) return
+      // If something else already connected, don't replace it.
+      const existing = wsRef.current
+      if (
+        existing &&
+        (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
+      ) {
+        return
+      }
+
+      closingRef.current = false
+      setError(null)
+      setLastMessageAtMs(null)
+
+      const ws = new WebSocket(wsUrl('/ws/market/ticks'))
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setConnected(true)
+        connectedAtMsRef.current = Date.now()
+        reconnectAttemptsRef.current = 0
+        if (reconnectTimerRef.current != null) {
+          window.clearTimeout(reconnectTimerRef.current)
+          reconnectTimerRef.current = null
+        }
+        sendSubscribe()
+      }
+      ws.onclose = () => {
+        setConnected(false)
+        connectedAtMsRef.current = null
+        if (!closingRef.current && enabledRef.current) {
+          reconnectAttemptsRef.current += 1
+          scheduleReconnect()
+        }
+      }
+      ws.onerror = () => {
+        setError('Live ticks websocket error')
         try {
           ws.close()
         } catch {
           // ignore
         }
       }
-      return
-    }
-
-    const ws = new WebSocket(wsUrl('/ws/market/ticks'))
-    wsRef.current = ws
-    setError(null)
-
-    ws.onopen = () => {
-      setConnected(true)
-      connectedAtMsRef.current = Date.now()
-      sendSubscribe()
-    }
-    ws.onclose = () => {
-      setConnected(false)
-      connectedAtMsRef.current = null
-    }
-    ws.onerror = () => {
-      setError('Live ticks websocket error')
-    }
-    ws.onmessage = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.data) as TickMessage | ErrorMessage
-        if (parsed && parsed.type === 'error') {
-          setError(parsed.error ? String(parsed.error) : 'Live ticks error')
-          return
+      ws.onmessage = (ev) => {
+        try {
+          const parsed = JSON.parse(ev.data) as TickMessage | ErrorMessage
+          if (parsed && parsed.type === 'error') {
+            setError(parsed.error ? String(parsed.error) : 'Live ticks error')
+            return
+          }
+          if (!parsed || parsed.type !== 'ticks' || !Array.isArray(parsed.data)) return
+          const ts = String(parsed.ts || '')
+          setLastTickTs(ts || null)
+          setLastMessageAtMs(Date.now())
+          for (const row of parsed.data) {
+            const symbol = (row.symbol || '').trim().toUpperCase()
+            if (!symbol) continue
+            const exchange = (row.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+            const ltp = row.ltp != null ? Number(row.ltp) : null
+            if (ltp == null || !Number.isFinite(ltp) || ltp <= 0) continue
+            const prevClose =
+              row.prevClose != null && Number.isFinite(Number(row.prevClose))
+                ? Number(row.prevClose)
+                : null
+            ticksRef.current.set(`${exchange}:${symbol}`, { exchange, symbol, ltp, prevClose })
+          }
+        } catch {
+          // ignore parse errors
         }
-        if (!parsed || parsed.type !== 'ticks' || !Array.isArray(parsed.data)) return
-        const ts = String(parsed.ts || '')
-        setLastTickTs(ts || null)
-        setLastMessageAtMs(Date.now())
-        for (const row of parsed.data) {
-          const symbol = (row.symbol || '').trim().toUpperCase()
-          if (!symbol) continue
-          const exchange = (row.exchange || 'NSE').trim().toUpperCase() || 'NSE'
-          const ltp = row.ltp != null ? Number(row.ltp) : null
-          if (ltp == null || !Number.isFinite(ltp) || ltp <= 0) continue
-          const prevClose =
-            row.prevClose != null && Number.isFinite(Number(row.prevClose))
-              ? Number(row.prevClose)
-              : null
-          ticksRef.current.set(`${exchange}:${symbol}`, { exchange, symbol, ltp, prevClose })
-        }
-      } catch {
-        // ignore parse errors
       }
     }
+
+    connectRef.current = connect
+    connect()
 
     return () => {
-      wsRef.current = null
-      try {
-        ws.close()
-      } catch {
-        // ignore
+      closingRef.current = true
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
       }
+      closeWs()
       setConnected(false)
       connectedAtMsRef.current = null
     }
-  }, [enabled, sendSubscribe])
+  }, [closeWs, enabled, scheduleReconnect, sendSubscribe])
 
   useEffect(() => {
     if (!enabled || !connected) return
     sendSubscribe()
   }, [connected, enabled, subscriptionKey, sendSubscribe])
+
+  useEffect(() => {
+    if (!enabled) return
+    // Keep the connection alive in the presence of proxies by periodically
+    // sending a small message + re-subscribing (idempotent).
+    const id = window.setInterval(() => {
+      const ws = wsRef.current
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      try {
+        ws.send(JSON.stringify({ type: 'ping' }))
+      } catch {
+        // ignore
+      }
+      sendSubscribe()
+    }, 15_000)
+    return () => window.clearInterval(id)
+  }, [enabled, sendSubscribe])
 
   useEffect(() => {
     if (!enabled) return
@@ -183,6 +265,15 @@ export function useMarketTicksWs(opts: {
     if (base == null) return true
     return Date.now() - base > staleMs
   }, [connected, lastMessageAtMs, staleMs])
+
+  useEffect(() => {
+    if (!enabled || !reconnectOnStale) return
+    if (!connected || !stale) return
+    // Force a reconnect to recover from silent stalls (broker/proxy hangs).
+    reconnectAttemptsRef.current += 1
+    closeWs()
+    scheduleReconnect()
+  }, [closeWs, connected, enabled, reconnectOnStale, scheduleReconnect, stale])
 
   return { connected, lastTickTs, lastMessageAtMs, stale, error }
 }

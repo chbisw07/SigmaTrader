@@ -167,6 +167,13 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
     lock = asyncio.Lock()
     subscribed: list[tuple[str, str]] = []
 
+    async def _call_blocking(fn, *args, timeout_sec: float = 2.5, **kwargs):
+        """Run a blocking broker call in a worker thread with a timeout."""
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(fn, *args, **kwargs), timeout=timeout_sec
+        )
+
     async def _recv_loop() -> None:
         nonlocal subscribed
         while True:
@@ -180,13 +187,18 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
     async def _send_loop() -> None:
         last_error_sent_at: float | None = None
         consecutive_failures = 0
+        loop = asyncio.get_running_loop()
+        poll_interval_sec = 1.0
         while True:
-            await asyncio.sleep(1.0)
+            start_mono = loop.time()
             async with lock:
                 keys = list(subscribed)
             if not keys:
+                # Still yield periodically so the task can be cancelled promptly.
+                await asyncio.sleep(poll_interval_sec)
                 continue
             # Quote API expects broker tradingsymbols; map app symbols when configured.
+            rows: list[dict[str, Any]] = []
             try:
                 from app.services.market_data import _map_app_symbol_to_zerodha_symbol
 
@@ -205,25 +217,26 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
                 # prevent all holdings from getting updates.
                 for batch in _chunked(mapped, size=50):
                     try:
-                        quotes.update(client.get_quote_bulk(batch))
+                        quotes.update(await _call_blocking(client.get_quote_bulk, batch))
                     except Exception as exc:
                         # Fall back to LTP for the batch. If that also fails, do
                         # per-instrument to keep partial progress.
                         errors.append(str(exc))
                         try:
-                            quotes.update(client.get_ltp_bulk(batch))
+                            quotes.update(await _call_blocking(client.get_ltp_bulk, batch))
                         except Exception as exc2:
                             errors.append(str(exc2))
                             for exch, broker_sym in batch:
                                 try:
-                                    ltp = client.get_ltp(exchange=exch, tradingsymbol=broker_sym)
+                                    ltp = await _call_blocking(
+                                        client.get_ltp, exchange=exch, tradingsymbol=broker_sym
+                                    )
                                 except Exception:
                                     continue
                                 quotes[(exch, broker_sym)] = {
                                     "last_price": float(ltp),
                                     "prev_close": None,
                                 }
-                rows: list[dict[str, Any]] = []
                 for mapped_key, q in quotes.items():
                     orig = back.get(mapped_key)
                     if orig is None:
@@ -253,7 +266,7 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
                 if errors:
                     # Best-effort signal that some instruments could not be quoted.
                     # Throttle to avoid spamming the UI.
-                    now = asyncio.get_running_loop().time()
+                    now = loop.time()
                     if last_error_sent_at is None or now - last_error_sent_at > 10.0:
                         last_error_sent_at = now
                         await websocket.send_json(
@@ -266,22 +279,33 @@ async def market_ticks_ws(websocket: WebSocket) -> None:
                 # Avoid killing the socket on transient broker errors, but
                 # surface persistent failures to the UI.
                 consecutive_failures += 1
-                now = asyncio.get_running_loop().time()
+                now = loop.time()
                 if consecutive_failures >= 3 and (
                     last_error_sent_at is None or now - last_error_sent_at > 10.0
                 ):
                     last_error_sent_at = now
-                    await websocket.send_json({"type": "error", "error": str(exc)})
-                continue
+                    try:
+                        await websocket.send_json({"type": "error", "error": str(exc)})
+                    except Exception:
+                        return
+                rows = []
 
             if rows:
-                await websocket.send_json(
-                    {
-                        "type": "ticks",
-                        "ts": _now_ist_iso(),
-                        "data": rows,
-                    }
-                )
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "ticks",
+                            "ts": _now_ist_iso(),
+                            "data": rows,
+                        }
+                    )
+                except Exception:
+                    return
+
+            elapsed = loop.time() - start_mono
+            sleep_for = poll_interval_sec - elapsed
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
 
     recv_task = asyncio.create_task(_recv_loop())
     send_task = asyncio.create_task(_send_loop())

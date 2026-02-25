@@ -164,6 +164,8 @@ type HoldingRow = Holding & {
   target_weight?: number | null
   reference_qty?: number | null
   reference_price?: number | null
+  __pulseDir?: 'up' | 'down'
+  __pulseSeq?: number
 }
 
 type HoldingsViewId =
@@ -343,19 +345,7 @@ export function HoldingsPage() {
     return keys.join('|')
   }, [liveTicksSymbols])
 
-  const livePulseByKeyRef = useRef<Map<string, { dir: 'up' | 'down'; at: number }>>(new Map())
-  const [, bumpLivePulseNonce] = useState(0)
-
-  const upsertLivePulses = useCallback((updates: Array<{ key: string; dir: 'up' | 'down' }>) => {
-    if (!updates.length) return
-    const now = Date.now()
-    const pulses = livePulseByKeyRef.current
-    for (const u of updates) pulses.set(u.key, { dir: u.dir, at: now })
-    bumpLivePulseNonce((n) => n + 1)
-  }, [])
-
   const applyMarketTicks = useCallback((ticksByKey: Map<string, MarketTick>) => {
-    const pulseUpdates: Array<{ key: string; dir: 'up' | 'down' }> = []
     setHoldings((prev) => {
       let changed = false
       const next = prev.map((h) => {
@@ -408,55 +398,51 @@ export function HoldingsPage() {
 
         if (maybeSameLtp && maybeSameToday && maybeSamePnl && maybeSamePnlPct) return h
 
-        if (
+        const pulseDir: 'up' | 'down' | null =
           current != null &&
           Number.isFinite(current) &&
           current > 0 &&
           Number.isFinite(t.ltp) &&
           t.ltp > 0 &&
           t.ltp !== current
-        ) {
-          pulseUpdates.push({ key, dir: t.ltp > current ? 'up' : 'down' })
-        }
+            ? t.ltp > current
+              ? ('up' as const)
+              : ('down' as const)
+            : null
 
         changed = true
+        const prevSeq = (h as HoldingRow).__pulseSeq
+        const nextSeq =
+          pulseDir != null ? (Number.isFinite(Number(prevSeq)) ? Number(prevSeq) + 1 : 1) : prevSeq
         return {
           ...h,
           last_price: t.ltp,
           pnl: nextPnl ?? h.pnl ?? null,
           total_pnl_percent: nextPnlPct ?? h.total_pnl_percent ?? null,
           today_pnl_percent: nextTodayPct ?? h.today_pnl_percent ?? null,
+          __pulseDir: pulseDir ?? (h as HoldingRow).__pulseDir,
+          __pulseSeq: nextSeq,
         }
       })
       return changed ? next : prev
     })
-    upsertLivePulses(pulseUpdates)
-  }, [upsertLivePulses])
-
-  useEffect(() => {
-    const ttlMs = 900
-    const id = window.setInterval(() => {
-      const now = Date.now()
-      const pulses = livePulseByKeyRef.current
-      let changed = false
-      for (const [k, v] of pulses) {
-        if (now - v.at > ttlMs) {
-          pulses.delete(k)
-          changed = true
-        }
-      }
-      if (changed) bumpLivePulseNonce((n) => n + 1)
-    }, 200)
-    return () => window.clearInterval(id)
   }, [])
 
   const getLivePulseClassName = useCallback((row: HoldingRow) => {
-    const sym = (row.symbol || '').trim().toUpperCase()
-    if (!sym) return ''
-    const exch = (row.exchange || 'NSE').trim().toUpperCase() || 'NSE'
-    const pulse = livePulseByKeyRef.current.get(`${exch}:${sym}`)
-    if (!pulse) return ''
-    return pulse.dir === 'up' ? 'st-flash-up' : 'st-flash-down'
+    const dir = row.__pulseDir
+    if (dir == null) return ''
+    const seq = row.__pulseSeq
+    const bit = Number.isFinite(Number(seq)) ? Number(seq) % 2 : 0
+    return dir === 'up' ? `st-flash-up-${bit}` : `st-flash-down-${bit}`
+  }, [])
+
+  const getLtpDirectionClassName = useCallback((row: HoldingRow) => {
+    const pct = row.today_pnl_percent
+    if (pct == null || !Number.isFinite(Number(pct))) return ''
+    const v = Number(pct)
+    if (v > 0) return 'st-ltp-up'
+    if (v < 0) return 'st-ltp-down'
+    return ''
   }, [])
 
   const {
@@ -478,7 +464,7 @@ export function HoldingsPage() {
   const [liveFallbackError, setLiveFallbackError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!liveTicksEnabled || !liveTicksConnected || !liveTicksStale) {
+    if (!liveTicksEnabled) {
       setLiveFallbackLastUpdateAtMs(null)
       setLiveFallbackError(null)
       return
@@ -486,7 +472,10 @@ export function HoldingsPage() {
     if (!liveTicksSymbolsKey) return
 
     let cancelled = false
+    let inFlight = false
     const pollOnce = async () => {
+      if (inFlight) return
+      inFlight = true
       try {
         const quotes = await fetchMarketQuotes(liveTicksSymbolsRef.current)
         if (cancelled) return
@@ -509,10 +498,15 @@ export function HoldingsPage() {
       } catch (err) {
         if (cancelled) return
         setLiveFallbackError(err instanceof Error ? err.message : 'Fallback quotes failed')
+      } finally {
+        inFlight = false
       }
     }
 
     void pollOnce()
+    // Always poll as a reliability backstop so the UI never “sticks” even if
+    // the websocket stalls behind a proxy or broker API hangs. This updates
+    // only the affected cells (no full page refresh).
     const id = window.setInterval(() => void pollOnce(), 5_000)
     return () => {
       cancelled = true
@@ -520,14 +514,12 @@ export function HoldingsPage() {
     }
   }, [
     applyMarketTicks,
-    liveTicksConnected,
     liveTicksEnabled,
-    liveTicksStale,
     liveTicksSymbolsKey,
   ])
 
   const liveStatusLabel = useMemo(() => {
-    const liveOn = marketOpenNow && liveTicksConnected && universeId === 'holdings'
+    const liveOn = marketOpenNow && liveTicksEnabled && universeId === 'holdings'
     const ts = liveTicksLastTickTs ? new Date(liveTicksLastTickTs) : null
     const timeLabel =
       ts && Number.isFinite(ts.getTime())
@@ -536,6 +528,10 @@ export function HoldingsPage() {
     if (!liveOn) return { label: 'Live: OFF', color: 'default' as const, timeLabel }
     const fallbackFresh =
       liveFallbackLastUpdateAtMs != null && Date.now() - liveFallbackLastUpdateAtMs < 12_000
+    if (!liveTicksConnected) {
+      if (fallbackFresh) return { label: 'Live: ON (fallback)', color: 'warning' as const, timeLabel }
+      return { label: 'Live: ON (connecting)', color: 'warning' as const, timeLabel }
+    }
     if (liveTicksStale && !fallbackFresh) {
       return { label: 'Live: ON (stale)', color: 'warning' as const, timeLabel }
     }
@@ -548,6 +544,7 @@ export function HoldingsPage() {
     liveTicksConnected,
     liveTicksLastTickTs,
     liveTicksStale,
+    liveTicksEnabled,
     marketOpenNow,
     universeId,
   ])
@@ -4500,7 +4497,10 @@ export function HoldingsPage() {
       type: 'number',
       width: 130,
       valueFormatter: (value) => (value != null ? Number(value).toFixed(2) : '-'),
-      cellClassName: (params: GridCellParams) => getLivePulseClassName(params.row as HoldingRow),
+      cellClassName: (params: GridCellParams) => {
+        const row = params.row as HoldingRow
+        return `${getLivePulseClassName(row)} ${getLtpDirectionClassName(row)}`.trim()
+      },
     },
     {
       field: 'gap_pct',
@@ -5513,11 +5513,17 @@ export function HoldingsPage() {
           color: 'inherit',
         },
       },
-      '& .st-flash-up': {
-        animation: 'stFlashUp 900ms ease-out',
+      '& .st-flash-up-0': { animation: 'stFlashUp 1400ms ease-out' },
+      '& .st-flash-up-1': { animation: 'stFlashUp 1400ms ease-out' },
+      '& .st-flash-down-0': { animation: 'stFlashDown 1400ms ease-out' },
+      '& .st-flash-down-1': { animation: 'stFlashDown 1400ms ease-out' },
+      '& .st-ltp-up': {
+        color: 'success.main',
+        fontWeight: 600,
       },
-      '& .st-flash-down': {
-        animation: 'stFlashDown 900ms ease-out',
+      '& .st-ltp-down': {
+        color: 'error.main',
+        fontWeight: 600,
       },
       '& .pnl-negative': {
         color: 'error.main',
@@ -7380,7 +7386,7 @@ export function HoldingsPage() {
 		              Last tick: {liveStatusLabel.timeLabel}
 		            </Typography>
 		          )}
-		          {liveTicksStale && liveFallbackTimeLabel && (
+		          {(!liveTicksConnected || liveTicksStale) && liveFallbackTimeLabel && (
 		            <Typography variant="caption" color="text.secondary">
 		              Fallback: {liveFallbackTimeLabel}
 		            </Typography>
@@ -7390,7 +7396,7 @@ export function HoldingsPage() {
 		              {liveTicksError}
 		            </Typography>
 		          )}
-		          {liveTicksStale && liveFallbackError && (
+		          {(!liveTicksConnected || liveTicksStale) && liveFallbackError && (
 		            <Typography variant="caption" color="error">
 		              {liveFallbackError}
 		            </Typography>
