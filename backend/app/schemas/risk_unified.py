@@ -15,6 +15,7 @@ class UnifiedRiskGlobalRead(BaseModel):
     enabled: bool = True
     manual_override_enabled: bool = False
     baseline_equity_inr: float = Field(default=0.0, ge=0.0)
+    no_trade_rules: str = ""
     updated_at: datetime | None = None
 
     if PYDANTIC_V2:
@@ -25,6 +26,7 @@ class UnifiedRiskGlobalUpdate(BaseModel):
     enabled: bool = True
     manual_override_enabled: bool = False
     baseline_equity_inr: float = Field(default=0.0, ge=0.0)
+    no_trade_rules: str = ""
 
     if PYDANTIC_V2:
         model_config = ConfigDict(extra="forbid")

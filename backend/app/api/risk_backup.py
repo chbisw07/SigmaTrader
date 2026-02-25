@@ -125,12 +125,14 @@ def export_risk_settings_bundle(
             enabled=True,
             manual_override_enabled=False,
             baseline_equity_inr=1_000_000.0,
+            no_trade_rules="",
         )
     else:
         global_settings = UnifiedRiskGlobalUpdate(
             enabled=bool(g.enabled),
             manual_override_enabled=bool(g.manual_override_enabled),
             baseline_equity_inr=float(g.baseline_equity_inr or 0.0),
+            no_trade_rules=str(getattr(g, "no_trade_rules", "") or ""),
         )
 
     profiles = db.query(RiskProfile).order_by(RiskProfile.product, RiskProfile.name).all()
@@ -269,6 +271,7 @@ def import_risk_settings_bundle(
         g.enabled = bool(payload.global_settings.enabled)
         g.manual_override_enabled = bool(payload.global_settings.manual_override_enabled)
         g.baseline_equity_inr = float(payload.global_settings.baseline_equity_inr or 0.0)
+        g.no_trade_rules = str(getattr(payload.global_settings, "no_trade_rules", "") or "")
         db.add(g)
 
         db.query(RiskSourceOverride).delete()

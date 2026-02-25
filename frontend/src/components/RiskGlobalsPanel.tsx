@@ -75,6 +75,7 @@ export function RiskGlobalsPanel() {
                 enabled: Boolean(draft.enabled),
                 manual_override_enabled: Boolean(draft.manual_override_enabled),
                 baseline_equity_inr: numOrZero(draft.baseline_equity_inr),
+                no_trade_rules: String(draft.no_trade_rules || ''),
               })
               setDraft(updated)
               setError(null)
@@ -154,6 +155,20 @@ export function RiskGlobalsPanel() {
             }
             helperText="Used for % caps and drawdown calculations."
             sx={{ maxWidth: 320 }}
+          />
+
+          <TextField
+            size="small"
+            label="No-trade windows (IST)"
+            value={draft.no_trade_rules ?? ''}
+            onChange={(e) =>
+              setDraft((p) => (p ? { ...p, no_trade_rules: String(e.target.value) } : p))
+            }
+            multiline
+            minRows={4}
+            placeholder={`09:15-09:20 NO_TRADE ALL\n09:20-09:25 NO_TRADE CNC_BUY,MIS_BUY`}
+            helperText="Advanced. One rule per line: 'HH:MM-HH:MM TRADE|NO_TRADE keys'. keys: ALL, BUY, SELL, CNC, MIS, CNC_BUY, CNC_SELL, MIS_BUY, MIS_SELL. AUTO dispatch is deferred to Waiting Queue during NO_TRADE."
+            sx={{ maxWidth: 740 }}
           />
         </Box>
       )}

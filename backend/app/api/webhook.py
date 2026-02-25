@@ -1054,6 +1054,7 @@ def tradingview_webhook(
                     request=request,
                     db=db,
                     settings=settings,
+                    auto_dispatch=True,
                 )
         except HTTPException as exc:
             # Legacy strategy-driven AUTO behavior: surface the broker error and

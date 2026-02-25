@@ -5,6 +5,7 @@ export type UnifiedRiskGlobal = {
   enabled: boolean
   manual_override_enabled: boolean
   baseline_equity_inr: number
+  no_trade_rules: string
   updated_at?: string | null
 }
 

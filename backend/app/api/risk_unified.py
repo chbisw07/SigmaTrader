@@ -38,6 +38,7 @@ def read_unified_risk_global_settings(
         enabled=bool(g.enabled),
         manual_override_enabled=bool(g.manual_override_enabled),
         baseline_equity_inr=float(g.baseline_equity_inr),
+        no_trade_rules=str(getattr(g, "no_trade_rules", "") or ""),
         updated_at=(row.updated_at if row is not None else None),
     )
 
@@ -53,11 +54,13 @@ def update_unified_risk_global_settings(
         enabled=bool(payload.enabled),
         manual_override_enabled=bool(payload.manual_override_enabled),
         baseline_equity_inr=float(payload.baseline_equity_inr or 0.0),
+        no_trade_rules=str(payload.no_trade_rules or ""),
     )
     return UnifiedRiskGlobalRead(
         enabled=bool(row.enabled),
         manual_override_enabled=bool(row.manual_override_enabled),
         baseline_equity_inr=float(row.baseline_equity_inr or 0.0),
+        no_trade_rules=str(getattr(row, "no_trade_rules", "") or ""),
         updated_at=row.updated_at,
     )
 

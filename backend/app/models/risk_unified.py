@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Float, Index, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -34,6 +43,10 @@ class RiskGlobalConfig(Base):
 
     # Baseline equity used for drawdown and daily loss calculations (INR).
     baseline_equity_inr: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    # Optional time windows that block AUTO dispatch. Stored as a simple text ruleset
+    # (one rule per line) interpreted in IST. UI treats this as an advanced feature.
+    no_trade_rules: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)

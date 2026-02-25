@@ -16,6 +16,7 @@ class UnifiedRiskGlobal:
     enabled: bool
     manual_override_enabled: bool
     baseline_equity_inr: float
+    no_trade_rules: str
 
 
 def get_or_create_risk_global_config(db: Session) -> RiskGlobalConfig:
@@ -27,6 +28,7 @@ def get_or_create_risk_global_config(db: Session) -> RiskGlobalConfig:
         enabled=True,
         manual_override_enabled=False,
         baseline_equity_inr=1_000_000.0,
+        no_trade_rules="",
     )
     db.add(row)
     db.commit()
@@ -40,6 +42,7 @@ def read_unified_risk_global(db: Session) -> UnifiedRiskGlobal:
         enabled=bool(row.enabled),
         manual_override_enabled=bool(row.manual_override_enabled),
         baseline_equity_inr=float(row.baseline_equity_inr or 0.0),
+        no_trade_rules=str(getattr(row, "no_trade_rules", "") or ""),
     )
 
 
@@ -49,11 +52,14 @@ def upsert_unified_risk_global(
     enabled: bool,
     manual_override_enabled: bool,
     baseline_equity_inr: float,
+    no_trade_rules: str | None = None,
 ) -> RiskGlobalConfig:
     row = get_or_create_risk_global_config(db)
     row.enabled = bool(enabled)
     row.manual_override_enabled = bool(manual_override_enabled)
     row.baseline_equity_inr = float(baseline_equity_inr or 0.0)
+    if no_trade_rules is not None:
+        row.no_trade_rules = str(no_trade_rules)
     db.add(row)
     db.commit()
     db.refresh(row)

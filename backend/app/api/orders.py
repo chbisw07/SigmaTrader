@@ -946,6 +946,7 @@ def execute_order_internal(
     db: Session,
     settings: Settings,
     correlation_id: str | None = None,
+    auto_dispatch: bool = False,
 ) -> Order:
     """Send a manual queue order to its configured broker for execution.
 
@@ -1377,6 +1378,49 @@ def execute_order_internal(
         db.add(order)
         db.commit()
         db.refresh(order)
+
+    # NO_TRADE windows (global): when an AUTO dispatch tries to execute during a
+    # blocked window, keep the order in the Waiting Queue for manual review.
+    if bool(auto_dispatch) and not bool(getattr(order, "is_exit", False)):
+        try:
+            from app.services.no_trade_rules import resolve_no_trade_action
+
+            match = resolve_no_trade_action(
+                rules_text=str(getattr(risk_global, "no_trade_rules", "") or ""),
+                now_utc=now_utc,
+                product=str(getattr(order, "product", "") or ""),
+                side=str(getattr(order, "side", "") or ""),
+            )
+            if match is not None and match.action == "NO_TRADE":
+                order.mode = "MANUAL"
+                order.status = "WAITING"
+                order.error_message = (
+                    "AUTO dispatch skipped: NO_TRADE window "
+                    f"({match.start.strftime('%H:%M')}-{match.end.strftime('%H:%M')} IST) "
+                    f"for {match.key}. Moved to Waiting Queue."
+                )
+                db.add(order)
+                db.commit()
+                db.refresh(order)
+                record_system_event(
+                    db,
+                    level="INFO",
+                    category="risk",
+                    message="AUTO order deferred by no-trade window",
+                    correlation_id=correlation_id,
+                    details={
+                        "order_id": int(order.id),
+                        "symbol": str(getattr(order, "symbol", "") or ""),
+                        "product": str(getattr(order, "product", "") or ""),
+                        "side": str(getattr(order, "side", "") or ""),
+                        "rule": match.raw,
+                    },
+                )
+                _release_execution_policy_inflight()
+                return order
+        except Exception:
+            # Fail open: if parsing fails, do not block execution.
+            pass
 
     # Route PAPER orders/strategies to the paper engine instead of the broker.
     # Precedence:
@@ -2435,6 +2479,7 @@ def execute_order_internal(
 def execute_order(
     order_id: int,
     request: Request,
+    auto_dispatch: bool = False,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Order:
@@ -2444,6 +2489,7 @@ def execute_order(
         db=db,
         settings=settings,
         correlation_id=correlation_id,
+        auto_dispatch=bool(auto_dispatch),
     )
 
 

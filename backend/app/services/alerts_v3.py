@@ -524,6 +524,7 @@ def _create_order_for_alert_match(
                 db=db,
                 settings=settings,
                 correlation_id=None,
+                auto_dispatch=True,
             )
             db.refresh(order)
         except Exception:
