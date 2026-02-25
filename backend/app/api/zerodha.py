@@ -17,6 +17,7 @@ from app.core.config import Settings, get_settings
 from app.core.crypto import decrypt_token, encrypt_token
 from app.db.session import get_db
 from app.models import BrokerConnection, Order, SystemEvent, User
+from app.pydantic_compat import model_to_dict
 from app.services.broker_secrets import get_broker_secret
 from app.services.managed_risk import (
     ensure_managed_risk_for_executed_order,
@@ -1080,7 +1081,7 @@ def zerodha_margins(
     except (TypeError, ValueError):
         available = 0.0
 
-    return MarginsResponse(available=available, raw=segment).dict()
+    return model_to_dict(MarginsResponse(available=available, raw=segment))
 
 
 @router.post("/order-preview", response_model=OrderPreviewResponse)
