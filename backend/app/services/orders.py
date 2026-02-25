@@ -3,7 +3,11 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models import Alert, Order
-from app.services.price_ticks import round_price_to_tick
+from app.services.price_ticks import (
+    parse_tick_size_from_error,
+    round_price_to_tick,
+    round_price_to_tick_mode,
+)
 
 
 def requeue_order_to_waiting(
@@ -64,6 +68,34 @@ def requeue_order_to_waiting(
         risk_spec_json=getattr(source, "risk_spec_json", None),
         is_exit=bool(getattr(source, "is_exit", False)),
     )
+
+    # If the source broker response hinted a tick-size mismatch, normalize the
+    # cloned order so the Waiting Queue contains an executable price.
+    tick = parse_tick_size_from_error(getattr(source, "error_message", None))
+    if tick is not None:
+        side_u = str(getattr(queue_order, "side", "") or "").strip().upper()
+        if side_u in {"BUY", "SELL"}:
+            price_mode = "ceil" if side_u == "BUY" else "floor"
+            trigger_mode = "floor" if side_u == "BUY" else "ceil"
+            if (
+                getattr(queue_order, "order_type", None) in {"LIMIT", "SL"}
+                and queue_order.price is not None
+            ):
+                queue_order.price = round_price_to_tick_mode(
+                    float(queue_order.price),
+                    tick_size=tick,
+                    mode=price_mode,
+                )
+            if (
+                getattr(queue_order, "order_type", None) in {"SL", "SL-M"}
+                and queue_order.trigger_price is not None
+            ):
+                queue_order.trigger_price = round_price_to_tick_mode(
+                    float(queue_order.trigger_price),
+                    tick_size=tick,
+                    mode=trigger_mode,
+                )
+
     db.add(queue_order)
     db.commit()
     db.refresh(queue_order)

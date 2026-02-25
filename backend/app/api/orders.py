@@ -46,7 +46,11 @@ from app.services.execution_policy_state import (
 from app.services.instruments_sync import sync_smartapi_instrument_master
 from app.services.paper_trading import submit_paper_order
 from app.services.positions_autosync import schedule_positions_autosync
-from app.services.price_ticks import round_price_to_tick
+from app.services.price_ticks import (
+    parse_tick_size_from_error,
+    round_price_to_tick,
+    round_price_to_tick_mode,
+)
 from app.services.risk_unified_store import read_unified_risk_global
 from app.services.system_events import record_system_event
 
@@ -2170,58 +2174,158 @@ def execute_order_internal(
             **extra,
         )
 
-    try:
-        result = _place(variety="regular")
-    except Exception as exc:  # pragma: no cover - defensive
-        message = str(exc)
+    def _apply_tick_size_autocorrect(message: str) -> bool:
+        """Best-effort correction for broker tick-size rejections (Zerodha).
 
-        # Zerodha returns a specific hint when an order must be placed as
-        # an AMO (off-market order). When we detect this, retry once with
-        # variety="amo" instead of failing immediately.
-        amo_hint_phrases = (
-            "Try placing an AMO order",
-            "markets are not open for trading today",
+        We round limit price and trigger price in side-aware directions to
+        avoid making the order less likely to execute:
+        - LIMIT price: BUY ceils, SELL floors
+        - Trigger price (SL/SL-M): BUY floors, SELL ceils
+        """
+
+        tick = parse_tick_size_from_error(message)
+        if tick is None:
+            return False
+
+        side_u = str(getattr(order, "side", "") or "").strip().upper()
+        if side_u not in {"BUY", "SELL"}:
+            return False
+
+        price_mode = "ceil" if side_u == "BUY" else "floor"
+        trigger_mode = "floor" if side_u == "BUY" else "ceil"
+
+        changed = False
+        before_price = float(order.price) if order.price is not None else None
+        before_trigger = (
+            float(order.trigger_price) if order.trigger_price is not None else None
         )
-        if any(phrase in message for phrase in amo_hint_phrases):
-            logger.info(
-                "Order failed with regular variety; retrying as AMO",
-                extra={
-                    "extra": {
-                        "correlation_id": correlation_id,
-                        "order_id": order.id,
-                        "error": message,
-                    }
-                },
+
+        if order.order_type in {"LIMIT", "SL"} and order.price is not None:
+            new_price = round_price_to_tick_mode(
+                float(order.price),
+                tick_size=tick,
+                mode=price_mode,
             )
-            try:
-                result = _place(variety="amo")
-            except Exception as exc_amo:  # pragma: no cover - defensive
-                order.status = "FAILED"
-                order.error_message = str(exc_amo)
-                db.add(order)
-                db.commit()
-                db.refresh(order)
+            if new_price is not None and before_price is not None:
+                if abs(float(new_price) - float(before_price)) > 1e-9:
+                    order.price = float(new_price)
+                    changed = True
+
+        if order.order_type in {"SL", "SL-M"} and order.trigger_price is not None:
+            new_trigger = round_price_to_tick_mode(
+                float(order.trigger_price),
+                tick_size=tick,
+                mode=trigger_mode,
+            )
+            if new_trigger is not None and before_trigger is not None:
+                if abs(float(new_trigger) - float(before_trigger)) > 1e-9:
+                    order.trigger_price = float(new_trigger)
+                    changed = True
+
+        if not changed:
+            return False
+
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        record_system_event(
+            db,
+            level="INFO",
+            category="order",
+            message="Tick-size auto-correction applied",
+            correlation_id=correlation_id,
+            details={
+                "order_id": int(order.id),
+                "broker_name": broker_name,
+                "symbol": order.symbol,
+                "order_type": order.order_type,
+                "side": side_u,
+                "tick_size": str(tick),
+                "price_before": before_price,
+                "price_after": float(order.price) if order.price is not None else None,
+                "trigger_before": before_trigger,
+                "trigger_after": float(order.trigger_price)
+                if order.trigger_price is not None
+                else None,
+            },
+        )
+        return True
+
+    tick_corrected = False
+    amo_tried = False
+    variety = "regular"
+    while True:
+        try:
+            result = _place(variety=variety)
+            break
+        except Exception as exc:  # pragma: no cover - defensive
+            message = str(exc)
+
+            if not tick_corrected and broker_name == "zerodha":
+                if _apply_tick_size_autocorrect(message):
+                    tick_corrected = True
+                    logger.info(
+                        "Applied tick-size correction; retrying order placement",
+                        extra={
+                            "extra": {
+                                "correlation_id": correlation_id,
+                                "order_id": order.id,
+                                "variety": variety,
+                                "error": message,
+                            }
+                        },
+                    )
+                    continue
+
+            # Zerodha returns a specific hint when an order must be placed as
+            # an AMO (off-market order). When we detect this, retry once with
+            # variety="amo" instead of failing immediately.
+            amo_hint_phrases = (
+                "Try placing an AMO order",
+                "markets are not open for trading today",
+            )
+            if (
+                not amo_tried
+                and variety == "regular"
+                and any(phrase in message for phrase in amo_hint_phrases)
+            ):
+                amo_tried = True
+                variety = "amo"
+                logger.info(
+                    "Order failed with regular variety; retrying as AMO",
+                    extra={
+                        "extra": {
+                            "correlation_id": correlation_id,
+                            "order_id": order.id,
+                            "error": message,
+                        }
+                    },
+                )
+                continue
+
+            order.status = "FAILED"
+            order.error_message = message
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+
+            if variety == "amo":
                 logger.error(
                     "Zerodha AMO order placement failed",
                     extra={
                         "extra": {
                             "correlation_id": correlation_id,
                             "order_id": order.id,
-                            "error": str(exc_amo),
+                            "error": message,
                         }
                     },
                 )
                 _release_execution_policy_inflight()
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Zerodha AMO order placement failed: {exc_amo}",
-                ) from exc_amo
-        else:
-            order.status = "FAILED"
-            order.error_message = message
-            db.add(order)
-            db.commit()
-            db.refresh(order)
+                    detail=f"Zerodha AMO order placement failed: {message}",
+                ) from exc
+
             logger.error(
                 "Zerodha order placement failed",
                 extra={

@@ -21,6 +21,7 @@ from . import (
     holdings_exit_subscriptions,
     holdings_summary,
     instruments,
+    market_ticks_ws,
     market_calendar,
     market_data,
     managed_risk,
@@ -204,6 +205,11 @@ router.include_router(
     prefix="/api/holdings-summary",
     dependencies=[Depends(require_admin)],
     tags=["holdings-summary"],
+)
+
+router.include_router(
+    market_ticks_ws.router,
+    tags=["ws"],
 )
 
 router.include_router(

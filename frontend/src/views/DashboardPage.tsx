@@ -1,60 +1,33 @@
 import Box from '@mui/material/Box'
 import Alert from '@mui/material/Alert'
-import Accordion from '@mui/material/Accordion'
-import AccordionDetails from '@mui/material/AccordionDetails'
-import AccordionSummary from '@mui/material/AccordionSummary'
 import Button from '@mui/material/Button'
 import Checkbox from '@mui/material/Checkbox'
-import Dialog from '@mui/material/Dialog'
-import DialogActions from '@mui/material/DialogActions'
-import DialogContent from '@mui/material/DialogContent'
-import DialogTitle from '@mui/material/DialogTitle'
+import Chip from '@mui/material/Chip'
 import FormControlLabel from '@mui/material/FormControlLabel'
-import IconButton from '@mui/material/IconButton'
 import MenuItem from '@mui/material/MenuItem'
 import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
-import Tooltip from '@mui/material/Tooltip'
 import Autocomplete from '@mui/material/Autocomplete'
 import { alpha, useTheme } from '@mui/material/styles'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
-import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
-import RefreshIcon from '@mui/icons-material/Refresh'
 
-import { DslExprHelpDrawer } from '../components/DslExprHelpDrawer'
 import { useTimeSettings } from '../timeSettingsContext'
 import { formatInDisplayTimeZone } from '../utils/datetime'
-import { appendDslText, insertIntoMonacoEditor } from '../utils/dslInsert'
-import { listGroupMembers, listGroups, type Group } from '../services/groups'
-import { fetchHoldings, type Holding } from '../services/positions'
+import { listGroups, type Group } from '../services/groups'
 import { fetchBrokerCapabilities } from '../services/brokerRuntime'
 import { fetchZerodhaStatus } from '../services/zerodha'
 import { fetchAngeloneStatus } from '../services/angelone'
 import {
   fetchBasketIndices,
   fetchSymbolSeries,
-  fetchSymbolIndicators,
-  fetchSymbolSignals,
   hydrateHistory,
   type BasketIndexResponse,
-  type AlertVariableDef,
-  type SignalMarker,
-  type SymbolIndicatorsResponse,
   type SymbolSeriesResponse,
 } from '../services/dashboard'
-import { PriceChart, type PriceChartType } from '../components/PriceChart'
-import { DslEditor } from '../components/DslEditor'
 import { HoldingsSummaryHistoryPanel } from '../components/HoldingsSummaryHistoryPanel'
-import { listCustomIndicators, type CustomIndicator } from '../services/alertsV3'
-import {
-  listSignalStrategies,
-  listSignalStrategyVersions,
-  type SignalStrategy,
-  type SignalStrategyVersion,
-} from '../services/signalStrategies'
+import { normalizeMarketSymbols, searchMarketSymbols, type MarketSymbol } from '../services/marketData'
 
 type RangeOption = { value: any; label: string; helper?: string }
 
@@ -121,22 +94,15 @@ type DashboardSettingsV1 = {
   groupIds?: number[]
   range?: string
   symbolRange?: string
-  chartType?: PriceChartType
   // Legacy global display mode (kept for backwards compatibility/migration).
   chartDisplayMode?: 'value' | 'pct'
   // Per-chart display modes.
   indicesChartDisplayMode?: 'value' | 'pct'
+  // Symbol compare display mode: base100 ("value") or % return ("pct").
   symbolChartDisplayMode?: 'value' | 'pct'
   holdingsHistoryChartDisplayMode?: 'value' | 'pct'
-  selectedSymbol?: { symbol: string; exchange: string; label: string } | null
-  indicatorRows?: Array<
-    AlertVariableDef & {
-      enabled: boolean
-      plot: 'price' | 'hidden'
-    }
-  >
-  signalDsl?: string
-  signalParams?: Record<string, unknown>
+  selectedSymbol?: { symbol: string; exchange: string; name?: string | null } | null
+  benchmarks?: Array<{ symbol: string; exchange: string; name?: string | null }>
 }
 
 function loadDashboardSettings(): DashboardSettingsV1 {
@@ -166,6 +132,7 @@ function MultiLineChart({
   height = 280,
   base = 100,
   displayMode = 'value',
+  emptyText,
 }: {
   series: Array<{
     label: string
@@ -176,6 +143,7 @@ function MultiLineChart({
   height?: number
   base?: number
   displayMode?: 'value' | 'pct'
+  emptyText?: string
 }) {
   const theme = useTheme()
   const [hoverX, setHoverX] = useState<number | null>(null)
@@ -188,7 +156,7 @@ function MultiLineChart({
   if (all.length < 2) {
     return (
       <Typography variant="body2" color="text.secondary">
-        No chart data yet. Select Holdings/Groups and click Refresh.
+        {emptyText ?? 'No chart data yet.'}
       </Typography>
     )
   }
@@ -466,7 +434,6 @@ function MultiLineChart({
 }
 
 export function DashboardPage() {
-  const theme = useTheme()
   const { displayTimeZone } = useTimeSettings()
   const [initialSettings] = useState<DashboardSettingsV1>(() =>
     loadDashboardSettings(),
@@ -509,29 +476,41 @@ export function DashboardPage() {
   const [hydratingUniverse, setHydratingUniverse] = useState(false)
   const [hydrateError, setHydrateError] = useState<string | null>(null)
 
-  type SymbolKey = { symbol: string; exchange: string; label: string }
-  const [symbolOptions, setSymbolOptions] = useState<SymbolKey[]>([])
+  const [symbolQuery, setSymbolQuery] = useState<string>('')
+  const [symbolOptions, setSymbolOptions] = useState<MarketSymbol[]>([])
   const [loadingSymbols, setLoadingSymbols] = useState(false)
   const [symbolsError, setSymbolsError] = useState<string | null>(null)
-  const [selectedSymbol, setSelectedSymbol] = useState<SymbolKey | null>(() => {
-    const s = initialSettings.selectedSymbol
-    if (
-      s &&
-      typeof s === 'object' &&
-      typeof s.symbol === 'string' &&
-      typeof s.exchange === 'string' &&
-      typeof s.label === 'string'
-    ) {
-      return { symbol: s.symbol, exchange: s.exchange, label: s.label }
+  const [selectedSymbol, setSelectedSymbol] = useState<MarketSymbol | null>(() => {
+    const s = initialSettings.selectedSymbol as any
+    if (!s || typeof s !== 'object') return null
+    const symbol = String(s.symbol ?? '').trim().toUpperCase()
+    const exchange = String(s.exchange ?? '').trim().toUpperCase()
+    const name = s.name != null ? String(s.name) : null
+    if (!symbol || !exchange) return null
+    return { symbol, exchange, name }
+  })
+
+  const [benchmarkQuery, setBenchmarkQuery] = useState<string>('')
+  const [benchmarkOptions, setBenchmarkOptions] = useState<MarketSymbol[]>([])
+  const [loadingBenchmarks, setLoadingBenchmarks] = useState(false)
+  const [benchmarksError, setBenchmarksError] = useState<string | null>(null)
+  const [benchmarks, setBenchmarks] = useState<MarketSymbol[]>(() => {
+    const raw = (initialSettings.benchmarks ?? []) as any
+    if (!Array.isArray(raw)) return []
+    const out: MarketSymbol[] = []
+    for (const it of raw) {
+      if (!it || typeof it !== 'object') continue
+      const symbol = String(it.symbol ?? '').trim().toUpperCase()
+      const exchange = String(it.exchange ?? '').trim().toUpperCase()
+      const name = it.name != null ? String(it.name) : null
+      if (!symbol || !exchange) continue
+      out.push({ symbol, exchange, name })
     }
-    return null
+    return out
   })
 
   const [symbolRange, setSymbolRange] = useState<any>(
     () => initialSettings.symbolRange ?? '6m',
-  )
-  const [chartType, setChartType] = useState<PriceChartType>(
-    () => initialSettings.chartType ?? 'line',
   )
   const initialDisplayMode: 'value' | 'pct' = initialSettings.chartDisplayMode ?? 'value'
   const [indicesChartDisplayMode, setIndicesChartDisplayMode] = useState<'value' | 'pct'>(
@@ -543,81 +522,9 @@ export function DashboardPage() {
   const [holdingsHistoryChartDisplayMode, setHoldingsHistoryChartDisplayMode] = useState<
     'value' | 'pct'
   >(() => initialSettings.holdingsHistoryChartDisplayMode ?? initialDisplayMode)
-  const [symbolData, setSymbolData] = useState<SymbolSeriesResponse | null>(null)
+  const [seriesByKey, setSeriesByKey] = useState<Record<string, SymbolSeriesResponse>>({})
   const [loadingSymbolData, setLoadingSymbolData] = useState(false)
   const [symbolDataError, setSymbolDataError] = useState<string | null>(null)
-
-  type IndicatorRow = AlertVariableDef & {
-    enabled: boolean
-    plot: 'price' | 'hidden'
-  }
-  const [indicatorRows, setIndicatorRows] = useState<IndicatorRow[]>(() =>
-    Array.isArray(initialSettings.indicatorRows)
-      ? (initialSettings.indicatorRows as IndicatorRow[])
-      : [],
-  )
-  const [indicatorData, setIndicatorData] = useState<SymbolIndicatorsResponse | null>(null)
-  const [indicatorLoading, setIndicatorLoading] = useState(false)
-  const [indicatorError, setIndicatorError] = useState<string | null>(null)
-
-	  const [signalDsl, setSignalDsl] = useState<string>(
-	    () => initialSettings.signalDsl ?? '',
-	  ) // boolean DSL
-	  const [signalParams, setSignalParams] = useState<Record<string, unknown>>(() => {
-	    const raw = (initialSettings as any).signalParams
-	    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-	      return raw as Record<string, unknown>
-	    }
-	    return {}
-	  })
-		  const [signalMarkers, setSignalMarkers] = useState<SignalMarker[]>([])
-		  const [signalLoading, setSignalLoading] = useState(false)
-		  const [signalError, setSignalError] = useState<string | null>(null)
-		  const [exprHelpOpen, setExprHelpOpen] = useState(false)
-      const signalDslEditorRef = useRef<any>(null)
-
-    // Saved strategy (optional) for dashboard signals/overlays
-    const [strategyDialogOpen, setStrategyDialogOpen] = useState(false)
-    const [strategyRows, setStrategyRows] = useState<SignalStrategy[]>([])
-    const [strategyLoading, setStrategyLoading] = useState(false)
-    const [strategyLoadError, setStrategyLoadError] = useState<string | null>(null)
-    const [strategyId, setStrategyId] = useState<number | null>(null)
-    const [strategyVersions, setStrategyVersions] = useState<SignalStrategyVersion[]>([])
-    const [strategyVersionId, setStrategyVersionId] = useState<number | null>(null)
-    const [strategySignalOutput, setStrategySignalOutput] = useState<string | null>(null)
-    const [strategyOverlayOutputs, setStrategyOverlayOutputs] = useState<string[]>([])
-    const [strategyParamDraft, setStrategyParamDraft] = useState<Record<string, unknown>>({})
-    const [strategyReplaceExisting, setStrategyReplaceExisting] = useState(true)
-
-  const [customIndicators, setCustomIndicators] = useState<CustomIndicator[]>([])
-  const [customIndicatorsLoading, setCustomIndicatorsLoading] = useState(false)
-  const [customIndicatorsError, setCustomIndicatorsError] = useState<string | null>(null)
-
-  const signalOperandOptions = useMemo(() => {
-    return [
-      ...(indicatorRows
-        .map((r) => String(r.name || '').trim())
-        .filter(Boolean)),
-      'open',
-      'high',
-      'low',
-      'close',
-      'volume',
-    ]
-  }, [indicatorRows])
-
-  const openExprHelpForSignals = () => {
-    setExprHelpOpen(true)
-  }
-
-  const insertFromExprHelp = (text: string) => {
-    const updated = insertIntoMonacoEditor(signalDslEditorRef.current, text)
-    if (updated != null) {
-      setSignalDsl(updated)
-      return
-    }
-    setSignalDsl((prev) => appendDslText(prev, text))
-  }
 
   useEffect(() => {
     let active = true
@@ -707,98 +614,7 @@ export function DashboardPage() {
     if (next.length) setSelectedGroups(next)
     setSettingsHydrated(true)
   }, [groups, selectedGroups.length, settingsHydrated])
-
-  const refreshCustomIndicators = async () => {
-    setCustomIndicatorsLoading(true)
-    setCustomIndicatorsError(null)
-    try {
-      const res = await listCustomIndicators()
-      setCustomIndicators(res)
-    } catch (err) {
-      setCustomIndicators([])
-      setCustomIndicatorsError(
-        err instanceof Error ? err.message : 'Failed to load custom indicators',
-      )
-    } finally {
-      setCustomIndicatorsLoading(false)
-    }
-  }
-
-		  useEffect(() => {
-		    void refreshCustomIndicators()
-		    // eslint-disable-next-line react-hooks/exhaustive-deps
-		  }, [])
-
-      useEffect(() => {
-        if (!strategyDialogOpen) return
-        setStrategyLoadError(null)
-        setStrategyId(null)
-        setStrategyVersions([])
-        setStrategyVersionId(null)
-        setStrategySignalOutput(null)
-        setStrategyOverlayOutputs([])
-        setStrategyParamDraft({})
-        setStrategyReplaceExisting(true)
-      }, [strategyDialogOpen])
-
-      useEffect(() => {
-        if (!strategyDialogOpen) return
-        let active = true
-        setStrategyLoading(true)
-        setStrategyLoadError(null)
-        void (async () => {
-          try {
-            const res = await listSignalStrategies({ includeLatest: true, includeUsage: false })
-            if (!active) return
-            setStrategyRows(res)
-          } catch (err) {
-            if (!active) return
-            setStrategyRows([])
-            setStrategyLoadError(
-              err instanceof Error ? err.message : 'Failed to load strategies',
-            )
-          } finally {
-            if (!active) return
-            setStrategyLoading(false)
-          }
-        })()
-        return () => {
-          active = false
-        }
-      }, [strategyDialogOpen])
-
-      useEffect(() => {
-        if (!strategyDialogOpen) return
-        if (strategyId == null) {
-          setStrategyVersions([])
-          return
-        }
-        let active = true
-        void (async () => {
-          try {
-            const res = await listSignalStrategyVersions(strategyId)
-            if (!active) return
-            setStrategyVersions(res)
-            if (res.length > 0) {
-              const desired = strategyVersionId
-              const exists = desired != null && res.some((v) => v.id === desired)
-              if (!exists) setStrategyVersionId(res[0]!.id)
-            }
-          } catch (err) {
-            if (!active) return
-            setStrategyVersions([])
-            setStrategyLoadError(
-              err instanceof Error ? err.message : 'Failed to load strategy versions',
-            )
-          }
-        })()
-        return () => {
-          active = false
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, [strategyDialogOpen, strategyId])
-	
- 	  const handleRefresh = async () => {
+	  const handleRefresh = async () => {
 	    const groupIds = selectedGroups.map((g) => g.id)
 	    if (!includeHoldings && groupIds.length === 0) {
 	      setError('Select Holdings and/or at least one group.')
@@ -966,29 +782,23 @@ export function DashboardPage() {
 	      groupIds,
 	      range: String(range ?? ''),
 	      symbolRange: String(symbolRange ?? ''),
-	      chartType,
-        indicesChartDisplayMode,
-        symbolChartDisplayMode,
-        holdingsHistoryChartDisplayMode,
+	        indicesChartDisplayMode,
+	        symbolChartDisplayMode,
+	        holdingsHistoryChartDisplayMode,
 	      selectedSymbol,
-	      indicatorRows,
-	      signalDsl,
-	      signalParams,
+        benchmarks,
 	    })
 	  }, [
-    chartType,
-    includeHoldings,
-    indicesChartDisplayMode,
-    holdingsHistoryChartDisplayMode,
-    holdingsBrokers,
-    indicatorRows,
-    range,
-    selectedGroups,
-    selectedSymbol,
-    symbolChartDisplayMode,
-    settingsHydrated,
-	    signalDsl,
-	    signalParams,
+	    includeHoldings,
+	    indicesChartDisplayMode,
+	    holdingsHistoryChartDisplayMode,
+	    holdingsBrokers,
+	    range,
+	    selectedGroups,
+	    selectedSymbol,
+	    symbolChartDisplayMode,
+	    settingsHydrated,
+        benchmarks,
 	    symbolRange,
 	  ])
 
@@ -1032,340 +842,258 @@ export function DashboardPage() {
     return (data?.series ?? []).some((s) => (s.needs_hydrate_history_symbols ?? 0) > 0)
   }, [data])
 
+  const instrumentKey = (s: { symbol: string; exchange: string }) =>
+    `${String(s.exchange || 'NSE').toUpperCase()}:${String(s.symbol || '').toUpperCase()}`
+
+  const formatInstrumentLabel = (s: MarketSymbol): string => {
+    const sym = String(s.symbol || '').trim().toUpperCase()
+    const exch = String(s.exchange || '').trim().toUpperCase()
+    return exch ? `${exch}:${sym}` : sym
+  }
+
+  const toDateOnly = (ts: string): string => {
+    const t = String(ts || '')
+    const idx = t.indexOf('T')
+    return idx >= 0 ? t.slice(0, idx) : t.slice(0, 10)
+  }
+
   useEffect(() => {
     let active = true
-    const loadSymbols = async () => {
-      const groupIds = selectedGroups.map((g) => g.id)
-      if (!includeHoldings && groupIds.length === 0) {
-        setSymbolOptions([])
-        setSelectedSymbol(null)
-        return
-      }
+    const q = symbolQuery.trim()
+    if (!q) {
+      setSymbolOptions([])
+      setSymbolsError(null)
+      setLoadingSymbols(false)
+      return
+    }
+    const t = window.setTimeout(async () => {
       setLoadingSymbols(true)
       setSymbolsError(null)
       try {
-        const members: Array<{ symbol: string; exchange: string }> = []
-        if (includeHoldings) {
-          const brokers = holdingsBrokers.length > 0 ? holdingsBrokers : ['zerodha']
-          const results = await Promise.allSettled(brokers.map((b) => fetchHoldings(b)))
-          for (const res of results) {
-            if (res.status !== 'fulfilled') continue
-            const holdings: Holding[] = res.value
-            for (const h of holdings) {
-              if (!h.symbol || !h.quantity || h.quantity <= 0) continue
-              members.push({
-                symbol: h.symbol.toUpperCase(),
-                exchange: (h.exchange || 'NSE').toUpperCase(),
-              })
-            }
-          }
-        }
-
-        for (const g of selectedGroups) {
-          const rows = await listGroupMembers(g.id)
-          for (const r of rows) {
-            if (!r.symbol) continue
-            members.push({
-              symbol: r.symbol.toUpperCase(),
-              exchange: (r.exchange || 'NSE').toUpperCase(),
-            })
-          }
-        }
-
-        const uniq = new Map<string, SymbolKey>()
-        for (const m of members) {
-          const key = `${m.exchange}:${m.symbol}`
-          if (uniq.has(key)) continue
-          uniq.set(key, { symbol: m.symbol, exchange: m.exchange, label: key })
-        }
-
-        const options = Array.from(uniq.values()).sort((a, b) =>
-          a.label.localeCompare(b.label),
-        )
+        const res = await searchMarketSymbols({ q, limit: 30 })
         if (!active) return
-        setSymbolOptions(options)
-        if (options.length === 0) {
-          setSelectedSymbol(null)
-        } else if (!selectedSymbol || !options.some((o) => o.label === selectedSymbol.label)) {
-          setSelectedSymbol(options[0]!)
-        }
+        setSymbolOptions(res)
       } catch (err) {
         if (!active) return
-        setSymbolsError(err instanceof Error ? err.message : 'Failed to load symbols')
+        setSymbolsError(err instanceof Error ? err.message : 'Failed to search symbols')
         setSymbolOptions([])
       } finally {
         if (!active) return
         setLoadingSymbols(false)
       }
+    }, 250)
+    return () => {
+      active = false
+      window.clearTimeout(t)
     }
+  }, [symbolQuery])
 
-    void loadSymbols()
+  useEffect(() => {
+    let active = true
+    const q = benchmarkQuery.trim()
+    if (!q) {
+      setBenchmarkOptions([])
+      setBenchmarksError(null)
+      setLoadingBenchmarks(false)
+      return
+    }
+    const t = window.setTimeout(async () => {
+      setLoadingBenchmarks(true)
+      setBenchmarksError(null)
+      try {
+        const res = await searchMarketSymbols({ q, limit: 30 })
+        if (!active) return
+        setBenchmarkOptions(res)
+      } catch (err) {
+        if (!active) return
+        setBenchmarksError(err instanceof Error ? err.message : 'Failed to search symbols')
+        setBenchmarkOptions([])
+      } finally {
+        if (!active) return
+        setLoadingBenchmarks(false)
+      }
+    }, 250)
+    return () => {
+      active = false
+      window.clearTimeout(t)
+    }
+  }, [benchmarkQuery])
+
+  useEffect(() => {
+    if (benchmarks.length > 0) return
+    let active = true
+    void (async () => {
+      try {
+        const candidates = [
+          'NSE:NIFTY 50',
+          'NSE:NIFTY50',
+          'NSE:NIFTY',
+          'NSE:NIFTYBEES',
+        ]
+        const res = await normalizeMarketSymbols({
+          items: candidates,
+          default_exchange: 'NSE',
+        })
+        if (!active) return
+        const firstValid = (res.items ?? []).find((x) => x.valid)
+        if (!firstValid?.normalized_symbol || !firstValid.normalized_exchange) {
+          setBenchmarksError('Default benchmark not found (tried NIFTY50/NIFTYBEES).')
+          return
+        }
+        setBenchmarks([
+          {
+            symbol: firstValid.normalized_symbol,
+            exchange: firstValid.normalized_exchange,
+            name: null,
+          },
+        ])
+      } catch (err) {
+        if (!active) return
+        setBenchmarksError(
+          err instanceof Error ? err.message : 'Failed to set default benchmark',
+        )
+      }
+    })()
     return () => {
       active = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includeHoldings, selectedGroups])
+  }, [benchmarks.length])
 
-  const loadSymbolSeries = async (hydrateMode: 'none' | 'auto' | 'force') => {
-    if (!selectedSymbol) return
+  useEffect(() => {
+    const selfKey = selectedSymbol ? instrumentKey(selectedSymbol) : null
+    setBenchmarks((prev) => {
+      const out: MarketSymbol[] = []
+      const seen = new Set<string>()
+      for (const s of prev) {
+        const key = instrumentKey(s)
+        if (selfKey && key === selfKey) continue
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ symbol: s.symbol, exchange: s.exchange, name: s.name ?? null })
+        if (out.length >= 5) break
+      }
+      return out
+    })
+  }, [selectedSymbol?.symbol, selectedSymbol?.exchange])
+
+  const loadCompareSeries = async (hydrateMode: 'none' | 'auto' | 'force') => {
+    if (!selectedSymbol) {
+      setSeriesByKey({})
+      return
+    }
+    const instruments = [selectedSymbol, ...benchmarks]
+    const uniq: MarketSymbol[] = []
+    const seen = new Set<string>()
+    for (const s of instruments) {
+      const key = instrumentKey(s)
+      if (seen.has(key)) continue
+      seen.add(key)
+      uniq.push(s)
+    }
+
     setLoadingSymbolData(true)
     setSymbolDataError(null)
     try {
-      const res = await fetchSymbolSeries({
-        symbol: selectedSymbol.symbol,
-        exchange: selectedSymbol.exchange,
-        range: symbolRange,
-        timeframe: '1d',
-        hydrate_mode: hydrateMode,
-      } as any)
-      setSymbolData(res)
-    } catch (err) {
-      setSymbolData(null)
-      setSymbolDataError(err instanceof Error ? err.message : 'Failed to load candles')
+      const results = await Promise.allSettled(
+        uniq.map((s) =>
+          fetchSymbolSeries({
+            symbol: s.symbol,
+            exchange: s.exchange,
+            range: symbolRange,
+            timeframe: '1d',
+            hydrate_mode: hydrateMode,
+          } as any),
+        ),
+      )
+      const next: Record<string, SymbolSeriesResponse> = {}
+      let firstErr: string | null = null
+      results.forEach((res, idx) => {
+        const s = uniq[idx]!
+        const key = instrumentKey(s)
+        if (res.status === 'fulfilled') {
+          next[key] = res.value
+        } else if (!firstErr) {
+          firstErr =
+            res.reason instanceof Error ? res.reason.message : 'Failed to load series'
+        }
+      })
+      setSeriesByKey(next)
+      if (firstErr) setSymbolDataError(firstErr)
     } finally {
       setLoadingSymbolData(false)
     }
   }
 
-  useEffect(() => {
-    void loadSymbolSeries('auto')
+  const compareKey = useMemo(() => {
+    const keys = [
+      selectedSymbol ? instrumentKey(selectedSymbol) : '',
+      ...benchmarks.map(instrumentKey),
+      String(symbolRange ?? ''),
+    ].filter(Boolean)
+    return keys.join('|')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSymbol, symbolRange])
+  }, [selectedSymbol?.symbol, selectedSymbol?.exchange, benchmarks, symbolRange])
 
   useEffect(() => {
-    setIndicatorData(null)
-    setSignalMarkers([])
-    setSignalError(null)
+    void loadCompareSeries('auto')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSymbol, symbolRange])
+  }, [compareKey])
 
-  const enabledVariables = useMemo(() => {
-    return indicatorRows
-      .filter((r) => r.enabled && String(r.name || '').trim())
-      .map((r) => ({
-        name: String(r.name || '').trim(),
-        dsl: r.dsl ?? null,
-        kind: r.kind ?? null,
-        params: (() => {
-          const kind = String(r.kind || '').toUpperCase()
-          const params = ((r.params ?? {}) as Record<string, any>) ?? {}
-          // Backend expects VWAP params as `{ price, timeframe }` (not `source`).
-          if (kind === 'VWAP') {
-            const price = params.price ?? params.source ?? 'hlc3'
-            const { source: _source, ...rest } = params
-            return { ...rest, price }
-          }
-          // Best-effort compatibility if older rows used `price` for non-VWAP.
-          if (params.source == null && params.price != null) {
-            const { price: _price, ...rest } = params
-            return { ...rest, source: _price }
-          }
-          return params
-        })(),
-      }))
-  }, [indicatorRows])
+  const compareChartSeries = useMemo(() => {
+    if (!selectedSymbol) return []
+    const instruments = [selectedSymbol, ...benchmarks]
+    const present: Array<{ ref: MarketSymbol; data: SymbolSeriesResponse }> = []
+    const seen = new Set<string>()
+    for (const s of instruments) {
+      const key = instrumentKey(s)
+      if (seen.has(key)) continue
+      seen.add(key)
+      const data = seriesByKey[key]
+      if (!data || (data.points ?? []).length < 2) continue
+      present.push({ ref: s, data })
+    }
+    if (present.length === 0) return []
 
-  const activeSavedStrategyVersion = useMemo(() => {
-    if (strategyVersionId == null) return null
-    return strategyVersions.find((v) => v.id === strategyVersionId) ?? null
-  }, [strategyVersionId, strategyVersions])
+    const starts = present
+      .map((p) => toDateOnly((p.data.points ?? [])[0]?.ts ?? ''))
+      .filter(Boolean)
+    const commonStart = starts.reduce((acc, cur) => (acc < cur ? cur : acc), starts[0]!)
 
-  useEffect(() => {
-    if (!strategyDialogOpen) return
-    if (!activeSavedStrategyVersion) return
-
-    const signalOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
-      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
-    )
-    const overlayOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
-      (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
-    )
-    const defaultSignal = signalOutputs[0]?.name ?? null
-    if (!strategySignalOutput && defaultSignal) setStrategySignalOutput(defaultSignal)
-
-    setStrategyOverlayOutputs((prev) => {
-      if (prev.length > 0) return prev
-      return overlayOutputs.map((o) => o.name)
-    })
-
-    setStrategyParamDraft((prev) => {
-      const next: Record<string, unknown> = {}
-      for (const inp of activeSavedStrategyVersion.inputs ?? []) {
-        if (!inp?.name) continue
-        if (inp.default != null) next[inp.name] = inp.default
+    return present.map((p, idx) => {
+      const pts = (p.data.points ?? [])
+        .map((x) => ({ ts: toDateOnly(x.ts), close: x.close }))
+        .filter((x) => x.ts && Number.isFinite(x.close) && x.ts >= commonStart)
+        .sort((a, b) => a.ts.localeCompare(b.ts))
+      const baseClose = pts[0]?.close ?? 0
+      const points =
+        baseClose > 0
+          ? pts.map((x) => ({ x: parseDateMs(x.ts), y: (x.close / baseClose) * 100 }))
+          : []
+      return {
+        label: formatInstrumentLabel(p.ref),
+        color: palette[idx % palette.length]!,
+        points,
       }
-      for (const [k, v] of Object.entries(prev || {})) next[k] = v
-      return next
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSavedStrategyVersion?.id, strategyDialogOpen])
+  }, [benchmarks, palette, selectedSymbol, seriesByKey])
 
-  useEffect(() => {
-    if (!strategyDialogOpen) return
-    if (!activeSavedStrategyVersion) return
-    const signalOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
-      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
-    )
-    const resolvedName =
-      signalOutputs.find((o) => o.name === strategySignalOutput)?.name ??
-      signalOutputs[0]?.name ??
-      null
-    if (resolvedName && resolvedName !== strategySignalOutput) {
-      setStrategySignalOutput(resolvedName)
-    }
-  }, [activeSavedStrategyVersion?.id, strategyDialogOpen, strategySignalOutput])
-
-  const applyIndicators = async () => {
-    if (!selectedSymbol) return
-    setIndicatorLoading(true)
-    setIndicatorError(null)
-    try {
-	      const res = await fetchSymbolIndicators({
-	        symbol: selectedSymbol.label,
-	        range: symbolRange,
-	        timeframe: '1d',
-	        hydrate_mode: 'auto',
-	        variables: enabledVariables,
-	        params: signalParams,
-	      })
-      setIndicatorData(res)
-      const keys = Object.keys(res.errors || {})
-      if (keys.length > 0) {
-        const firstKey = keys[0]!
-        const firstMsg = (res.errors || {})[firstKey]
-        setIndicatorError(
-          `Some indicators failed: ${keys.slice(0, 3).join(', ')}${
-            firstMsg ? ` — ${firstMsg}` : ''
-          }`,
-        )
-      }
-    } catch (err) {
-      setIndicatorData(null)
-      setIndicatorError(err instanceof Error ? err.message : 'Failed to compute indicators')
-    } finally {
-      setIndicatorLoading(false)
-    }
-  }
-
-  const runSignals = async () => {
-    if (!selectedSymbol) return
-    if (!signalDsl.trim()) {
-      setSignalError('Enter a DSL expression.')
-      return
-    }
-    setSignalLoading(true)
-    setSignalError(null)
-    try {
-	      const res = await fetchSymbolSignals({
-	        symbol: selectedSymbol.label,
-	        range: symbolRange,
-	        timeframe: '1d',
-	        hydrate_mode: 'auto',
-	        variables: enabledVariables,
-	        condition_dsl: signalDsl,
-	        params: signalParams,
-	      })
-      setSignalMarkers(res.markers || [])
-      if (res.errors?.length) setSignalError(res.errors[0]!)
-    } catch (err) {
-      setSignalMarkers([])
-      setSignalError(err instanceof Error ? err.message : 'Failed to evaluate signals')
-    } finally {
-      setSignalLoading(false)
-    }
-  }
-
-  const applySavedStrategy = () => {
-    if (!activeSavedStrategyVersion) return
-    const signalOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
-      (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
-    )
-    const overlayOutputs = (activeSavedStrategyVersion.outputs ?? []).filter(
-      (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
-    )
-    const signalDslText =
-      signalOutputs.find((o) => o.name === strategySignalOutput)?.dsl ??
-      signalOutputs[0]?.dsl ??
-      ''
-
-    const vars: IndicatorRow[] = (activeSavedStrategyVersion.variables ?? []).map((v) => ({
-      ...v,
-      enabled: true,
-      plot: 'hidden',
-    }))
-    const overlays: IndicatorRow[] = overlayOutputs.map((o) => ({
-      name: o.name,
-      dsl: o.dsl,
-      kind: null,
-      params: null,
-      enabled: strategyOverlayOutputs.includes(o.name),
-      plot: 'price',
-    }))
-
-    setIndicatorRows((prev) => (strategyReplaceExisting ? [...vars, ...overlays] : [...prev, ...vars, ...overlays]))
-    setSignalDsl(String(signalDslText || ''))
-    setSignalParams(strategyParamDraft || {})
-    setSignalMarkers([])
-    setSignalError(null)
-    setIndicatorData(null)
-    setIndicatorError(null)
-    setStrategyDialogOpen(false)
-  }
-
-  const perf = useMemo(() => {
-    const pts = symbolData?.points ?? []
-    if (pts.length < 2) return null
-    const closes = pts.map((p) => p.close)
-    const last = closes[closes.length - 1]!
-    const prev = closes[closes.length - 2]!
-    const pct = (a: number, b: number) => (b === 0 ? 0 : ((a - b) / b) * 100)
-    const at = (nBack: number) => {
-      const idx = closes.length - 1 - nBack
-      if (idx < 0) return null
-      return pct(last, closes[idx]!)
-    }
-    return {
-      today: pct(last, prev),
-      d5: at(5),
-      m1: at(21),
-      m3: at(63),
-      m6: at(126),
-      y1: at(252),
-      y2: at(504),
-    }
-  }, [symbolData])
-
-  const chartOverlays = useMemo(() => {
-    if (!indicatorData) return []
-    const ts = indicatorData.ts || []
-    const series = indicatorData.series || {}
-    const palette = [
-      theme.palette.warning.main,
-      theme.palette.success.main,
-      theme.palette.info.main,
-      theme.palette.secondary.main,
-      theme.palette.error.main,
-      theme.palette.primary.light,
-    ]
-    const plotted = indicatorRows.filter((r) => r.enabled && r.plot === 'price')
-    return plotted
-      .map((r, idx) => {
-        const name = String(r.name || '').trim()
-        if (!name) return null
-        const values = series[name] || series[name.toUpperCase()] || null
-        if (!values) return null
-        return {
-          name,
-          color: palette[idx % palette.length]!,
-          points: ts.map((t, i) => ({ ts: t, value: values[i] ?? null })),
-        }
+  const compareSummary = useMemo(() => {
+    return compareChartSeries
+      .map((s) => {
+        const pts = s.points ?? []
+        if (pts.length < 2) return null
+        const first = pts[0]!.y
+        const last = pts[pts.length - 1]!.y
+        const ret = first === 0 ? 0 : ((last - first) / first) * 100
+        return { label: s.label, color: s.color, ret }
       })
-      .filter(Boolean) as Array<{
-      name: string
-      color: string
-      points: Array<{ ts: string; value: number | null }>
-    }>
-  }, [indicatorData, indicatorRows, theme])
+      .filter(Boolean) as Array<{ label: string; color: string; ret: number }>
+  }, [compareChartSeries])
+
+  const needsHydrateSymbols = useMemo(() => {
+    return Object.values(seriesByKey).some((s) => Boolean(s?.needs_hydrate_history))
+  }, [seriesByKey])
 
   return (
     <Box>
@@ -1588,6 +1316,7 @@ export function DashboardPage() {
                 series={chartSeries}
                 height={300}
                 displayMode={indicesChartDisplayMode}
+                emptyText="No chart data yet. Select Holdings/Groups and click Refresh."
               />
 
               {summary.length > 0 && (
@@ -1627,7 +1356,7 @@ export function DashboardPage() {
         >
             <Stack spacing={1.5}>
               <Stack direction="row" spacing={2} alignItems="center">
-                <Typography variant="h6">Symbol explorer</Typography>
+                <Typography variant="h6">Symbol compare</Typography>
                 <Box sx={{ flex: 1 }} />
               </Stack>
 
@@ -1639,14 +1368,30 @@ export function DashboardPage() {
                 <Autocomplete
                   options={symbolOptions}
                   loading={loadingSymbols}
-                  getOptionLabel={(o) => o.label}
                   value={selectedSymbol}
-                  onChange={(_e, value) => setSelectedSymbol(value)}
+                  onChange={(_e, v) => setSelectedSymbol(v)}
+                  onInputChange={(_e, v) => setSymbolQuery(v.toUpperCase())}
+                  getOptionLabel={(o) => `${o.symbol} (${o.exchange})`}
+                  isOptionEqualToValue={(a, b) => a.symbol === b.symbol && a.exchange === b.exchange}
+                  renderOption={(props, option) => (
+                    <li {...props}>
+                      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                        <Typography variant="body2">
+                          {option.symbol} ({option.exchange})
+                        </Typography>
+                        {option.name ? (
+                          <Typography variant="caption" color="text.secondary">
+                            {option.name}
+                          </Typography>
+                        ) : null}
+                      </Box>
+                    </li>
+                  )}
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       label="Symbol"
-                      helperText={symbolsError || 'Pick a symbol from the selected universe.'}
+                      helperText={symbolsError ?? 'Start typing to search symbols (stocks/ETFs/indices).'}
                       error={!!symbolsError}
                     />
                   )}
@@ -1677,31 +1422,20 @@ export function DashboardPage() {
                     }
                     sx={{ minWidth: 120 }}
                   >
-                    <MenuItem value="value">Value</MenuItem>
+                    <MenuItem value="value">Base 100</MenuItem>
                     <MenuItem value="pct">%</MenuItem>
-                  </TextField>
-                  <TextField
-                    label="Chart"
-                    select
-                    size="small"
-                    value={chartType}
-                    onChange={(e) => setChartType(e.target.value as PriceChartType)}
-                    sx={{ minWidth: 120 }}
-                  >
-                    <MenuItem value="line">Line</MenuItem>
-                    <MenuItem value="candles">Candles</MenuItem>
                   </TextField>
                 </Stack>
               </Stack>
 
-              {symbolData?.needs_hydrate_history && (
+              {needsHydrateSymbols && (
                 <Alert
                   severity="warning"
                   action={
                     <Button
                       color="inherit"
                       size="small"
-                      onClick={() => void loadSymbolSeries('force')}
+                      onClick={() => void loadCompareSeries('force')}
                       disabled={loadingSymbolData}
                     >
                       {loadingSymbolData ? 'Hydrating…' : 'Hydrate now'}
@@ -1718,63 +1452,102 @@ export function DashboardPage() {
                 </Typography>
               )}
 
-              {perf && (
-                <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
-                  <Typography variant="caption" color="text.secondary">
-                    Perf:
+              <Box>
+                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                  Benchmarks (max 5)
+                </Typography>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{ flexWrap: 'wrap', alignItems: 'center' }}
+                >
+                  {benchmarks.map((b) => (
+                    <Chip
+                      key={formatInstrumentLabel(b)}
+                      label={formatInstrumentLabel(b)}
+                      size="small"
+                      onDelete={() => {
+                        const key = formatInstrumentLabel(b)
+                        setBenchmarks((prev) =>
+                          prev.filter((x) => formatInstrumentLabel(x) !== key),
+                        )
+                      }}
+                    />
+                  ))}
+                  {benchmarks.length < 5 && (
+                    <Autocomplete
+                      options={benchmarkOptions}
+                      loading={loadingBenchmarks}
+                      value={null}
+                      onChange={(_e, v) => {
+                        if (!v) return
+                        setBenchmarksError(null)
+                        setBenchmarks((prev) => {
+                          if (prev.length >= 5) {
+                            setBenchmarksError('Max 5 benchmarks.')
+                            return prev
+                          }
+                          const key = formatInstrumentLabel(v)
+                          if (prev.some((x) => formatInstrumentLabel(x) === key)) return prev
+                          return [...prev, v]
+                        })
+                        setBenchmarkQuery('')
+                        setBenchmarkOptions([])
+                      }}
+                      onInputChange={(_e, v) => setBenchmarkQuery(v.toUpperCase())}
+                      getOptionLabel={(o) => `${o.symbol} (${o.exchange})`}
+                      isOptionEqualToValue={(a, b) =>
+                        a.symbol === b.symbol && a.exchange === b.exchange
+                      }
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          label="Add benchmark"
+                          size="small"
+                          sx={{ minWidth: 240 }}
+                        />
+                      )}
+                      sx={{ minWidth: 240 }}
+                    />
+                  )}
+                </Stack>
+                {benchmarksError && (
+                  <Typography variant="caption" color="error">
+                    {benchmarksError}
                   </Typography>
-                  <Typography variant="caption" color={perf.today >= 0 ? 'success.main' : 'error.main'}>
-                    Today {formatPct(perf.today)}
-                  </Typography>
-                  {perf.d5 != null && (
-                    <Typography variant="caption" color={perf.d5 >= 0 ? 'success.main' : 'error.main'}>
-                      5D {formatPct(perf.d5)}
-                    </Typography>
-                  )}
-                  {perf.m1 != null && (
-                    <Typography variant="caption" color={perf.m1 >= 0 ? 'success.main' : 'error.main'}>
-                      1M {formatPct(perf.m1)}
-                    </Typography>
-                  )}
-                  {perf.m3 != null && (
-                    <Typography variant="caption" color={perf.m3 >= 0 ? 'success.main' : 'error.main'}>
-                      3M {formatPct(perf.m3)}
-                    </Typography>
-                  )}
-                  {perf.m6 != null && (
-                    <Typography variant="caption" color={perf.m6 >= 0 ? 'success.main' : 'error.main'}>
-                      6M {formatPct(perf.m6)}
-                    </Typography>
-                  )}
-                  {perf.y1 != null && (
-                    <Typography variant="caption" color={perf.y1 >= 0 ? 'success.main' : 'error.main'}>
-                      1Y {formatPct(perf.y1)}
-                    </Typography>
-                  )}
-                  {perf.y2 != null && (
-                    <Typography variant="caption" color={perf.y2 >= 0 ? 'success.main' : 'error.main'}>
-                      2Y {formatPct(perf.y2)}
-                    </Typography>
-                  )}
+                )}
+              </Box>
+
+              {compareSummary.length > 0 && (
+                <Stack
+                  direction={{ xs: 'column', md: 'row' }}
+                  spacing={1.5}
+                  sx={{ flexWrap: 'wrap' }}
+                >
+                  {compareSummary.map((s) => (
+                    <Paper key={s.label} variant="outlined" sx={{ p: 1.25, minWidth: 220 }}>
+                      <Typography variant="subtitle2">{s.label}</Typography>
+                      <Typography
+                        variant="h6"
+                        sx={{ mt: 0.5 }}
+                        color={s.ret >= 0 ? 'success.main' : 'error.main'}
+                      >
+                        {formatPct(s.ret)}
+                      </Typography>
+                    </Paper>
+                  ))}
                 </Stack>
               )}
 
-              <PriceChart
-                candles={symbolData?.points ?? []}
-                chartType={chartType}
-                overlays={chartOverlays}
-                markers={signalMarkers}
-                displayMode={symbolChartDisplayMode}
+              <MultiLineChart
+                series={compareChartSeries}
                 height={340}
+                base={100}
+                displayMode={symbolChartDisplayMode}
+                emptyText="No chart data yet. Pick a symbol to compare."
               />
 
-              {symbolData && (
-                <Typography variant="caption" color="text.secondary">
-                  Coverage — head gap: {symbolData.head_gap_days}d, tail gap:{' '}
-                  {symbolData.tail_gap_days}d
-                </Typography>
-              )}
-
+              {/*
               <Accordion disableGutters defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Typography variant="subtitle2">Indicators</Typography>
@@ -2080,7 +1853,6 @@ export function DashboardPage() {
                   </Stack>
                 </AccordionDetails>
               </Accordion>
-
               <Accordion disableGutters defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Typography variant="subtitle2">DSL signals</Typography>
@@ -2161,6 +1933,7 @@ export function DashboardPage() {
                   </Stack>
                 </AccordionDetails>
               </Accordion>
+              */}
             </Stack>
 	          </Paper>
       </Box>
@@ -2171,201 +1944,6 @@ export function DashboardPage() {
           onChartDisplayModeChange={setHoldingsHistoryChartDisplayMode}
         />
       </Box>
-
-      <Dialog
-        open={strategyDialogOpen}
-        onClose={() => setStrategyDialogOpen(false)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>Apply saved strategy</DialogTitle>
-        <DialogContent dividers>
-          <Stack spacing={2}>
-            {strategyLoadError && (
-              <Typography color="error">{strategyLoadError}</Typography>
-            )}
-
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={strategyReplaceExisting}
-                  onChange={(e) => setStrategyReplaceExisting(e.target.checked)}
-                />
-              }
-              label="Replace existing indicators/signals"
-            />
-
-            <Autocomplete
-              options={strategyRows}
-              loading={strategyLoading}
-              value={strategyRows.find((s) => s.id === strategyId) ?? null}
-              onChange={(_e, v) => {
-                setStrategyId(v?.id ?? null)
-                setStrategyVersionId(null)
-                setStrategySignalOutput(null)
-                setStrategyOverlayOutputs([])
-                setStrategyParamDraft({})
-              }}
-              getOptionLabel={(s) => `${s.name} (v${s.latest_version})`}
-              renderInput={(params) => (
-                <TextField {...params} label="Strategy" />
-              )}
-            />
-
-            <Stack direction="row" spacing={1} flexWrap="wrap">
-              <TextField
-                label="Version"
-                select
-                size="small"
-                value={strategyVersionId ?? ''}
-                onChange={(e) => {
-                  const n = Number(e.target.value || '')
-                  setStrategyVersionId(Number.isFinite(n) ? n : null)
-                  setStrategySignalOutput(null)
-                  setStrategyOverlayOutputs([])
-                  setStrategyParamDraft({})
-                }}
-                sx={{ minWidth: 120 }}
-                disabled={strategyId == null || strategyVersions.length === 0}
-              >
-                {strategyVersions.map((v) => (
-                  <MenuItem key={v.id} value={v.id}>
-                    v{v.version}
-                  </MenuItem>
-                ))}
-              </TextField>
-
-              <TextField
-                label="Signal output"
-                select
-                size="small"
-                value={strategySignalOutput ?? ''}
-                onChange={(e) => setStrategySignalOutput(e.target.value || null)}
-                sx={{ minWidth: 180 }}
-                disabled={!activeSavedStrategyVersion}
-              >
-                {(activeSavedStrategyVersion?.outputs ?? [])
-                  .filter(
-                    (o) => String(o.kind || '').toUpperCase() === 'SIGNAL',
-                  )
-                  .map((o) => (
-                    <MenuItem key={o.name} value={o.name}>
-                      {o.name}
-                    </MenuItem>
-                  ))}
-              </TextField>
-
-              <TextField
-                label="Overlay outputs"
-                select
-                size="small"
-                SelectProps={{ multiple: true }}
-                value={strategyOverlayOutputs}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setStrategyOverlayOutputs(Array.isArray(v) ? (v as string[]) : [])
-                }}
-                sx={{ minWidth: 240, flex: 1 }}
-                disabled={!activeSavedStrategyVersion}
-              >
-                {(activeSavedStrategyVersion?.outputs ?? [])
-                  .filter(
-                    (o) => String(o.kind || '').toUpperCase() === 'OVERLAY',
-                  )
-                  .map((o) => (
-                    <MenuItem key={o.name} value={o.name}>
-                      {o.name}
-                    </MenuItem>
-                  ))}
-              </TextField>
-            </Stack>
-
-            {(activeSavedStrategyVersion?.inputs ?? []).length > 0 && (
-              <Box>
-                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  Parameters
-                </Typography>
-                <Stack spacing={1}>
-                  {(activeSavedStrategyVersion?.inputs ?? []).map((inp) => {
-                    const key = inp.name
-                    const raw = strategyParamDraft[key]
-                    const val = raw == null ? '' : String(raw)
-                    const typ = inp.type
-                    const enumValues = Array.isArray(inp.enum_values)
-                      ? inp.enum_values
-                      : []
-                    return (
-                      <Stack key={key} direction="row" spacing={1} alignItems="center">
-                        <TextField
-                          label={key}
-                          size="small"
-                          value={val}
-                          onChange={(e) => {
-                            const nextRaw = e.target.value
-                            const nextVal =
-                              typ === 'number'
-                                ? (Number.isFinite(Number(nextRaw)) ? Number(nextRaw) : nextRaw)
-                                : typ === 'bool'
-                                  ? nextRaw === 'true'
-                                  : nextRaw
-                            setStrategyParamDraft((prev) => ({ ...prev, [key]: nextVal }))
-                          }}
-                          select={
-                            typ === 'bool' || (typ === 'enum' && enumValues.length > 0)
-                          }
-                          sx={{ minWidth: 220 }}
-                        >
-                          {typ === 'bool' ? (
-                            [
-                              <MenuItem key="true" value="true">
-                                true
-                              </MenuItem>,
-                              <MenuItem key="false" value="false">
-                                false
-                              </MenuItem>,
-                            ]
-                          ) : null}
-                          {typ === 'enum' && enumValues.length > 0
-                            ? enumValues.map((ev) => (
-                                <MenuItem key={ev} value={ev}>
-                                  {ev}
-                                </MenuItem>
-                              ))
-                            : null}
-                        </TextField>
-                        {inp.default != null && (
-                          <Typography variant="caption" color="text.secondary">
-                            default: {String(inp.default)}
-                          </Typography>
-                        )}
-                      </Stack>
-                    )
-                  })}
-                </Stack>
-              </Box>
-            )}
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setStrategyDialogOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={applySavedStrategy}
-            disabled={!activeSavedStrategyVersion}
-          >
-            Apply
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <DslExprHelpDrawer
-        open={exprHelpOpen}
-        onClose={() => setExprHelpOpen(false)}
-        operands={signalOperandOptions}
-        customIndicators={customIndicators}
-        onInsert={insertFromExprHelp}
-        title="Dashboard DSL expression help"
-      />
     </Box>
   )
 }

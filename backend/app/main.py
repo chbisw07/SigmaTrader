@@ -18,6 +18,9 @@ from .services.alerts_v3 import schedule_alerts_v3
 from .services.deployment_runtime import start_deployments_runtime
 from .services.instruments_sync import schedule_instrument_master_sync
 from .services.holdings_exit_engine import schedule_holdings_exit
+from .services.holdings_summary_daily_snapshots import (
+    schedule_holdings_summary_daily_snapshots,
+)
 from .services.managed_risk import schedule_managed_risk
 from .services.market_data import schedule_market_data_sync
 from .services.synthetic_gtt import schedule_synthetic_gtt
@@ -177,6 +180,7 @@ async def _lifespan(_app: FastAPI):
         )
 
         schedule_holdings_summary_finalizer()
+        schedule_holdings_summary_daily_snapshots()
         # AI Trading Manager monitoring loop is feature-flagged and no-ops unless enabled.
         schedule_ai_tm_monitoring()
         # AI Trading Manager automation loop (Phase 2+) is also feature-flagged.

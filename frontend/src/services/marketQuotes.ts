@@ -9,18 +9,35 @@ export type MarketQuote = {
 export async function fetchMarketQuotes(
   items: Array<{ symbol: string; exchange?: string | null }>,
 ): Promise<MarketQuote[]> {
-  const res = await fetch('/api/market/quotes', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items }),
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(
-      `Failed to fetch market quotes (${res.status})${body ? `: ${body}` : ''}`,
-    )
+  const norm: Array<{ symbol: string; exchange?: string | null }> = []
+  const seen = new Set<string>()
+  for (const it of items || []) {
+    const sym = (it.symbol || '').trim().toUpperCase()
+    if (!sym) continue
+    const exch = (it.exchange || 'NSE').trim().toUpperCase() || 'NSE'
+    const key = `${exch}:${sym}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    norm.push({ symbol: sym, exchange: exch })
   }
-  const data = (await res.json()) as { items?: MarketQuote[] }
-  return Array.isArray(data.items) ? data.items : []
-}
 
+  const BATCH = 200
+  const out: MarketQuote[] = []
+  for (let i = 0; i < norm.length; i += BATCH) {
+    const batch = norm.slice(i, i + BATCH)
+    const res = await fetch('/api/market/quotes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: batch }),
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(
+        `Failed to fetch market quotes (${res.status})${body ? `: ${body}` : ''}`,
+      )
+    }
+    const data = (await res.json()) as { items?: MarketQuote[] }
+    if (Array.isArray(data.items)) out.push(...data.items)
+  }
+  return out
+}

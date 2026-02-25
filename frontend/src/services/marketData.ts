@@ -72,6 +72,40 @@ export async function searchMarketSymbols(params: {
   return (await res.json()) as MarketSymbol[]
 }
 
+export type MarketSymbolNormalizeRequest = {
+  items: string[]
+  default_exchange?: string
+}
+
+export type MarketSymbolNormalizeItem = {
+  raw: string
+  normalized_symbol?: string | null
+  normalized_exchange?: string | null
+  valid: boolean
+  reason?: string | null
+}
+
+export type MarketSymbolNormalizeResponse = {
+  items: MarketSymbolNormalizeItem[]
+}
+
+export async function normalizeMarketSymbols(
+  payload: MarketSymbolNormalizeRequest,
+): Promise<MarketSymbolNormalizeResponse> {
+  const res = await fetch('/api/market/symbols/normalize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(
+      `Failed to normalize symbols (${res.status})${body ? `: ${body}` : ''}`,
+    )
+  }
+  return (await res.json()) as MarketSymbolNormalizeResponse
+}
+
 export async function fetchMarketDataStatus(): Promise<MarketDataStatus> {
   const res = await fetch('/api/market/status')
   if (!res.ok) {
