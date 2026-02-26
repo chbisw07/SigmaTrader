@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time as dt_time
+from datetime import UTC, datetime, time as dt_time, timedelta
 from typing import Iterable, Literal, Optional, Set
 
 
@@ -182,12 +182,59 @@ def resolve_no_trade_action(
     return matched
 
 
+def compute_no_trade_defer_until_utc(
+    *,
+    now_utc: datetime,
+    start: dt_time,
+    end: dt_time,
+) -> datetime:
+    """Compute the next window end as a UTC datetime for deferral.
+
+    The ruleset uses local (IST) wall-clock times. When a match is active,
+    AUTO dispatch should be deferred until the end of the matched window.
+    """
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("Asia/Kolkata")
+        now_local = now_utc.astimezone(tz)
+    except Exception:
+        # Best-effort fallback: treat now_utc as local time.
+        tz = None
+        now_local = now_utc
+
+    d = now_local.date()
+    t = now_local.time()
+
+    # Special case: start==end means "all day" (or "always") per _in_range.
+    # Defer until the next day's same wall-clock time.
+    if start == end:
+        end_local_dt = datetime.combine(d + timedelta(days=1), end)
+    elif end > start:
+        end_local_dt = datetime.combine(d, end)
+    else:
+        # Cross-midnight window.
+        if t >= start:
+            end_local_dt = datetime.combine(d + timedelta(days=1), end)
+        else:
+            end_local_dt = datetime.combine(d, end)
+
+    if tz is not None:
+        end_local_dt = end_local_dt.replace(tzinfo=tz)
+        return end_local_dt.astimezone(UTC)
+    # Fallback path: keep naive/offset-less datetimes in UTC for storage.
+    if end_local_dt.tzinfo is None:
+        return end_local_dt.replace(tzinfo=UTC)
+    return end_local_dt.astimezone(UTC)
+
+
 __all__ = [
     "NoTradeMatch",
     "NoTradeRule",
     "TradeAction",
     "TradeKey",
+    "compute_no_trade_defer_until_utc",
     "parse_no_trade_rules",
     "resolve_no_trade_action",
 ]
-

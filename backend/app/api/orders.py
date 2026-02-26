@@ -1380,10 +1380,15 @@ def execute_order_internal(
         db.refresh(order)
 
     # NO_TRADE windows (global): when an AUTO dispatch tries to execute during a
-    # blocked window, keep the order in the Waiting Queue for manual review.
+    # blocked window, defer broker execution until the window ends. We keep the
+    # order in WAITING/AUTO and persist a "not before" timestamp so a background
+    # worker can resume dispatch automatically.
     if bool(auto_dispatch) and not bool(getattr(order, "is_exit", False)):
         try:
-            from app.services.no_trade_rules import resolve_no_trade_action
+            from app.services.no_trade_rules import (
+                compute_no_trade_defer_until_utc,
+                resolve_no_trade_action,
+            )
 
             match = resolve_no_trade_action(
                 rules_text=str(getattr(risk_global, "no_trade_rules", "") or ""),
@@ -1392,12 +1397,26 @@ def execute_order_internal(
                 side=str(getattr(order, "side", "") or ""),
             )
             if match is not None and match.action == "NO_TRADE":
-                order.mode = "MANUAL"
+                # Backward-compatible: older versions flipped AUTO to MANUAL
+                # when deferring. If this order came from an alert, keep it in
+                # AUTO so dispatch can resume automatically.
+                if str(getattr(order, "mode", "") or "").strip().upper() != "AUTO" and getattr(
+                    order, "alert_id", None
+                ) is not None:
+                    order.mode = "AUTO"
                 order.status = "WAITING"
+                try:
+                    order.armed_at = compute_no_trade_defer_until_utc(
+                        now_utc=now_utc,
+                        start=match.start,
+                        end=match.end,
+                    )
+                except Exception:
+                    order.armed_at = None
                 order.error_message = (
-                    "AUTO dispatch skipped: NO_TRADE window "
+                    "AUTO dispatch deferred: NO_TRADE window "
                     f"({match.start.strftime('%H:%M')}-{match.end.strftime('%H:%M')} IST) "
-                    f"for {match.key}. Moved to Waiting Queue."
+                    f"for {match.key}. Will retry after {match.end.strftime('%H:%M')} IST."
                 )
                 db.add(order)
                 db.commit()
@@ -1414,6 +1433,11 @@ def execute_order_internal(
                         "product": str(getattr(order, "product", "") or ""),
                         "side": str(getattr(order, "side", "") or ""),
                         "rule": match.raw,
+                        "defer_until_utc": (
+                            order.armed_at.isoformat()
+                            if getattr(order, "armed_at", None) is not None
+                            else None
+                        ),
                     },
                 )
                 _release_execution_policy_inflight()

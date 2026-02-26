@@ -23,6 +23,7 @@ from .services.holdings_summary_daily_snapshots import (
 )
 from .services.managed_risk import schedule_managed_risk
 from .services.market_data import schedule_market_data_sync
+from .services.no_trade_deferred_dispatch import schedule_no_trade_deferred_dispatch
 from .services.synthetic_gtt import schedule_synthetic_gtt
 from .services.users import ensure_default_admin
 from .services.risk_unified_migration import migrate_legacy_risk_policy_v1_to_unified
@@ -169,6 +170,7 @@ async def _lifespan(_app: FastAPI):
             schedule_indicator_alerts()
         schedule_alerts_v3()
         schedule_synthetic_gtt()
+        schedule_no_trade_deferred_dispatch()
         schedule_managed_risk()
         # Holdings Exit Automation can be enabled/disabled at runtime via the Settings page
         # (DB-backed). Always start the loop; it no-ops when disabled.

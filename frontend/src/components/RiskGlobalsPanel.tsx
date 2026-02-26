@@ -167,7 +167,7 @@ export function RiskGlobalsPanel() {
             multiline
             minRows={4}
             placeholder={`09:15-09:20 NO_TRADE ALL\n09:20-09:25 NO_TRADE CNC_BUY,MIS_BUY`}
-            helperText="Advanced. One rule per line: 'HH:MM-HH:MM TRADE|NO_TRADE keys'. keys: ALL, BUY, SELL, CNC, MIS, CNC_BUY, CNC_SELL, MIS_BUY, MIS_SELL. AUTO dispatch is deferred to Waiting Queue during NO_TRADE."
+            helperText="Advanced. One rule per line: 'HH:MM-HH:MM TRADE|NO_TRADE keys'. keys: ALL, BUY, SELL, CNC, MIS, CNC_BUY, CNC_SELL, MIS_BUY, MIS_SELL. AUTO dispatch is deferred during NO_TRADE and resumes automatically after the window ends."
             sx={{ maxWidth: 740 }}
           />
         </Box>
