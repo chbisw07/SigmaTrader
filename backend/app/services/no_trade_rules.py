@@ -8,6 +8,29 @@ from typing import Iterable, Literal, Optional, Set
 TradeAction = Literal["TRADE", "NO_TRADE"]
 TradeKey = Literal["CNC_BUY", "CNC_SELL", "MIS_BUY", "MIS_SELL"]
 
+IST_OFFSET = timedelta(hours=5, minutes=30)
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def _now_ist_naive(now_utc: datetime) -> datetime:
+    """Return current time in IST as a naive datetime.
+
+    We prefer IANA tz conversion when available, but fall back to a fixed
+    +05:30 offset. This keeps NO_TRADE behavior correct in minimal container
+    images that may not ship tzdata (ZoneInfoNotFoundError).
+    """
+
+    now_utc = _ensure_utc(now_utc).astimezone(UTC)
+    try:
+        from zoneinfo import ZoneInfo
+
+        return now_utc.astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    except Exception:
+        return (now_utc + IST_OFFSET).replace(tzinfo=None)
+
 
 @dataclass(frozen=True)
 class NoTradeRule:
@@ -156,13 +179,7 @@ def resolve_no_trade_action(
     if not rules:
         return None
 
-    try:
-        from zoneinfo import ZoneInfo
-
-        now_local = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
-        t = now_local.time()
-    except Exception:
-        t = now_utc.time()
+    t = _now_ist_naive(now_utc).time()
 
     prod = (product or "").strip().upper()
     sd = (side or "").strip().upper()
@@ -194,16 +211,7 @@ def compute_no_trade_defer_until_utc(
     AUTO dispatch should be deferred until the end of the matched window.
     """
 
-    try:
-        from zoneinfo import ZoneInfo
-
-        tz = ZoneInfo("Asia/Kolkata")
-        now_local = now_utc.astimezone(tz)
-    except Exception:
-        # Best-effort fallback: treat now_utc as local time.
-        tz = None
-        now_local = now_utc
-
+    now_local = _now_ist_naive(now_utc)
     d = now_local.date()
     t = now_local.time()
 
@@ -220,13 +228,8 @@ def compute_no_trade_defer_until_utc(
         else:
             end_local_dt = datetime.combine(d, end)
 
-    if tz is not None:
-        end_local_dt = end_local_dt.replace(tzinfo=tz)
-        return end_local_dt.astimezone(UTC)
-    # Fallback path: keep naive/offset-less datetimes in UTC for storage.
-    if end_local_dt.tzinfo is None:
-        return end_local_dt.replace(tzinfo=UTC)
-    return end_local_dt.astimezone(UTC)
+    # Convert naive IST -> UTC.
+    return (end_local_dt - IST_OFFSET).replace(tzinfo=UTC)
 
 
 __all__ = [
