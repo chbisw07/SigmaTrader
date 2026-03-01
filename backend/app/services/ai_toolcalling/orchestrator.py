@@ -760,6 +760,7 @@ async def run_chat(
 
     provider_kind = str(getattr(prov, "kind", "") or "remote").lower()
     is_remote_provider = provider_kind == "remote"
+    llm_timeout_seconds = 30.0 if is_remote_provider else 120.0
 
     final_text = ""
     max_iters = 6
@@ -802,7 +803,7 @@ async def run_chat(
                 messages=messages,
                 tools=openai_tools,
                 base_url=toolcall_base_url,
-                timeout_seconds=30,
+                timeout_seconds=llm_timeout_seconds,
                 max_tokens=ai_cfg.limits.max_tokens_per_request,
                 temperature=effective_temperature(
                     provider_id=str(ai_cfg.provider),

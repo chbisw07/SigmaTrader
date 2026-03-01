@@ -80,8 +80,15 @@ async def openai_chat_with_tools(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
-        resp = await client.post(url, headers=headers, json=body)
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
+            resp = await client.post(url, headers=headers, json=body)
+    except httpx.TimeoutException as exc:
+        raise OpenAiChatError(f"LLM endpoint timed out after {timeout_seconds:.0f}s.") from exc
+    except httpx.RequestError as exc:
+        raise OpenAiChatError(f"LLM endpoint request failed: {type(exc).__name__}: {exc}") from exc
+    except Exception as exc:
+        raise OpenAiChatError(str(exc) or "LLM endpoint request failed.") from exc
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     if resp.status_code in {401, 403}:
@@ -89,7 +96,11 @@ async def openai_chat_with_tools(
     if resp.status_code >= 400:
         raise OpenAiChatError(f"LLM endpoint HTTP {resp.status_code}: {resp.text}")
 
-    payload = resp.json()
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        preview = (resp.text or "")[:500]
+        raise OpenAiChatError(f"LLM endpoint returned non-JSON response. status={resp.status_code} body={preview!r}") from exc
     if not isinstance(payload, dict):
         raise OpenAiChatError("Invalid OpenAI response.")
     choices = payload.get("choices")

@@ -259,6 +259,12 @@ async def ai_chat_stream(
                         "decision_id": result.decision_id,
                     }
                 )
+        except HTTPException as exc:
+            msg = getattr(exc, "detail", None)
+            if isinstance(msg, dict):
+                msg = json.dumps(msg, ensure_ascii=False)
+            msg2 = str(msg or "").strip() or f"HTTP {getattr(exc, 'status_code', 400)}"
+            await _emit({"type": "error", "error": msg2})
         except Exception as exc:
             await _emit({"type": "error", "error": str(exc) or "chat_failed"})
         finally:
