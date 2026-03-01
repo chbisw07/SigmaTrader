@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.session import get_db
+from app.ai.time_context import format_time_context_line, time_context_from_test_payload
 from app.schemas.ai_provider import (
     AiActiveConfig,
     AiActiveConfigUpdate,
@@ -455,12 +456,20 @@ def run_ai_test(
 
     status = "ok"
     latency_ms_for_audit: int | None = None
+    tctx = time_context_from_test_payload(payload)
+    prompt = payload.prompt
+    if tctx is not None:
+        prompt = (
+            "Time context: The user's local time (use this as 'now' for any time/date questions) is "
+            f"{format_time_context_line(tctx)}. If time context is missing, say you can't know the time.\n\n"
+            + prompt
+        )
     try:
         client = build_provider_client(provider_id=info.id, api_key=api_key, base_url=base_url)
         try:
             res = client.run_test(
                 model=model,
-                prompt=payload.prompt,
+                prompt=prompt,
                 temperature=effective_temperature(
                     provider_id=info.id,
                     model=model,

@@ -104,14 +104,29 @@ class McpSseClient:
         self._reader_task: asyncio.Task | None = None
 
         self._message_endpoint: str | None = None
+        self._connect_seq = 0
         self._next_id = 1
         self._pending: dict[int, asyncio.Future] = {}
 
         self.initialize_result: McpInitializeResult | None = None
 
     @property
+    def connect_seq(self) -> int:
+        return int(self._connect_seq)
+
+    @property
     def message_endpoint(self) -> str | None:
         return self._message_endpoint
+
+    @property
+    def is_connected(self) -> bool:
+        if self._sse_response is None or self._message_endpoint is None:
+            return False
+        if getattr(self._sse_response, "is_closed", False):
+            return False
+        if self._reader_task is None or self._reader_task.done():
+            return False
+        return True
 
     async def __aenter__(self) -> "McpSseClient":
         await self.connect()
@@ -120,9 +135,46 @@ class McpSseClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
         await self.close()
 
-    async def connect(self) -> None:
+    async def disconnect(self) -> None:
+        """Disconnect the SSE transport but keep the underlying HTTP client open."""
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except BaseException:
+                pass
+            self._reader_task = None
+
+        # Fail pending.
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.set_exception(McpError("MCP session disconnected."))
+        self._pending.clear()
+
         if self._sse_response is not None:
-            return
+            try:
+                await self._sse_response.aclose()
+            except Exception:
+                pass
+            self._sse_response = None
+        if self._sse_stream_cm is not None:
+            try:
+                await self._sse_stream_cm.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._sse_stream_cm = None
+
+        self._message_endpoint = None
+        self.initialize_result = None
+
+    async def connect(self) -> None:
+        # If the SSE stream died (Cloudflare idle timeout, network blip), the
+        # reader task completes and we stop receiving responses. Treat that as
+        # disconnected and transparently reconnect on the next request.
+        if self._sse_response is not None:
+            if self.is_connected:
+                return
+            await self.disconnect()
 
         # Keep a strong reference to the stream context manager. Discarding it
         # can close the underlying stream unexpectedly (GC/finalizer), which
@@ -170,7 +222,7 @@ class McpSseClient:
             endpoint_timeout = max(0.5, min(10.0, self._timeout_seconds))
             endpoint = await asyncio.wait_for(endpoint_fut, timeout=endpoint_timeout)
         except Exception as exc:
-            await self.close()
+            await self.disconnect()
             raise McpError("Failed to establish MCP SSE session.") from exc
 
         # Resolve relative endpoint against server origin.
@@ -181,34 +233,10 @@ class McpSseClient:
             # Prefer joining against the SSE URL so relative paths like
             # `message?sessionId=...` resolve correctly.
             self._message_endpoint = urljoin(self.server_url + "/", endpoint)
+        self._connect_seq += 1
 
     async def close(self) -> None:
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except BaseException:
-                pass
-            self._reader_task = None
-
-        # Fail pending.
-        for fut in list(self._pending.values()):
-            if not fut.done():
-                fut.set_exception(McpError("MCP session closed."))
-        self._pending.clear()
-
-        if self._sse_response is not None:
-            try:
-                await self._sse_response.aclose()
-            except Exception:
-                pass
-            self._sse_response = None
-        if self._sse_stream_cm is not None:
-            try:
-                await self._sse_stream_cm.__aexit__(None, None, None)
-            except Exception:
-                pass
-            self._sse_stream_cm = None
+        await self.disconnect()
 
         if not self._external_client:
             await self._client.aclose()
@@ -225,8 +253,9 @@ class McpSseClient:
         params: dict[str, Any] | None = None,
         timeout_seconds: float | None = None,
     ) -> Any:
-        if self._message_endpoint is None:
-            await self.connect()
+        # Always ensure the SSE transport is connected; it may have dropped
+        # silently while the process stayed alive.
+        await self.connect()
         if self._message_endpoint is None:
             raise McpError("MCP session is not connected.")
 

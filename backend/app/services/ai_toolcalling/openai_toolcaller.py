@@ -53,7 +53,7 @@ def _parse_tool_calls(msg: dict[str, Any]) -> List[OpenAiToolCall]:
 
 async def openai_chat_with_tools(
     *,
-    api_key: str,
+    api_key: str | None,
     model: str,
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
@@ -73,20 +73,21 @@ async def openai_chat_with_tools(
         body["temperature"] = float(temperature)
     if max_tokens is not None:
         body["max_tokens"] = int(max_tokens)
-    headers = {
+    headers: dict[str, str] = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
     }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     t0 = time.perf_counter()
     async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
         resp = await client.post(url, headers=headers, json=body)
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
     if resp.status_code in {401, 403}:
-        raise OpenAiChatError("OpenAI unauthorized (check API key).")
+        raise OpenAiChatError("LLM endpoint unauthorized (check API key).")
     if resp.status_code >= 400:
-        raise OpenAiChatError(f"OpenAI HTTP {resp.status_code}: {resp.text}")
+        raise OpenAiChatError(f"LLM endpoint HTTP {resp.status_code}: {resp.text}")
 
     payload = resp.json()
     if not isinstance(payload, dict):

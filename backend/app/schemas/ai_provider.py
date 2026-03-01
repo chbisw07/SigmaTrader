@@ -93,6 +93,11 @@ class AiTestRequest(BaseModel):
     base_url: Optional[str] = None
     key_id: Optional[int] = None
     prompt: str = Field(min_length=1, max_length=4000)
+    # Optional client-side time anchor so the model can answer "current time"
+    # questions accurately (otherwise it must not guess).
+    client_now_ms: Optional[int] = None
+    client_time_zone: Optional[str] = None
+    client_utc_offset_minutes: Optional[int] = None
 
 
 class AiUsage(BaseModel):

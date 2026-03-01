@@ -46,3 +46,25 @@ export function formatInDisplayTimeZone(
   if (displayTimeZone === 'LOCAL') return formatInTimeZone(value, undefined, opts)
   return formatInTimeZone(value, displayTimeZone, opts)
 }
+
+export function getClientTimeContext(): {
+  client_now_ms: number
+  client_time_zone: string | null
+  client_utc_offset_minutes: number
+} {
+  const now = new Date()
+  let tz: string | null = null
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? null
+  } catch {
+    tz = null
+  }
+  // JS getTimezoneOffset() is minutes to add to local time to get UTC.
+  // Convert to "minutes ahead of UTC" (e.g., IST => +330).
+  const utcOffsetMinutes = -now.getTimezoneOffset()
+  return {
+    client_now_ms: now.getTime(),
+    client_time_zone: tz,
+    client_utc_offset_minutes: utcOffsetMinutes,
+  }
+}

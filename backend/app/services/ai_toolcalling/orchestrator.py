@@ -20,6 +20,7 @@ from app.ai.safety.safe_summary_registry import (
     summarize_tool_for_llm,
     tool_has_safe_summary,
 )
+from app.ai.time_context import format_time_context_line, time_context_from_ui_context
 from app.core.config import Settings
 from app.models import Candle
 from app.schemas.ai_trading_manager import DecisionToolCall, Quote, TradeIntent
@@ -102,6 +103,12 @@ def _minimal_llm_context(ui_context: Dict[str, Any] | None) -> Dict[str, Any] | 
     page = ui_context.get("page")
     if isinstance(page, str) and page.strip():
         out["page"] = page.strip()
+    # Time context (safe): used to answer "current time" questions without guessing.
+    # Keep it minimal and non-identifying.
+    for k in ("client_now_ms", "client_time_zone", "client_utc_offset_minutes"):
+        v = ui_context.get(k)
+        if isinstance(v, (str, int, float)) and str(v).strip():
+            out[k] = v
     # Intentionally omit identifiers, broker ids, auth/session info, and raw UI state.
     return out or None
 
@@ -326,17 +333,46 @@ async def run_chat(
     ai_cfg, _src = get_active_config(db, settings)
     if not ai_cfg.enabled:
         raise HTTPException(status_code=403, detail="AI provider is disabled. Enable it in Settings → AI.")
-    if (ai_cfg.provider or "").strip().lower() != "openai":
-        raise HTTPException(status_code=400, detail="Tool-calling MVP currently supports OpenAI provider only.")
+    provider_id = (ai_cfg.provider or "").strip().lower()
+    prov = get_provider(provider_id)
+    if prov is None:
+        raise HTTPException(status_code=400, detail="Unsupported AI provider. Configure it in Settings → AI.")
+    # Tool-calling currently relies on OpenAI-compatible /v1/chat/completions "tools".
+    supported_toolcalling_providers = {"openai", "local_lmstudio"}
+    if provider_id not in supported_toolcalling_providers:
+        supported_labels = ", ".join(
+            (getattr(get_provider(pid), "label", None) or pid) for pid in sorted(supported_toolcalling_providers)
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tool-calling MVP currently supports OpenAI-compatible providers only ({supported_labels}).",
+        )
     if not ai_cfg.model:
         raise HTTPException(status_code=400, detail="AI model is not set. Configure it in Settings → AI.")
-    if ai_cfg.active_key_id is None:
-        raise HTTPException(status_code=400, detail="No OpenAI key selected. Add/select a key in Settings → AI.")
 
-    key_row = get_key(db, key_id=int(ai_cfg.active_key_id), user_id=None)
-    if key_row is None:
-        raise HTTPException(status_code=400, detail="Selected OpenAI key not found.")
-    api_key = decrypt_key_value(settings, key_row)
+    toolcall_base_url = "https://api.openai.com/v1"
+    if getattr(prov, "supports_base_url", False):
+        base_url = (ai_cfg.base_url or getattr(prov, "default_base_url", None) or "").strip()
+        if not base_url:
+            raise HTTPException(status_code=400, detail="AI base URL is not set. Configure it in Settings → AI.")
+        toolcall_base_url = base_url.rstrip("/")
+        if provider_id == "local_lmstudio" and not toolcall_base_url.endswith("/v1"):
+            toolcall_base_url = toolcall_base_url + "/v1"
+
+    toolcall_api_key: str | None = None
+    if bool(getattr(prov, "requires_api_key", False)):
+        if ai_cfg.active_key_id is None:
+            raise HTTPException(status_code=400, detail=f"No {prov.label} key selected. Add/select a key in Settings → AI.")
+        key_row = get_key(db, key_id=int(ai_cfg.active_key_id), user_id=None)
+        if key_row is None:
+            raise HTTPException(status_code=400, detail=f"Selected {prov.label} key not found.")
+        toolcall_api_key = decrypt_key_value(settings, key_row)
+    else:
+        # Optional key (some local gateways can still require auth).
+        if ai_cfg.active_key_id is not None:
+            key_row = get_key(db, key_id=int(ai_cfg.active_key_id), user_id=None)
+            if key_row is not None:
+                toolcall_api_key = decrypt_key_value(settings, key_row)
 
     tm_cfg, _tm_src = get_ai_settings_with_source(db, settings)
     if not tm_cfg.feature_flags.kite_mcp_enabled or not tm_cfg.kite_mcp.server_url:
@@ -445,6 +481,18 @@ async def run_chat(
     llm_ctx = _minimal_llm_context(ui_context)
     if llm_ctx:
         messages.append({"role": "system", "content": f"Context (json): {json.dumps(llm_ctx, ensure_ascii=False)}"})
+        # Provide an explicit time anchor so the model doesn't hallucinate "now".
+        tctx = time_context_from_ui_context(llm_ctx)
+        if tctx is not None:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Time context: The user's local time (use this as 'now' for any time/date questions) is "
+                        f"{format_time_context_line(tctx)}. If time context is missing, say you can't know the time."
+                    ),
+                }
+            )
     if attachments:
         attachments_json = json.dumps(_minimal_attachments_for_llm(attachments), ensure_ascii=False)
         messages.append(
@@ -710,7 +758,6 @@ async def run_chat(
             return None
         return float(sum(trs) / float(len(trs)))
 
-    prov = get_provider(str(ai_cfg.provider or ""))
     provider_kind = str(getattr(prov, "kind", "") or "remote").lower()
     is_remote_provider = provider_kind == "remote"
 
@@ -750,10 +797,11 @@ async def run_chat(
                 break
         try:
             turn = await openai_chat_with_tools(
-                api_key=api_key,
+                api_key=toolcall_api_key,
                 model=str(ai_cfg.model),
                 messages=messages,
                 tools=openai_tools,
+                base_url=toolcall_base_url,
                 timeout_seconds=30,
                 max_tokens=ai_cfg.limits.max_tokens_per_request,
                 temperature=effective_temperature(

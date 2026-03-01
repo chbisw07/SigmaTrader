@@ -19,6 +19,25 @@ export type AiTmThread = {
   messages: AiTmMessage[]
 }
 
+function getClientTimeContext(): {
+  client_now_ms: number
+  client_time_zone: string | null
+  client_utc_offset_minutes: number
+} {
+  const now = new Date()
+  let tz: string | null = null
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? null
+  } catch {
+    tz = null
+  }
+  return {
+    client_now_ms: now.getTime(),
+    client_time_zone: tz,
+    client_utc_offset_minutes: -now.getTimezoneOffset(),
+  }
+}
+
 export async function fetchAiThread(params?: {
   account_id?: string
   thread_id?: string
@@ -96,6 +115,7 @@ export async function chatAi(payload: {
   attachments_used?: Array<Record<string, unknown>>
   thread?: AiTmThread | null
 }> {
+  const uiContext = { ...getClientTimeContext(), ...(payload.ui_context ?? {}) }
   const res = await fetch('/api/ai/chat', {
     method: 'POST',
     signal: payload.signal,
@@ -106,7 +126,7 @@ export async function chatAi(payload: {
       message: payload.message,
       context: payload.context ?? {},
       attachments: payload.attachments ?? [],
-      ui_context: payload.ui_context ?? null,
+      ui_context: uiContext,
     }),
   })
   if (!res.ok) {
@@ -140,6 +160,7 @@ export async function chatAiStream(payload: {
   signal?: AbortSignal
   onEvent?: (ev: AiChatStreamEvent) => void
 }): Promise<{ assistant_message: string; decision_id: string }> {
+  const uiContext = { ...getClientTimeContext(), ...(payload.ui_context ?? {}) }
   const res = await fetch('/api/ai/chat/stream', {
     method: 'POST',
     signal: payload.signal,
@@ -150,7 +171,7 @@ export async function chatAiStream(payload: {
       message: payload.message,
       context: payload.context ?? {},
       attachments: payload.attachments ?? [],
-      ui_context: payload.ui_context ?? null,
+      ui_context: uiContext,
     }),
   })
 

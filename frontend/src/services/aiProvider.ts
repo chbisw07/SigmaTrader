@@ -160,6 +160,18 @@ export async function runAiTest(payload: {
   key_id?: number | null
   prompt: string
 }): Promise<{ text: string; latency_ms: number; usage: any; raw_metadata: any }> {
+  const now = new Date()
+  let tz: string | null = null
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone ?? null
+  } catch {
+    tz = null
+  }
+  const clientTime = {
+    client_now_ms: now.getTime(),
+    client_time_zone: tz,
+    client_utc_offset_minutes: -now.getTimezoneOffset(),
+  }
   const res = await fetch('/api/ai/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -169,6 +181,7 @@ export async function runAiTest(payload: {
       base_url: payload.base_url ?? null,
       key_id: payload.key_id ?? null,
       prompt: payload.prompt,
+      ...clientTime,
     }),
   })
   if (!res.ok) {
