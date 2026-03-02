@@ -940,7 +940,64 @@ def edit_order(
     return order
 
 
+def _best_effort_release_execution_policy_inflight_reservation(order_id: int) -> None:
+    """Clear an execution-policy inflight reservation for this order id.
+
+    The execute path uses `ExecutionPolicyState.inflight_order_id` as a best-effort
+    concurrency guard. Some failure paths (validation, risk blocks, connectivity)
+    can raise before the inflight marker is cleared; this helper prevents a stale
+    inflight flag from incorrectly blocking subsequent executions.
+    """
+
+    try:
+        from sqlalchemy import text
+
+        from app.models import ExecutionPolicyState
+
+        with SessionLocal() as guard_db:
+            if guard_db.bind is not None and guard_db.bind.dialect.name == "sqlite":
+                # Ensures the UPDATE sees the latest committed inflight flag.
+                guard_db.execute(text("BEGIN IMMEDIATE"))
+            updated = (
+                guard_db.query(ExecutionPolicyState)
+                .filter(ExecutionPolicyState.inflight_order_id == int(order_id))
+                .update(
+                    {
+                        ExecutionPolicyState.inflight_order_id: None,
+                        ExecutionPolicyState.inflight_started_at: None,
+                        ExecutionPolicyState.inflight_expires_at: None,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            if int(updated or 0) > 0:
+                guard_db.commit()
+    except Exception:
+        # Best-effort cleanup only; never fail the API because cleanup failed.
+        return
+
+
 def execute_order_internal(
+    order_id: int,
+    *,
+    db: Session,
+    settings: Settings,
+    correlation_id: str | None = None,
+    auto_dispatch: bool = False,
+) -> Order:
+    try:
+        return _execute_order_internal_impl(
+            order_id,
+            db=db,
+            settings=settings,
+            correlation_id=correlation_id,
+            auto_dispatch=auto_dispatch,
+        )
+    finally:
+        _best_effort_release_execution_policy_inflight_reservation(int(order_id))
+
+
+def _execute_order_internal_impl(
     order_id: int,
     *,
     db: Session,
@@ -1057,6 +1114,9 @@ def execute_order_internal(
             while time.monotonic() < wait_deadline_mono:
                 guard_now = _now_utc()
                 expires_at = guard_now + timedelta(seconds=int(DEFAULT_INFLIGHT_TTL_SECONDS))
+                stale_started_deadline = guard_now - timedelta(
+                    seconds=int(DEFAULT_INFLIGHT_TTL_SECONDS)
+                )
 
                 try:
                     with SessionLocal() as guard_db:
@@ -1088,6 +1148,19 @@ def execute_order_internal(
                                         ),
                                         ExecutionPolicyState.inflight_expires_at
                                         <= guard_now,
+                                    ),
+                                    # Backward/defensive: treat missing expiry as stale.
+                                    and_(
+                                        ExecutionPolicyState.inflight_expires_at.is_(
+                                            None
+                                        ),
+                                        or_(
+                                            ExecutionPolicyState.inflight_started_at.is_(
+                                                None
+                                            ),
+                                            ExecutionPolicyState.inflight_started_at
+                                            <= stale_started_deadline,
+                                        ),
                                     ),
                                 ),
                             )

@@ -90,13 +90,20 @@ def _ensure_default_profiles() -> None:
         session.commit()
 
 
-def _create_tv_waiting_order(*, action: str, product: str, price: float) -> int:
+def _create_tv_waiting_order(
+    *,
+    action: str,
+    product: str,
+    price: float,
+    strategy: str | None = None,
+    symbol: str = "NSE:TCS",
+) -> int:
     payload: Dict[str, Any] = {
         "secret": "risk-unified-secret",
         "platform": "TRADINGVIEW",
         "st_user_id": "ru-user",
-        "strategy_name": f"ru-strategy-{uuid4().hex}",
-        "symbol": "NSE:TCS",
+        "strategy_name": strategy or f"ru-strategy-{uuid4().hex}",
+        "symbol": symbol,
         "exchange": "NSE",
         "interval": "5",
         "trade_details": {
@@ -203,3 +210,28 @@ def test_unified_capital_per_trade_sizes_non_manual_orders(monkeypatch: Any) -> 
         o = session.get(Order, oid)
         assert o is not None
         assert float(o.qty or 0.0) == 200.0
+
+
+def test_risk_block_does_not_leave_stale_inflight_reservation(monkeypatch: Any) -> None:
+    _patch_zerodha(monkeypatch)
+    _ensure_default_profiles()
+
+    # Block shorts for TradingView MIS orders.
+    upsert = client.put(
+        "/api/risk/source-overrides",
+        json={"source_bucket": "TRADINGVIEW", "product": "MIS", "allow_short_selling": False},
+    )
+    assert upsert.status_code == 200, upsert.text
+
+    strategy = f"ru-inflight-{uuid4().hex}"
+    sym = "NSE:TCS_INFLIGHT1"
+    o1 = _create_tv_waiting_order(action="SELL", product="MIS", price=100.0, strategy=strategy, symbol=sym)
+    o2 = _create_tv_waiting_order(action="SELL", product="MIS", price=101.0, strategy=strategy, symbol=sym)
+
+    blocked1 = client.post(f"/api/orders/{o1}/execute")
+    assert blocked1.status_code == 400, blocked1.text
+
+    # Regression: previously the first blocked execution could leave an inflight
+    # marker, causing the second execute to incorrectly return 409 busy.
+    blocked2 = client.post(f"/api/orders/{o2}/execute")
+    assert blocked2.status_code == 400, blocked2.text
