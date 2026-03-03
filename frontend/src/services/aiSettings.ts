@@ -34,6 +34,13 @@ export type AiSettings = {
       max_cost_usd_per_day?: number | null
     }
   }
+  hybrid_llm?: {
+    enabled: boolean
+    mode: 'LOCAL_ONLY' | 'REMOTE_ONLY' | 'HYBRID'
+    allow_remote_market_data_tools: boolean
+    allow_remote_account_digests: boolean
+    rate_limits?: Record<string, unknown>
+  }
 }
 
 export type AiSettingsUpdate = Partial<{
@@ -41,6 +48,7 @@ export type AiSettingsUpdate = Partial<{
   kill_switch: Partial<AiSettings['kill_switch']>
   kite_mcp: Partial<Pick<AiSettings['kite_mcp'], 'server_url' | 'transport_mode' | 'auth_method' | 'auth_profile_ref' | 'scopes' | 'broker_adapter'>>
   llm_provider: Partial<AiSettings['llm_provider']>
+  hybrid_llm: Partial<NonNullable<AiSettings['hybrid_llm']>>
 }>
 
 export async function fetchAiSettings(): Promise<AiSettings> {
@@ -106,4 +114,3 @@ export async function fetchAiSettingsAudit(params?: {
   if (!res.ok) throw new Error(`Failed to load AI audit (${res.status})`)
   return (await res.json()) as { items: any[]; next_offset: number }
 }
-
