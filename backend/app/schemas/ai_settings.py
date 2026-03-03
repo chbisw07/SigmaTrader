@@ -74,6 +74,9 @@ class AiSettings(BaseModel):
     kill_switch: AiKillSwitch = Field(default_factory=AiKillSwitch)
     kite_mcp: KiteMcpConfig = Field(default_factory=KiteMcpConfig)
     llm_provider: LlmProviderConfig = Field(default_factory=LlmProviderConfig)
+    # Hybrid LLM (Local Security Gateway + Remote Reasoner). Default disabled for
+    # backwards compatibility with the legacy OpenAI tool-calling loop.
+    hybrid_llm: "HybridLlmConfig" = Field(default_factory=lambda: HybridLlmConfig())
 
 
 class AiFeatureFlagsUpdate(BaseModel):
@@ -121,6 +124,34 @@ class AiSettingsUpdate(BaseModel):
     kill_switch: Optional[AiKillSwitchUpdate] = None
     kite_mcp: Optional[KiteMcpConfigUpdate] = None
     llm_provider: Optional[LlmProviderConfigUpdate] = None
+    hybrid_llm: Optional["HybridLlmConfigUpdate"] = None
+
+
+class HybridLlmMode(str, Enum):
+    local_only = "LOCAL_ONLY"
+    remote_only = "REMOTE_ONLY"
+    hybrid = "HYBRID"
+
+
+class HybridLlmConfig(BaseModel):
+    enabled: bool = False
+    mode: HybridLlmMode = HybridLlmMode.remote_only
+    # Guardrails: remote is untrusted, so these are explicit toggles.
+    allow_remote_market_data_tools: bool = False
+    allow_remote_account_digests: bool = False
+
+    # Lightweight rate-limits (best-effort). Keys are tool names.
+    # Example:
+    # {"get_ltp": {"per_minute": 60, "per_symbol_per_minute": 30}}
+    rate_limits: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HybridLlmConfigUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    mode: Optional[HybridLlmMode] = None
+    allow_remote_market_data_tools: Optional[bool] = None
+    allow_remote_account_digests: Optional[bool] = None
+    rate_limits: Optional[Dict[str, Any]] = None
 
 
 class KiteMcpTestRequest(BaseModel):

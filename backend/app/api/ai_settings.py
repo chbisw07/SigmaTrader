@@ -100,6 +100,7 @@ def update_ai_settings(
                 "do_not_send_pii": merged.llm_provider.do_not_send_pii,
                 "limits": merged.llm_provider.limits.model_dump(mode="json"),
             },
+            "hybrid_llm": merged.hybrid_llm.model_dump(mode="json") if getattr(merged, "hybrid_llm", None) else None,
         },
     )
     return merged
