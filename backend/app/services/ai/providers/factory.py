@@ -14,32 +14,37 @@ def build_provider_client(
     provider_id: str,
     api_key: str | None,
     base_url: str | None,
+    timeout_seconds: int | None = None,
 ) -> ProviderClient:
     pid = (provider_id or "").strip().lower()
     info = get_provider(pid)
     if info is None:
         raise ProviderConfigError("Unsupported provider.")
 
+    # Local models (LM Studio / Ollama) can be much slower on first token and
+    # should not trip the default 30s timeout during basic tests.
+    effective_timeout = int(timeout_seconds or (120 if info.kind == "local" else 30))
+
     if pid == "openai":
         if not api_key:
             raise ProviderConfigError("OpenAI API key is required.")
-        return OpenAIClient(api_key=api_key)
+        return OpenAIClient(api_key=api_key, timeout_seconds=effective_timeout)
 
     if pid == "google":
         if not api_key:
             raise ProviderConfigError("Google API key is required.")
-        return GoogleGeminiClient(api_key=api_key)
+        return GoogleGeminiClient(api_key=api_key, timeout_seconds=effective_timeout)
 
     if pid == "local_ollama":
         if not base_url:
             raise ProviderConfigError("base_url is required for Ollama.")
-        return OllamaClient(base_url=base_url)
+        return OllamaClient(base_url=base_url, timeout_seconds=effective_timeout)
 
     if pid == "local_lmstudio":
         if not base_url:
             raise ProviderConfigError("base_url is required for LM Studio.")
         # LM Studio is typically OpenAI-compatible; key optional.
-        return OpenAICompatibleClient(base_url=base_url, api_key=api_key)
+        return OpenAICompatibleClient(base_url=base_url, api_key=api_key, timeout_seconds=effective_timeout)
 
     raise ProviderConfigError("Provider is not implemented yet.")
 
