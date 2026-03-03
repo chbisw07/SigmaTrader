@@ -5,7 +5,7 @@ from datetime import UTC, datetime, time as dt_time, timedelta
 from typing import Iterable, Literal, Optional, Set
 
 
-TradeAction = Literal["TRADE", "NO_TRADE"]
+TradeAction = Literal["TRADE", "NO_TRADE", "PAUSE_AUTO"]
 TradeKey = Literal["CNC_BUY", "CNC_SELL", "MIS_BUY", "MIS_SELL"]
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
@@ -98,7 +98,7 @@ def parse_no_trade_rules(text: str | None) -> tuple[list[NoTradeRule], list[str]
     """Parse a simple line-oriented ruleset.
 
     Syntax (one rule per line):
-      HH:MM-HH:MM  TRADE|NO_TRADE  <keys>
+      HH:MM-HH:MM  TRADE|NO_TRADE|PAUSE_AUTO  <keys>
 
     keys: comma/space separated tokens from:
       ALL, BUY, SELL, CNC, MIS, CNC_BUY, CNC_SELL, MIS_BUY, MIS_SELL
@@ -138,8 +138,10 @@ def parse_no_trade_rules(text: str | None) -> tuple[list[NoTradeRule], list[str]
             continue
 
         action = parts[1].strip().upper()
-        if action not in {"TRADE", "NO_TRADE"}:
-            warnings.append(f"Line {i}: invalid action '{parts[1]}' (use TRADE or NO_TRADE)")
+        if action not in {"TRADE", "NO_TRADE", "PAUSE_AUTO"}:
+            warnings.append(
+                f"Line {i}: invalid action '{parts[1]}' (use TRADE, NO_TRADE, or PAUSE_AUTO)"
+            )
             continue
 
         keys_raw = " ".join(parts[2:])

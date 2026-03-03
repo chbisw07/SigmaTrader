@@ -317,6 +317,7 @@ def rebalance_execute(
                             db=db,
                             settings=settings,
                             correlation_id=correlation_id,
+                            auto_dispatch=True,
                         )
                         db.refresh(order)
                     except HTTPException as exc:
@@ -503,6 +504,7 @@ def rebalance_execute(
                             db=db,
                             settings=settings,
                             correlation_id=correlation_id,
+                            auto_dispatch=True,
                         )
                         db.refresh(order)
                     except HTTPException as exc:

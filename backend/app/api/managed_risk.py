@@ -129,6 +129,7 @@ def _create_and_execute_exit(
             db=db,
             settings=settings,
             correlation_id="managed-risk",
+            auto_dispatch=True,
         )
         db.refresh(exit_order)
     except HTTPException as exc:

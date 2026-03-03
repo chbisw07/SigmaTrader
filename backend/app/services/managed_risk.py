@@ -1089,6 +1089,7 @@ def process_managed_risk_once() -> int:
                         db=db,
                         settings=settings,
                         correlation_id="managed-risk",
+                        auto_dispatch=True,
                     )
                     db.refresh(exit_order)
                 except HTTPException as exc:
@@ -1242,6 +1243,7 @@ def process_managed_risk_once() -> int:
                         db=db2,
                         settings=settings,
                         correlation_id="managed-risk",
+                        auto_dispatch=True,
                     )
                     db2.refresh(exit_order)
                 except HTTPException as exc:

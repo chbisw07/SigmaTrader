@@ -82,7 +82,7 @@ def test_auto_dispatch_is_deferred_during_no_trade_window(monkeypatch: Any) -> N
         now_ist = now_utc
     start = now_ist - timedelta(minutes=1)
     end = now_ist + timedelta(minutes=1)
-    rules = f"{_hhmm(start)}-{_hhmm(end)} NO_TRADE CNC_BUY"
+    rules = f"{_hhmm(start)}-{_hhmm(end)} PAUSE_AUTO CNC_BUY"
 
     with SessionLocal() as session:
         # Ensure this webhook is routed via strategy mode with AUTO execution.
@@ -114,7 +114,7 @@ def test_auto_dispatch_is_deferred_during_no_trade_window(monkeypatch: Any) -> N
     from app.api import orders as orders_api
 
     def _fail_get_client(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("Broker client must not be created during NO_TRADE deferral.")
+        raise AssertionError("Broker client must not be created during AUTO pause window.")
 
     monkeypatch.setattr(orders_api, "_get_zerodha_client", _fail_get_client)
 
@@ -124,21 +124,22 @@ def test_auto_dispatch_is_deferred_during_no_trade_window(monkeypatch: Any) -> N
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "WAITING"
-    assert data["mode"] == "AUTO"
-    assert "NO_TRADE" in (data.get("error_message") or "")
+    assert data["mode"] == "MANUAL"
+    assert "paused" in (data.get("error_message") or "").lower()
     assert data.get("armed_at") is not None
 
     with SessionLocal() as session:
         order = session.get(Order, order_id)
         assert order is not None
         assert order.status == "WAITING"
-        assert order.mode == "AUTO"
-        assert "NO_TRADE" in (order.error_message or "")
+        assert order.mode == "MANUAL"
+        assert "paused" in (order.error_message or "").lower()
         assert order.armed_at is not None
 
 
-def test_auto_dispatch_resumes_after_defer_until(monkeypatch: Any) -> None:
-    # Create a short-lived window that includes "now".
+def test_no_trade_auto_resume_worker_is_disabled(monkeypatch: Any) -> None:
+    # Create a short-lived window that includes "now" and ensure we do NOT
+    # automatically resume execution after it ends.
     now_utc = datetime.now(UTC)
     try:
         from zoneinfo import ZoneInfo
@@ -148,7 +149,7 @@ def test_auto_dispatch_resumes_after_defer_until(monkeypatch: Any) -> None:
         now_ist = now_utc
     start = now_ist - timedelta(minutes=1)
     end = now_ist + timedelta(minutes=1)
-    rules = f"{_hhmm(start)}-{_hhmm(end)} NO_TRADE CNC_BUY"
+    rules = f"{_hhmm(start)}-{_hhmm(end)} PAUSE_AUTO CNC_BUY"
 
     with SessionLocal() as session:
         upsert_unified_risk_global(
@@ -161,15 +162,15 @@ def test_auto_dispatch_resumes_after_defer_until(monkeypatch: Any) -> None:
 
     from app.api import orders as orders_api
 
-    # Ensure the initial AUTO execution is deferred (no broker client creation).
+    # Ensure the initial AUTO execution is paused (no broker client creation).
     def _fail_get_client(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("Broker client must not be created during NO_TRADE deferral.")
+        raise AssertionError("Broker client must not be created during AUTO pause window.")
 
     monkeypatch.setattr(orders_api, "_get_zerodha_client", _fail_get_client)
 
     order_id = _create_waiting_order(side="BUY")
 
-    # Make the order immediately eligible for retry.
+    # Make the order eligible for what used to be an auto-resume worker.
     with SessionLocal() as session:
         order = session.get(Order, order_id)
         assert order is not None
@@ -181,27 +182,149 @@ def test_auto_dispatch_resumes_after_defer_until(monkeypatch: Any) -> None:
     later_utc = now_utc + timedelta(minutes=2)
     monkeypatch.setattr(orders_api, "_now_utc", lambda: later_utc)
 
-    class _FakeResult:
-        def __init__(self, order_id: str) -> None:
-            self.order_id = order_id
-
-    class _FakeZerodhaClient:
-        broker_user_id = "TESTUSER"
-
-        def place_order(self, **_kwargs: Any) -> _FakeResult:  # type: ignore[override]
-            return _FakeResult("TEST_ORDER_ID")
-
-    monkeypatch.setattr(orders_api, "_get_zerodha_client", lambda *_a, **_k: _FakeZerodhaClient())
-
     from app.services import no_trade_deferred_dispatch as nt_worker
 
-    monkeypatch.setattr(nt_worker, "is_market_open_now", lambda: True)
-
     processed = nt_worker.process_no_trade_deferred_dispatch_once()
-    assert processed >= 1
+    assert processed == 0
 
     with SessionLocal() as session:
         order = session.get(Order, order_id)
         assert order is not None
-        assert order.status == "SENT"
-        assert order.broker_order_id == "TEST_ORDER_ID"
+        assert order.status == "WAITING"
+        assert order.mode == "MANUAL"
+
+
+def test_auto_mode_is_deferred_without_auto_dispatch_flag(monkeypatch: Any) -> None:
+    now_utc = datetime.now(UTC)
+    try:
+        from zoneinfo import ZoneInfo
+
+        now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
+    except Exception:
+        now_ist = now_utc
+    start = now_ist - timedelta(minutes=1)
+    end = now_ist + timedelta(minutes=1)
+    rules = f"{_hhmm(start)}-{_hhmm(end)} PAUSE_AUTO CNC_BUY"
+
+    with SessionLocal() as session:
+        upsert_unified_risk_global(
+            session,
+            enabled=False,
+            manual_override_enabled=False,
+            baseline_equity_inr=1_000_000.0,
+            no_trade_rules=rules,
+        )
+        user = session.query(User).filter(User.username == "no-trade-user").one()
+        order = Order(
+            user_id=user.id,
+            broker_name="zerodha",
+            alert_id=None,
+            strategy_id=None,
+            portfolio_group_id=None,
+            symbol="NSE:INFY",
+            exchange="NSE",
+            side="BUY",
+            qty=1.0,
+            price=None,
+            trigger_price=None,
+            trigger_percent=None,
+            order_type="MARKET",
+            product="CNC",
+            gtt=False,
+            synthetic_gtt=False,
+            status="WAITING",
+            mode="AUTO",
+            execution_target="LIVE",
+            simulated=False,
+            error_message=None,
+            risk_spec_json=None,
+            is_exit=False,
+            created_at=now_utc,
+        )
+        session.add(order)
+        session.commit()
+        session.refresh(order)
+        order_id = int(order.id)
+
+    from app.api import orders as orders_api
+
+    def _fail_get_client(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Broker client must not be created during AUTO pause window.")
+
+    monkeypatch.setattr(orders_api, "_get_zerodha_client", _fail_get_client)
+
+    resp = client.post(f"/api/orders/{order_id}/execute")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "WAITING"
+    assert data["mode"] == "MANUAL"
+    assert "paused" in (data.get("error_message") or "").lower()
+    assert data.get("armed_at") is not None
+
+
+def test_auto_exit_is_deferred_during_no_trade_window(monkeypatch: Any) -> None:
+    now_utc = datetime.now(UTC)
+    try:
+        from zoneinfo import ZoneInfo
+
+        now_ist = now_utc.astimezone(ZoneInfo("Asia/Kolkata"))
+    except Exception:
+        now_ist = now_utc
+    start = now_ist - timedelta(minutes=1)
+    end = now_ist + timedelta(minutes=1)
+    rules = f"{_hhmm(start)}-{_hhmm(end)} PAUSE_AUTO CNC_SELL"
+
+    with SessionLocal() as session:
+        upsert_unified_risk_global(
+            session,
+            enabled=False,
+            manual_override_enabled=False,
+            baseline_equity_inr=1_000_000.0,
+            no_trade_rules=rules,
+        )
+        user = session.query(User).filter(User.username == "no-trade-user").one()
+        order = Order(
+            user_id=user.id,
+            broker_name="zerodha",
+            alert_id=None,
+            strategy_id=None,
+            portfolio_group_id=None,
+            symbol="NSE:INFY",
+            exchange="NSE",
+            side="SELL",
+            qty=1.0,
+            price=None,
+            trigger_price=None,
+            trigger_percent=None,
+            order_type="MARKET",
+            product="CNC",
+            gtt=False,
+            synthetic_gtt=False,
+            status="WAITING",
+            mode="AUTO",
+            execution_target="LIVE",
+            simulated=False,
+            error_message=None,
+            risk_spec_json=None,
+            is_exit=True,
+            created_at=now_utc,
+        )
+        session.add(order)
+        session.commit()
+        session.refresh(order)
+        order_id = int(order.id)
+
+    from app.api import orders as orders_api
+
+    def _fail_get_client(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("Broker client must not be created during AUTO pause window.")
+
+    monkeypatch.setattr(orders_api, "_get_zerodha_client", _fail_get_client)
+
+    resp = client.post(f"/api/orders/{order_id}/execute")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "WAITING"
+    assert data["mode"] == "MANUAL"
+    assert "paused" in (data.get("error_message") or "").lower()
+    assert data.get("armed_at") is not None

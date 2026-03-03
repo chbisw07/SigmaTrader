@@ -22,7 +22,7 @@ def test_resolve_no_trade_action_uses_ist_offset_when_zoneinfo_missing(
 
     # 03:47 UTC == 09:17 IST
     now_utc = datetime(2026, 2, 27, 3, 47, tzinfo=UTC)
-    rules = "09:15-09:20 NO_TRADE CNC_BUY"
+    rules = "09:15-09:20 PAUSE_AUTO CNC_BUY"
 
     match = resolve_no_trade_action(
         rules_text=rules,
@@ -31,7 +31,7 @@ def test_resolve_no_trade_action_uses_ist_offset_when_zoneinfo_missing(
         side="BUY",
     )
     assert match is not None
-    assert match.action == "NO_TRADE"
+    assert match.action == "PAUSE_AUTO"
 
     after_utc = datetime(2026, 2, 27, 3, 51, tzinfo=UTC)  # 09:21 IST
     assert (
@@ -60,4 +60,3 @@ def test_compute_defer_until_utc_uses_ist_offset_when_zoneinfo_missing(
         end=dt_time(9, 20),
     )
     assert defer_until == datetime(2026, 2, 27, 3, 50, tzinfo=UTC)
-

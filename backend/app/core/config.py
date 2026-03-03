@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     managed_risk_enabled: bool = True
     managed_risk_poll_interval_sec: float = 2.0
     managed_risk_max_per_cycle: int = 200
+    # AUTO pause windows: legacy NO_TRADE auto-resume worker (deprecated).
+    # Kept disabled by default to avoid surprising delayed executions.
+    no_trade_deferred_dispatch_enabled: bool = False
+    no_trade_deferred_dispatch_poll_interval_sec: float = 5.0
     # Product-specific risk engine: centralized enforcement for CNC/MIS profiles
     # + drawdown thresholds (enabled via DB-backed Risk Globals).
     # Holdings Exit Automation (new): conservative by default, gated behind a flag.

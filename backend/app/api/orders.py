@@ -704,6 +704,7 @@ def create_manual_order(
                 request=request,
                 db=db,
                 settings=settings,
+                auto_dispatch=True,
             )
             db.refresh(order)
         except HTTPException as exc:
@@ -1456,7 +1457,13 @@ def _execute_order_internal_impl(
     # blocked window, defer broker execution until the window ends. We keep the
     # order in WAITING/AUTO and persist a "not before" timestamp so a background
     # worker can resume dispatch automatically.
-    if bool(auto_dispatch) and not bool(getattr(order, "is_exit", False)):
+    #
+    # IMPORTANT: Treat `mode=AUTO` as AUTO dispatch even if callers forgot to
+    # pass `auto_dispatch=True` (multiple internal automation loops call the
+    # same execute path).
+    mode_u = str(getattr(order, "mode", "") or "").strip().upper()
+    is_auto_dispatch = bool(auto_dispatch) or mode_u == "AUTO"
+    if is_auto_dispatch:
         try:
             from app.services.no_trade_rules import (
                 compute_no_trade_defer_until_utc,
@@ -1469,14 +1476,10 @@ def _execute_order_internal_impl(
                 product=str(getattr(order, "product", "") or ""),
                 side=str(getattr(order, "side", "") or ""),
             )
-            if match is not None and match.action == "NO_TRADE":
-                # Backward-compatible: older versions flipped AUTO to MANUAL
-                # when deferring. If this order came from an alert, keep it in
-                # AUTO so dispatch can resume automatically.
-                if str(getattr(order, "mode", "") or "").strip().upper() != "AUTO" and getattr(
-                    order, "alert_id", None
-                ) is not None:
-                    order.mode = "AUTO"
+            if match is not None and match.action in {"NO_TRADE", "PAUSE_AUTO"}:
+                # AUTO pause window: convert AUTO attempts into a MANUAL queue item.
+                # This is a safer "kill switch" than deferred auto-resume.
+                order.mode = "MANUAL"
                 order.status = "WAITING"
                 try:
                     order.armed_at = compute_no_trade_defer_until_utc(
@@ -1487,9 +1490,9 @@ def _execute_order_internal_impl(
                 except Exception:
                     order.armed_at = None
                 order.error_message = (
-                    "AUTO dispatch deferred: NO_TRADE window "
+                    "AUTO execution paused by schedule "
                     f"({match.start.strftime('%H:%M')}-{match.end.strftime('%H:%M')} IST) "
-                    f"for {match.key}. Will retry after {match.end.strftime('%H:%M')} IST."
+                    f"for {match.key}. Manual execution required."
                 )
                 db.add(order)
                 db.commit()
@@ -1498,7 +1501,7 @@ def _execute_order_internal_impl(
                     db,
                     level="INFO",
                     category="risk",
-                    message="AUTO order deferred by no-trade window",
+                    message="AUTO order paused by schedule window",
                     correlation_id=correlation_id,
                     details={
                         "order_id": int(order.id),

@@ -236,6 +236,7 @@ def process_synthetic_gtt_once() -> int:
                             db=db,
                             settings=settings,
                             correlation_id="synthetic-gtt",
+                            auto_dispatch=True,
                         )
                         triggered += 1
                     except HTTPException as exc:
