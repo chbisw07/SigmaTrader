@@ -525,7 +525,7 @@ export function AiSettingsPanel() {
         </Stack>
       </Paper>
 
-      <AiProviderSettingsPanel />
+      <AiProviderSettingsPanel title="Remote Model / Provider" />
 
       <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
         <Stack spacing={1.5}>
@@ -587,10 +587,22 @@ export function AiSettingsPanel() {
                 Remote requests are validated and audited. Trading write tools and identity/auth are always denied to
                 remote models; execution remains gated by explicit user authorization and kill switches.
               </Alert>
+
+              <Alert severity="info">
+                In HYBRID mode, the remote reasoner uses the <b>Remote Model / Provider</b> configured above. To use a
+                different local model for LOCAL_ONLY (or for future hybrid formatting), configure <b>Hybrid Local Model / Provider</b>{' '}
+                below.
+              </Alert>
             </>
           )}
         </Stack>
       </Paper>
+
+      {hybrid?.enabled && (
+        <Box sx={{ mt: 2 }}>
+          <AiProviderSettingsPanel slot="hybrid_local" title="Hybrid Local Model / Provider" />
+        </Box>
+      )}
 
       <Dialog open={confirmExecOpen} onClose={() => setConfirmExecOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Enable AI execution?</DialogTitle>

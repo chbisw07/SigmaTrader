@@ -55,8 +55,9 @@ from .openai_toolcaller import OpenAiChatError, openai_chat_plain, openai_chat_w
 from .policy import classify_tool, evaluate_tool_policy, tool_lookup_map
 from .redaction import redact_for_llm
 from .tools_cache import get_tools_cached
-from .lsg import LsgContext, build_tool_request, lsg_execute
-from .lsg_types import ToolRequestEnvelope
+from .lsg import LsgContext, LsgExecution, build_tool_request, lsg_execute
+from .lsg_policy import LsgPolicyDecision
+from .lsg_types import ToolRequestEnvelope, ToolResultEnvelope, ToolSanitizationMeta
 from .digests import orders_digest, portfolio_digest, risk_digest
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot_via_toolcaller
 
@@ -363,9 +364,43 @@ async def run_chat(
     corr = correlation_id or _corr()
     direct_req = _parse_direct_portfolio_request(user_message)
 
-    ai_cfg, _src = get_active_config(db, settings)
+    tm_cfg, _tm_src = get_ai_settings_with_source(db, settings)
+    hy_cfg = getattr(tm_cfg, "hybrid_llm", None)
+    hy_enabled = bool(getattr(hy_cfg, "enabled", False))
+    hy_mode = str(getattr(getattr(hy_cfg, "mode", None), "value", None) or getattr(hy_cfg, "mode", "") or "")
+
+    # Provider selection:
+    # - Legacy mode: use the default provider config slot.
+    # - Hybrid LOCAL_ONLY: prefer hybrid_local slot, else allow default if it is local.
+    # - Hybrid REMOTE_ONLY/HYBRID: prefer hybrid_remote slot, else fall back to default.
+    default_cfg, _src = get_active_config(db, settings, slot="default")
+    remote_cfg, _rsrc = get_active_config(db, settings, slot="hybrid_remote")
+    local_cfg, _lsrc = get_active_config(db, settings, slot="hybrid_local")
+
+    ai_cfg = default_cfg
+    ai_cfg_slot = "default"
+    if hy_enabled:
+        mode = hy_mode or "REMOTE_ONLY"
+        if mode == "LOCAL_ONLY":
+            if bool(getattr(local_cfg, "enabled", False)):
+                ai_cfg = local_cfg
+                ai_cfg_slot = "hybrid_local"
+            else:
+                # Allow LOCAL_ONLY without an override if the default config is already local.
+                prov_default = get_provider((default_cfg.provider or "").strip().lower())
+                if prov_default is None or str(getattr(prov_default, "kind", "")).lower() != "local":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Hybrid LLM LOCAL_ONLY requires a local AI provider. Configure Hybrid Local provider in Settings → AI.",
+                    )
+        else:
+            if bool(getattr(remote_cfg, "enabled", False)):
+                ai_cfg = remote_cfg
+                ai_cfg_slot = "hybrid_remote"
+
     if not ai_cfg.enabled:
         raise HTTPException(status_code=403, detail="AI provider is disabled. Enable it in Settings → AI.")
+
     provider_id = (ai_cfg.provider or "").strip().lower()
     prov = get_provider(provider_id)
     if prov is None:
@@ -378,7 +413,7 @@ async def run_chat(
         )
         raise HTTPException(
             status_code=400,
-            detail=f"Tool-calling MVP currently supports OpenAI-compatible providers only ({supported_labels}).",
+            detail=f"SigmaTrader currently supports OpenAI-compatible providers only ({supported_labels}).",
         )
     if not ai_cfg.model:
         raise HTTPException(status_code=400, detail="AI model is not set. Configure it in Settings → AI.")
@@ -407,7 +442,6 @@ async def run_chat(
             if key_row is not None:
                 toolcall_api_key = decrypt_key_value(settings, key_row)
 
-    tm_cfg, _tm_src = get_ai_settings_with_source(db, settings)
     if not tm_cfg.feature_flags.kite_mcp_enabled or not tm_cfg.kite_mcp.server_url:
         raise HTTPException(
             status_code=400,
@@ -424,6 +458,7 @@ async def run_chat(
     safe_mcp_tools = [t for t in cached.mcp_tools if classify_tool(str(t.get("name") or ""), t) == "read"]
     # PII Safety Layer: only expose tools that have deterministic safe summaries.
     llm_mcp_tools = [t for t in safe_mcp_tools if tool_has_safe_summary(str(t.get("name") or ""))]
+    allowlisted_mcp_tool_names = {str(t.get("name") or "") for t in llm_mcp_tools if isinstance(t, dict)}
 
     internal_tools: list[dict[str, Any]] = [
         {
@@ -504,10 +539,6 @@ async def run_chat(
             **_safe_prompt_audit(user_message, do_not_send_pii=bool(ai_cfg.do_not_send_pii)),
         },
     )
-
-    hy_cfg = getattr(tm_cfg, "hybrid_llm", None)
-    hy_enabled = bool(getattr(hy_cfg, "enabled", False))
-    hy_mode = str(getattr(getattr(hy_cfg, "mode", None), "value", None) or getattr(hy_cfg, "mode", "") or "")
 
     system_prompt = (
         (
@@ -592,6 +623,7 @@ async def run_chat(
         account_id=account_id,
         user_message=user_message,
         inputs_used={
+            "llm_config_slot": ai_cfg_slot,
             "provider": ai_cfg.provider,
             "model": ai_cfg.model,
             "tools_hash": tools_hash,
@@ -1496,14 +1528,76 @@ async def run_chat(
                             bucket_numbers=False,
                         )
                     else:
-                        # Kite MCP tool: route via LSG wrapper.
-                        ex = await _lsg_call_mcp_payload(
-                            tool_name=tname,
-                            arguments=args2,
-                            request_id=rid,
-                            source=reasoner_source,
-                            mode=mode,
-                        )
+                        # Kite MCP tool: only allow tools that are already exposed as safe (read-only)
+                        # tools in the legacy tool-calling loop. This prevents LOCAL_ONLY from
+                        # directly executing broker-write MCP tools via JSON ToolRequests.
+                        if tname not in allowlisted_mcp_tool_names:
+                            req = build_tool_request(
+                                request_id=rid,
+                                source=reasoner_source,  # type: ignore[arg-type]
+                                mode=mode,
+                                tool_name=tname or "unknown",
+                                args=args2,
+                                reason=reason,
+                                risk_tier=risk_tier,
+                            )
+                            denied = ToolResultEnvelope(
+                                request_id=rid,
+                                status="denied",
+                                denial_reason="policy",
+                                data={"error": "Tool is not allowlisted for LLM tool-requests."},
+                                sanitization=ToolSanitizationMeta(),
+                                audit_ref=None,
+                            )
+                            meta = persist_operator_payload(
+                                db,
+                                decision_id=trace.decision_id,
+                                tool_name=f"lsg.{tname or 'unknown'}",
+                                tool_call_id=rid,
+                                account_id=account_id,
+                                user_id=None,
+                                payload={
+                                    "request": req.model_dump(mode="json"),
+                                    "result": denied.model_dump(mode="json"),
+                                    "policy_reason": "tool_not_allowlisted",
+                                },
+                            )
+                            denied = denied.model_copy(update={"audit_ref": str(meta.get("payload_id") or "")})
+                            record_system_event(
+                                db,
+                                level="WARNING",
+                                category="AI_LSG",
+                                message="LSG denied tool request (tool not allowlisted).",
+                                correlation_id=corr,
+                                details={
+                                    "request_id": rid,
+                                    "tool": tname,
+                                    "source": reasoner_source,
+                                    "mode": mode,
+                                    "denial_reason": "policy",
+                                    "policy_reason": "tool_not_allowlisted",
+                                    "audit_ref": denied.audit_ref,
+                                },
+                            )
+                            ex = LsgExecution(
+                                policy=LsgPolicyDecision(
+                                    allowed=False,
+                                    capability=req.capability,
+                                    reason="Tool is not allowlisted for LLM tool-requests.",
+                                    denial_reason="policy",
+                                ),
+                                duration_ms=0,
+                                raw_payload=None,
+                                result=denied,
+                            )
+                        else:
+                            ex = await _lsg_call_mcp_payload(
+                                tool_name=tname,
+                                arguments=args2,
+                                request_id=rid,
+                                source=reasoner_source,
+                                mode=mode,
+                            )
 
                     # Audit into the decision trace (LLM-visible payload is the sanitized ToolResult envelope).
                     safe_args = redact_for_llm(args2)

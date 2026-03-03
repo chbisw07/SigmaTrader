@@ -14,12 +14,15 @@ Default behavior is unchanged: if the hybrid gateway is disabled, SigmaTrader co
 In the web UI:
 
 1. Go to **Settings → AI**
-2. Enable **Hybrid LLM Gateway**
-3. Pick a mode:
+2. Configure the LLM(s):
+   * **Remote Model / Provider**: used for `REMOTE_ONLY` and `HYBRID` (unless you later enable a dedicated remote slot).
+   * **Hybrid Local Model / Provider**: used for `LOCAL_ONLY` (and reserved for future hybrid formatting/summarization).
+3. Enable **Hybrid LLM Gateway**
+4. Pick a mode:
    * `LOCAL_ONLY`
    * `REMOTE_ONLY`
    * `HYBRID`
-4. Enable the remote capability toggles you want:
+5. Enable the remote capability toggles you want:
    * Remote market-data tools
    * Remote account digests
 
@@ -42,6 +45,17 @@ Example payload:
   }
 }
 ```
+
+### Provider Config Slots
+
+The UI stores the active LLM provider config via:
+
+* `GET /api/ai/config?slot=default`
+* `PUT /api/ai/config?slot=default`
+* `GET /api/ai/config?slot=hybrid_local`
+* `PUT /api/ai/config?slot=hybrid_local`
+
+If `hybrid_local` is not configured, `LOCAL_ONLY` will require you to either configure it or switch the default provider to a local provider.
 
 ## Modes
 
@@ -147,4 +161,3 @@ cd backend
 source .venv/bin/activate
 pytest -q tests/test_lsg_policy_and_sanitizer.py tests/test_ai_hybrid_gateway.py
 ```
-

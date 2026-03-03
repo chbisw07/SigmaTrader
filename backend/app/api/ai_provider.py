@@ -205,10 +205,14 @@ def list_ai_providers() -> List[ProviderDescriptor]:
 
 @router.get("/config", response_model=AiActiveConfig)
 def read_ai_provider_config(
+    slot: str = Query("default", description="Config slot: default|hybrid_remote|hybrid_local"),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> AiActiveConfig:
-    cfg, _src = get_active_config(db, settings)
+    try:
+        cfg, _src = get_active_config(db, settings, slot=slot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if cfg.active_key_id is not None:
         row = get_key(db, key_id=int(cfg.active_key_id), user_id=None)
         if row is not None:
@@ -219,16 +223,23 @@ def read_ai_provider_config(
 @router.put("/config", response_model=AiActiveConfig)
 def update_ai_provider_config(
     payload: AiActiveConfigUpdate,
+    slot: str = Query("default", description="Config slot: default|hybrid_remote|hybrid_local"),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> AiActiveConfig:
-    existing, _src = get_active_config(db, settings)
+    try:
+        existing, _src = get_active_config(db, settings, slot=slot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         merged = apply_config_update(db, settings, existing=existing, update=payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    set_active_config(db, settings, merged)
+    try:
+        set_active_config(db, settings, merged, slot=slot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     record_system_event(
         db,
         level="INFO",
@@ -237,6 +248,7 @@ def update_ai_provider_config(
         correlation_id=_corr(),
         details={
             "event_type": "AI_CONFIG_UPDATED",
+            "slot": slot,
             "enabled": merged.enabled,
             "provider": merged.provider,
             "model": merged.model,
