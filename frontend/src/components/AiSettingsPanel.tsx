@@ -552,10 +552,11 @@ export function AiSettingsPanel() {
                 select
                 size="small"
                 label="Mode"
-                value={hybrid.mode || 'REMOTE_ONLY'}
+                value={hybrid.mode || 'AUTO'}
                 onChange={(e) => void patch({ hybrid_llm: { mode: e.target.value as any } } as any)}
                 disabled={busy}
               >
+                <MenuItem value="AUTO">Auto (AUTO)</MenuItem>
                 <MenuItem value="LOCAL_ONLY">Local (LOCAL_ONLY)</MenuItem>
                 <MenuItem value="REMOTE_ONLY">Remote (REMOTE_ONLY)</MenuItem>
                 <MenuItem value="HYBRID">Hybrid (HYBRID)</MenuItem>

@@ -36,7 +36,7 @@ export type AiSettings = {
   }
   hybrid_llm?: {
     enabled: boolean
-    mode: 'LOCAL_ONLY' | 'REMOTE_ONLY' | 'HYBRID'
+    mode: 'AUTO' | 'LOCAL_ONLY' | 'REMOTE_ONLY' | 'HYBRID'
     allow_remote_market_data_tools: boolean
     allow_remote_account_digests: boolean
     rate_limits?: Record<string, unknown>

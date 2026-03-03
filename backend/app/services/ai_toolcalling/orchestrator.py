@@ -109,9 +109,11 @@ def _minimal_llm_context(ui_context: Dict[str, Any] | None) -> Dict[str, Any] | 
     page = ui_context.get("page")
     if isinstance(page, str) and page.strip():
         out["page"] = page.strip()
-    # Time context (safe): used to answer "current time" questions without guessing.
-    # Keep it minimal and non-identifying.
-    for k in ("client_now_ms", "client_time_zone", "client_utc_offset_minutes"):
+    # Time context (safe): keep it minimal and non-identifying.
+    # NOTE: Do not include raw epoch millisecond strings. They frequently trip the
+    # outbound PII "phone_like" heuristic and are not necessary because we also
+    # provide an explicit "Time context: ..." line below.
+    for k in ("client_time_zone", "client_utc_offset_minutes"):
         v = ui_context.get(k)
         if isinstance(v, (str, int, float)) and str(v).strip():
             out[k] = v
@@ -184,6 +186,42 @@ def _parse_direct_portfolio_request(msg: str) -> _DirectPortfolioRequest | None:
         want_positions=bool(want_positions),
         want_summary=bool(want_summary),
         top_n=top_n,
+    )
+
+
+def _wants_portfolio_digest(user_message: str, ui_context: dict[str, Any] | None) -> bool:
+    """Heuristic: when the user asks for analysis of *their* portfolio, prefetch a sanitized digest.
+
+    This improves UX in HYBRID/REMOTE_ONLY with PII-safe mode enabled: the remote reasoner can answer
+    with only digest data, without ever seeing raw broker payloads.
+    """
+    m = (user_message or "").strip().lower()
+    if not m:
+        return False
+    # Require an "owning" signal (avoid fetching portfolio for generic market questions).
+    owns = any(x in m for x in ("my ", "mine", "portfolio", "holding", "holdings", "position", "positions"))
+    if not owns:
+        return False
+    # Common analysis intents.
+    return any(
+        x in m
+        for x in (
+            "top",
+            "bottom",
+            "best",
+            "worst",
+            "return",
+            "returns",
+            "pnl",
+            "profit",
+            "loss",
+            "exposure",
+            "allocation",
+            "diversif",
+            "analy",
+            "analysis",
+            "summary",
+        )
     )
 
 
@@ -398,26 +436,47 @@ async def run_chat(
     remote_cfg, _rsrc = get_active_config(db, settings, slot="hybrid_remote")
     local_cfg, _lsrc = get_active_config(db, settings, slot="hybrid_local")
 
+    def _provider_kind_for(cfg0) -> str | None:
+        try:
+            info0 = get_provider((getattr(cfg0, "provider", None) or "").strip().lower())
+            return str(getattr(info0, "kind", "")).lower() if info0 is not None else None
+        except Exception:
+            return None
+
+    remote_candidate = remote_cfg if bool(getattr(remote_cfg, "enabled", False)) else default_cfg
+    local_candidate = local_cfg if bool(getattr(local_cfg, "enabled", False)) else default_cfg
+
+    remote_kind = _provider_kind_for(remote_candidate)
+    local_kind = _provider_kind_for(local_candidate)
+    remote_available = bool(getattr(remote_candidate, "enabled", False)) and remote_kind == "remote"
+    local_available = bool(getattr(local_candidate, "enabled", False)) and local_kind == "local"
+
+    effective_hy_mode = (hy_mode or "AUTO").strip().upper()
+    if effective_hy_mode == "AUTO":
+        if remote_available and local_available:
+            effective_hy_mode = "HYBRID"
+        elif remote_available:
+            effective_hy_mode = "REMOTE_ONLY"
+        elif local_available:
+            effective_hy_mode = "LOCAL_ONLY"
+        else:
+            # Fall back; downstream will error if provider/model isn't configured.
+            effective_hy_mode = "REMOTE_ONLY"
+
     ai_cfg = default_cfg
     ai_cfg_slot = "default"
     if hy_enabled:
-        mode = hy_mode or "REMOTE_ONLY"
-        if mode == "LOCAL_ONLY":
-            if bool(getattr(local_cfg, "enabled", False)):
-                ai_cfg = local_cfg
-                ai_cfg_slot = "hybrid_local"
-            else:
-                # Allow LOCAL_ONLY without an override if the default config is already local.
-                prov_default = get_provider((default_cfg.provider or "").strip().lower())
-                if prov_default is None or str(getattr(prov_default, "kind", "")).lower() != "local":
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Hybrid LLM LOCAL_ONLY requires a local AI provider. Configure Hybrid Local provider in Settings → AI.",
-                    )
+        if effective_hy_mode == "LOCAL_ONLY":
+            ai_cfg = local_candidate
+            ai_cfg_slot = "hybrid_local" if local_candidate is local_cfg else "default"
+            if local_kind != "local":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Hybrid LLM LOCAL_ONLY requires a local AI provider. Configure Hybrid Local provider in Settings → AI.",
+                )
         else:
-            if bool(getattr(remote_cfg, "enabled", False)):
-                ai_cfg = remote_cfg
-                ai_cfg_slot = "hybrid_remote"
+            ai_cfg = remote_candidate
+            ai_cfg_slot = "hybrid_remote" if remote_candidate is remote_cfg else "default"
 
     if not ai_cfg.enabled:
         raise HTTPException(status_code=403, detail="AI provider is disabled. Enable it in Settings → AI.")
@@ -616,14 +675,19 @@ async def run_chat(
     ]
     llm_ctx = _minimal_llm_context(ui_context)
     if llm_ctx:
-        # Split label and JSON into separate messages so the payload inspector can
-        # parse the JSON structurally (avoids false positives like timestamps
-        # being flagged as phone numbers).
-        messages.append({"role": "system", "content": "Context (json):"})
+        # Keep this message JSON-only so the payload inspector can parse it structurally.
+        # Prefix strings like "Context (json): ..." cause regex scanning over the serialized
+        # blob and can trip noisy heuristics (e.g., epoch timestamps -> phone_like).
         messages.append(
             {
                 "role": "system",
-                "content": json.dumps(llm_ctx, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str),
+                "content": json.dumps(
+                    {"context": llm_ctx},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                    default=str,
+                ),
             }
         )
         # Provide an explicit time anchor so the model doesn't hallucinate "now".
@@ -639,12 +703,11 @@ async def run_chat(
                 }
             )
     if attachments:
-        messages.append({"role": "system", "content": "Attachments (summaries json):"})
         messages.append(
             {
                 "role": "system",
                 "content": json.dumps(
-                    _minimal_attachments_for_llm(attachments),
+                    {"attachments": _minimal_attachments_for_llm(attachments)},
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
@@ -666,6 +729,7 @@ async def run_chat(
             "tools_hash": tools_hash,
             "kite_mcp_server_url": tm_cfg.kite_mcp.server_url,
             "hybrid_llm": tm_cfg.hybrid_llm.model_dump(mode="json") if getattr(tm_cfg, "hybrid_llm", None) else None,
+            "hybrid_llm_effective_mode": effective_hy_mode if hy_enabled else None,
             "authorization_message_id": authorization_message_id,
             "attachments": [
                 {
@@ -1358,7 +1422,7 @@ async def run_chat(
 
     # Hybrid gateway: remote reasoner emits ToolRequests as JSON (no tool handles).
     if hy_enabled:
-        mode = hy_mode or "REMOTE_ONLY"
+        mode = effective_hy_mode or "REMOTE_ONLY"
         if mode == "LOCAL_ONLY" and is_remote_provider:
             raise HTTPException(status_code=400, detail="Hybrid LLM LOCAL_ONLY requires a local AI provider (LM Studio).")
         if mode in {"REMOTE_ONLY", "HYBRID"} and not is_remote_provider:
@@ -1458,6 +1522,80 @@ async def run_chat(
                     positions_payload=px.raw_payload if px.result.status == "ok" else {},
                 )
             raise ValueError("unknown digest tool")
+
+        # Prefetch portfolio digest for portfolio-analysis prompts so REMOTE_ONLY/HYBRID can
+        # answer without ever seeing raw broker payloads (and without relying on the remote
+        # model to request the digest first).
+        try:
+            if (
+                is_remote_provider
+                and bool(getattr(hy_cfg, "allow_remote_account_digests", False))
+                and _wants_portfolio_digest(user_message, ui_context)
+            ):
+                rid = uuid4().hex
+                req = build_tool_request(
+                    request_id=rid,
+                    source="system",
+                    mode="DIGEST_PREFETCH",
+                    tool_name="portfolio_digest",
+                    args={"top_n": 25},
+                    reason="Prefetch portfolio digest for analysis question.",
+                    risk_tier="LOW",
+                )
+
+                async def _exec_pf(args2: dict[str, Any]) -> Any:
+                    return await _exec_digest("portfolio_digest", args2)
+
+                ex = await lsg_execute(
+                    lsg_ctx,
+                    request=req,
+                    tool_input_schema=digest_schemas.get("portfolio_digest"),
+                    executor=_exec_pf,
+                    bucket_numbers=True,
+                )
+
+                tr_env = ex.result.model_dump(mode="json")
+                preview = tool_result_preview(tr_env, max_chars=1200)
+                tool_logs.append(
+                    ToolCallLog(
+                        name="portfolio_digest",
+                        arguments={"top_n": 25},
+                        status="ok"
+                        if ex.result.status == "ok"
+                        else ("blocked" if ex.result.status == "denied" else "error"),
+                        duration_ms=int(ex.duration_ms),
+                        result_preview=preview,
+                        error=str((ex.result.data or {}).get("error") or "") if ex.result.status != "ok" else None,
+                    )
+                )
+                trace.tools_called.append(
+                    DecisionToolCall(
+                        tool_name="portfolio_digest",
+                        input_summary={"arguments": {"top_n": 25}},
+                        output_summary={"status": ex.result.status, "preview": preview},
+                        duration_ms=int(ex.duration_ms),
+                        operator_payload_meta={"payload_id": str(ex.result.audit_ref or "")} if ex.result.audit_ref else None,
+                        llm_summary=tr_env,
+                    )
+                )
+
+                if ex.result.status == "ok":
+                    # Provide the digest directly (JSON-only) so the remote model can answer immediately.
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": json.dumps(
+                                {"portfolio_digest": tr_env.get("data")},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                default=str,
+                            ),
+                        }
+                    )
+        except Exception:
+            # Prefetch is best-effort; never fail the chat because of it.
+            pass
 
         max_iters = 10
         reasoner_turns: list[dict[str, Any]] = []

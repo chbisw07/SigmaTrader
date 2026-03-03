@@ -251,6 +251,32 @@ def test_hybrid_remote_tool_loop_market_data(monkeypatch: pytest.MonkeyPatch, fa
     assert any(t["name"] == "get_ltp" for t in body["tool_calls"])
 
 
+def test_hybrid_remote_not_false_blocked_by_time_context(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp_hybrid) -> None:
+    _enable_ai_provider()
+
+    from app.services.ai_toolcalling import orchestrator as orch
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+
+    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
+        # If the outbound PII inspector blocks, run_chat never calls the provider.
+        return OpenAiAssistantTurn(content=json.dumps({"final_message": "OK"}), tool_calls=[], raw={})
+
+    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+
+    resp = client.post(
+        "/api/ai/chat",
+        json={
+            "account_id": "default",
+            "message": "Analyze my portfolio: top 5 stocks by returns.",
+            # UI often sends epoch millis as a string. This must not trip phone_like.
+            "ui_context": {"page": "ai", "client_now_ms": "1700000000000", "client_time_zone": "Asia/Kolkata", "client_utc_offset_minutes": 330},
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["assistant_message"] == "OK"
+
+
 def test_hybrid_exfiltration_denied_and_audited(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp_hybrid) -> None:
     _enable_ai_provider()
 

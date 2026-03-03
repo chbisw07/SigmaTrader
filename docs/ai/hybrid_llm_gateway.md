@@ -19,6 +19,7 @@ In the web UI:
    * **Hybrid Local Model / Provider**: used for `LOCAL_ONLY` (and reserved for future hybrid formatting/summarization).
 3. Enable **Hybrid LLM Gateway**
 4. Pick a mode:
+   * `AUTO` (recommended)
    * `LOCAL_ONLY`
    * `REMOTE_ONLY`
    * `HYBRID`
@@ -59,6 +60,9 @@ If `hybrid_local` is not configured, `LOCAL_ONLY` will require you to either con
 
 ## Modes
 
+* `AUTO`
+  * If both a remote provider and Hybrid Local provider are configured, runs `HYBRID`.
+  * Otherwise picks `REMOTE_ONLY` or `LOCAL_ONLY` based on what is configured.
 * `LOCAL_ONLY`
   * Intended for local reasoning (LM Studio).
   * Tool execution still goes through LSG.

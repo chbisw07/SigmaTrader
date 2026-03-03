@@ -128,6 +128,7 @@ class AiSettingsUpdate(BaseModel):
 
 
 class HybridLlmMode(str, Enum):
+    auto = "AUTO"
     local_only = "LOCAL_ONLY"
     remote_only = "REMOTE_ONLY"
     hybrid = "HYBRID"
@@ -135,7 +136,9 @@ class HybridLlmMode(str, Enum):
 
 class HybridLlmConfig(BaseModel):
     enabled: bool = False
-    mode: HybridLlmMode = HybridLlmMode.remote_only
+    # AUTO: if both remote + local provider configs exist, run HYBRID; else pick
+    # the only available mode.
+    mode: HybridLlmMode = HybridLlmMode.auto
     # Guardrails: remote is untrusted, so these are explicit toggles.
     allow_remote_market_data_tools: bool = False
     allow_remote_account_digests: bool = False
