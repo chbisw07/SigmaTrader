@@ -159,3 +159,4 @@ npm -C ../website install && npm -C ../website run dev
 ### Docs
 
 - TradingView webhook setup and templates: `docs/tradingview_alerts.md`
+- Hybrid LLM Gateway (LSG + Remote Reasoner): `docs/ai/hybrid_llm_gateway.md`
