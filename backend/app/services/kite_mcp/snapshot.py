@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -102,18 +102,33 @@ async def fetch_kite_mcp_snapshot(
     session = await kite_mcp_sessions.get_session(server_url=cfg.kite_mcp.server_url, auth_session_id=auth_sid)
     await session.ensure_initialized()
 
-    # Helper for calling tools and surfacing common error.
-    async def _call(name: str) -> Tuple[dict[str, Any], Any]:
-        res = await session.tools_call(name=name, arguments={})
+    async def _call_payload(name: str, arguments: dict[str, Any]) -> Any:
+        res = await session.tools_call(name=name, arguments=arguments or {})
         if isinstance(res, dict) and res.get("isError") is True:
             raise RuntimeError(_extract_tool_text(res) or f"{name} failed.")
-        return res, _extract_tool_json(res) if isinstance(res, dict) else None
+        return _extract_tool_json(res) if isinstance(res, dict) else None
 
+    return await fetch_kite_mcp_snapshot_via_toolcaller(
+        account_id=account_id,
+        call_tool=_call_payload,
+    )
+
+
+async def fetch_kite_mcp_snapshot_via_toolcaller(
+    *,
+    account_id: str,
+    call_tool: Callable[[str, dict[str, Any]], Awaitable[Any]],
+) -> BrokerSnapshot:
+    """Build a BrokerSnapshot using an injected tool caller.
+
+    This enables routing tool execution through a Local Security Gateway (LSG)
+    without duplicating snapshot normalization logic.
+    """
     now = datetime.now(UTC)
-    holdings_res, holdings = await _call("get_holdings")
-    positions_res, positions_payload = await _call("get_positions")
-    orders_res, orders_payload = await _call("get_orders")
-    margins_res, margins_payload = await _call("get_margins")
+    holdings = await call_tool("get_holdings", {})
+    positions_payload = await call_tool("get_positions", {})
+    orders_payload = await call_tool("get_orders", {})
+    margins_payload = await call_tool("get_margins", {})
 
     holdings_list: List[Dict[str, Any]] = []
     if isinstance(holdings, list):
@@ -135,5 +150,4 @@ async def fetch_kite_mcp_snapshot(
     )
 
 
-__all__ = ["fetch_kite_mcp_snapshot"]
-
+__all__ = ["fetch_kite_mcp_snapshot", "fetch_kite_mcp_snapshot_via_toolcaller"]
