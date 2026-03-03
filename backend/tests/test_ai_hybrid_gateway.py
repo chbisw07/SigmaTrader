@@ -277,6 +277,90 @@ def test_hybrid_remote_not_false_blocked_by_time_context(monkeypatch: pytest.Mon
     assert body["assistant_message"] == "OK"
 
 
+def test_hybrid_portfolio_digest_errors_when_broker_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_ai_provider()
+
+    # Enable Kite MCP + hybrid gateway toggles.
+    resp = client.put(
+        "/api/settings/ai",
+        json={
+            "feature_flags": {"kite_mcp_enabled": True},
+            "kite_mcp": {"server_url": "https://mcp.kite.trade/sse"},
+            "hybrid_llm": {
+                "enabled": True,
+                "mode": "REMOTE_ONLY",
+                "allow_remote_market_data_tools": True,
+                "allow_remote_account_digests": True,
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    from app.services.ai_toolcalling import orchestrator as orch
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.state = type("S", (), {"server_info": {"name": "Fake"}, "capabilities": {"tools": {}}})()
+
+        async def ensure_initialized(self) -> None:
+            return None
+
+        async def tools_list(self):
+            return {
+                "tools": [
+                    {
+                        "name": "get_holdings",
+                        "description": "Return holdings",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                    },
+                    {
+                        "name": "get_positions",
+                        "description": "Return positions",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                    },
+                    {
+                        "name": "get_margins",
+                        "description": "Return margins",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                    },
+                ]
+            }
+
+        async def tools_call(self, *, name: str, arguments: dict):  # noqa: ARG002
+            # Simulate broker unauthorized (MCP tool errors).
+            return {"content": [{"type": "text", "text": "Please log in first using the login tool"}], "isError": True}
+
+    class FakeManager:
+        async def get_session(self, *, server_url: str, auth_session_id: str | None):  # noqa: ARG002
+            return FakeSession()
+
+    mgr = FakeManager()
+    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.kite_mcp.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.api.kite_mcp.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.get_auth_session_id", lambda *a, **k: None)
+
+    calls = {"n": 0}
+
+    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
+        # If prefetch succeeds, we'd see a portfolio_digest system message. Here it should be unavailable.
+        calls["n"] += 1
+        assert any("portfolio_digest_unavailable" in str(m.get("content") or "") for m in (messages or []) if m.get("role") == "system")
+        return OpenAiAssistantTurn(content=json.dumps({"final_message": "Need login"}), tool_calls=[], raw={})
+
+    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+
+    resp2 = client.post("/api/ai/chat", json={"account_id": "default", "message": "Analyze my portfolio top 5"})
+    assert resp2.status_code == 200
+    assert "Need login" in resp2.json()["assistant_message"]
+
+
 def test_hybrid_exfiltration_denied_and_audited(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp_hybrid) -> None:
     _enable_ai_provider()
 

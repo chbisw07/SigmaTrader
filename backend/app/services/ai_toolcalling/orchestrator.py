@@ -1446,6 +1446,14 @@ async def run_chat(
             "risk_digest": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
         }
 
+        def _lsg_err(ex: LsgExecution) -> str:
+            data = ex.result.data
+            if isinstance(data, dict) and data.get("error"):
+                return str(data.get("error") or "")
+            if ex.result.denial_reason:
+                return str(ex.result.denial_reason)
+            return "tool_failed"
+
         async def _exec_digest(name: str, args: dict[str, Any]) -> Any:
             if name == "portfolio_digest":
                 try:
@@ -1459,6 +1467,8 @@ async def run_chat(
                     source="system",
                     mode="DIGEST_FETCH",
                 )
+                if hx.result.status != "ok":
+                    raise RuntimeError(f"Unable to fetch holdings (broker not authorized?): {_lsg_err(hx)}")
                 px = await _lsg_call_mcp_payload(
                     tool_name="get_positions",
                     arguments={},
@@ -1466,6 +1476,8 @@ async def run_chat(
                     source="system",
                     mode="DIGEST_FETCH",
                 )
+                if px.result.status != "ok":
+                    raise RuntimeError(f"Unable to fetch positions (broker not authorized?): {_lsg_err(px)}")
                 mx = await _lsg_call_mcp_payload(
                     tool_name="get_margins",
                     arguments={},
@@ -1473,6 +1485,8 @@ async def run_chat(
                     source="system",
                     mode="DIGEST_FETCH",
                 )
+                if mx.result.status != "ok":
+                    raise RuntimeError(f"Unable to fetch margins (broker not authorized?): {_lsg_err(mx)}")
                 return portfolio_digest(
                     tm_cfg=tm_cfg,
                     holdings_payload=hx.raw_payload if hx.result.status == "ok" else [],
@@ -1492,6 +1506,8 @@ async def run_chat(
                     source="system",
                     mode="DIGEST_FETCH",
                 )
+                if ox.result.status != "ok":
+                    raise RuntimeError(f"Unable to fetch orders (broker not authorized?): {_lsg_err(ox)}")
                 return orders_digest(orders_payload=ox.raw_payload if ox.result.status == "ok" else [], last_n=last_n)
             if name == "risk_digest":
                 mx = await _lsg_call_mcp_payload(
@@ -1501,6 +1517,8 @@ async def run_chat(
                     source="system",
                     mode="DIGEST_FETCH",
                 )
+                if mx.result.status != "ok":
+                    raise RuntimeError(f"Unable to fetch margins (broker not authorized?): {_lsg_err(mx)}")
                 hx = await _lsg_call_mcp_payload(
                     tool_name="get_holdings",
                     arguments={},
@@ -1508,6 +1526,8 @@ async def run_chat(
                     source="system",
                     mode="DIGEST_FETCH",
                 )
+                if hx.result.status != "ok":
+                    raise RuntimeError(f"Unable to fetch holdings (broker not authorized?): {_lsg_err(hx)}")
                 px = await _lsg_call_mcp_payload(
                     tool_name="get_positions",
                     arguments={},
@@ -1515,6 +1535,8 @@ async def run_chat(
                     source="system",
                     mode="DIGEST_FETCH",
                 )
+                if px.result.status != "ok":
+                    raise RuntimeError(f"Unable to fetch positions (broker not authorized?): {_lsg_err(px)}")
                 return risk_digest(
                     tm_cfg=tm_cfg,
                     margins_payload=mx.raw_payload if mx.result.status == "ok" else {},
@@ -1586,6 +1608,30 @@ async def run_chat(
                             "role": "system",
                             "content": json.dumps(
                                 {"portfolio_digest": tr_env.get("data")},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                default=str,
+                            ),
+                        }
+                    )
+                else:
+                    # Provide a structured hint so the remote model can guide the user
+                    # to complete broker authorization, instead of hallucinating a zero portfolio.
+                    err = ""
+                    if isinstance(ex.result.data, dict) and ex.result.data.get("error"):
+                        err = str(ex.result.data.get("error") or "")
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": json.dumps(
+                                {
+                                    "portfolio_digest_unavailable": {
+                                        "status": ex.result.status,
+                                        "error": err or "digest_unavailable",
+                                        "hint": "Kite MCP appears unauthorized. Use the Kite login flow (Settings -> AI -> Kite MCP -> Login) and retry.",
+                                    }
+                                },
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                                 sort_keys=True,
