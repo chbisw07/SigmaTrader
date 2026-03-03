@@ -458,6 +458,15 @@ async def run_chat(
             },
         },
     ]
+    internal_schema_by_name: dict[str, dict[str, Any]] = {}
+    for t in internal_tools:
+        fn = t.get("function") if isinstance(t, dict) else None
+        if not isinstance(fn, dict):
+            continue
+        name = str(fn.get("name") or "").strip()
+        params = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else None
+        if name and isinstance(params, dict):
+            internal_schema_by_name[name] = params
 
     openai_tools = mcp_tools_to_openai_tools(llm_mcp_tools) + internal_tools
     tools_hash = hash_tool_definitions(openai_tools)
@@ -837,7 +846,16 @@ async def run_chat(
         m = (msg or "").lower()
         if any(x in m for x in ("plan", "proposal", "what if", "simulate")):
             return False
-        return bool(re.search(r"\\b(buy|sell|execute|place|go\\s+ahead|enter)\\b", m))
+        return bool(
+            re.search(r"\b(buy|sell|execute|place|go\s+ahead|enter)\b", m)
+            or re.search(r"\bexecute\b", m)
+        )
+
+    def _kite_mcp_is_connected() -> bool:
+        st = getattr(tm_cfg.kite_mcp, "last_status", None)
+        val = getattr(st, "value", None)
+        s = str(val if val is not None else (st or "")).strip().lower()
+        return s == "connected"
 
     def _hash_payload(value: Any) -> str:
         raw = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -1093,7 +1111,7 @@ async def run_chat(
                 out = {"executed": False, "veto": True, "reason": "EXECUTION_DISABLED"}
             elif is_execution_hard_disabled(tm_cfg):
                 out = {"executed": False, "veto": True, "reason": "EXECUTION_KILL_SWITCH"}
-            elif str(tm_cfg.kite_mcp.last_status or "").lower() != "connected":
+            elif not _kite_mcp_is_connected():
                 out = {"executed": False, "veto": True, "reason": "MCP_NOT_CONNECTED"}
             else:
                 # Playbook pre-trade decision (passive by default; enabled=false).
@@ -1473,7 +1491,7 @@ async def run_chat(
                         ex = await lsg_execute(
                             lsg_ctx,
                             request=req,
-                            tool_input_schema=None,
+                            tool_input_schema=internal_schema_by_name.get(tname),
                             executor=_exec2,
                             bucket_numbers=False,
                         )
@@ -1789,7 +1807,7 @@ async def run_chat(
                             out = {"executed": False, "veto": True, "reason": "EXECUTION_DISABLED"}
                         elif is_execution_hard_disabled(tm_cfg):
                             out = {"executed": False, "veto": True, "reason": "EXECUTION_KILL_SWITCH"}
-                        elif str(tm_cfg.kite_mcp.last_status or "").lower() != "connected":
+                        elif not _kite_mcp_is_connected():
                             out = {"executed": False, "veto": True, "reason": "MCP_NOT_CONNECTED"}
                         else:
                             # Playbook pre-trade decision (passive by default; enabled=false).
