@@ -117,6 +117,38 @@ def _bucket_number(v: float) -> str:
     return ">=1m"
 
 
+_SENSITIVE_NUMERIC_KEY_SUBSTR = (
+    "qty",
+    "quantity",
+    "price",
+    "avg",
+    "ltp",
+    "margin",
+    "util",
+    "available",
+    "cash",
+    "equity",
+    "pnl",
+    "value",
+    "notional",
+    "amount",
+    "exposure",
+    "loss",
+)
+
+
+def _should_bucket_numeric(key_path: str) -> bool:
+    # Bucket only numeric values that are plausibly sensitive. Avoid bucketing
+    # obvious counters like "count", "n", etc.
+    p = (key_path or "").strip().lower()
+    if not p:
+        return False
+    last = p.split(".")[-1]
+    if last in {"count", "counts", "n", "num", "total"}:
+        return False
+    return any(sub in last for sub in _SENSITIVE_NUMERIC_KEY_SUBSTR)
+
+
 def _paths_append(meta_list: list[str], path: str, *, limit: int = 200) -> None:
     if len(meta_list) >= limit:
         return
@@ -160,7 +192,7 @@ def _sanitize(
             _paths_append(meta.redacted_fields, path or "$")
             return "[REDACTED]"
         return value
-    if bucket_numbers and isinstance(value, (int, float)):
+    if bucket_numbers and isinstance(value, (int, float)) and _should_bucket_numeric(path):
         _paths_append(meta.bucketed_fields, path or "$")
         return _bucket_number(float(value))
     return value
@@ -203,4 +235,3 @@ def redact_keys_for_remote(keys: Iterable[str]) -> list[str]:
 
 
 __all__ = ["sanitize_digest_payload", "sanitize_kite_payload", "redact_keys_for_remote"]
-
