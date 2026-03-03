@@ -347,6 +347,27 @@ def _compact_json(value: Any, *, max_chars: int) -> str:
     return s
 
 
+def _pii_inspection_payload(*, model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Minimize outbound payload for PII inspection to avoid false positives.
+
+    We care about what we send as content, not tool schemas or transport metadata.
+    """
+    safe_msgs: list[dict[str, Any]] = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "").strip()
+        content = m.get("content")
+        if not role or content is None:
+            continue
+        # Ignore assistant messages for inspection. The assistant output is remote
+        # and can contain arbitrary keys; echoing it back should not block the flow.
+        if role == "assistant":
+            continue
+        safe_msgs.append({"role": role, "content": content})
+    return {"model": str(model or ""), "messages": safe_msgs}
+
+
 async def run_chat(
     db: Session,
     settings: Settings,
@@ -1423,10 +1444,11 @@ async def run_chat(
             raise ValueError("unknown digest tool")
 
         max_iters = 10
+        reasoner_turns: list[dict[str, Any]] = []
         for _i in range(max_iters):
             if is_remote_provider:
                 try:
-                    inspect_llm_payload({"model": str(ai_cfg.model), "messages": messages})
+                    inspect_llm_payload(_pii_inspection_payload(model=str(ai_cfg.model), messages=messages))
                 except PayloadInspectionError as exc:
                     findings = [{"path": f.path, "kind": f.kind, "detail": f.detail} for f in (exc.findings or [])][:10]
                     final_text = (
@@ -1465,13 +1487,12 @@ async def run_chat(
                 )
                 continue
 
-            # Keep remote response auditable and feed it back as assistant content.
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str),
-                }
-            )
+            # Keep remote response auditable without echoing it back verbatim.
+            # ToolResult messages already provide the model with continuity.
+            try:
+                reasoner_turns.append(redact_for_llm(obj))
+            except Exception:
+                reasoner_turns.append({"parse_error": True})
 
             tool_reqs = obj.get("tool_requests")
             if isinstance(tool_reqs, list) and tool_reqs:
@@ -1678,6 +1699,7 @@ async def run_chat(
             **prior,
             "assistant_message": final_text,
             "tool_calls": [t.__dict__ for t in tool_logs],
+            "reasoner_turns": reasoner_turns[:12],
             **structured,
         }
         trace.explanations = []
@@ -1697,7 +1719,7 @@ async def run_chat(
         # Enforce PII-safe outbound payload for remote providers (fail-closed).
         if is_remote_provider:
             try:
-                inspect_llm_payload({"model": str(ai_cfg.model), "messages": messages, "tools": openai_tools})
+                inspect_llm_payload(_pii_inspection_payload(model=str(ai_cfg.model), messages=messages))
             except PayloadInspectionError as exc:
                 # Do not attempt a remote call if payload contains forbidden keys/patterns.
                 findings = [{"path": f.path, "kind": f.kind, "detail": f.detail} for f in (exc.findings or [])][:10]
