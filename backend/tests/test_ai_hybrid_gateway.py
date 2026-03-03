@@ -198,20 +198,17 @@ def _extract_last_toolresult(messages: list[dict]) -> dict | None:
         if m.get("role") != "user":
             continue
         c = str(m.get("content") or "")
-        if "ToolResult (json):" not in c:
+        # Hybrid loop sends tool results as JSON: {"tool_result": {...}}.
+        raw = c.strip()
+        if not raw.startswith("{"):
             continue
-        raw = c.split("ToolResult (json):", 1)[1].strip()
         try:
-            return json.loads(raw)
+            obj = json.loads(raw)
         except Exception:
-            i = raw.find("{")
-            j = raw.rfind("}")
-            if i >= 0 and j > i:
-                try:
-                    return json.loads(raw[i : j + 1])
-                except Exception:
-                    return None
             return None
+        if isinstance(obj, dict) and isinstance(obj.get("tool_result"), dict):
+            return obj.get("tool_result")
+        return obj if isinstance(obj, dict) else None
     return None
 
 
