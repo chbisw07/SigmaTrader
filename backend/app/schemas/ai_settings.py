@@ -133,6 +133,11 @@ class HybridLlmMode(str, Enum):
     remote_only = "REMOTE_ONLY"
     hybrid = "HYBRID"
 
+class RemotePortfolioDetailLevel(str, Enum):
+    off = "OFF"
+    digest_only = "DIGEST_ONLY"
+    full_sanitized = "FULL_SANITIZED"
+
 
 class HybridLlmConfig(BaseModel):
     enabled: bool = False
@@ -142,6 +147,10 @@ class HybridLlmConfig(BaseModel):
     # Guardrails: remote is untrusted, so these are explicit toggles.
     allow_remote_market_data_tools: bool = False
     allow_remote_account_digests: bool = False
+    # Tier-2 posture: what portfolio telemetry may be exposed to a remote model.
+    # Default DIGEST_ONLY preserves the previous behavior where remote could
+    # only see local digests (never raw holdings/orders payloads).
+    remote_portfolio_detail_level: RemotePortfolioDetailLevel = RemotePortfolioDetailLevel.digest_only
 
     # Lightweight rate-limits (best-effort). Keys are tool names.
     # Example:
@@ -154,6 +163,7 @@ class HybridLlmConfigUpdate(BaseModel):
     mode: Optional[HybridLlmMode] = None
     allow_remote_market_data_tools: Optional[bool] = None
     allow_remote_account_digests: Optional[bool] = None
+    remote_portfolio_detail_level: Optional[RemotePortfolioDetailLevel] = None
     rate_limits: Optional[Dict[str, Any]] = None
 
 

@@ -562,6 +562,22 @@ export function AiSettingsPanel() {
                 <MenuItem value="HYBRID">Hybrid (HYBRID)</MenuItem>
               </TextField>
 
+              <TextField
+                select
+                size="small"
+                label="Remote portfolio detail level"
+                value={(hybrid as any).remote_portfolio_detail_level || 'DIGEST_ONLY'}
+                onChange={(e) =>
+                  void patch({ hybrid_llm: { remote_portfolio_detail_level: e.target.value as any } } as any)
+                }
+                disabled={busy}
+                helperText="Controls what Tier-2 portfolio telemetry (holdings/positions/orders/margins) can be sent to a remote model. Tier-3 PII/secrets are always blocked."
+              >
+                <MenuItem value="OFF">Off (OFF)</MenuItem>
+                <MenuItem value="DIGEST_ONLY">Digests only (DIGEST_ONLY)</MenuItem>
+                <MenuItem value="FULL_SANITIZED">Full sanitized (FULL_SANITIZED)</MenuItem>
+              </TextField>
+
               <FormControlLabel
                 control={
                   <Switch

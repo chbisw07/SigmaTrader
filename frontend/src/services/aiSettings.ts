@@ -39,6 +39,7 @@ export type AiSettings = {
     mode: 'AUTO' | 'LOCAL_ONLY' | 'REMOTE_ONLY' | 'HYBRID'
     allow_remote_market_data_tools: boolean
     allow_remote_account_digests: boolean
+    remote_portfolio_detail_level?: 'OFF' | 'DIGEST_ONLY' | 'FULL_SANITIZED'
     rate_limits?: Record<string, unknown>
   }
 }
