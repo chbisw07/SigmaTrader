@@ -86,7 +86,12 @@ def _ensure_sqlite_schema_if_missing() -> None:
         try:
             inspector = inspect(engine)
             tables = set(inspector.get_table_names())
-            if "users" in tables:
+            # Minimal set required for login + broker integrations. If any of
+            # these are missing, create_all(checkfirst=True) is a safe,
+            # non-destructive way to bootstrap tables for SQLite dev DBs.
+            core = {"users", "broker_secrets"}
+            missing = sorted(core - tables)
+            if not missing:
                 _SCHEMA_ENSURED = True
                 return
 
@@ -95,7 +100,7 @@ def _ensure_sqlite_schema_if_missing() -> None:
 
             logger.warning(
                 "SQLite schema missing core tables; creating tables with create_all(checkfirst=True).",
-                extra={"extra": {"missing_table": "users"}},
+                extra={"extra": {"missing_tables": missing}},
             )
             Base.metadata.create_all(bind=engine, checkfirst=True)
         except Exception:
@@ -116,3 +121,7 @@ def get_db() -> Iterator[Session]:
 
 
 __all__ = ["engine", "SessionLocal", "get_db", "Base"]
+
+# Ensure background tasks that use SessionLocal() directly (not the FastAPI
+# dependency) still see a usable schema in local SQLite deployments.
+_ensure_sqlite_schema_if_missing()

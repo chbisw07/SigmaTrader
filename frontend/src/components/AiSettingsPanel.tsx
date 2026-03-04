@@ -74,6 +74,8 @@ export function AiSettingsPanel() {
     return Boolean(settings.feature_flags.kite_mcp_enabled && kite.server_url && kite.last_status === 'connected')
   }, [settings])
 
+  const hybrid = settings?.hybrid_llm
+
   const load = async () => {
     setError(null)
     try {
@@ -523,7 +525,85 @@ export function AiSettingsPanel() {
         </Stack>
       </Paper>
 
-      <AiProviderSettingsPanel />
+      <AiProviderSettingsPanel title="Remote Model / Provider" />
+
+      <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+        <Stack spacing={1.5}>
+          <Typography variant="h6">Hybrid LLM Gateway</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Routes all tool execution through the Local Security Gateway (LSG). Remote models do not receive tool handles
+            and can only request allowlisted capabilities.
+          </Typography>
+
+          <FormControlLabel
+            control={
+              <Switch
+                checked={Boolean(hybrid?.enabled)}
+                onChange={(_, v) => void patch({ hybrid_llm: { enabled: v } } as any)}
+                disabled={busy || !settings}
+              />
+            }
+            label="Enable Hybrid LLM Gateway"
+          />
+
+          {hybrid?.enabled && (
+            <>
+              <TextField
+                select
+                size="small"
+                label="Mode"
+                value={hybrid.mode || 'AUTO'}
+                onChange={(e) => void patch({ hybrid_llm: { mode: e.target.value as any } } as any)}
+                disabled={busy}
+              >
+                <MenuItem value="AUTO">Auto (AUTO)</MenuItem>
+                <MenuItem value="LOCAL_ONLY">Local (LOCAL_ONLY)</MenuItem>
+                <MenuItem value="REMOTE_ONLY">Remote (REMOTE_ONLY)</MenuItem>
+                <MenuItem value="HYBRID">Hybrid (HYBRID)</MenuItem>
+              </TextField>
+
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={Boolean(hybrid.allow_remote_market_data_tools)}
+                    onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_market_data_tools: v } } as any)}
+                    disabled={busy}
+                  />
+                }
+                label="Remote may request market-data tools"
+              />
+
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={Boolean(hybrid.allow_remote_account_digests)}
+                    onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_account_digests: v } } as any)}
+                    disabled={busy}
+                  />
+                }
+                label="Remote may request account digests"
+              />
+
+              <Alert severity="info">
+                Remote requests are validated and audited. Trading write tools and identity/auth are always denied to
+                remote models; execution remains gated by explicit user authorization and kill switches.
+              </Alert>
+
+              <Alert severity="info">
+                In HYBRID mode, the remote reasoner uses the <b>Remote Model / Provider</b> configured above. To use a
+                different local model for LOCAL_ONLY (or for future hybrid formatting), configure <b>Hybrid Local Model / Provider</b>{' '}
+                below.
+              </Alert>
+            </>
+          )}
+        </Stack>
+      </Paper>
+
+      {hybrid?.enabled && (
+        <Box sx={{ mt: 2 }}>
+          <AiProviderSettingsPanel slot="hybrid_local" title="Hybrid Local Model / Provider" />
+        </Box>
+      )}
 
       <Dialog open={confirmExecOpen} onClose={() => setConfirmExecOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Enable AI execution?</DialogTitle>

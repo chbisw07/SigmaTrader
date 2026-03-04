@@ -15,7 +15,12 @@ from app.services.ai.provider_keys import get_key
 from app.pydantic_compat import model_to_dict
 
 AI_PROVIDER_CONFIG_BROKER_NAME = "ai_provider"
-AI_PROVIDER_CONFIG_KEY = "active_config_v1"
+AI_PROVIDER_CONFIG_KEY_DEFAULT = "active_config_v1"
+# Optional alternate slots used by Hybrid LLM. These are separate from the
+# AiSettings.hybrid_llm toggles; they only define which LLM endpoint/model/key
+# is used when a mode needs a local vs remote model.
+AI_PROVIDER_CONFIG_KEY_HYBRID_REMOTE = "hybrid_remote_config_v1"
+AI_PROVIDER_CONFIG_KEY_HYBRID_LOCAL = "hybrid_local_config_v1"
 
 AiConfigSource = Literal["db", "default", "db_invalid"]
 
@@ -40,12 +45,24 @@ def _normalize_base_url(url: str | None) -> str | None:
     return u.rstrip("/")
 
 
-def get_active_config(db: Session, settings: Settings) -> tuple[AiActiveConfig, AiConfigSource]:
+def _config_key_for_slot(slot: str | None) -> str:
+    s = (slot or "default").strip().lower()
+    if s in {"default", "primary"}:
+        return AI_PROVIDER_CONFIG_KEY_DEFAULT
+    if s in {"hybrid_remote", "remote"}:
+        return AI_PROVIDER_CONFIG_KEY_HYBRID_REMOTE
+    if s in {"hybrid_local", "local"}:
+        return AI_PROVIDER_CONFIG_KEY_HYBRID_LOCAL
+    raise ValueError("Unsupported config slot.")
+
+
+def get_active_config(db: Session, settings: Settings, *, slot: str | None = None) -> tuple[AiActiveConfig, AiConfigSource]:
+    cfg_key = _config_key_for_slot(slot)
     row = (
         db.query(BrokerSecret)
         .filter(
             BrokerSecret.broker_name == AI_PROVIDER_CONFIG_BROKER_NAME,
-            BrokerSecret.key == AI_PROVIDER_CONFIG_KEY,
+            BrokerSecret.key == cfg_key,
             BrokerSecret.user_id.is_(None),
         )
         .one_or_none()
@@ -60,14 +77,15 @@ def get_active_config(db: Session, settings: Settings) -> tuple[AiActiveConfig, 
         return AiActiveConfig(), "db_invalid"
 
 
-def set_active_config(db: Session, settings: Settings, cfg: AiActiveConfig) -> BrokerSecret:
+def set_active_config(db: Session, settings: Settings, cfg: AiActiveConfig, *, slot: str | None = None) -> BrokerSecret:
+    cfg_key = _config_key_for_slot(slot)
     payload = json.dumps(cfg.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
     encrypted = encrypt_token(settings, payload)
     row = (
         db.query(BrokerSecret)
         .filter(
             BrokerSecret.broker_name == AI_PROVIDER_CONFIG_BROKER_NAME,
-            BrokerSecret.key == AI_PROVIDER_CONFIG_KEY,
+            BrokerSecret.key == cfg_key,
             BrokerSecret.user_id.is_(None),
         )
         .one_or_none()
@@ -76,7 +94,7 @@ def set_active_config(db: Session, settings: Settings, cfg: AiActiveConfig) -> B
         row = BrokerSecret(
             user_id=None,
             broker_name=AI_PROVIDER_CONFIG_BROKER_NAME,
-            key=AI_PROVIDER_CONFIG_KEY,
+            key=cfg_key,
             value_encrypted=encrypted,
         )
         db.add(row)
@@ -136,7 +154,9 @@ def apply_config_update(
 
 __all__ = [
     "AI_PROVIDER_CONFIG_BROKER_NAME",
-    "AI_PROVIDER_CONFIG_KEY",
+    "AI_PROVIDER_CONFIG_KEY_DEFAULT",
+    "AI_PROVIDER_CONFIG_KEY_HYBRID_LOCAL",
+    "AI_PROVIDER_CONFIG_KEY_HYBRID_REMOTE",
     "AiConfigSource",
     "apply_config_update",
     "get_active_config",

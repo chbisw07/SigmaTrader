@@ -78,6 +78,13 @@ def _env_defaults(settings: Settings) -> AiSettings:
             "do_not_send_pii": True,
             "limits": {},
         },
+        hybrid_llm={
+            "enabled": False,
+            "mode": "REMOTE_ONLY",
+            "allow_remote_market_data_tools": False,
+            "allow_remote_account_digests": False,
+            "rate_limits": {},
+        },
     )
 
 

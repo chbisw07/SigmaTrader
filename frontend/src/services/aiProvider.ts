@@ -57,14 +57,18 @@ export async function fetchAiProviders(): Promise<ProviderDescriptor[]> {
   return (await res.json()) as ProviderDescriptor[]
 }
 
-export async function fetchAiConfig(): Promise<AiActiveConfig> {
-  const res = await fetch('/api/ai/config')
+export async function fetchAiConfig(slot?: string): Promise<AiActiveConfig> {
+  const url = new URL('/api/ai/config', window.location.origin)
+  if (slot) url.searchParams.set('slot', slot)
+  const res = await fetch(url.toString())
   if (!res.ok) throw new Error(`Failed to load AI config (${res.status})`)
   return (await res.json()) as AiActiveConfig
 }
 
-export async function updateAiConfig(payload: AiActiveConfigUpdate): Promise<AiActiveConfig> {
-  const res = await fetch('/api/ai/config', {
+export async function updateAiConfig(payload: AiActiveConfigUpdate, slot?: string): Promise<AiActiveConfig> {
+  const url = new URL('/api/ai/config', window.location.origin)
+  if (slot) url.searchParams.set('slot', slot)
+  const res = await fetch(url.toString(), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

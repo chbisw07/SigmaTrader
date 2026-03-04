@@ -116,4 +116,76 @@ async def openai_chat_with_tools(
     return OpenAiAssistantTurn(content=content, tool_calls=tool_calls, raw=raw_meta)
 
 
-__all__ = ["OpenAiAssistantTurn", "OpenAiChatError", "OpenAiToolCall", "openai_chat_with_tools"]
+async def openai_chat_plain(
+    *,
+    api_key: str | None,
+    model: str,
+    messages: List[Dict[str, Any]],
+    base_url: str = "https://api.openai.com/v1",
+    timeout_seconds: float = 30,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> OpenAiAssistantTurn:
+    """OpenAI-compatible chat completion without tools.
+
+    Used by the Hybrid LLM gateway where the remote reasoner emits ToolRequests
+    as JSON instead of OpenAI tool-calls.
+    """
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    body: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+    }
+    if temperature is not None:
+        body["temperature"] = float(temperature)
+    if max_tokens is not None:
+        body["max_tokens"] = int(max_tokens)
+    headers: dict[str, str] = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    t0 = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
+            resp = await client.post(url, headers=headers, json=body)
+    except httpx.TimeoutException as exc:
+        raise OpenAiChatError(f"LLM endpoint timed out after {timeout_seconds:.0f}s.") from exc
+    except httpx.RequestError as exc:
+        raise OpenAiChatError(f"LLM endpoint request failed: {type(exc).__name__}: {exc}") from exc
+    except Exception as exc:
+        raise OpenAiChatError(str(exc) or "LLM endpoint request failed.") from exc
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+
+    if resp.status_code in {401, 403}:
+        raise OpenAiChatError("LLM endpoint unauthorized (check API key).")
+    if resp.status_code >= 400:
+        raise OpenAiChatError(f"LLM endpoint HTTP {resp.status_code}: {resp.text}")
+
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        preview = (resp.text or "")[:500]
+        raise OpenAiChatError(f"LLM endpoint returned non-JSON response. status={resp.status_code} body={preview!r}") from exc
+    if not isinstance(payload, dict):
+        raise OpenAiChatError("Invalid OpenAI response.")
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise OpenAiChatError("OpenAI returned no choices.")
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        raise OpenAiChatError("OpenAI response missing message.")
+
+    content = str(msg.get("content") or "")
+    raw_meta = {"latency_ms": latency_ms, "usage": payload.get("usage"), "id": payload.get("id")}
+    return OpenAiAssistantTurn(content=content, tool_calls=[], raw=raw_meta)
+
+
+__all__ = [
+    "OpenAiAssistantTurn",
+    "OpenAiChatError",
+    "OpenAiToolCall",
+    "openai_chat_plain",
+    "openai_chat_with_tools",
+]

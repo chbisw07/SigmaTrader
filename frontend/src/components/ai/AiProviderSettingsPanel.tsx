@@ -83,7 +83,9 @@ function isLocalNetworkUrl(raw: string | null | undefined): boolean {
   return isPrivateIpv4(host)
 }
 
-export function AiProviderSettingsPanel() {
+export function AiProviderSettingsPanel(props: { slot?: string; title?: string }) {
+  const slot = props.slot
+  const title = props.title ?? 'Model / Provider'
   const [providers, setProviders] = useState<ProviderDescriptor[]>([])
   const [cfg, setCfg] = useState<AiActiveConfig | null>(null)
   const [keys, setKeys] = useState<AiProviderKey[]>([])
@@ -120,7 +122,7 @@ export function AiProviderSettingsPanel() {
   const load = async () => {
     setError(null)
     try {
-      const [ps, c] = await Promise.all([fetchAiProviders(), fetchAiConfig()])
+      const [ps, c] = await Promise.all([fetchAiProviders(), fetchAiConfig(slot)])
       setProviders(ps)
       setCfg(c)
     } catch (e) {
@@ -153,7 +155,7 @@ export function AiProviderSettingsPanel() {
     setError(null)
     setSuccess(null)
     try {
-      const next = await updateAiConfig(partial as any)
+      const next = await updateAiConfig(partial as any, slot)
       setCfg(next)
       setSuccess('Saved.')
     } catch (e) {
@@ -290,7 +292,7 @@ export function AiProviderSettingsPanel() {
   if (!cfg) {
     return (
       <Box>
-        <Typography variant="subtitle1">Model / Provider</Typography>
+        <Typography variant="subtitle1">{title}</Typography>
         {error ? (
           <Alert severity="error" sx={{ mt: 1 }}>
             {error}
@@ -310,7 +312,7 @@ export function AiProviderSettingsPanel() {
     <Paper sx={{ p: 2 }}>
       <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
         <Typography variant="subtitle1" sx={{ flex: 1, minWidth: 200 }}>
-          Model / Provider
+          {title}
         </Typography>
         <Button size="small" variant="outlined" onClick={() => void load()} disabled={busy}>
           Refresh
