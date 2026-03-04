@@ -145,7 +145,8 @@ def evaluate_lsg_policy(
 
     # Tier-2: portfolio telemetry posture (explicit user setting).
     hy = getattr(tm_cfg, "hybrid_llm", None)
-    detail = str(getattr(hy, "remote_portfolio_detail_level", "DIGEST_ONLY") or "DIGEST_ONLY").upper()
+    detail_raw = getattr(hy, "remote_portfolio_detail_level", None)
+    detail = str(getattr(detail_raw, "value", None) or detail_raw or "DIGEST_ONLY").upper()
     if n in REMOTE_DENY_RAW_ACCOUNT_READS:
         if detail != "FULL_SANITIZED":
             return LsgPolicyDecision(

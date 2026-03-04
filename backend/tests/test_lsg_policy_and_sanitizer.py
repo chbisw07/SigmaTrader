@@ -71,6 +71,8 @@ def test_sanitizer_hashes_ids_and_redacts_identity_fields() -> None:
         "client_id": "CID-1",
         "email": "a@example.com",
         "name": "Alice",
+        "jwt": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbb",
+        "opaque": "Abcdefghijklmnopqrstuvwxyz0123456789_-Abcdefghijklmnopqrstuvwxyz",
         "ok": True,
     }
     out, meta = sanitize_kite_payload("get_orders", payload, settings=settings, bucket_numbers=False)
@@ -79,6 +81,8 @@ def test_sanitizer_hashes_ids_and_redacts_identity_fields() -> None:
     assert "client_id" not in out
     assert "email" not in out
     assert "name" not in out
+    assert out.get("jwt") == "[REDACTED]"
+    assert out.get("opaque") == "[REDACTED]"
     assert "order_id" in out
     assert meta.hashed_fields
     assert meta.redacted_fields

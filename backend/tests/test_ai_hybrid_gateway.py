@@ -85,6 +85,7 @@ def fake_kite_mcp_hybrid(monkeypatch: pytest.MonkeyPatch):
                 "mode": "REMOTE_ONLY",
                 "allow_remote_market_data_tools": True,
                 "allow_remote_account_digests": True,
+                "remote_portfolio_detail_level": "DIGEST_ONLY",
             },
         },
     )
@@ -363,6 +364,82 @@ def test_hybrid_portfolio_digest_errors_when_broker_unauthorized(monkeypatch: py
     assert "Need login" in resp2.json()["assistant_message"]
 
 
+def test_hybrid_tier2_off_denies_digests(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_ai_provider()
+
+    resp = client.put(
+        "/api/settings/ai",
+        json={
+            "feature_flags": {"kite_mcp_enabled": True},
+            "kite_mcp": {"server_url": "https://mcp.kite.trade/sse"},
+            "hybrid_llm": {
+                "enabled": True,
+                "mode": "REMOTE_ONLY",
+                "allow_remote_market_data_tools": True,
+                "allow_remote_account_digests": True,
+                "remote_portfolio_detail_level": "OFF",
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    # Minimal MCP session for tool list; digest tools are internal and do not require MCP list.
+    class FakeSession:
+        def __init__(self) -> None:
+            self.state = type("S", (), {"server_info": {"name": "Fake"}, "capabilities": {"tools": {}}})()
+
+        async def ensure_initialized(self) -> None:
+            return None
+
+        async def tools_list(self):
+            return {"tools": []}
+
+        async def tools_call(self, *, name: str, arguments: dict):  # noqa: ARG002
+            return {"content": [{"type": "text", "text": "nope"}], "isError": True}
+
+    class FakeManager:
+        async def get_session(self, *, server_url: str, auth_session_id: str | None):  # noqa: ARG002
+            return FakeSession()
+
+    mgr = FakeManager()
+    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.kite_mcp.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.api.kite_mcp.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.get_auth_session_id", lambda *a, **k: None)
+
+    from app.services.ai_toolcalling import orchestrator as orch
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+
+    calls = {"n": 0}
+
+    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return OpenAiAssistantTurn(
+                content=json.dumps(
+                    {
+                        "tool_requests": [
+                            {"request_id": "d1", "tool_name": "portfolio_digest", "args": {"top_n": 5}, "reason": "need portfolio", "risk_tier": "LOW"}
+                        ]
+                    }
+                ),
+                tool_calls=[],
+                raw={},
+            )
+        tr = _extract_last_toolresult(messages)
+        assert isinstance(tr, dict)
+        assert tr.get("status") == "denied"
+        assert tr.get("denial_reason") in {"policy", "capability"}
+        return OpenAiAssistantTurn(content=json.dumps({"final_message": "Denied."}), tool_calls=[], raw={})
+
+    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+
+    resp2 = client.post("/api/ai/chat", json={"account_id": "default", "message": "Analyze my portfolio"})
+    assert resp2.status_code == 200
+
+
 def test_hybrid_exfiltration_denied_and_audited(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp_hybrid) -> None:
     _enable_ai_provider()
 
@@ -396,6 +473,171 @@ def test_hybrid_exfiltration_denied_and_audited(monkeypatch: pytest.MonkeyPatch,
     assert any(t["name"] == "get_profile" and t["status"] in {"blocked", "error"} for t in body["tool_calls"])
     # Ensure the fake MCP get_profile tool was never executed.
     assert fake_kite_mcp_hybrid.get("get_profile", 0) == 0
+
+
+def test_hybrid_raw_account_read_denied_in_digest_only(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp_hybrid) -> None:
+    _enable_ai_provider()
+
+    from app.services.ai_toolcalling import orchestrator as orch
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+
+    calls = {"n": 0}
+
+    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return OpenAiAssistantTurn(
+                content=json.dumps(
+                    {
+                        "tool_requests": [
+                            {"request_id": "h1", "tool_name": "get_holdings", "args": {}, "reason": "need holdings", "risk_tier": "LOW"}
+                        ]
+                    }
+                ),
+                tool_calls=[],
+                raw={},
+            )
+        tr = _extract_last_toolresult(messages)
+        assert isinstance(tr, dict)
+        assert tr.get("status") == "denied"
+        return OpenAiAssistantTurn(content=json.dumps({"final_message": "Denied as expected."}), tool_calls=[], raw={})
+
+    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+
+    # Avoid direct deterministic portfolio path ("show/list/fetch") so we test the hybrid remote ToolRequest path.
+    resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "What are my holdings?"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert any(t["name"] == "get_holdings" and t["status"] in {"blocked", "error"} for t in body["tool_calls"])
+    # Denied by policy before execution.
+    assert fake_kite_mcp_hybrid.get("get_holdings", 0) == 0
+
+
+def test_hybrid_raw_account_read_allowed_full_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_ai_provider()
+
+    # Enable Kite MCP + hybrid gateway toggles; FULL_SANITIZED allows raw account tools to remote,
+    # but LSG must deterministically sanitize Tier-3 fields.
+    resp = client.put(
+        "/api/settings/ai",
+        json={
+            "feature_flags": {"kite_mcp_enabled": True},
+            "kite_mcp": {"server_url": "https://mcp.kite.trade/sse"},
+            "hybrid_llm": {
+                "enabled": True,
+                "mode": "REMOTE_ONLY",
+                "allow_remote_market_data_tools": True,
+                "allow_remote_account_digests": True,
+                "remote_portfolio_detail_level": "FULL_SANITIZED",
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    calls: dict[str, int] = {}
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.state = type("S", (), {"server_info": {"name": "Fake"}, "capabilities": {"tools": {}}})()
+
+        async def ensure_initialized(self) -> None:
+            return None
+
+        async def tools_list(self):
+            return {
+                "tools": [
+                    {
+                        "name": "get_holdings",
+                        "description": "Return holdings",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                        "annotations": {"readOnlyHint": True, "destructiveHint": False},
+                    }
+                ]
+            }
+
+        async def tools_call(self, *, name: str, arguments: dict):  # noqa: ARG002
+            calls[name] = calls.get(name, 0) + 1
+            if name == "get_holdings":
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                [
+                                    {
+                                        "tradingsymbol": "INFY",
+                                        "quantity": 14,
+                                        "average_price": 1384.2,
+                                        "last_price": 1370.5,
+                                        "pnl": -191.8,
+                                        # Tier-3: must not be exposed.
+                                        "client_id": "CID-1",
+                                        "user_id": "U-1",
+                                        "instrument_token": 123456,
+                                        "access_token": "sk-test-1234567890",
+                                        # Tier-2 identifiers: may be pseudonymized.
+                                        "order_id": "oid-123",
+                                    }
+                                ]
+                            ),
+                        }
+                    ],
+                    "isError": False,
+                }
+            return {"content": [{"type": "text", "text": "nope"}], "isError": True}
+
+    class FakeManager:
+        async def get_session(self, *, server_url: str, auth_session_id: str | None):  # noqa: ARG002
+            return FakeSession()
+
+    mgr = FakeManager()
+    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.api.kite_mcp.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.api.kite_mcp.get_auth_session_id", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.kite_mcp_sessions", mgr)
+    monkeypatch.setattr("app.services.kite_mcp.snapshot.get_auth_session_id", lambda *a, **k: None)
+
+    from app.services.ai_toolcalling import orchestrator as orch
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+
+    seq = {"n": 0}
+
+    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
+        seq["n"] += 1
+        if seq["n"] == 1:
+            return OpenAiAssistantTurn(
+                content=json.dumps(
+                    {
+                        "tool_requests": [
+                            {"request_id": "h1", "tool_name": "get_holdings", "args": {}, "reason": "need holdings", "risk_tier": "LOW"}
+                        ]
+                    }
+                ),
+                tool_calls=[],
+                raw={},
+            )
+        tr = _extract_last_toolresult(messages)
+        assert isinstance(tr, dict)
+        assert tr.get("status") == "ok"
+        data = tr.get("data")
+        assert isinstance(data, list) and data, data
+        row = data[0]
+        assert isinstance(row, dict)
+        assert "client_id" not in row
+        assert "user_id" not in row
+        assert "instrument_token" not in row
+        assert "access_token" not in row
+        # order_id should be pseudonymized.
+        assert str(row.get("order_id") or "").startswith("h_")
+        return OpenAiAssistantTurn(content=json.dumps({"final_message": "OK"}), tool_calls=[], raw={})
+
+    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+
+    # Avoid direct deterministic portfolio path ("show/list/fetch") so we test the hybrid remote ToolRequest path.
+    resp2 = client.post("/api/ai/chat", json={"account_id": "default", "message": "What are my holdings?"})
+    assert resp2.status_code == 200
+    assert calls.get("get_holdings", 0) == 1
 
 
 def test_hybrid_e2e_smoke_no_broker_write_when_execution_disabled(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp_hybrid) -> None:

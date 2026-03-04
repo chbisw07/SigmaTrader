@@ -1553,6 +1553,8 @@ async def run_chat(
             if (
                 is_remote_provider
                 and bool(getattr(hy_cfg, "allow_remote_account_digests", False))
+                and str(getattr(getattr(hy_cfg, "remote_portfolio_detail_level", None), "value", None) or getattr(hy_cfg, "remote_portfolio_detail_level", "DIGEST_ONLY") or "DIGEST_ONLY").upper()
+                != "OFF"
                 and _wants_portfolio_digest(user_message, ui_context)
             ):
                 rid = uuid4().hex
