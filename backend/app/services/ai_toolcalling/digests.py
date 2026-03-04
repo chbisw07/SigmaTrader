@@ -119,6 +119,30 @@ def portfolio_digest(
         prod = str(r.get("product") or "CNC").upper()
         exposure[prod] = exposure.get(prod, 0.0) + float(r.get("notional") or 0.0)
 
+    # Concentration metrics (symbol weights by notional).
+    by_symbol_notional: dict[str, float] = {}
+    total_notional = 0.0
+    for r in holdings + positions:
+        sym = str(r.get("symbol") or "").strip().upper()
+        if not sym:
+            continue
+        n = float(r.get("notional") or 0.0)
+        if n < 0:
+            n = abs(n)
+        by_symbol_notional[sym] = by_symbol_notional.get(sym, 0.0) + n
+        total_notional += n
+
+    top_weights: list[dict[str, Any]] = []
+    hhi = None
+    if total_notional > 0:
+        items = sorted(by_symbol_notional.items(), key=lambda kv: kv[1], reverse=True)
+        for sym, n in items[:10]:
+            top_weights.append({"symbol": sym, "weight_pct": (n / total_notional) * 100.0})
+        hhi = 0.0
+        for _sym, n in items:
+            w = n / total_notional
+            hhi += w * w
+
     def _risk_score(r: dict[str, Any]) -> float:
         pnl = r.get("pnl")
         notional = r.get("notional")
@@ -157,6 +181,11 @@ def portfolio_digest(
         "holdings_symbols": holdings_symbols,
         "positions_symbols": positions_symbols,
         "exposure_by_product": exposure,
+        "concentration": {
+            "total_notional": float(total_notional),
+            "hhi": float(hhi) if hhi is not None else None,
+            "top_weights": top_weights,
+        },
         "top_symbols": top_syms,
         "margins": margins,
         "pnl_total": float(total_pnl) if pnl_any else None,
