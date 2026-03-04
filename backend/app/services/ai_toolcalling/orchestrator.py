@@ -56,7 +56,8 @@ from .policy import classify_tool, evaluate_tool_policy, tool_lookup_map
 from .redaction import redact_for_llm
 from .tools_cache import get_tools_cached
 from .lsg import LsgContext, LsgExecution, build_tool_request, lsg_execute
-from .lsg_policy import LsgPolicyDecision
+from .lsg_policy import LsgPolicyDecision, telemetry_tier_for_tool
+from .lsg_types import TelemetryTier
 from .lsg_types import ToolRequestEnvelope, ToolResultEnvelope, ToolSanitizationMeta
 from .digests import orders_digest, portfolio_digest, risk_digest
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot_via_toolcaller
@@ -1806,6 +1807,7 @@ async def run_chat(
                                 policy=LsgPolicyDecision(
                                     allowed=False,
                                     capability=req.capability,
+                                    telemetry_tier=telemetry_tier_for_tool(tname or "") if (tname or "").strip() else TelemetryTier.TIER_3,
                                     reason="Tool is not allowlisted for LLM tool-requests.",
                                     denial_reason="policy",
                                 ),

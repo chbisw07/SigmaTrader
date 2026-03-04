@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional
@@ -239,6 +241,7 @@ async def lsg_execute(
                 "request": req2.model_dump(mode="json"),
                 "result": denied.model_dump(mode="json"),
                 "policy_reason": pol.reason,
+                "telemetry_tier": getattr(pol, "telemetry_tier", None).value if getattr(pol, "telemetry_tier", None) else None,
             },
         )
         denied = denied.model_copy(update={"audit_ref": str(meta.get("payload_id") or "")})
@@ -253,6 +256,7 @@ async def lsg_execute(
                 "tool": req2.tool_name,
                 "source": req2.source,
                 "capability": computed_cap.value,
+                "telemetry_tier": getattr(pol, "telemetry_tier", None).value if getattr(pol, "telemetry_tier", None) else None,
                 "denial_reason": str(pol.denial_reason or "policy"),
                 "policy_reason": pol.reason,
                 "audit_ref": denied.audit_ref,
@@ -378,7 +382,11 @@ async def lsg_execute(
             tool_call_id=req2.request_id,
             account_id=ctx.account_id,
             user_id=ctx.user_id,
-            payload={"request": req2.model_dump(mode="json"), "error": str(exc) or "tool_error"},
+            payload={
+                "request": req2.model_dump(mode="json"),
+                "error": str(exc) or "tool_error",
+                "telemetry_tier": getattr(pol, "telemetry_tier", None).value if getattr(pol, "telemetry_tier", None) else None,
+            },
         )
         out = out.model_copy(update={"audit_ref": str(meta.get("payload_id") or "")})
         record_system_event(
@@ -410,6 +418,27 @@ async def lsg_execute(
         sanitization=sanit_meta,
         audit_ref=None,
     )
+    payload_obj: dict[str, Any] = {
+        "request": req2.model_dump(mode="json"),
+        "result": {"status": "ok", "capability": computed_cap.value},
+        "sanitization": sanit_meta.model_dump(mode="json"),
+        "telemetry_tier": getattr(pol, "telemetry_tier", None).value if getattr(pol, "telemetry_tier", None) else None,
+    }
+    if req2.source == "remote":
+        # Do not store raw payload for remote requests (may contain Tier-3 values).
+        try:
+            raw_json = json.dumps(raw, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
+            payload_obj["raw_payload_sha256"] = hashlib.sha256(raw_json.encode("utf-8")).hexdigest()
+            payload_obj["raw_payload_type"] = type(raw).__name__
+            payload_obj["raw_payload_items_hint"] = 0 if raw is None else (len(raw) if isinstance(raw, (list, dict)) else 1)
+        except Exception:
+            payload_obj["raw_payload_sha256"] = None
+        payload_obj["remote_data"] = data
+    else:
+        # Keep raw stored locally for non-remote sources (local/system/legacy).
+        payload_obj["raw_payload"] = raw
+        payload_obj["remote_data"] = None
+
     meta = persist_operator_payload(
         ctx.db,
         decision_id=ctx.decision_id,
@@ -417,15 +446,7 @@ async def lsg_execute(
         tool_call_id=req2.request_id,
         account_id=ctx.account_id,
         user_id=ctx.user_id,
-        payload={
-            "request": req2.model_dump(mode="json"),
-            "result": {"status": "ok", "capability": computed_cap.value},
-            # Keep raw stored locally for audit/debugging.
-            "raw_payload": raw,
-            # Keep a small view of remote-visible data too.
-            "remote_data": data if req2.source == "remote" else None,
-            "sanitization": sanit_meta.model_dump(mode="json"),
-        },
+        payload=payload_obj,
     )
     ok = ok.model_copy(update={"audit_ref": str(meta.get("payload_id") or "")})
     record_system_event(
@@ -439,6 +460,7 @@ async def lsg_execute(
             "tool": req2.tool_name,
             "source": req2.source,
             "capability": computed_cap.value,
+            "telemetry_tier": getattr(pol, "telemetry_tier", None).value if getattr(pol, "telemetry_tier", None) else None,
             "duration_ms": duration_ms,
             "audit_ref": ok.audit_ref,
         },
@@ -455,4 +477,3 @@ __all__ = [
     "lsg_execute",
     "validate_args_against_schema",
 ]
-
