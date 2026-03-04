@@ -56,7 +56,12 @@ from .policy import classify_tool, evaluate_tool_policy, tool_lookup_map
 from .redaction import redact_for_llm
 from .tools_cache import get_tools_cached
 from .lsg import LsgContext, LsgExecution, build_tool_request, lsg_execute
-from .lsg_policy import LsgPolicyDecision, telemetry_tier_for_tool
+from .lsg_policy import (
+    LsgPolicyDecision,
+    REMOTE_DENY_RAW_ACCOUNT_READS,
+    REMOTE_MARKET_DATA_TOOLS,
+    telemetry_tier_for_tool,
+)
 from .lsg_types import TelemetryTier
 from .lsg_types import ToolRequestEnvelope, ToolResultEnvelope, ToolSanitizationMeta
 from .digests import orders_digest, portfolio_digest, risk_digest
@@ -540,6 +545,10 @@ async def run_chat(
     # PII Safety Layer: only expose tools that have deterministic safe summaries.
     llm_mcp_tools = [t for t in safe_mcp_tools if tool_has_safe_summary(str(t.get("name") or ""))]
     allowlisted_mcp_tool_names = {str(t.get("name") or "") for t in llm_mcp_tools if isinstance(t, dict)}
+    # Hybrid gateway tool requests are JSON-only (no tool handles) and always go through LSG.
+    # Allowlist by tier policy rather than safe-summary registry so FULL_SANITIZED can request
+    # Tier-2 raw account tools (still sanitized and policy-gated).
+    hybrid_mcp_request_allowlist = set(REMOTE_MARKET_DATA_TOOLS) | set(REMOTE_DENY_RAW_ACCOUNT_READS)
 
     internal_tools: list[dict[str, Any]] = [
         {
@@ -1755,9 +1764,9 @@ async def run_chat(
                         )
                     else:
                         # Kite MCP tool: only allow tools that are already exposed as safe (read-only)
-                        # tools in the legacy tool-calling loop. This prevents LOCAL_ONLY from
-                        # directly executing broker-write MCP tools via JSON ToolRequests.
-                        if tname not in allowlisted_mcp_tool_names:
+                        # tools by the telemetry-tier allowlist. Policy will still deny based on
+                        # `remote_portfolio_detail_level` and hard-denies.
+                        if tname not in hybrid_mcp_request_allowlist:
                             req = build_tool_request(
                                 request_id=rid,
                                 source=reasoner_source,  # type: ignore[arg-type]
