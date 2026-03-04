@@ -259,6 +259,8 @@ def test_hybrid_remote_not_false_blocked_by_time_context(monkeypatch: pytest.Mon
 
     async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
         # If the outbound PII inspector blocks, run_chat never calls the provider.
+        # Also ensure we prefetched a digest that includes the full symbol list.
+        assert any("symbols_all" in str(m.get("content") or "") for m in (messages or []) if m.get("role") == "system")
         return OpenAiAssistantTurn(content=json.dumps({"final_message": "OK"}), tool_calls=[], raw={})
 
     monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)

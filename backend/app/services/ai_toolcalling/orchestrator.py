@@ -1557,7 +1557,9 @@ async def run_chat(
                 rid = uuid4().hex
                 req = build_tool_request(
                     request_id=rid,
-                    source="system",
+                    # The consumer of this digest is the remote reasoner; mark it as
+                    # remote so LSG applies digest sanitization before we inject it.
+                    source="remote",
                     mode="DIGEST_PREFETCH",
                     tool_name="portfolio_digest",
                     args={"top_n": 25},

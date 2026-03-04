@@ -110,6 +110,10 @@ def portfolio_digest(
     positions = _positions_rows(positions_payload)
     margins = _normalize_margins(margins_payload)
 
+    holdings_symbols = sorted({str(r.get("symbol") or "").strip().upper() for r in holdings if r.get("symbol")})
+    positions_symbols = sorted({str(r.get("symbol") or "").strip().upper() for r in positions if r.get("symbol")})
+    symbols_all = sorted({*holdings_symbols, *positions_symbols})
+
     exposure: dict[str, float] = {}
     for r in holdings + positions:
         prod = str(r.get("product") or "CNC").upper()
@@ -147,6 +151,11 @@ def portfolio_digest(
         "schema": "portfolio_digest.v1",
         "as_of_ts": _now_iso(),
         "counts": {"holdings": len(holdings), "positions": len(positions)},
+        # Full symbol list (no raw broker identifiers). This enables remote reasoning
+        # over the whole portfolio without sending raw holdings/positions payloads.
+        "symbols_all": symbols_all,
+        "holdings_symbols": holdings_symbols,
+        "positions_symbols": positions_symbols,
         "exposure_by_product": exposure,
         "top_symbols": top_syms,
         "margins": margins,
@@ -238,4 +247,3 @@ def risk_digest(
 
 
 __all__ = ["orders_digest", "portfolio_digest", "risk_digest"]
-
