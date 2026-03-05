@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
@@ -806,6 +806,12 @@ export function AiTradingManagerPage() {
     setAutoscroll(atBottom)
   }
 
+  // Keep a stable reference so retry handlers don't depend on the (recreated) sendMessage closure.
+  const sendMessageRef = useRef<
+    | null
+    | ((opts: { content: string; files?: File[]; attachmentRefs?: AttachmentRef[]; clearDraft?: boolean }) => Promise<void>)
+  >(null)
+
   const sendMessage = async (opts: {
     content: string
     files?: File[]
@@ -904,6 +910,9 @@ export function AiTradingManagerPage() {
     }
   }
 
+  // Assign on every render; keeps the latest closure without forcing callback memoization.
+  sendMessageRef.current = sendMessage
+
   const handleDeleteThread = async (t: AiThreadSummary) => {
     const tid = String(t.thread_id || '').trim()
     if (!tid || tid === 'default') return
@@ -965,13 +974,13 @@ export function AiTradingManagerPage() {
     abortRef.current?.abort()
   }
 
-  const onLoadTrace = async (decisionId: string) => {
+  const onLoadTrace = useCallback(async (decisionId: string) => {
     try {
       return await fetchDecisionTrace(decisionId)
     } catch {
       return null
     }
-  }
+  }, [])
 
   const addFiles = (files: FileList | File[]) => {
     const list: File[] = Array.isArray(files) ? files : Array.from(files)
@@ -1009,32 +1018,32 @@ export function AiTradingManagerPage() {
     if (files.length) addFiles(files)
   }
 
-  const handleQuote = (m: AiTmMessage) => {
+  const handleQuote = useCallback((m: AiTmMessage) => {
     const raw = String(m.content || '').trim()
     if (!raw) return
     const block = `\n\n\`\`\`md\n${raw}\n\`\`\`\n`
     setInput((prev) => (prev ? `${prev}${block}` : block.trimStart()))
     window.setTimeout(() => promptRef.current?.focus(), 0)
-  }
+  }, [])
 
-  const handleEdit = (m: AiTmMessage) => {
+  const handleEdit = useCallback((m: AiTmMessage) => {
     if (m.role !== 'user') return
     setInput(String(m.content || ''))
     setPendingFiles([])
     setPendingAttachmentRefs(m.attachments ?? [])
     window.setTimeout(() => promptRef.current?.focus(), 0)
-  }
+  }, [])
 
-  const retryFromAssistantIndex = (idx: number) => {
+  const retryFromAssistantIndex = useCallback((idx: number) => {
     for (let i = idx - 1; i >= 0; i--) {
       const m = messages[i]
       if (m?.role === 'user' && String(m.content || '').trim()) {
-        void sendMessage({ content: m.content, files: [], attachmentRefs: m.attachments ?? [], clearDraft: false })
+        void sendMessageRef.current?.({ content: m.content, files: [], attachmentRefs: m.attachments ?? [], clearDraft: false })
         return
       }
     }
     setError('Nothing to retry.')
-  }
+  }, [messages])
 
   const setTab = (next: string, patch?: Record<string, string | null>) => {
     const sp = new URLSearchParams(searchParams)
@@ -1047,6 +1056,37 @@ export function AiTradingManagerPage() {
     }
     setSearchParams(sp, { replace: true })
   }
+
+  // Memoize the transcript so typing in the prompt doesn't re-render/rehydrate the whole chat history.
+  const chatTranscript = useMemo(() => {
+    if (messages.length === 0) {
+      return (
+        <Typography variant="body2" color="text.secondary">
+          No messages yet.
+        </Typography>
+      )
+    }
+    return (
+      <Stack spacing={1.25}>
+        {messages.map((m, idx) => {
+          const canRetry =
+            m.role === 'assistant' && messages.slice(0, idx).some((p) => p.role === 'user' && String(p.content || '').trim())
+          return (
+            <MessageBubble
+              key={m.message_id}
+              message={m}
+              canRetry={canRetry}
+              onRetry={() => retryFromAssistantIndex(idx)}
+              onQuote={handleQuote}
+              onEdit={handleEdit}
+              onLoadTrace={onLoadTrace}
+              liveToolCalls={m.decision_id ? liveToolCallsByDecision[m.decision_id] : undefined}
+            />
+          )
+        })}
+      </Stack>
+    )
+  }, [messages, retryFromAssistantIndex, handleQuote, handleEdit, onLoadTrace, liveToolCallsByDecision])
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 140px)' }}>
@@ -1166,31 +1206,7 @@ export function AiTradingManagerPage() {
                 {error}
               </Typography>
             )}
-            {messages.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
-                No messages yet.
-              </Typography>
-            ) : (
-              <Stack spacing={1.25}>
-                {messages.map((m, idx) => {
-                  const canRetry =
-                    m.role === 'assistant' &&
-                    messages.slice(0, idx).some((p) => p.role === 'user' && String(p.content || '').trim())
-                  return (
-                    <MessageBubble
-                      key={m.message_id}
-                      message={m}
-                      canRetry={canRetry}
-                      onRetry={() => retryFromAssistantIndex(idx)}
-                      onQuote={handleQuote}
-                      onEdit={handleEdit}
-                      onLoadTrace={onLoadTrace}
-                      liveToolCalls={m.decision_id ? liveToolCallsByDecision[m.decision_id] : undefined}
-                    />
-                  )
-                })}
-              </Stack>
-            )}
+            {chatTranscript}
           </Paper>
 
           <Divider sx={{ my: 1.5 }} />
