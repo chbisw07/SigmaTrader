@@ -1719,8 +1719,8 @@ async def run_chat(
                         web_search_allowed_domains=allowed_domains or None,
                         web_search_external_web_access=live_access,
                         web_search_include_sources=include_sources,
-                        # Keep the reasoner contract stable: a single JSON object.
-                        force_json_object=True,
+                        # web_search cannot be used with JSON mode; rely on prompt + validation loop.
+                        force_json_object=False,
                     )
 
                     ws_meta = (turn.raw or {}).get("web_search") if isinstance(turn.raw, dict) else None

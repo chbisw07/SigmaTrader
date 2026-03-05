@@ -33,7 +33,8 @@ Notes:
 ## What It Does
 
 - Adds `tools: [{"type":"web_search", ...}]` to the remote reasoner request.
-- Keeps the existing remote reasoner contract stable by requesting JSON-object output, so the orchestrator can continue parsing `ToolRequest` envelopes.
+- Keeps the existing remote reasoner contract stable by continuing to require a single JSON object in the prompt and validating/retrying when needed.
+  (OpenAI currently rejects `web_search` when JSON mode/response format is forced.)
 - Captures **only source domains** (not full URLs) into the decision trace metadata when available.
 
 ## Safety Notes

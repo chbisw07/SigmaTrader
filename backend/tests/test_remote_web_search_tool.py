@@ -36,10 +36,11 @@ def test_responses_body_web_search_respects_domains_and_live_access_and_sources(
         web_search_allowed_domains=["reuters.com", " bloomberg.com ", ""],
         web_search_external_web_access=False,
         web_search_include_sources=True,
+        # Force JSON mode is ignored when web_search is enabled (OpenAI restriction).
         force_json_object=True,
     )
     assert body["max_output_tokens"] == 321
-    assert body["text"]["format"]["type"] == "json_object"
+    assert "text" not in body
     assert body["tool_choice"] == "auto"
     assert body["include"] == ["web_search_call.action.sources"]
     assert isinstance(body["tools"], list) and len(body["tools"]) == 1
@@ -91,4 +92,3 @@ def test_responses_parser_works_without_output_text_or_sources() -> None:
     assert text == '{"final_message":"hi"}'
     assert meta["id"] == "resp_456"
     assert "web_search" not in meta
-

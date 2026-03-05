@@ -83,9 +83,6 @@ def _build_openai_responses_body(
     if max_tokens is not None:
         # Responses API uses max_output_tokens (not chat-completions max_tokens).
         body["max_output_tokens"] = int(max_tokens)
-    if force_json_object:
-        # Keep the hybrid reasoner contract stable: a single JSON object output.
-        body["text"] = {"format": {"type": "json_object"}}
 
     if enable_web_search:
         tool: dict[str, Any] = {"type": "web_search", "external_web_access": bool(web_search_external_web_access)}
@@ -98,6 +95,11 @@ def _build_openai_responses_body(
         if web_search_include_sources:
             # Request sources via include mechanism (kept out of the main assistant text).
             body["include"] = ["web_search_call.action.sources"]
+    elif force_json_object:
+        # Keep the hybrid reasoner contract stable: a single JSON object output.
+        #
+        # NOTE: OpenAI web_search cannot currently be used with JSON mode.
+        body["text"] = {"format": {"type": "json_object"}}
 
     return body
 
