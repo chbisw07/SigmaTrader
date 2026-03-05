@@ -213,6 +213,18 @@ async def ai_chat_stream(
             # Best-effort: if the client is slow, drop events rather than blocking.
             return
 
+    async def _emit_stream(ev: dict[str, object]) -> None:
+        """Emit events to the client with a tiny throttle for assistant text.
+
+        This improves the perceived streaming UX (avoids the response "popping" in
+        instantly) without requiring provider-level token streaming.
+        """
+
+        await _emit(ev)
+        if ev.get("type") == "assistant_delta":
+            # Keep this small so it doesn't noticeably slow down long responses.
+            await asyncio.sleep(0.015)
+
     auth_message_id = uuid4().hex
 
     async def _runner() -> None:
@@ -229,7 +241,7 @@ async def ai_chat_stream(
                     attachments=attachments_for_llm,
                     ui_context=payload.ui_context or payload.context or {},
                     correlation_id=corr,
-                    event_cb=_emit,
+                    event_cb=_emit_stream,
                     stream_assistant=True,
                 )
 
@@ -264,8 +276,8 @@ async def ai_chat_stream(
                     chunk = 160
                     text = result.assistant_message or ""
                     for i in range(0, len(text), chunk):
-                        await _emit({"type": "assistant_delta", "text": text[i : i + chunk]})
-                await _emit(
+                        await _emit_stream({"type": "assistant_delta", "text": text[i : i + chunk]})
+                await _emit_stream(
                     {
                         "type": "done",
                         "assistant_message": result.assistant_message,
