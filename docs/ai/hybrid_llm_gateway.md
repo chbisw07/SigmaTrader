@@ -26,6 +26,10 @@ In the web UI:
 5. Enable the remote capability toggles you want:
    * Remote market-data tools
    * Remote account digests
+6. Set **Remote portfolio detail level**:
+   * `OFF`: remote cannot receive Tier-2 portfolio telemetry (holdings/positions/orders/margins/trades)
+   * `DIGEST_ONLY` (default): remote can receive local digests only (bucketed/sanitized)
+   * `FULL_SANITIZED`: remote may receive full portfolio payloads, but only after deterministic sanitization (Tier-3 secrets/PII removed, broker IDs pseudonymized)
 
 ## Settings (API)
 
@@ -42,7 +46,8 @@ Example payload:
     "enabled": true,
     "mode": "REMOTE_ONLY",
     "allow_remote_market_data_tools": true,
-    "allow_remote_account_digests": true
+    "allow_remote_account_digests": true,
+    "remote_portfolio_detail_level": "DIGEST_ONLY"
   }
 }
 ```
@@ -126,12 +131,16 @@ Remote is denied:
 * Broker write tools:
   * `place_order`, `modify_order`, `cancel_order`
   * `place_gtt_order`, `modify_gtt_order`, `delete_gtt_order`
-* Raw sensitive account reads:
+* Raw account reads unless `remote_portfolio_detail_level` is `FULL_SANITIZED`:
   * `get_holdings`, `get_positions`, `get_orders`, `get_order_history`, `get_order_trades`, `get_trades`, `get_margins`, `get_mf_holdings`
 
 ## Security Guarantees
 
-* Remote models never receive raw holdings/orders/margins/trades payloads.
+* Tier-3 PII/secrets/session artifacts are always blocked from leaving local (deterministic redaction).
+* Remote models receive portfolio telemetry based on `remote_portfolio_detail_level`:
+  * `OFF`: none
+  * `DIGEST_ONLY`: local digests only
+  * `FULL_SANITIZED`: full payloads, but sanitized deterministically
 * Remote tool results are sanitized:
   * secrets/session ids removed
   * identity fields removed

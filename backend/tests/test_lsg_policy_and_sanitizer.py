@@ -47,6 +47,10 @@ def test_policy_denies_remote_raw_holdings_always() -> None:
     assert d.allowed is False
     assert d.denial_reason in {"capability", "policy"}
 
+    cfg.hybrid_llm.remote_portfolio_detail_level = "FULL_SANITIZED"  # type: ignore[assignment]
+    d2 = evaluate_lsg_policy(source="remote", tool_name="get_holdings", tm_cfg=cfg)
+    assert d2.allowed is True
+
 
 def test_policy_allows_remote_portfolio_digest_only_when_toggle_enabled() -> None:
     cfg = AiSettings()
@@ -67,14 +71,18 @@ def test_sanitizer_hashes_ids_and_redacts_identity_fields() -> None:
         "client_id": "CID-1",
         "email": "a@example.com",
         "name": "Alice",
+        "jwt": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbb",
+        "opaque": "Abcdefghijklmnopqrstuvwxyz0123456789_-Abcdefghijklmnopqrstuvwxyz",
         "ok": True,
     }
     out, meta = sanitize_kite_payload("get_orders", payload, settings=settings, bucket_numbers=False)
     assert isinstance(out, dict)
     assert out.get("order_id", "").startswith("h_")
-    assert out.get("client_id", "").startswith("h_")
+    assert "client_id" not in out
     assert "email" not in out
     assert "name" not in out
+    assert out.get("jwt") == "[REDACTED]"
+    assert out.get("opaque") == "[REDACTED]"
     assert "order_id" in out
     assert meta.hashed_fields
     assert meta.redacted_fields
@@ -91,4 +99,3 @@ def test_sanitizer_buckets_sensitive_numbers_for_digests_but_not_counts() -> Non
     assert out["count"] == 3
     assert isinstance(out["counts"], dict)
     assert out["counts"]["holdings"] == 2
-

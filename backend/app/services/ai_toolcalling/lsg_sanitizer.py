@@ -35,6 +35,13 @@ _DROP_KEYS_EXACT = {
     "date_of_birth",
     "address",
     "name",
+    # Broker identity ids (Tier-3): do not send to remote, even hashed.
+    "client_id",
+    "user_id",
+    "broker_user_id",
+    # Hidden identifiers (linkable).
+    "instrument_token",
+    "exchange_token",
 }
 
 _DROP_KEYS_SUBSTR = (
@@ -52,19 +59,21 @@ _HASH_KEYS_EXACT = {
     "exchange_order_id",
     "parent_order_id",
     "trade_id",
-    "client_id",
-    "user_id",
-    "broker_user_id",
+    "transaction_id",
 }
 
 _HASH_KEYS_SUBSTR = (
     "order_id",
     "trade_id",
-    "client_id",
-    "user_id",
+    "transaction_id",
 )
 
 _EMAIL_RE = re.compile(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
+_JWT_RE = re.compile(r"\beyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}\b")
+_API_KEY_LIKE_RE = re.compile(r"(?i)\b(sk-[a-z0-9]{10,}|ya29\.[a-z0-9\-_]+)\b")
+# Heuristic for opaque secret-like strings. Exclude long pure-hex strings
+# (hashes are common in safe summaries) to reduce false positives.
+_OPAQUE_SECRET_RE = re.compile(r"\b(?![0-9a-f]{32,}\b)[A-Za-z0-9_\-]{40,}\b")
 
 
 def _key_norm(key: Any) -> str:
@@ -187,8 +196,8 @@ def _sanitize(
         s = value.strip()
         if not s:
             return value
-        # Drop obvious PII patterns (emails) even if the key name isn't flagged.
-        if _EMAIL_RE.search(s):
+        # Drop obvious PII/secret patterns even if the key name isn't flagged.
+        if _EMAIL_RE.search(s) or _JWT_RE.search(s) or _API_KEY_LIKE_RE.search(s) or _OPAQUE_SECRET_RE.search(s):
             _paths_append(meta.redacted_fields, path or "$")
             return "[REDACTED]"
         return value

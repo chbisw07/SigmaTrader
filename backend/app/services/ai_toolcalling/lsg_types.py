@@ -8,10 +8,23 @@ from pydantic import BaseModel, Field
 
 class ToolCapability(str, Enum):
     MARKET_DATA_READONLY = "MARKET_DATA_READONLY"
+    ACCOUNT_READ = "ACCOUNT_READ"
     ACCOUNT_DIGEST = "ACCOUNT_DIGEST"
     TRADING_INTENT = "TRADING_INTENT"
     TRADING_WRITE = "TRADING_WRITE"
     IDENTITY_AUTH = "IDENTITY_AUTH"
+
+class TelemetryTier(str, Enum):
+    """Exposure classification for remote models.
+
+    Tier-1: public market data (safe to share to remote).
+    Tier-2: portfolio telemetry (user-controlled).
+    Tier-3: PII/secrets/session artifacts (always blocked).
+    """
+
+    TIER_1 = "TIER_1"
+    TIER_2 = "TIER_2"
+    TIER_3 = "TIER_3"
 
 
 ToolRequestSource = Literal["remote", "local", "system", "legacy_llm"]
@@ -48,6 +61,7 @@ class ToolResultEnvelope(BaseModel):
 
 
 __all__ = [
+    "TelemetryTier",
     "ToolCapability",
     "ToolDenialReason",
     "ToolRequestEnvelope",
@@ -56,4 +70,3 @@ __all__ = [
     "ToolResultStatus",
     "ToolSanitizationMeta",
 ]
-
