@@ -166,6 +166,27 @@ def _parse_direct_portfolio_request(msg: str) -> _DirectPortfolioRequest | None:
     if not any(x in m for x in ("show", "list", "display", "fetch")):
         return None
 
+    # If the user is asking for analysis/insights/news, do not short-circuit into
+    # the deterministic "tables-only" path; let the main LLM pipeline run.
+    if any(
+        x in m
+        for x in (
+            "analy",  # analyze/analysis
+            "insight",
+            "recommend",
+            "suggest",
+            "explain",
+            "why",
+            "news",
+            "event",
+            "sector",
+            "impact",
+            "watchlist",
+            "theme",
+        )
+    ):
+        return None
+
     want_holdings = any(x in m for x in ("holding", "cnc", "delivery", "portfolio"))
     want_positions = any(x in m for x in ("position", "net"))
     want_summary = any(x in m for x in ("summarize", "summary", "exposure", "risk"))
