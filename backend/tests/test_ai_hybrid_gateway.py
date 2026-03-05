@@ -280,6 +280,40 @@ def test_hybrid_remote_not_false_blocked_by_time_context(monkeypatch: pytest.Mon
     assert body["assistant_message"] == "OK"
 
 
+def test_hybrid_web_search_retries_timeouts(monkeypatch: pytest.MonkeyPatch, fake_kite_mcp_hybrid) -> None:
+    _enable_ai_provider()
+
+    # Enable env gate + per-provider toggle (test-local only; must not leak across tests).
+    monkeypatch.setenv("ST_ENABLE_REMOTE_WEB_SEARCH", "1")
+    get_settings.cache_clear()
+    resp_cfg = client.put("/api/ai/config", json={"enable_web_search": True})
+    assert resp_cfg.status_code == 200
+
+    from app.services.ai_toolcalling import orchestrator as orch
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn, OpenAiChatError
+
+    seen: list[float] = []
+
+    async def fake_openai_responses_plain(*, timeout_seconds: float, **kwargs):  # noqa: ANN001, ARG001
+        seen.append(float(timeout_seconds))
+        if len(seen) == 1:
+            raise OpenAiChatError("LLM endpoint timed out after 30s.")
+        return OpenAiAssistantTurn(content=json.dumps({"final_message": "OK"}), tool_calls=[], raw={})
+
+    monkeypatch.setattr(orch, "openai_responses_plain", fake_openai_responses_plain)
+
+    try:
+        resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "Use web search: what happened today?"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["assistant_message"] == "OK"
+        # First attempt uses the default remote timeout, then retries with a higher value.
+        assert seen[:2] == [30.0, 60.0]
+    finally:
+        # Reset provider toggle so other tests remain on the legacy /chat/completions path.
+        client.put("/api/ai/config", json={"enable_web_search": False})
+
+
 def test_hybrid_portfolio_digest_errors_when_broker_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
     _enable_ai_provider()
 

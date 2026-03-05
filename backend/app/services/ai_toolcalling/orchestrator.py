@@ -1724,25 +1724,44 @@ async def run_chat(
                     include_sources = bool(getattr(settings, "remote_web_search_include_sources", True))
                     live_access = bool(getattr(settings, "remote_web_search_live_access", True))
 
-                    turn = await openai_responses_plain(
-                        api_key=toolcall_api_key,
-                        model=str(ai_cfg.model),
-                        messages=messages,
-                        base_url=toolcall_base_url,
-                        timeout_seconds=llm_timeout_seconds,
-                        max_tokens=ai_cfg.limits.max_tokens_per_request,
-                        temperature=effective_temperature(
-                            provider_id=str(ai_cfg.provider),
-                            model=str(ai_cfg.model),
-                            configured=getattr(ai_cfg, "temperature", None),
-                        ),
-                        enable_web_search=True,
-                        web_search_allowed_domains=allowed_domains or None,
-                        web_search_external_web_access=live_access,
-                        web_search_include_sources=include_sources,
-                        # web_search cannot be used with JSON mode; rely on prompt + validation loop.
-                        force_json_object=False,
-                    )
+                    # Web search can be slower than the default remote timeout. Retry a small number of times
+                    # with progressively higher timeouts, only on timeout errors.
+                    timeouts = [float(llm_timeout_seconds), 60.0, 180.0]
+                    used_timeouts: list[float] = []
+                    last_exc: OpenAiChatError | None = None
+                    turn = None
+                    for tmo in timeouts[:3]:
+                        used_timeouts.append(float(tmo))
+                        try:
+                            turn = await openai_responses_plain(
+                                api_key=toolcall_api_key,
+                                model=str(ai_cfg.model),
+                                messages=messages,
+                                base_url=toolcall_base_url,
+                                timeout_seconds=float(tmo),
+                                max_tokens=ai_cfg.limits.max_tokens_per_request,
+                                temperature=effective_temperature(
+                                    provider_id=str(ai_cfg.provider),
+                                    model=str(ai_cfg.model),
+                                    configured=getattr(ai_cfg, "temperature", None),
+                                ),
+                                enable_web_search=True,
+                                web_search_allowed_domains=allowed_domains or None,
+                                web_search_external_web_access=live_access,
+                                web_search_include_sources=include_sources,
+                                # web_search cannot be used with JSON mode; rely on prompt + validation loop.
+                                force_json_object=False,
+                            )
+                            last_exc = None
+                            break
+                        except OpenAiChatError as exc:
+                            last_exc = exc
+                            msg = str(exc or "").lower()
+                            if "timed out" in msg and tmo != timeouts[-1]:
+                                continue
+                            raise
+                    if turn is None and last_exc is not None:
+                        raise last_exc
 
                     ws_meta = (turn.raw or {}).get("web_search") if isinstance(turn.raw, dict) else None
                     if isinstance(ws_meta, dict):
@@ -1753,6 +1772,7 @@ async def run_chat(
                             "allowed_domains": allowed_domains[:25],
                             "live_access": live_access,
                             "include_sources": include_sources,
+                            "timeout_attempts_sec": used_timeouts,
                         }
                 else:
                     turn = await openai_chat_plain(
