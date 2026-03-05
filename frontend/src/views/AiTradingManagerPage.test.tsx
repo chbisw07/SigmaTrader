@@ -9,6 +9,7 @@ vi.mock('../services/aiTradingManager', () => {
   return {
     fetchAiThreads: vi.fn(async () => []),
     createAiThread: vi.fn(async () => ({ thread_id: 't2', account_id: 'default' })),
+    deleteAiThread: vi.fn(async () => ({ thread_id: 't2', deleted_messages: 2 })),
     fetchAiThread: vi.fn(async () => ({
       thread_id: 'default',
       account_id: 'default',

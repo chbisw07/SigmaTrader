@@ -27,6 +27,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import EditIcon from '@mui/icons-material/Edit'
 import FormatQuoteIcon from '@mui/icons-material/FormatQuote'
 import ReplayIcon from '@mui/icons-material/Replay'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import ImageIcon from '@mui/icons-material/Image'
 import DescriptionIcon from '@mui/icons-material/Description'
 import FormControl from '@mui/material/FormControl'
@@ -42,6 +43,7 @@ import remarkGfm from 'remark-gfm'
 import {
   chatAiStream,
   createAiThread,
+  deleteAiThread,
   fetchAiThreads,
   fetchAiThread,
   fetchDecisionTrace,
@@ -902,6 +904,26 @@ export function AiTradingManagerPage() {
     }
   }
 
+  const handleDeleteThread = async (t: AiThreadSummary) => {
+    const tid = String(t.thread_id || '').trim()
+    if (!tid || tid === 'default') return
+    const ok = window.confirm(`Delete chat \"${t.title || tid}\"? This will remove the conversation messages.`)
+    if (!ok) return
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteAiThread({ account_id: accountId, thread_id: tid })
+      await loadThreads()
+      if (threadId === tid) {
+        setThreadId('default')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete chat')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleSend = async () => {
     return sendMessage({ content: input, clearDraft: true })
   }
@@ -1044,7 +1066,27 @@ export function AiTradingManagerPage() {
                   .filter((t) => t.thread_id !== 'default')
                   .map((t) => (
                     <MenuItem key={t.thread_id} value={t.thread_id}>
-                      {t.title}
+                      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ width: '100%' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {t.title}
+                        </span>
+                        <Tooltip title="Delete chat">
+                          <IconButton
+                            size="small"
+                            onMouseDown={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                            }}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              void handleDeleteThread(t)
+                            }}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
                     </MenuItem>
                   ))}
               </Select>

@@ -74,6 +74,22 @@ export async function createAiThread(payload?: { account_id?: string }): Promise
   return (await res.json()) as { thread_id: string; account_id: string }
 }
 
+export async function deleteAiThread(payload: {
+  account_id?: string
+  thread_id: string
+}): Promise<{ thread_id: string; deleted_messages: number }> {
+  const tid = String(payload.thread_id || '').trim()
+  if (!tid) throw new Error('thread_id is required')
+  const url = new URL(`/api/ai/threads/${encodeURIComponent(tid)}`, window.location.origin)
+  if (payload.account_id) url.searchParams.set('account_id', payload.account_id)
+  const res = await fetch(url.toString(), { method: 'DELETE' })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to delete AI thread (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as { thread_id: string; deleted_messages: number }
+}
+
 export async function postAiMessage(payload: {
   account_id?: string
   content: string

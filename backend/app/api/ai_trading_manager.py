@@ -167,6 +167,25 @@ def create_thread(
     return {"thread_id": thread_id, "account_id": account_id}
 
 
+@router.delete("/threads/{thread_id}")
+def delete_thread(
+    request: Request,
+    thread_id: str,
+    account_id: str = "default",
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    tid = (thread_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="thread_id is required")
+    if tid == "default":
+        raise HTTPException(status_code=400, detail="Cannot delete the default thread.")
+    log_with_correlation(logger, request, logging.INFO, "ai_tm.threads.delete", account_id=account_id, thread_id=tid)
+    deleted = audit_store.delete_thread(db, account_id=account_id, thread_id=tid)
+    return {"thread_id": tid, "deleted_messages": int(deleted)}
+
+
 @router.post("/messages", response_model=AiTmUserMessageResponse)
 def post_message(
     payload: AiTmUserMessageRequest,
