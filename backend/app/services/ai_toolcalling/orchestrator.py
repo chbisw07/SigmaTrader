@@ -51,7 +51,12 @@ from app.services.system_events import record_system_event
 from app.models.ai_trading_manager import AiTmPositionShadow
 
 from .mcp_tools import hash_tool_definitions, mcp_tools_to_openai_tools, tool_result_preview
-from .openai_toolcaller import OpenAiChatError, openai_chat_plain, openai_chat_with_tools
+from .openai_toolcaller import (
+    OpenAiChatError,
+    openai_chat_plain,
+    openai_chat_with_tools,
+    openai_responses_plain,
+)
 from .policy import classify_tool, evaluate_tool_policy, tool_lookup_map
 from .redaction import redact_for_llm
 from .tools_cache import get_tools_cached
@@ -1674,19 +1679,73 @@ async def run_chat(
                     break
 
             try:
-                turn = await openai_chat_plain(
-                    api_key=toolcall_api_key,
-                    model=str(ai_cfg.model),
-                    messages=messages,
-                    base_url=toolcall_base_url,
-                    timeout_seconds=llm_timeout_seconds,
-                    max_tokens=ai_cfg.limits.max_tokens_per_request,
-                    temperature=effective_temperature(
-                        provider_id=str(ai_cfg.provider),
-                        model=str(ai_cfg.model),
-                        configured=getattr(ai_cfg, "temperature", None),
-                    ),
+                use_web_search = (
+                    bool(getattr(settings, "enable_remote_web_search", False))
+                    and is_remote_provider
+                    and str(ai_cfg.provider) == "openai"
                 )
+                if use_web_search:
+                    raw_domains = str(getattr(settings, "remote_web_search_allowed_domains", "") or "").strip()
+                    allowed_domains: list[str] = []
+                    if raw_domains:
+                        try:
+                            # Accept JSON array or CSV.
+                            if raw_domains.startswith("["):
+                                parsed = json.loads(raw_domains)
+                                if isinstance(parsed, list):
+                                    allowed_domains = [str(x).strip() for x in parsed if str(x or "").strip()]
+                            else:
+                                allowed_domains = [p.strip() for p in raw_domains.split(",") if p.strip()]
+                        except Exception:
+                            allowed_domains = [p.strip() for p in raw_domains.split(",") if p.strip()]
+
+                    include_sources = bool(getattr(settings, "remote_web_search_include_sources", True))
+                    live_access = bool(getattr(settings, "remote_web_search_live_access", True))
+
+                    turn = await openai_responses_plain(
+                        api_key=toolcall_api_key,
+                        model=str(ai_cfg.model),
+                        messages=messages,
+                        base_url=toolcall_base_url,
+                        timeout_seconds=llm_timeout_seconds,
+                        max_tokens=ai_cfg.limits.max_tokens_per_request,
+                        temperature=effective_temperature(
+                            provider_id=str(ai_cfg.provider),
+                            model=str(ai_cfg.model),
+                            configured=getattr(ai_cfg, "temperature", None),
+                        ),
+                        enable_web_search=True,
+                        web_search_allowed_domains=allowed_domains or None,
+                        web_search_external_web_access=live_access,
+                        web_search_include_sources=include_sources,
+                        # Keep the reasoner contract stable: a single JSON object.
+                        force_json_object=True,
+                    )
+
+                    ws_meta = (turn.raw or {}).get("web_search") if isinstance(turn.raw, dict) else None
+                    if isinstance(ws_meta, dict):
+                        trace.inputs_used["remote_web_search"] = {
+                            "enabled": True,
+                            "calls": int(ws_meta.get("calls") or 0),
+                            "source_domains": list(ws_meta.get("source_domains") or [])[:25],
+                            "allowed_domains": allowed_domains[:25],
+                            "live_access": live_access,
+                            "include_sources": include_sources,
+                        }
+                else:
+                    turn = await openai_chat_plain(
+                        api_key=toolcall_api_key,
+                        model=str(ai_cfg.model),
+                        messages=messages,
+                        base_url=toolcall_base_url,
+                        timeout_seconds=llm_timeout_seconds,
+                        max_tokens=ai_cfg.limits.max_tokens_per_request,
+                        temperature=effective_temperature(
+                            provider_id=str(ai_cfg.provider),
+                            model=str(ai_cfg.model),
+                            configured=getattr(ai_cfg, "temperature", None),
+                        ),
+                    )
             except OpenAiChatError as exc:
                 final_text = f"AI provider error: {exc}"
                 break
