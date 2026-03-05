@@ -53,6 +53,9 @@ class AiActiveConfig(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
     active_key_id: Optional[int] = None
     do_not_send_pii: bool = True
+    # Optional remote-only capability: allow the OpenAI Responses API web_search tool
+    # for this config slot. Hard-gated by backend env (ST_ENABLE_REMOTE_WEB_SEARCH).
+    enable_web_search: bool = False
     limits: AiLimits = Field(default_factory=AiLimits)
 
     # Optional denormalized key metadata for UI.
@@ -67,6 +70,7 @@ class AiActiveConfigUpdate(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
     active_key_id: Optional[int] = None
     do_not_send_pii: Optional[bool] = None
+    enable_web_search: Optional[bool] = None
     limits: Optional[AiLimits] = None
 
 

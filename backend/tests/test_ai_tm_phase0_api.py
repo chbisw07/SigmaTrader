@@ -53,6 +53,57 @@ def test_post_message_persists_thread_and_trace() -> None:
     assert payload.get("thread_id")
 
 
+def test_delete_thread_removes_conversation() -> None:
+    from app.models.ai_trading_manager import AiTmChatMessage
+
+    tid = "t_delete_me"
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        db.add(
+            AiTmChatMessage(
+                message_id="m_del_u1",
+                thread_id=tid,
+                account_id="default",
+                user_id=None,
+                role="user",
+                content="hello",
+                correlation_id="c1",
+                decision_id=None,
+                attachments_json="[]",
+                created_at=now,
+            )
+        )
+        db.add(
+            AiTmChatMessage(
+                message_id="m_del_a1",
+                thread_id=tid,
+                account_id="default",
+                user_id=None,
+                role="assistant",
+                content="hi",
+                correlation_id="c1",
+                decision_id=None,
+                attachments_json="[]",
+                created_at=now,
+            )
+        )
+        db.commit()
+
+    threads = client.get("/api/ai/threads?account_id=default&limit=200")
+    assert threads.status_code == 200
+    assert any(r.get("thread_id") == tid for r in threads.json())
+
+    resp = client.delete(f"/api/ai/threads/{tid}?account_id=default")
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["thread_id"] == tid
+    assert int(out.get("deleted_messages") or 0) >= 2
+
+    threads2 = client.get("/api/ai/threads?account_id=default&limit=200")
+    assert threads2.status_code == 200
+    assert not any(r.get("thread_id") == tid for r in threads2.json())
+
+
 def test_reconcile_creates_exception_for_position_mismatch() -> None:
     # Seed an expected position in the ST ledger (DB) so stub broker snapshot (empty)
     # produces a deterministic mismatch.

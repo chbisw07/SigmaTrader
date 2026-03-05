@@ -316,6 +316,25 @@ def list_threads(db: Session, *, account_id: str, limit: int = 50, offset: int =
     return out
 
 
+def delete_thread(db: Session, *, account_id: str, thread_id: str) -> int:
+    """Delete chat messages for a thread (conversation).
+
+    Note: decision traces/tool payloads are retained; this removes the user-visible
+    conversation history and the thread from the thread list.
+    """
+
+    n = (
+        db.query(AiTmChatMessage)
+        .filter(AiTmChatMessage.account_id == account_id, AiTmChatMessage.thread_id == thread_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    try:
+        return int(n or 0)
+    except Exception:
+        return 0
+
+
 def persist_reconciliation_run(
     db: Session,
     *,

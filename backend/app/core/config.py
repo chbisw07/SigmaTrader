@@ -97,6 +97,17 @@ class Settings(BaseSettings):
     # Salt used for hashing broker identifiers (order ids, etc.) for LLM-safe summaries.
     hash_salt: str | None = None
 
+    # --- Remote LLM optional capabilities (default off; env-controlled) ---
+    # Enables OpenAI Responses API web_search tool for the REMOTE reasoner only.
+    # This is intentionally not part of DB-backed AI settings yet.
+    enable_remote_web_search: bool = False
+    # Comma-separated list of allowed domains; empty => no restriction.
+    remote_web_search_allowed_domains: str | None = None
+    # When false, web_search will not perform live external web access.
+    remote_web_search_live_access: bool = True
+    # When true, request web_search sources via Responses API include mechanism.
+    remote_web_search_include_sources: bool = True
+
     if SettingsConfigDict is not None:
         # Pydantic v2 / pydantic-settings configuration.
         model_config = SettingsConfigDict(
@@ -197,6 +208,31 @@ def get_settings() -> Settings:
     raw_monitoring = _parse_bool("ST_MONITORING_ENABLED")
     if raw_monitoring is not None:
         settings.monitoring_enabled = raw_monitoring
+
+    # Remote LLM web search flags (kept usable in BaseModel fallback too).
+    raw_ws = _parse_bool("ST_ENABLE_REMOTE_WEB_SEARCH")
+    if raw_ws is None:
+        raw_ws = _parse_bool("ENABLE_REMOTE_WEB_SEARCH")
+    if raw_ws is not None:
+        settings.enable_remote_web_search = raw_ws
+
+    raw_ws_domains = os.getenv("ST_REMOTE_WEB_SEARCH_ALLOWED_DOMAINS")
+    if raw_ws_domains is None:
+        raw_ws_domains = os.getenv("REMOTE_WEB_SEARCH_ALLOWED_DOMAINS")
+    if raw_ws_domains is not None:
+        settings.remote_web_search_allowed_domains = str(raw_ws_domains).strip() or None
+
+    raw_ws_live = _parse_bool("ST_REMOTE_WEB_SEARCH_LIVE_ACCESS")
+    if raw_ws_live is None:
+        raw_ws_live = _parse_bool("REMOTE_WEB_SEARCH_LIVE_ACCESS")
+    if raw_ws_live is not None:
+        settings.remote_web_search_live_access = raw_ws_live
+
+    raw_ws_sources = _parse_bool("ST_REMOTE_WEB_SEARCH_INCLUDE_SOURCES")
+    if raw_ws_sources is None:
+        raw_ws_sources = _parse_bool("REMOTE_WEB_SEARCH_INCLUDE_SOURCES")
+    if raw_ws_sources is not None:
+        settings.remote_web_search_include_sources = raw_ws_sources
 
     raw_poll = os.getenv("ST_HOLDINGS_EXIT_POLL_INTERVAL_SEC")
     if raw_poll is not None:
