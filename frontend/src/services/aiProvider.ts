@@ -26,6 +26,7 @@ export type AiActiveConfig = {
   temperature?: number | null
   active_key_id?: number | null
   do_not_send_pii: boolean
+  enable_web_search?: boolean
   limits: {
     max_tokens_per_request?: number | null
     max_cost_usd_per_request?: number | null
@@ -42,6 +43,7 @@ export type AiActiveConfigUpdate = Partial<{
   temperature: number | null
   active_key_id: number | null
   do_not_send_pii: boolean
+  enable_web_search: boolean
   limits: AiActiveConfig['limits']
 }>
 

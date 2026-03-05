@@ -463,20 +463,49 @@ export function AiProviderSettingsPanel(props: { slot?: string; title?: string }
 
         <Divider />
 
-        <FormControlLabel
-          control={
-            <Switch
-              checked={cfg.do_not_send_pii}
-              onChange={(_, v) => void patch({ do_not_send_pii: v } as any)}
-              disabled={busy}
+        {providerInfo?.kind === 'remote' && (
+          <Alert severity="info" sx={{ mb: 1 }}>
+            Remote providers are always PII-safe: SigmaTrader will only send sanitized summaries and will block outbound
+            payloads that appear to contain secrets/PII. Tier-3 secrets are never sent.
+          </Alert>
+        )}
+
+        {providerInfo?.kind === 'local' && (
+          <>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!cfg.do_not_send_pii}
+                  onChange={(_, v) => void patch({ do_not_send_pii: !v } as any)}
+                  disabled={busy}
+                />
+              }
+              label="Include attachment preview rows (local only)"
             />
-          }
-          label="PII-safe mode (remote LLM sees summaries only)"
-        />
-        <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
-          Remote providers never receive raw broker payloads. Local providers may support deeper context later behind an
-          explicit toggle.
-        </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
+              Preview rows can contain sensitive data. Enable only if you trust the configured local endpoint.
+            </Typography>
+          </>
+        )}
+
+        {providerInfo?.id === 'openai' && providerInfo?.kind === 'remote' && (
+          <>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={Boolean(cfg.enable_web_search)}
+                  onChange={(_, v) => void patch({ enable_web_search: v } as any)}
+                  disabled={busy}
+                />
+              }
+              label="Enable web search (OpenAI Responses API)"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: -0.5 }}>
+              Requires backend env <b>ST_ENABLE_REMOTE_WEB_SEARCH=true</b>. When enabled, the remote reasoner may use web
+              search; SigmaTrader records only source domains (not full URLs).
+            </Typography>
+          </>
+        )}
 
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <TextField

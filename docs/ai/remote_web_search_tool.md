@@ -26,6 +26,8 @@ export ST_REMOTE_WEB_SEARCH_INCLUDE_SOURCES=true
 Notes:
 
 - This uses the OpenAI **Responses API** (`POST /v1/responses`) when enabled.
+- There is also a per-provider UI toggle in **Settings → AI → Remote Model / Provider** ("Enable web search"). Web search
+  is active only when both the backend env flag and the UI toggle are enabled.
 - If the configured provider is not `openai`, SigmaTrader keeps using the existing OpenAI-compatible `POST /v1/chat/completions` path and web search is not enabled.
 
 ## What It Does
@@ -39,4 +41,3 @@ Notes:
 - This may increase cost/latency because the remote model can perform web lookups.
 - Do not rely on web content for broker-write actions: execution remains gated by the existing policy engine + kill switches.
 - No prompts/responses are logged; the trace stores only timing/usage indicators and (optionally) source **domains**.
-

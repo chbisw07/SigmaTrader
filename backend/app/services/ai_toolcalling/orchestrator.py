@@ -1683,6 +1683,7 @@ async def run_chat(
                     bool(getattr(settings, "enable_remote_web_search", False))
                     and is_remote_provider
                     and str(ai_cfg.provider) == "openai"
+                    and bool(getattr(ai_cfg, "enable_web_search", False))
                 )
                 if use_web_search:
                     raw_domains = str(getattr(settings, "remote_web_search_allowed_domains", "") or "").strip()
