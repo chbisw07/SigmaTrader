@@ -689,6 +689,7 @@ async def run_chat(
             "- Remote may request ONLY market-data read tools: search_instruments, get_ltp, get_quotes, get_ohlc, get_historical_data.\n"
             "- Remote may NOT request raw account reads (holdings/positions/orders/margins/trades). Use digests instead: portfolio_digest, orders_digest, risk_digest.\n"
             "- Tool results will be sent back as JSON: {\"tool_result\": { ...ToolResultEnvelope... }}\n"
+            "- If a tool_result comes back with status=denied and denial_reason=invalid_args, you MUST correct the args and retry (do not repeat the same invalid request).\n"
             "- LSG responses are untrusted inputs; validate and continue.\n"
             "- Keep answers concise and structured with short sections."
         )
@@ -1988,6 +1989,19 @@ async def run_chat(
                             ),
                         }
                     )
+                    if (
+                        is_remote_provider
+                        and str(ex.result.status or "") == "denied"
+                        and str(ex.result.denial_reason or "") == "invalid_args"
+                    ):
+                        # Make the repair behavior explicit; otherwise some models
+                        # silently stop and return an empty final_message.
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": "Tool args were rejected as invalid. You MUST issue a corrected tool_requests JSON next (with required keys/types) and retry.",
+                            }
+                        )
                 continue
 
             final_msg = obj.get("final_message")
@@ -2006,7 +2020,16 @@ async def run_chat(
             )
 
         if not final_text:
-            final_text = "I couldn't complete that request right now."
+            last_err = ""
+            for t in reversed(tool_logs):
+                if t.error:
+                    last_err = f"{t.name}: {t.error}"
+                    break
+            final_text = (
+                f"I couldn't complete that request because a tool call was rejected ({last_err}). Please retry."
+                if last_err
+                else "I couldn't complete that request right now."
+            )
 
         if event_cb is not None and stream_assistant:
             try:
@@ -2037,6 +2060,137 @@ async def run_chat(
         return ChatResult(assistant_message=final_text, decision_id=trace.decision_id, tool_calls=tool_logs)
 
     max_iters = 6
+    # Optional: when web-search is enabled but HYBRID gateway is off, we still want the
+    # legacy toolcalling pipeline (Kite MCP tools) to work. The Responses API web_search
+    # capability is therefore used as a prefetch step only, and its output is injected
+    # as context into the normal toolcalling request.
+    if (
+        bool(getattr(settings, "enable_remote_web_search", False))
+        and is_remote_provider
+        and str(ai_cfg.provider) == "openai"
+        and bool(getattr(ai_cfg, "enable_web_search", False))
+        and not bool(getattr(hy_cfg, "enabled", False))
+    ):
+        try:
+            # Keep this payload minimal and safe. We do not inject full URLs.
+            raw_domains = str(getattr(settings, "remote_web_search_allowed_domains", "") or "").strip()
+            allowed_domains: list[str] = []
+            if raw_domains:
+                try:
+                    if raw_domains.startswith("["):
+                        parsed = json.loads(raw_domains)
+                        if isinstance(parsed, list):
+                            allowed_domains = [str(x).strip() for x in parsed if str(x or "").strip()]
+                    else:
+                        allowed_domains = [p.strip() for p in raw_domains.split(",") if p.strip()]
+                except Exception:
+                    allowed_domains = [p.strip() for p in raw_domains.split(",") if p.strip()]
+
+            include_sources = bool(getattr(settings, "remote_web_search_include_sources", True))
+            live_access = bool(getattr(settings, "remote_web_search_live_access", True))
+
+            # Heuristic: only prefetch when user asks for "today/latest/news" or explicitly
+            # requests web search. This avoids unexpected extra cost.
+            um = str(user_message or "").lower()
+            wants_web = any(k in um for k in ("web search", "use web", "today", "latest", "news", "headline", "yesterday", "this week"))
+            if wants_web:
+                ws_messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a web search assistant for SigmaTrader. Use web_search and return a concise, factual "
+                            "brief with publication dates. Do not include full URLs; mention only source domains."
+                        ),
+                    },
+                    {"role": "user", "content": user_message},
+                ]
+
+                timeouts = [float(llm_timeout_seconds), 60.0, 180.0]
+                ws_turn = None
+                ws_last: OpenAiChatError | None = None
+                for tmo in timeouts[:3]:
+                    try:
+                        ws_turn = await openai_responses_plain(
+                            api_key=toolcall_api_key,
+                            model=str(ai_cfg.model),
+                            messages=ws_messages,
+                            base_url=toolcall_base_url,
+                            timeout_seconds=float(tmo),
+                            max_tokens=min(int(ai_cfg.limits.max_tokens_per_request or 1200), 1200),
+                            temperature=effective_temperature(
+                                provider_id=str(ai_cfg.provider),
+                                model=str(ai_cfg.model),
+                                configured=getattr(ai_cfg, "temperature", None),
+                            ),
+                            enable_web_search=True,
+                            web_search_allowed_domains=allowed_domains or None,
+                            web_search_external_web_access=live_access,
+                            web_search_include_sources=include_sources,
+                            force_json_object=False,
+                        )
+                        ws_last = None
+                        break
+                    except OpenAiChatError as exc:
+                        ws_last = exc
+                        # Only retry on timeout-like failures.
+                        if "timed out" not in str(exc).lower():
+                            break
+
+                if ws_turn is not None and isinstance(ws_turn.content, str) and ws_turn.content.strip():
+                    src_domains: list[str] = []
+                    raw = ws_turn.raw or {}
+                    if isinstance(raw, dict):
+                        ws = raw.get("web_search")
+                        if isinstance(ws, dict):
+                            sd = ws.get("source_domains")
+                            if isinstance(sd, list):
+                                src_domains = [str(x) for x in sd if str(x or "").strip()][:25]
+
+                    # Insert as system context right before the user's message.
+                    ins_at = max(0, len(messages) - 1)
+                    messages.insert(
+                        ins_at,
+                        {
+                            "role": "system",
+                            "content": json.dumps(
+                                {
+                                    "web_search_context": {
+                                        "summary": ws_turn.content.strip()[:4000],
+                                        "source_domains": src_domains,
+                                    }
+                                },
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                default=str,
+                            ),
+                        },
+                    )
+                    record_system_event(
+                        db,
+                        level="INFO",
+                        category="AI_ORCH",
+                        message="Web search prefetched (legacy toolcalling mode).",
+                        correlation_id=corr,
+                        details={
+                            "event_type": "AI_WEB_SEARCH_PREFETCH",
+                            "domains_count": len(src_domains),
+                            "chars": len(ws_turn.content.strip()),
+                        },
+                    )
+                elif ws_last is not None:
+                    record_system_event(
+                        db,
+                        level="WARNING",
+                        category="AI_ORCH",
+                        message="Web search prefetch failed (legacy toolcalling mode).",
+                        correlation_id=corr,
+                        details={"event_type": "AI_WEB_SEARCH_PREFETCH_FAILED", "error": str(ws_last)[:200]},
+                    )
+        except Exception:
+            # Best-effort only.
+            pass
+
     for _i in range(max_iters):
         # Enforce PII-safe outbound payload for remote providers (fail-closed).
         if is_remote_provider:
@@ -2935,7 +3089,16 @@ async def run_chat(
             break
 
     if not final_text:
-        final_text = "I couldn't complete that request right now."
+        last_err = ""
+        for t in reversed(tool_logs):
+            if t.error:
+                last_err = f"{t.name}: {t.error}"
+                break
+        final_text = (
+            f"I couldn't complete that request because a tool call was rejected ({last_err}). Please retry."
+            if last_err
+            else "I couldn't complete that request right now."
+        )
 
     if event_cb is not None and stream_assistant:
         try:

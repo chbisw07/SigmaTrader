@@ -78,6 +78,87 @@ def _coerce_args(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _as_str_list(v: Any) -> list[str] | None:
+    if isinstance(v, str) and v.strip():
+        return [v.strip()]
+    if isinstance(v, list):
+        out: list[str] = []
+        for row in v:
+            if isinstance(row, str) and row.strip():
+                out.append(row.strip())
+        return out
+    return None
+
+
+def _normalize_args_for_tool(
+    *,
+    tool_name: str,
+    args: dict[str, Any],
+    schema: dict[str, Any] | None,
+    strict: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Normalize common remote arg shapes to match MCP tool schemas.
+
+    Remote requests are validated strictly (unknown keys are rejected). In practice,
+    remote LLMs often emit close-but-not-exact arg keys. Normalization improves
+    convergence of the remote tool loop without weakening policy-gating.
+    """
+    if not strict or not schema or not isinstance(schema, dict):
+        return args, {}
+
+    props = schema.get("properties")
+    props = props if isinstance(props, dict) else {}
+    required = schema.get("required")
+    req = required if isinstance(required, list) else []
+    wanted = set(str(k) for k in props.keys() if str(k))
+    wanted |= set(str(k) for k in req if str(k))
+
+    out = dict(args or {})
+    changed: dict[str, Any] = {}
+
+    # Market-data tools: accept symbols/tradingsymbols and map them to instruments.
+    if "instruments" in wanted and "instruments" not in out:
+        used_key = ""
+        cand: Any = None
+        for k in ("symbols", "symbol", "tradingsymbols", "tradingsymbol", "instrument"):
+            if k in out:
+                used_key = k
+                cand = out.get(k)
+                break
+        items = _as_str_list(cand)
+        if items:
+            exch = str(out.get("exchange") or "NSE").strip().upper() or "NSE"
+            norm: list[str] = []
+            for s in items:
+                ss = str(s).strip()
+                if not ss:
+                    continue
+                if ":" in ss:
+                    norm.append(ss.upper())
+                else:
+                    norm.append(f"{exch}:{ss.upper()}")
+            if norm:
+                out["instruments"] = norm
+                changed["instruments"] = {"from": used_key or "unknown", "count": len(norm)}
+
+    # search_instruments expects "query".
+    if tool_name == "search_instruments" and "query" in wanted and "query" not in out:
+        q = out.get("symbol") or out.get("tradingsymbol")
+        if isinstance(q, str) and q.strip():
+            out["query"] = q.strip()
+            changed["query"] = {"from": "symbol/tradingsymbol"}
+
+    # Drop unknown keys (post-normalization) so strict schema validation can pass.
+    if wanted:
+        dropped = [k for k in list(out.keys()) if k not in wanted]
+        if dropped:
+            for k in dropped:
+                out.pop(k, None)
+            changed["dropped_keys"] = dropped
+
+    return out, changed
+
+
 def _schema_type_ok(expected: str, v: Any) -> bool:
     t = (expected or "").strip().lower()
     if t == "string":
@@ -287,6 +368,13 @@ async def lsg_execute(
         out = out.model_copy(update={"audit_ref": str(meta.get("payload_id") or "")})
         return LsgExecution(policy=pol, duration_ms=duration_ms, raw_payload=None, result=out)
 
+    args, norm_meta = _normalize_args_for_tool(
+        tool_name=str(req2.tool_name or ""),
+        args=args,
+        schema=tool_input_schema,
+        strict=strict,
+    )
+
     err = validate_args_against_schema(schema=tool_input_schema, args=args, strict=strict)
     if err:
         duration_ms = int((time.perf_counter() - t0) * 1000)
@@ -294,7 +382,11 @@ async def lsg_execute(
             request_id=req2.request_id,
             status="denied",
             denial_reason="invalid_args",
-            data={"error": err},
+            data={
+                "error": err,
+                "hint": "Fix args to match the MCP schema (required keys + correct types). For market-data tools, provide instruments like ['NSE:INFY'].",
+                "normalized_args": norm_meta or None,
+            },
             sanitization=ToolSanitizationMeta(),
         )
         meta = persist_operator_payload(
@@ -304,7 +396,7 @@ async def lsg_execute(
             tool_call_id=req2.request_id,
             account_id=ctx.account_id,
             user_id=ctx.user_id,
-            payload={"request": req2.model_dump(mode="json"), "error": err},
+            payload={"request": req2.model_dump(mode="json"), "normalized_args": norm_meta or None, "error": err},
         )
         out = out.model_copy(update={"audit_ref": str(meta.get("payload_id") or "")})
         record_system_event(
