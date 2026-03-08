@@ -319,7 +319,13 @@ class McpSseClient:
             payload["params"] = params
 
         # MCP servers typically acknowledge with HTTP 202 and send the response on SSE.
-        post_resp = await self._client.post(self._message_endpoint, json=payload)
+        post_resp = await self._client.post(
+            self._message_endpoint,
+            json=payload,
+            # Some MCP-over-HTTP servers require the client to accept both JSON
+            # and SSE, even when using POST-only flows.
+            headers={"Accept": "application/json, text/event-stream"},
+        )
         if post_resp.status_code >= 400:
             body = ""
             try:
