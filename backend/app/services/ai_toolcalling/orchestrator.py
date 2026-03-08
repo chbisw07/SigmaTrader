@@ -597,8 +597,14 @@ async def run_chat(
     # through ST internal execution, gated by policy + flags.
     allowed_categories = {"read"} | ({"web"} if web_search_enabled else set())
     safe_mcp_tools = [t for t in all_mcp_tools if classify_tool(str(t.get("name") or ""), t) in allowed_categories]
-    # PII Safety Layer: only expose tools that have deterministic safe summaries.
-    llm_mcp_tools = [t for t in safe_mcp_tools if tool_has_safe_summary(str(t.get("name") or ""))]
+    # PII Safety Layer:
+    # - Restricted-trust (remote) providers only see tools with deterministic safe summaries.
+    # - High-trust (local) providers can see the full safe tool surface.
+    llm_mcp_tools = (
+        [t for t in safe_mcp_tools if tool_has_safe_summary(str(t.get("name") or ""))]
+        if is_remote_provider
+        else safe_mcp_tools
+    )
     allowlisted_mcp_tool_names = {str(t.get("name") or "") for t in llm_mcp_tools if isinstance(t, dict)}
     # Hybrid gateway tool requests are JSON-only (no tool handles) and always go through LSG.
     # Allowlist by tier policy rather than safe-summary registry so FULL_SANITIZED can request
@@ -3452,28 +3458,39 @@ async def run_chat(
                     try:
                         llm_summary3 = summarize_tool_for_llm(settings, tool_name=tc.name, operator_payload=operator_payload)
                     except SafeSummaryError as exc:
-                        # Fail closed for remote providers: do not proceed if we cannot safely summarize.
-                        pii_abort_message = (
-                            f"Blocked sending broker data to remote LLM: no safe summary for tool '{tc.name}'. "
-                            f"({str(exc) or 'missing summarizer'})"
-                        )
-                        final_text = pii_abort_message
-                        trace.final_outcome = {
-                            "assistant_message": final_text,
-                            "blocked_by": "PII_POLICY",
-                            "reason": "NO_SAFE_SUMMARY",
+                        if is_remote_provider:
+                            # Fail closed for restricted-trust providers: do not proceed if we cannot safely summarize.
+                            pii_abort_message = (
+                                f"Blocked sending tool result to restricted-trust provider '{ai_cfg.provider}': "
+                                f"no safe summary for tool '{tc.name}'. ({str(exc) or 'missing summarizer'})"
+                            )
+                            final_text = pii_abort_message
+                            trace.final_outcome = {
+                                "assistant_message": final_text,
+                                "blocked_by": "PII_POLICY",
+                                "reason": "NO_SAFE_SUMMARY",
+                                "tool": tc.name,
+                                "provider": ai_cfg.provider,
+                            }
+                            trace.explanations = ["PII_POLICY_NO_SAFE_SUMMARY"]
+                            record_system_event(
+                                db,
+                                level="WARNING",
+                                category="AI_ORCH",
+                                message="Tool result blocked (no safe summary).",
+                                correlation_id=corr,
+                                details={"event_type": "AI_PII_BLOCKED", "tool": tc.name, "provider": ai_cfg.provider},
+                            )
+                            break
+
+                        # High-trust (local) providers: fall back to a compact raw payload rather than aborting.
+                        raw_json = _compact_json(operator_payload, max_chars=12_000)
+                        llm_summary3 = {
+                            "schema": "tool_raw_compact.v1",
                             "tool": tc.name,
+                            "note": "No safe summary registered; returning compact raw JSON (local provider).",
+                            "data": raw_json,
                         }
-                        trace.explanations = ["PII_POLICY_NO_SAFE_SUMMARY"]
-                        record_system_event(
-                            db,
-                            level="WARNING",
-                            category="AI_ORCH",
-                            message="Tool result blocked (no safe summary).",
-                            correlation_id=corr,
-                            details={"event_type": "AI_PII_BLOCKED", "tool": tc.name},
-                        )
-                        break
                 else:
                     llm_summary3 = {"schema": "tool_error.v1", "tool": tc.name, "isError": True, "error": err or ""}
                 preview = tool_result_preview(llm_summary3)
