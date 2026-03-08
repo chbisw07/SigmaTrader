@@ -163,8 +163,65 @@ export type AiChatStreamEvent =
   | { type: 'decision'; decision_id: string; correlation_id?: string }
   | { type: 'tool_call'; name: string; arguments?: Record<string, unknown>; status: string; duration_ms?: number; result_preview?: string; error?: string | null }
   | { type: 'assistant_delta'; text: string }
-  | { type: 'done'; assistant_message: string; decision_id: string }
+  | { type: 'approval_required'; approval: Record<string, unknown>; decision_id?: string }
+  | { type: 'done'; assistant_message: string; decision_id: string; approval_required?: Record<string, unknown> | null }
   | { type: 'error'; error: string }
+
+export async function postAiApproval(payload: {
+  account_id?: string
+  thread_id?: string
+  kind: string
+  decision: string
+  grant?: number | null
+}): Promise<Record<string, unknown>> {
+  const res = await fetch('/api/ai/approvals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_id: payload.account_id ?? 'default',
+      thread_id: payload.thread_id ?? 'default',
+      kind: payload.kind,
+      decision: payload.decision,
+      grant: payload.grant ?? null,
+    }),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to submit approval (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as Record<string, unknown>
+}
+
+export async function resumeAiChat(payload: {
+  account_id?: string
+  thread_id?: string
+  authorization_message_id: string
+}): Promise<{
+  assistant_message: string
+  decision_id: string
+  tool_calls: AiChatToolCall[]
+  approval_required?: Record<string, unknown> | null
+}> {
+  const res = await fetch('/api/ai/chat/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_id: payload.account_id ?? 'default',
+      thread_id: payload.thread_id ?? 'default',
+      authorization_message_id: payload.authorization_message_id,
+    }),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Failed to resume chat (${res.status})${body ? `: ${body}` : ''}`)
+  }
+  return (await res.json()) as {
+    assistant_message: string
+    decision_id: string
+    tool_calls: AiChatToolCall[]
+    approval_required?: Record<string, unknown> | null
+  }
+}
 
 export async function chatAiStream(payload: {
   account_id?: string

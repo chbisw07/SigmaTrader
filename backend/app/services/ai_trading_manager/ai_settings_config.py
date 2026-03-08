@@ -85,6 +85,10 @@ def _env_defaults(settings: Settings) -> AiSettings:
             "allow_remote_account_digests": False,
             "rate_limits": {},
         },
+        tool_guardrails={
+            "tavily_max_calls_per_session": 10,
+            "tavily_warning_threshold": 8,
+        },
     )
 
 

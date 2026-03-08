@@ -51,6 +51,7 @@ from .user import User
 from .ai_trading_manager import (
     AiTmBrokerSnapshot,
     AiTmChatMessage,
+    AiTmThreadState,
     AiTmDecisionTrace,
     AiTmException,
     AiTmJournalEvent,
@@ -131,6 +132,7 @@ __all__ = [
     "AlertDecisionLog",
     "AiTmBrokerSnapshot",
     "AiTmChatMessage",
+    "AiTmThreadState",
     "AiTmDecisionTrace",
     "AiTmException",
     "AiTmJournalEvent",

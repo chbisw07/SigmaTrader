@@ -8,6 +8,10 @@ import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import Alert from '@mui/material/Alert'
+import Dialog from '@mui/material/Dialog'
+import DialogTitle from '@mui/material/DialogTitle'
+import DialogContent from '@mui/material/DialogContent'
+import DialogActions from '@mui/material/DialogActions'
 import Accordion from '@mui/material/Accordion'
 import AccordionSummary from '@mui/material/AccordionSummary'
 import AccordionDetails from '@mui/material/AccordionDetails'
@@ -47,6 +51,8 @@ import {
   fetchAiThreads,
   fetchAiThread,
   fetchDecisionTrace,
+  postAiApproval,
+  resumeAiChat,
   uploadAiFiles,
   type AiFileMeta,
   type AiTmMessage,
@@ -741,6 +747,8 @@ export function AiTradingManagerPage() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingApproval, setPendingApproval] = useState<Record<string, any> | null>(null)
+  const [approvalBusy, setApprovalBusy] = useState(false)
   const [autoscroll, setAutoscroll] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
   const [liveToolCallsByDecision, setLiveToolCallsByDecision] = useState<Record<string, any[]>>({})
@@ -862,6 +870,7 @@ export function AiTradingManagerPage() {
       ])
 
       let currentDecisionId: string | null = null
+      let approval: Record<string, any> | null = null
       const onEvent = (ev: AiChatStreamEvent) => {
         if (ev.type === 'decision') {
           currentDecisionId = ev.decision_id
@@ -876,6 +885,9 @@ export function AiTradingManagerPage() {
           const did = currentDecisionId
           if (!did) return
           setLiveToolCallsByDecision((prev) => ({ ...prev, [did]: [...(prev[did] ?? []), ev as any] }))
+        } else if (ev.type === 'approval_required') {
+          approval = (ev as any).approval ?? null
+          if (approval) setPendingApproval(approval)
         }
       }
 
@@ -892,7 +904,7 @@ export function AiTradingManagerPage() {
 
       await loadThreads()
       await loadThread()
-      if (opts.clearDraft !== false) {
+      if (opts.clearDraft !== false && !approval) {
         setInput('')
         setPendingFiles([])
         setPendingAttachmentRefs([])
@@ -972,6 +984,40 @@ export function AiTradingManagerPage() {
 
   const handleStop = () => {
     abortRef.current?.abort()
+  }
+
+  const handleApprovalDecision = async (opt: { id: string; grant?: number | null }) => {
+    if (!pendingApproval || approvalBusy) return
+    const kind = String(pendingApproval.kind || '')
+    const decision = String(opt.id || '')
+    const grant = opt.grant ?? null
+    const authId = String(pendingApproval.authorization_message_id || '')
+    setApprovalBusy(true)
+    setError(null)
+    try {
+      await postAiApproval({
+        account_id: accountId,
+        thread_id: threadId,
+        kind,
+        decision,
+        grant,
+      })
+      setPendingApproval(null)
+      if (decision.startsWith('allow') && authId) {
+        setBusy(true)
+        try {
+          await resumeAiChat({ account_id: accountId, thread_id: threadId, authorization_message_id: authId })
+        } finally {
+          setBusy(false)
+        }
+      }
+      await loadThreads()
+      await loadThread()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to apply approval')
+    } finally {
+      setApprovalBusy(false)
+    }
   }
 
   const onLoadTrace = useCallback(async (decisionId: string) => {
@@ -1319,6 +1365,40 @@ export function AiTradingManagerPage() {
       </Paper>
         </>
       )}
+
+      <Dialog
+        open={Boolean(pendingApproval)}
+        onClose={() => {
+          if (approvalBusy) return
+          setPendingApproval(null)
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>{String(pendingApproval?.title || 'Approval required')}</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+            {String(pendingApproval?.message || '')}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          {(Array.isArray((pendingApproval as any)?.options) ? ((pendingApproval as any).options as any[]) : []).map((o) => (
+            <Button
+              key={String(o?.id || 'option')}
+              variant={String(o?.id || '') === 'deny' ? 'outlined' : 'contained'}
+              disabled={approvalBusy}
+              onClick={() => void handleApprovalDecision({ id: String(o?.id || ''), grant: o?.grant ?? null })}
+            >
+              {String(o?.label || o?.id || 'OK')}
+            </Button>
+          ))}
+          {!Array.isArray((pendingApproval as any)?.options) ? (
+            <Button variant="contained" disabled={approvalBusy} onClick={() => setPendingApproval(null)}>
+              OK
+            </Button>
+          ) : null}
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

@@ -42,6 +42,10 @@ export type AiSettings = {
     remote_portfolio_detail_level?: 'OFF' | 'DIGEST_ONLY' | 'FULL_SANITIZED'
     rate_limits?: Record<string, unknown>
   }
+  tool_guardrails?: {
+    tavily_max_calls_per_session: number
+    tavily_warning_threshold: number
+  }
 }
 
 export type AiSettingsUpdate = Partial<{
@@ -50,6 +54,7 @@ export type AiSettingsUpdate = Partial<{
   kite_mcp: Partial<Pick<AiSettings['kite_mcp'], 'server_url' | 'transport_mode' | 'auth_method' | 'auth_profile_ref' | 'scopes' | 'broker_adapter'>>
   llm_provider: Partial<AiSettings['llm_provider']>
   hybrid_llm: Partial<NonNullable<AiSettings['hybrid_llm']>>
+  tool_guardrails: Partial<NonNullable<AiSettings['tool_guardrails']>>
 }>
 
 export async function fetchAiSettings(): Promise<AiSettings> {

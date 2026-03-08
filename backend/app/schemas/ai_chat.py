@@ -21,6 +21,12 @@ class AiChatRequest(BaseModel):
     ui_context: Optional[Dict[str, Any]] = None
 
 
+class AiChatResumeRequest(BaseModel):
+    account_id: str = "default"
+    thread_id: str = "default"
+    authorization_message_id: str = Field(min_length=1, max_length=128)
+
+
 class AiToolCallRow(BaseModel):
     name: str
     arguments: Dict[str, Any] = Field(default_factory=dict)
@@ -37,6 +43,7 @@ class AiChatResponse(BaseModel):
     render_blocks: List[Dict[str, Any]] = Field(default_factory=list)
     attachments_used: List[Dict[str, Any]] = Field(default_factory=list)
     thread: Optional[AiTmThread] = None
+    approval_required: Optional[Dict[str, Any]] = None
 
 
-__all__ = ["AiChatAttachment", "AiChatRequest", "AiChatResponse", "AiToolCallRow"]
+__all__ = ["AiChatAttachment", "AiChatRequest", "AiChatResumeRequest", "AiChatResponse", "AiToolCallRow"]

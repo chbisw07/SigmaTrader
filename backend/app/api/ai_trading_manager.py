@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,6 +32,7 @@ from app.schemas.ai_trading_manager import (
     ManagePlaybookUpsertRequest,
 )
 from app.services.ai_trading_manager import audit_store
+from app.services.ai_trading_manager.thread_state import get_or_create_thread_state, patch_thread_state
 from app.services.ai_trading_manager.broker_factory import get_broker_adapter
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
 from app.services.ai_trading_manager.execution.engine import ExecutionEngine
@@ -88,6 +90,91 @@ router = APIRouter()
 
 def _correlation_id(request: Request) -> str:
     return getattr(request.state, "correlation_id", None) or request.headers.get("X-Request-ID") or uuid4().hex
+
+
+class AiApprovalDecisionRequest(BaseModel):
+    account_id: str = "default"
+    thread_id: str = "default"
+    kind: str = "tavily_over_limit"  # tavily_over_limit|remote_portfolio_detail
+    decision: str = "deny"  # allow_once|allow_session|allow_5_more|deny
+    grant: Optional[int] = None
+
+
+@router.post("/approvals", response_model=Dict[str, Any])
+def post_ai_approval(
+    payload: AiApprovalDecisionRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user_optional),
+) -> Dict[str, Any]:
+    require_ai_assistant_enabled(db, settings)
+    corr = _correlation_id(request)
+
+    state = get_or_create_thread_state(
+        db,
+        account_id=payload.account_id,
+        thread_id=payload.thread_id,
+        user_id=int(user.id) if user is not None else None,
+    )
+
+    kind = str(payload.kind or "").strip()
+    decision = str(payload.decision or "").strip()
+
+    patch: dict[str, Any] = {}
+    ev_type = "ai_approval"
+
+    if kind == "remote_portfolio_detail":
+        ev_type = "portfolio_access_remote_denied"
+        if decision == "allow_once":
+            patch = {"portfolio_access_approved": True}
+            ev_type = "portfolio_access_remote_granted"
+        elif decision == "allow_session":
+            patch = {"portfolio_access_session": True, "portfolio_access_approved": False}
+            ev_type = "portfolio_access_remote_granted"
+        else:
+            patch = {"portfolio_access_session": False, "portfolio_access_approved": False}
+            ev_type = "portfolio_access_remote_denied"
+    elif kind == "tavily_over_limit":
+        ev_type = "tavily_extra_calls_denied"
+        if decision in {"allow_once", "allow_5_more"}:
+            inc = int(payload.grant or (1 if decision == "allow_once" else 5))
+            inc = max(1, min(1000, inc))
+            patch = {"tavily_extra_calls_allowed": int(state.get("tavily_extra_calls_allowed") or 0) + inc}
+            ev_type = "tavily_extra_calls_granted"
+        else:
+            ev_type = "tavily_extra_calls_denied"
+
+    next_state = patch_thread_state(
+        db,
+        account_id=payload.account_id,
+        thread_id=payload.thread_id,
+        user_id=int(user.id) if user is not None else None,
+        patch=patch,
+    ) if patch else state
+
+    try:
+        from app.services.system_events import record_system_event
+
+        record_system_event(
+            db,
+            level="INFO",
+            category="AI_APPROVAL",
+            message="AI approval decision recorded.",
+            correlation_id=corr,
+            details={
+                "event_type": ev_type,
+                "kind": kind,
+                "decision": decision,
+                "grant": payload.grant,
+                "account_id": payload.account_id,
+                "thread_id": payload.thread_id,
+            },
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "state": next_state, "event_type": ev_type}
 
 
 def _validate_authorization_message_id(db: Session, *, message_id: str) -> None:

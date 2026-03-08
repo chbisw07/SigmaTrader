@@ -31,6 +31,7 @@ from app.services.ai.temperature import effective_temperature
 from app.services.ai_trading_manager import audit_store
 from app.services.ai_trading_manager.ai_settings_config import get_ai_settings_with_source
 from app.services.ai_trading_manager.ai_settings_config import is_execution_hard_disabled
+from app.services.ai_trading_manager.thread_state import get_or_create_thread_state, patch_thread_state
 from app.services.ai_trading_manager.execution.engine import ExecutionEngine
 from app.services.ai_trading_manager.execution.idempotency_store import IdempotencyStore
 from app.services.ai_trading_manager.execution.post_trade_reconcile import post_trade_reconcile
@@ -73,6 +74,15 @@ from .lsg_types import TelemetryTier
 from .lsg_types import ToolRequestEnvelope, ToolResultEnvelope, ToolSanitizationMeta
 from .digests import orders_digest, portfolio_digest, risk_digest
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot_via_toolcaller
+from .trust_policy import (
+    ApprovalOption,
+    ApprovalRequired,
+    ApprovalRequest,
+    TrustTier,
+    portfolio_detail_requires_approval,
+    tavily_budget_decision,
+)
+from .tavily_cache import tavily_cache
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,7 @@ class ChatResult:
     assistant_message: str
     decision_id: str
     tool_calls: List[ToolCallLog]
+    approval_required: dict[str, Any] | None = None
 
 @dataclass(frozen=True)
 class _DirectPortfolioRequest:
@@ -458,6 +469,7 @@ async def run_chat(
     settings: Settings,
     *,
     account_id: str,
+    thread_id: str = "default",
     user_message: str,
     authorization_message_id: str | None = None,
     attachments: List[Dict[str, Any]] | None = None,
@@ -532,6 +544,8 @@ async def run_chat(
     prov = get_provider(provider_id)
     if prov is None:
         raise HTTPException(status_code=400, detail="Unsupported AI provider. Configure it in Settings → AI.")
+    provider_kind = str(getattr(prov, "kind", "") or "remote").lower()
+    is_remote_provider = provider_kind == "remote"
     # Tool-calling currently relies on OpenAI-compatible /v1/chat/completions "tools".
     supported_toolcalling_providers = {"openai", "local_lmstudio"}
     if provider_id not in supported_toolcalling_providers:
@@ -843,6 +857,7 @@ async def run_chat(
         account_id=account_id,
         user_message=user_message,
         inputs_used={
+            "thread_id": thread_id,
             "llm_config_slot": ai_cfg_slot,
             "provider": ai_cfg.provider,
             "model": ai_cfg.model,
@@ -869,6 +884,13 @@ async def run_chat(
             await event_cb({"type": "decision", "decision_id": trace.decision_id, "correlation_id": corr})
         except Exception:
             pass
+
+    thread_state = get_or_create_thread_state(db, account_id=account_id, thread_id=thread_id, user_id=None)
+
+    def _patch_thread_state(patch: dict[str, Any]) -> dict[str, Any]:
+        nonlocal thread_state
+        thread_state = patch_thread_state(db, account_id=account_id, thread_id=thread_id, user_id=None, patch=patch)
+        return thread_state
 
     lsg_ctx = LsgContext(
         db=db,
@@ -1041,6 +1063,177 @@ async def run_chat(
         source: str,
         mode: str,
     ):
+        trust_tier = TrustTier.remote_model if bool(is_remote_provider) else TrustTier.local_model
+
+        # Remote detailed portfolio access requires explicit user approval per session/thread.
+        # Apply only to LLM-initiated tool calls (not internal/system broker reads).
+        if (
+            trust_tier == TrustTier.remote_model
+            and source in {"remote", "legacy_llm"}
+            and tool_name in REMOTE_DENY_RAW_ACCOUNT_READS
+        ):
+            detail_raw = getattr(getattr(tm_cfg, "hybrid_llm", None), "remote_portfolio_detail_level", None)
+            detail = str(getattr(detail_raw, "value", None) or detail_raw or "DIGEST_ONLY").upper()
+            if detail == "OFF":
+                record_system_event(
+                    db,
+                    level="WARNING",
+                    category="AI_ORCH",
+                    message="Remote portfolio detail access denied (OFF).",
+                    correlation_id=corr,
+                    details={"event_type": "kite_tool_denied_remote", "tool": tool_name, "reason": "REMOTE_PORTFOLIO_DETAIL_OFF"},
+                )
+                raise ApprovalRequired(
+                    ApprovalRequest(
+                        kind="remote_portfolio_detail",
+                        title="Remote portfolio access blocked",
+                        message=(
+                            "Remote model requested detailed portfolio data, but remote portfolio detail level is OFF. "
+                            "Enable remote portfolio detail level in Settings → AI (Hybrid LLM Gateway) to proceed."
+                        ),
+                        options=[ApprovalOption(id="deny", label="OK")],
+                        meta={"tool_name": tool_name, "detail_level": detail},
+                    )
+                )
+            if portfolio_detail_requires_approval(state=thread_state):
+                record_system_event(
+                    db,
+                    level="INFO",
+                    category="AI_ORCH",
+                    message="Remote portfolio detail access requested.",
+                    correlation_id=corr,
+                    details={"event_type": "portfolio_access_remote_requested", "tool": tool_name, "detail_level": detail},
+                )
+                raise ApprovalRequired(
+                    ApprovalRequest(
+                        kind="remote_portfolio_detail",
+                        title="Remote model requesting detailed portfolio data",
+                        message=(
+                            "Remote model is requesting detailed portfolio data. "
+                            "This may include sensitive financial information."
+                        ),
+                        options=[
+                            ApprovalOption(id="allow_once", label="Allow once"),
+                            ApprovalOption(id="allow_session", label="Allow for this session"),
+                            ApprovalOption(id="deny", label="Deny"),
+                        ],
+                        meta={"tool_name": tool_name, "detail_level": detail},
+                    )
+                )
+
+        # Tavily usage guardrails apply to both local and remote models (credits/cost control).
+        # Apply only to LLM-initiated tool calls (not internal/system calls).
+        #
+        # Important: if this is a duplicate query and we can serve it from cache, do NOT
+        # require over-limit approval (no new credits are consumed).
+        if tool_name == "tavily_search" and source in {"remote", "local", "legacy_llm"}:
+            a0 = arguments or {}
+            q0 = str(a0.get("query") or a0.get("q") or a0.get("search_query") or "").strip()
+            sym0 = str(a0.get("symbol") or a0.get("ticker") or a0.get("instrument") or "").strip() or None
+            if q0:
+                try:
+                    if (
+                        tavily_cache.get(
+                            account_id=account_id,
+                            thread_id=thread_id,
+                            query=q0,
+                            symbol=sym0,
+                            ttl_seconds=120,
+                        )
+                        is not None
+                    ):
+                        # Cache will be applied inside the executor as well.
+                        pass
+                    else:
+                        raise LookupError("miss")
+                except Exception:
+                    # Cache miss: enforce budget decisions.
+                    guards = getattr(tm_cfg, "tool_guardrails", None)
+                    warn_at = int(getattr(guards, "tavily_warning_threshold", 8) or 0)
+                    max_calls = int(getattr(guards, "tavily_max_calls_per_session", 10) or 0)
+                    dec, meta = tavily_budget_decision(
+                        state=thread_state,
+                        warning_threshold=warn_at,
+                        max_calls_per_session=max_calls,
+                    )
+                    if dec == "approval_required":
+                        record_system_event(
+                            db,
+                            level="WARNING",
+                            category="AI_ORCH",
+                            message="Tavily usage threshold exceeded (approval required).",
+                            correlation_id=corr,
+                            details={"event_type": "tavily_threshold_warning", **meta},
+                        )
+                        raise ApprovalRequired(
+                            ApprovalRequest(
+                                kind="tavily_over_limit",
+                                title="Tavily search over limit",
+                                message=(
+                                    f"This session has already used {int(meta.get('max_calls') or max_calls)} Tavily searches. "
+                                    "Additional searches may consume credits."
+                                ),
+                                options=[
+                                    ApprovalOption(id="allow_once", label="Allow once", grant=1),
+                                    ApprovalOption(id="allow_5_more", label="Allow 5 more", grant=5),
+                                    ApprovalOption(id="deny", label="Deny"),
+                                ],
+                                meta=meta,
+                            )
+                        )
+                    if dec == "warn":
+                        record_system_event(
+                            db,
+                            level="INFO",
+                            category="AI_ORCH",
+                            message="Tavily usage approaching session limit (soft warning).",
+                            correlation_id=corr,
+                            details={"event_type": "tavily_threshold_warning", **meta},
+                        )
+            else:
+                guards = getattr(tm_cfg, "tool_guardrails", None)
+                warn_at = int(getattr(guards, "tavily_warning_threshold", 8) or 0)
+                max_calls = int(getattr(guards, "tavily_max_calls_per_session", 10) or 0)
+                dec, meta = tavily_budget_decision(
+                    state=thread_state,
+                    warning_threshold=warn_at,
+                    max_calls_per_session=max_calls,
+                )
+                if dec == "approval_required":
+                    record_system_event(
+                        db,
+                        level="WARNING",
+                        category="AI_ORCH",
+                        message="Tavily usage threshold exceeded (approval required).",
+                        correlation_id=corr,
+                        details={"event_type": "tavily_threshold_warning", **meta},
+                    )
+                    raise ApprovalRequired(
+                        ApprovalRequest(
+                            kind="tavily_over_limit",
+                            title="Tavily search over limit",
+                            message=(
+                                f"This session has already used {int(meta.get('max_calls') or max_calls)} Tavily searches. "
+                                "Additional searches may consume credits."
+                            ),
+                            options=[
+                                ApprovalOption(id="allow_once", label="Allow once", grant=1),
+                                ApprovalOption(id="allow_5_more", label="Allow 5 more", grant=5),
+                                ApprovalOption(id="deny", label="Deny"),
+                            ],
+                            meta=meta,
+                        )
+                    )
+                if dec == "warn":
+                    record_system_event(
+                        db,
+                        level="INFO",
+                        category="AI_ORCH",
+                        message="Tavily usage approaching session limit (soft warning).",
+                        correlation_id=corr,
+                        details={"event_type": "tavily_threshold_warning", **meta},
+                    )
+
         arguments2 = await _maybe_repair_historical_args(tool_name=tool_name, arguments=arguments)
         # Run an MCP tool through the Local Security Gateway.
         req = build_tool_request(
@@ -1051,6 +1244,8 @@ async def run_chat(
             args=arguments2 or {},
         )
 
+        tavily_meta: dict[str, Any] = {"attempted": False, "cache_hit": False, "query": None, "symbol": None}
+
         async def _exec(args: dict[str, Any]) -> Any:
             mcp_session = tool_session_by_name.get(tool_name) or session
             try:
@@ -1059,17 +1254,127 @@ async def run_chat(
                     await ensure()
             except Exception:
                 pass
+            if tool_name == "tavily_search":
+                q = str(args.get("query") or args.get("q") or args.get("search_query") or "").strip()
+                sym = str(args.get("symbol") or args.get("ticker") or args.get("instrument") or "").strip() or None
+                tavily_meta["query"] = q
+                tavily_meta["symbol"] = sym
+                cached = tavily_cache.get(
+                    account_id=account_id,
+                    thread_id=thread_id,
+                    query=q,
+                    symbol=sym,
+                    ttl_seconds=120,
+                )
+                if cached is not None:
+                    tavily_meta["cache_hit"] = True
+                    record_system_event(
+                        db,
+                        level="INFO",
+                        category="AI_ORCH",
+                        message="Tavily cache hit (duplicate query avoided).",
+                        correlation_id=corr,
+                        details={"event_type": "tavily_cache_hit", "query": q, "symbol": sym},
+                    )
+                    return cached
+                tavily_meta["attempted"] = True
             res = await asyncio.wait_for(mcp_session.tools_call(name=tool_name, arguments=args or {}), timeout=20)
             if isinstance(res, dict) and res.get("isError") is True:
                 raise RuntimeError(_extract_tool_text(res) or f"{tool_name} failed.")
             payload = _extract_tool_json(res) if isinstance(res, dict) else None
+            if tool_name == "tavily_search" and not bool(tavily_meta.get("cache_hit")):
+                try:
+                    tavily_cache.set(
+                        account_id=account_id,
+                        thread_id=thread_id,
+                        query=str(tavily_meta.get("query") or ""),
+                        symbol=tavily_meta.get("symbol"),
+                        value=payload,
+                    )
+                except Exception:
+                    pass
             return payload
 
-        return await lsg_execute(
+        ex = await lsg_execute(
             lsg_ctx,
             request=req,
             tool_input_schema=_tool_schema(tool_name),
             executor=_exec,
+        )
+
+        # Update session/thread state after tool execution (best-effort).
+        if tool_name == "tavily_search" and source in {"remote", "local", "legacy_llm"} and bool(tavily_meta.get("attempted")):
+            calls = int(thread_state.get("tavily_calls_session") or 0) + 1
+            extra = int(thread_state.get("tavily_extra_calls_allowed") or 0)
+            guards = getattr(tm_cfg, "tool_guardrails", None)
+            max_calls = int(getattr(guards, "tavily_max_calls_per_session", 10) or 0)
+            if max_calls > 0 and calls > max_calls and extra > 0:
+                extra = max(0, extra - 1)
+            _patch_thread_state({"tavily_calls_session": calls, "tavily_extra_calls_allowed": extra})
+            record_system_event(
+                db,
+                level="INFO",
+                category="AI_ORCH",
+                message="Tavily tool call executed.",
+                correlation_id=corr,
+                details={"event_type": "tavily_call", "calls": calls, "extra_remaining": extra},
+            )
+
+        if (
+            trust_tier == TrustTier.remote_model
+            and source in {"remote", "legacy_llm"}
+            and tool_name in REMOTE_DENY_RAW_ACCOUNT_READS
+            and ex.result.status == "ok"
+        ):
+            # Consume the one-time approval if session-wide approval isn't enabled.
+            if not bool(thread_state.get("portfolio_access_session")) and bool(thread_state.get("portfolio_access_approved")):
+                _patch_thread_state({"portfolio_access_approved": False})
+
+        return ex
+
+    async def _finish_approval(ar: ApprovalRequired) -> ChatResult:
+        approval = {
+            "kind": ar.approval.kind,
+            "title": ar.approval.title,
+            "message": ar.approval.message,
+            "options": [
+                {"id": o.id, "label": o.label, **({"grant": o.grant} if o.grant is not None else {})}
+                for o in (ar.approval.options or [])
+            ],
+            "meta": ar.approval.meta or {},
+            "account_id": account_id,
+            "thread_id": thread_id,
+            "decision_id": trace.decision_id,
+            "authorization_message_id": authorization_message_id,
+        }
+        try:
+            record_system_event(
+                db,
+                level="INFO",
+                category="AI_ORCH",
+                message="AI approval required.",
+                correlation_id=corr,
+                details={"event_type": "AI_APPROVAL_REQUIRED", **approval},
+            )
+        except Exception:
+            pass
+        if event_cb is not None:
+            try:
+                await event_cb({"type": "approval_required", "approval": approval, "decision_id": trace.decision_id})
+            except Exception:
+                pass
+        trace.final_outcome = {
+            "assistant_message": "",
+            "approval_required": approval,
+            "tool_calls": [t.__dict__ for t in tool_logs],
+        }
+        trace.explanations = []
+        audit_store.persist_decision_trace(db, trace, user_id=None)
+        return ChatResult(
+            assistant_message="",
+            decision_id=trace.decision_id,
+            tool_calls=tool_logs,
+            approval_required=approval,
         )
 
     if direct_req is not None:
@@ -1689,8 +1994,7 @@ async def run_chat(
 
         raise ValueError("unknown internal tool")
 
-    provider_kind = str(getattr(prov, "kind", "") or "remote").lower()
-    is_remote_provider = provider_kind == "remote"
+    # Provider kind drives trust posture + timeouts.
     llm_timeout_seconds = 30.0 if is_remote_provider else 120.0
 
     final_text = ""
@@ -2167,13 +2471,16 @@ async def run_chat(
                                 result=denied,
                             )
                         else:
-                            ex = await _lsg_call_mcp_payload(
-                                tool_name=tname,
-                                arguments=args2,
-                                request_id=rid,
-                                source=reasoner_source,
-                                mode=mode,
-                            )
+                            try:
+                                ex = await _lsg_call_mcp_payload(
+                                    tool_name=tname,
+                                    arguments=args2,
+                                    request_id=rid,
+                                    source=reasoner_source,
+                                    mode=mode,
+                                )
+                            except ApprovalRequired as ar:
+                                return await _finish_approval(ar)
 
                     # Audit into the decision trace (LLM-visible payload is the sanitized ToolResult envelope).
                     safe_args = redact_for_llm(args2)
@@ -3247,6 +3554,8 @@ async def run_chat(
                         ),
                     }
                 )
+            except ApprovalRequired as ar:
+                return await _finish_approval(ar)
             except Exception as exc:
                 duration_ms = int((time.perf_counter() - t0) * 1000)
                 out = {"isError": True, "error": str(exc) or "tool call failed", "tool": tc.name}

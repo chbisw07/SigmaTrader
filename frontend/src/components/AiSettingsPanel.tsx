@@ -41,6 +41,7 @@ export function AiSettingsPanel() {
   }, [settings])
 
   const hybrid = settings?.hybrid_llm
+  const guardrails = settings?.tool_guardrails ?? { tavily_max_calls_per_session: 10, tavily_warning_threshold: 8 }
 
   const load = async () => {
     setError(null)
@@ -291,6 +292,38 @@ export function AiSettingsPanel() {
           <AiProviderSettingsPanel slot="hybrid_local" title="Hybrid Local Model / Provider" />
         </Box>
       )}
+
+      <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+        <Stack spacing={1.5}>
+          <Typography variant="h6">External Tool Guardrails</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Session-scoped limits to prevent runaway tool loops and unexpected credit usage.
+          </Typography>
+          <TextField
+            size="small"
+            type="number"
+            label="Tavily max calls per session"
+            value={Number(guardrails.tavily_max_calls_per_session ?? 10)}
+            onChange={(e) =>
+              void patch({ tool_guardrails: { tavily_max_calls_per_session: Number(e.target.value || 0) } } as any)
+            }
+            disabled={busy}
+            inputProps={{ min: 0, max: 10000, step: 1 }}
+          />
+          <TextField
+            size="small"
+            type="number"
+            label="Tavily warning threshold"
+            value={Number(guardrails.tavily_warning_threshold ?? 8)}
+            onChange={(e) =>
+              void patch({ tool_guardrails: { tavily_warning_threshold: Number(e.target.value || 0) } } as any)
+            }
+            disabled={busy}
+            helperText="Calls at/after this threshold show a soft warning; calls beyond the max require explicit approval."
+            inputProps={{ min: 0, max: 10000, step: 1 }}
+          />
+        </Stack>
+      </Paper>
 
       <Dialog open={confirmExecOpen} onClose={() => setConfirmExecOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Enable AI execution?</DialogTitle>
