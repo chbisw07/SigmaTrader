@@ -1361,7 +1361,7 @@ export const mcpToolsHelp: HelpContext = {
               items: [
                 'Enable the Tavily server and set its URL.',
                 'Turn on “Allow AI to use Tavily tools (external web search)”.',
-                'Then the AI reasoner (REMOTE_ONLY/HYBRID uses remote; LOCAL_ONLY uses local) can call `tavily_search` when appropriate.',
+                'Then the AI reasoner (remote models use remote; local models use local) can call `tavily_search` when appropriate.',
               ],
             },
           ],

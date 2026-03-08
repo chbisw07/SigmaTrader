@@ -536,8 +536,8 @@ export function McpToolsPanel() {
 
           {!tavilyAiEnabled && (
             <Alert severity="info">
-              Turn this on to let SigmaTrader’s AI orchestrator call Tavily tools. In HYBRID/REMOTE_ONLY modes, the remote
-              reasoner will decide when to use search; results are returned to the model via a sanitized summary.
+              Turn this on to let SigmaTrader’s AI orchestrator call Tavily tools. When using a remote model, the
+              orchestrator will decide when to use search; results are returned via a sanitized summary.
             </Alert>
           )}
 

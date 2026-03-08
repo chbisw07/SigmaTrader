@@ -40,8 +40,10 @@ export function AiSettingsPanel() {
     return Boolean(settings.feature_flags.kite_mcp_enabled && kite.server_url && kite.last_status === 'connected')
   }, [settings])
 
-  const hybrid = settings?.hybrid_llm
+  const lsg = settings?.hybrid_llm
   const guardrails = settings?.tool_guardrails ?? { tavily_max_calls_per_session: 10, tavily_warning_threshold: 8 }
+  const lsgMode = (lsg?.mode || 'AUTO') === 'HYBRID' ? 'REMOTE_ONLY' : (lsg?.mode || 'AUTO')
+  const showLocalProvider = Boolean(lsg?.enabled) && lsgMode !== 'REMOTE_ONLY'
 
   const load = async () => {
     setError(null)
@@ -197,48 +199,47 @@ export function AiSettingsPanel() {
         </Stack>
       </Paper>
 
-      <AiProviderSettingsPanel title="Remote Model / Provider" />
+      <AiProviderSettingsPanel title="Model / Provider" />
 
       <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
         <Stack spacing={1.5}>
-          <Typography variant="h6">Hybrid LLM Gateway</Typography>
+          <Typography variant="h6">Local Security Gateway (LSG)</Typography>
           <Typography variant="body2" color="text.secondary">
-            Routes all tool execution through the Local Security Gateway (LSG). Remote models do not receive tool handles
-            and can only request allowlisted capabilities.
+            Safety layer for tool usage and sensitive data. Remote models do not receive tool handles and can only request
+            allowlisted capabilities.
           </Typography>
 
           <FormControlLabel
             control={
               <Switch
-                checked={Boolean(hybrid?.enabled)}
+                checked={Boolean(lsg?.enabled)}
                 onChange={(_, v) => void patch({ hybrid_llm: { enabled: v } } as any)}
                 disabled={busy || !settings}
               />
             }
-            label="Enable Hybrid LLM Gateway"
+            label="Enable LSG (recommended)"
           />
 
-          {hybrid?.enabled && (
+          {lsg?.enabled && (
             <>
               <TextField
                 select
                 size="small"
-                label="Mode"
-                value={hybrid.mode || 'AUTO'}
+                label="Assistant model mode"
+                value={lsgMode}
                 onChange={(e) => void patch({ hybrid_llm: { mode: e.target.value as any } } as any)}
                 disabled={busy}
               >
                 <MenuItem value="AUTO">Auto (AUTO)</MenuItem>
                 <MenuItem value="LOCAL_ONLY">Local (LOCAL_ONLY)</MenuItem>
                 <MenuItem value="REMOTE_ONLY">Remote (REMOTE_ONLY)</MenuItem>
-                <MenuItem value="HYBRID">Hybrid (HYBRID)</MenuItem>
               </TextField>
 
               <TextField
                 select
                 size="small"
                 label="Remote portfolio detail level"
-                value={(hybrid as any).remote_portfolio_detail_level || 'DIGEST_ONLY'}
+                value={(lsg as any).remote_portfolio_detail_level || 'DIGEST_ONLY'}
                 onChange={(e) =>
                   void patch({ hybrid_llm: { remote_portfolio_detail_level: e.target.value as any } } as any)
                 }
@@ -253,7 +254,7 @@ export function AiSettingsPanel() {
               <FormControlLabel
                 control={
                   <Switch
-                    checked={Boolean(hybrid.allow_remote_market_data_tools)}
+                    checked={Boolean(lsg.allow_remote_market_data_tools)}
                     onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_market_data_tools: v } } as any)}
                     disabled={busy}
                   />
@@ -264,7 +265,7 @@ export function AiSettingsPanel() {
               <FormControlLabel
                 control={
                   <Switch
-                    checked={Boolean(hybrid.allow_remote_account_digests)}
+                    checked={Boolean(lsg.allow_remote_account_digests)}
                     onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_account_digests: v } } as any)}
                     disabled={busy}
                   />
@@ -278,18 +279,17 @@ export function AiSettingsPanel() {
               </Alert>
 
               <Alert severity="info">
-                In HYBRID mode, the remote reasoner uses the <b>Remote Model / Provider</b> configured above. To use a
-                different local model for LOCAL_ONLY (or for future hybrid formatting), configure <b>Hybrid Local Model / Provider</b>{' '}
-                below.
+                When set to <b>Remote</b>, the assistant uses the <b>Model / Provider</b> configured above. When set to{' '}
+                <b>Local</b>, configure the <b>Local Model / Provider</b> below.
               </Alert>
             </>
           )}
         </Stack>
       </Paper>
 
-      {hybrid?.enabled && (
+      {showLocalProvider && (
         <Box sx={{ mt: 2 }}>
-          <AiProviderSettingsPanel slot="hybrid_local" title="Hybrid Local Model / Provider" />
+          <AiProviderSettingsPanel slot="hybrid_local" title="Local Model / Provider" />
         </Box>
       )}
 

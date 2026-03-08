@@ -531,7 +531,7 @@ async def run_chat(
             if local_kind != "local":
                 raise HTTPException(
                     status_code=400,
-                    detail="Hybrid LLM LOCAL_ONLY requires a local AI provider. Configure Hybrid Local provider in Settings → AI.",
+                    detail="Local-only mode requires a local AI provider. Configure Local Model / Provider in Settings → AI.",
                 )
         else:
             ai_cfg = remote_candidate
@@ -1089,7 +1089,7 @@ async def run_chat(
                         title="Remote portfolio access blocked",
                         message=(
                             "Remote model requested detailed portfolio data, but remote portfolio detail level is OFF. "
-                            "Enable remote portfolio detail level in Settings → AI (Hybrid LLM Gateway) to proceed."
+                            "Enable remote portfolio detail level in Settings → AI (Local Security Gateway) to proceed."
                         ),
                         options=[ApprovalOption(id="deny", label="OK")],
                         meta={"tool_name": tool_name, "detail_level": detail},
@@ -2033,9 +2033,9 @@ async def run_chat(
     if hy_enabled:
         mode = effective_hy_mode or "REMOTE_ONLY"
         if mode == "LOCAL_ONLY" and is_remote_provider:
-            raise HTTPException(status_code=400, detail="Hybrid LLM LOCAL_ONLY requires a local AI provider (LM Studio).")
+            raise HTTPException(status_code=400, detail="Local-only mode requires a local AI provider (LM Studio).")
         if mode in {"REMOTE_ONLY", "HYBRID"} and not is_remote_provider:
-            raise HTTPException(status_code=400, detail="Hybrid LLM REMOTE_ONLY/HYBRID requires a remote AI provider (OpenAI).")
+            raise HTTPException(status_code=400, detail="Remote-only mode requires a remote AI provider (OpenAI).")
 
         reasoner_source = "remote" if mode in {"REMOTE_ONLY", "HYBRID"} else "local"
 
