@@ -719,6 +719,13 @@ async def run_chat(
 
     system_prompt = (
         (
+            (  # Hybrid gateway (remote reasoner).
+                "- Remote may request ONLY market-data read tools: "
+                "search_instruments, get_ltp, get_quotes, get_ohlc, get_historical_data"
+                + (", tavily_search" if web_search_enabled else "")
+                + ".\n"
+            )
+            +
             "You are SigmaTrader's Remote Reasoner operating behind a Local Security Gateway (LSG). "
             "You have NO direct tool handles. You may request tools by emitting a single JSON object. "
             "Always output ONLY valid JSON (no markdown).\n\n"
@@ -747,7 +754,6 @@ async def run_chat(
             "}\n\n"
             "Rules:\n"
             "- The LSG will deny disallowed tools. Do not attempt identity/auth or broker-write MCP tools.\n"
-            "- Remote may request ONLY market-data read tools: search_instruments, get_ltp, get_quotes, get_ohlc, get_historical_data.\n"
             "- Remote may NOT request raw account reads (holdings/positions/orders/margins/trades). Use digests instead: portfolio_digest, orders_digest, risk_digest.\n"
             "- Tool results will be sent back as JSON: {\"tool_result\": { ...ToolResultEnvelope... }}\n"
             "- If a tool_result comes back with status=denied and denial_reason=invalid_args, you MUST correct the args and retry (do not repeat the same invalid request).\n"
@@ -758,13 +764,14 @@ async def run_chat(
         else (
             "You are SigmaTrader's AI Trading Manager. "
             "You can call tools to read broker-truth portfolio data via Kite MCP. "
-            "Only call tools that help answer the user's question. "
-            "Important: in Kite, 'holdings' (delivery/CNC) are different from 'positions' (net open/intraday). "
-            "If the user asks for 'positions' but expects their portfolio, you likely need get_holdings too. "
-            "For trading intents, first call propose_trade_plan. "
-            "Only call execute_trade_plan when the user explicitly asks to execute.\n\n"
-            "Never call broker order tools directly. Execution is policy-gated and may be vetoed.\n\n"
-            "When you answer, be concise and structured with short sections."
+            + ("If you need external web context, use tavily_search. " if web_search_enabled else "")
+            + "Only call tools that help answer the user's question. "
+            + "Important: in Kite, 'holdings' (delivery/CNC) are different from 'positions' (net open/intraday). "
+            + "If the user asks for 'positions' but expects their portfolio, you likely need get_holdings too. "
+            + "For trading intents, first call propose_trade_plan. "
+            + "Only call execute_trade_plan when the user explicitly asks to execute.\n\n"
+            + "Never call broker order tools directly. Execution is policy-gated and may be vetoed.\n\n"
+            + "When you answer, be concise and structured with short sections."
         )
     )
 
