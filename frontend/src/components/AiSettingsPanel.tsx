@@ -26,6 +26,7 @@ import { AiProviderSettingsPanel } from './ai/AiProviderSettingsPanel'
 
 export function AiSettingsPanel() {
   const [settings, setSettings] = useState<AiSettings | null>(null)
+  const [assistantProviderKind, setAssistantProviderKind] = useState<'remote' | 'local' | string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -196,56 +197,42 @@ export function AiSettingsPanel() {
         </Stack>
       </Paper>
 
-      <AiProviderSettingsPanel title="Assistant Model / Provider" />
+      <AiProviderSettingsPanel
+        title="Assistant Model / Provider"
+        onProviderKindChange={(kind) => setAssistantProviderKind(kind)}
+      />
 
-      <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
-        <Stack spacing={1.5}>
-          <Typography variant="h6">Safety &amp; Privacy</Typography>
-          <Typography variant="body2" color="text.secondary">
-            SigmaTrader enforces least-privilege tool access, approval gates, and PII-safe summaries for remote providers.
-          </Typography>
+      {assistantProviderKind === 'remote' && (
+        <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
+          <Stack spacing={1.5}>
+            <Typography variant="h6">Safety &amp; Privacy</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Remote providers are restricted-trust. SigmaTrader enforces least-privilege tool access, approval gates, and
+              PII-safe summaries.
+            </Typography>
 
-          <TextField
-            select
-            size="small"
-            label="Remote portfolio detail level"
-            value={(remotePolicy as any)?.remote_portfolio_detail_level || 'DIGEST_ONLY'}
-            onChange={(e) => void patch({ hybrid_llm: { remote_portfolio_detail_level: e.target.value as any } } as any)}
-            disabled={busy}
-            helperText="Controls what Tier-2 portfolio telemetry (holdings/positions/orders/margins) can be shared with a remote model. Tier-3 PII/secrets are always blocked."
-          >
-            <MenuItem value="OFF">Off (OFF)</MenuItem>
-            <MenuItem value="DIGEST_ONLY">Digests only (DIGEST_ONLY)</MenuItem>
-            <MenuItem value="FULL_SANITIZED">Full sanitized (FULL_SANITIZED)</MenuItem>
-          </TextField>
+            <TextField
+              select
+              size="small"
+              label="Remote portfolio detail level"
+              value={(remotePolicy as any)?.remote_portfolio_detail_level || 'DIGEST_ONLY'}
+              onChange={(e) =>
+                void patch({ hybrid_llm: { remote_portfolio_detail_level: e.target.value as any } } as any)
+              }
+              disabled={busy}
+              helperText="Controls what Tier-2 portfolio telemetry (holdings/positions/orders/margins) can be shared with a remote model. Tier-3 PII/secrets are always blocked."
+            >
+              <MenuItem value="OFF">Off (OFF)</MenuItem>
+              <MenuItem value="DIGEST_ONLY">Digests only (DIGEST_ONLY)</MenuItem>
+              <MenuItem value="FULL_SANITIZED">Full sanitized (FULL_SANITIZED)</MenuItem>
+            </TextField>
 
-          <FormControlLabel
-            control={
-              <Switch
-                checked={Boolean((remotePolicy as any)?.allow_remote_market_data_tools)}
-                onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_market_data_tools: v } } as any)}
-                disabled={busy}
-              />
-            }
-            label="Remote may request market-data tools"
-          />
-
-          <FormControlLabel
-            control={
-              <Switch
-                checked={Boolean((remotePolicy as any)?.allow_remote_account_digests)}
-                onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_account_digests: v } } as any)}
-                disabled={busy}
-              />
-            }
-            label="Remote may request account digests"
-          />
-
-          <Alert severity="info">
-            Detailed portfolio reads and Tavily over-limit searches may require explicit approval. Decisions are audit-logged.
-          </Alert>
-        </Stack>
-      </Paper>
+            <Alert severity="info">
+              Detailed portfolio reads and Tavily over-limit searches may require explicit approval. Decisions are audit-logged.
+            </Alert>
+          </Stack>
+        </Paper>
+      )}
 
       <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
         <Stack spacing={1.5}>

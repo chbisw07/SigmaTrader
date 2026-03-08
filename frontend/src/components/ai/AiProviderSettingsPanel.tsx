@@ -83,7 +83,11 @@ function isLocalNetworkUrl(raw: string | null | undefined): boolean {
   return isPrivateIpv4(host)
 }
 
-export function AiProviderSettingsPanel(props: { slot?: string; title?: string }) {
+export function AiProviderSettingsPanel(props: {
+  slot?: string
+  title?: string
+  onProviderKindChange?: (kind: ProviderDescriptor['kind'] | null, providerId: string | null) => void
+}) {
   const slot = props.slot
   const title = props.title ?? 'Model / Provider'
   const [providers, setProviders] = useState<ProviderDescriptor[]>([])
@@ -112,6 +116,10 @@ export function AiProviderSettingsPanel(props: { slot?: string; title?: string }
     if (!cfg) return null
     return providers.find((p) => p.id === cfg.provider) ?? null
   }, [providers, cfg])
+
+  useEffect(() => {
+    props.onProviderKindChange?.((providerInfo?.kind as any) ?? null, (cfg?.provider as any) ?? null)
+  }, [providerInfo?.kind, cfg?.provider])
 
   const showLocalBaseUrlHint = useMemo(() => {
     if (!cfg || !providerInfo?.supports_base_url || providerInfo.kind !== 'local') return false
