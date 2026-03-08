@@ -22,7 +22,7 @@ from app.ai.safety.safe_summary_registry import (
 )
 from app.ai.time_context import format_time_context_line, time_context_from_ui_context
 from app.core.config import Settings
-from app.models import Candle
+from app.models import BrokerInstrument, Candle, Listing
 from app.schemas.ai_trading_manager import BrokerOrder, DecisionToolCall, Quote, TradeIntent
 from app.services.ai.provider_registry import get_provider
 from app.services.ai.active_config import get_active_config
@@ -880,6 +880,153 @@ async def run_chat(
         user_id=None,
     )
 
+    def _canonical_broker_name() -> str:
+        return (str(getattr(settings, "canonical_market_data_broker", "") or "zerodha").strip().lower() or "zerodha")
+
+    def _parse_exchange_symbol(args: dict[str, Any]) -> tuple[str, str] | None:
+        instruments = args.get("instruments")
+        first_inst = None
+        if isinstance(instruments, str) and instruments.strip():
+            first_inst = instruments.strip()
+        elif isinstance(instruments, list) and instruments:
+            cand0 = instruments[0]
+            if isinstance(cand0, str) and cand0.strip():
+                first_inst = cand0.strip()
+        if first_inst:
+            if ":" in first_inst:
+                exch, sym = first_inst.split(":", 1)
+                exch = exch.strip().upper()
+                sym = sym.strip().upper()
+            else:
+                exch = "NSE"
+                sym = first_inst.strip().upper()
+            if exch and sym:
+                return exch, sym
+
+        sym2 = args.get("symbol") or args.get("tradingsymbol")
+        if isinstance(sym2, str) and sym2.strip():
+            exch2 = args.get("exchange")
+            exch_s = str(exch2 or "NSE").strip().upper() or "NSE"
+            return exch_s, sym2.strip().upper()
+        return None
+
+    def _resolve_instrument_token_from_db(*, exchange: str, symbol: str) -> int | None:
+        exch = (exchange or "").strip().upper()
+        sym = (symbol or "").strip().upper()
+        if not exch or not sym:
+            return None
+        listing: Listing | None = (
+            db.query(Listing)
+            .filter(Listing.exchange == exch, Listing.symbol == sym, Listing.active.is_(True))
+            .one_or_none()
+        )
+        if listing is None:
+            return None
+        broker = _canonical_broker_name()
+        bi: BrokerInstrument | None = (
+            db.query(BrokerInstrument)
+            .filter(
+                BrokerInstrument.broker_name == broker,
+                BrokerInstrument.listing_id == listing.id,
+                BrokerInstrument.active.is_(True),
+            )
+            .order_by(BrokerInstrument.updated_at.desc())
+            .first()
+        )
+        token_raw = str(getattr(bi, "instrument_token", "") or "") if bi is not None else ""
+        token_raw = token_raw.strip()
+        if token_raw.isdigit():
+            try:
+                return int(token_raw)
+            except Exception:
+                return None
+        return None
+
+    async def _resolve_instrument_token_via_mcp(*, exchange: str, symbol: str) -> int | None:
+        # Best-effort fallback: use the broker MCP search tool to discover instrument_token.
+        q = (symbol or "").strip().upper()
+        if not q:
+            return None
+        mcp_session = tool_session_by_name.get("search_instruments") or session
+        try:
+            ensure = getattr(mcp_session, "ensure_initialized", None)
+            if ensure is not None:
+                await ensure()
+        except Exception:
+            pass
+        try:
+            res = await asyncio.wait_for(
+                mcp_session.tools_call(name="search_instruments", arguments={"query": q}),
+                timeout=12,
+            )
+        except Exception:
+            return None
+        payload = _extract_tool_json(res) if isinstance(res, dict) else None
+        rows: list[dict[str, Any]] = []
+        if isinstance(payload, list):
+            rows = [r for r in payload if isinstance(r, dict)]
+        elif isinstance(payload, dict) and isinstance(payload.get("data"), list):
+            rows = [r for r in payload.get("data") if isinstance(r, dict)]
+        if not rows:
+            return None
+
+        exch = (exchange or "NSE").strip().upper() or "NSE"
+        sym = q
+        picked: dict[str, Any] | None = None
+        for r in rows:
+            rx = str(r.get("exchange") or "").strip().upper()
+            ts = str(r.get("tradingsymbol") or r.get("symbol") or "").strip().upper()
+            if rx == exch and ts == sym:
+                picked = r
+                break
+        if picked is None:
+            picked = rows[0]
+        tok_val = picked.get("instrument_token") or picked.get("instrumentToken") or picked.get("token")
+        try:
+            if isinstance(tok_val, int) and not isinstance(tok_val, bool):
+                return int(tok_val)
+            if isinstance(tok_val, float) and tok_val.is_integer():
+                return int(tok_val)
+            if isinstance(tok_val, str) and tok_val.strip().isdigit():
+                return int(tok_val.strip())
+        except Exception:
+            return None
+        return None
+
+    async def _maybe_repair_historical_args(*, tool_name: str, arguments: dict[str, Any] | None) -> dict[str, Any] | None:
+        if str(tool_name or "") != "get_historical_data":
+            return arguments
+        args = dict(arguments or {})
+        if "instrument_token" in args and args.get("instrument_token") is not None:
+            return args
+
+        parsed = _parse_exchange_symbol(args)
+        if parsed is None:
+            # Last-ditch: try extracting "(SYMBOL)" from the user message.
+            m = re.search(r"\\(([A-Z0-9]{1,16})\\)", str(user_message or "").upper())
+            if m:
+                parsed = ("NSE", m.group(1))
+        if parsed is None:
+            return args
+
+        exch, sym = parsed
+        token = _resolve_instrument_token_from_db(exchange=exch, symbol=sym)
+        if token is None:
+            token = await _resolve_instrument_token_via_mcp(exchange=exch, symbol=sym)
+        if token is None:
+            return args
+
+        args["instrument_token"] = int(token)
+        record_system_event(
+            db,
+            level="INFO",
+            category="AI_ORCH",
+            message="Repaired get_historical_data args (instrument_token inferred).",
+            correlation_id=corr,
+            details={"event_type": "AI_TOOL_ARGS_REPAIRED", "tool": "get_historical_data", "exchange": exch, "symbol": sym},
+        )
+        return args
+
     def _tool_schema(name: str) -> dict[str, Any] | None:
         meta = tools_by_name.get(name) if isinstance(tools_by_name, dict) else None
         if isinstance(meta, dict) and isinstance(meta.get("inputSchema"), dict):
@@ -894,13 +1041,14 @@ async def run_chat(
         source: str,
         mode: str,
     ):
+        arguments2 = await _maybe_repair_historical_args(tool_name=tool_name, arguments=arguments)
         # Run an MCP tool through the Local Security Gateway.
         req = build_tool_request(
             request_id=request_id,
             source=source,  # type: ignore[arg-type]
             mode=mode,
             tool_name=tool_name,
-            args=arguments or {},
+            args=arguments2 or {},
         )
 
         async def _exec(args: dict[str, Any]) -> Any:

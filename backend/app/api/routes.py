@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends
 
 from ..core.config import Settings, get_settings
@@ -65,10 +67,13 @@ def read_root(settings: Settings = Depends(get_settings)) -> dict[str, str]:
 def health_check(settings: Settings = Depends(get_settings)) -> dict[str, str]:
     """Basic health endpoint used by the frontend and monitoring."""
 
+    build_sha = str(os.getenv("ST_BUILD_SHA") or os.getenv("GIT_SHA") or "").strip()
     return {
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.environment,
+        "version": str(settings.version or ""),
+        **({"build_sha": build_sha} if build_sha else {}),
     }
 
 
