@@ -163,6 +163,7 @@ export type AiChatStreamEvent =
   | { type: 'decision'; decision_id: string; correlation_id?: string }
   | { type: 'tool_call'; name: string; arguments?: Record<string, unknown>; status: string; duration_ms?: number; result_preview?: string; error?: string | null }
   | { type: 'assistant_delta'; text: string }
+  | { type: 'warning'; code: string; message: string; meta?: Record<string, unknown> }
   | { type: 'approval_required'; approval: Record<string, unknown>; decision_id?: string }
   | { type: 'done'; assistant_message: string; decision_id: string; approval_required?: Record<string, unknown> | null }
   | { type: 'error'; error: string }

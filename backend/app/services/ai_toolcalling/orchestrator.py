@@ -1190,6 +1190,21 @@ async def run_chat(
                             correlation_id=corr,
                             details={"event_type": "tavily_threshold_warning", **meta},
                         )
+                        if event_cb is not None:
+                            try:
+                                await event_cb(
+                                    {
+                                        "type": "warning",
+                                        "code": "tavily_threshold_warning",
+                                        "message": (
+                                            f"Tavily usage warning: this session is at {int(meta.get('calls') or 0) + 1}/"
+                                            f"{int(meta.get('max_calls') or max_calls)} searches."
+                                        ),
+                                        "meta": meta,
+                                    }
+                                )
+                            except Exception:
+                                pass
             else:
                 guards = getattr(tm_cfg, "tool_guardrails", None)
                 warn_at = int(getattr(guards, "tavily_warning_threshold", 8) or 0)
@@ -1233,6 +1248,21 @@ async def run_chat(
                         correlation_id=corr,
                         details={"event_type": "tavily_threshold_warning", **meta},
                     )
+                    if event_cb is not None:
+                        try:
+                            await event_cb(
+                                {
+                                    "type": "warning",
+                                    "code": "tavily_threshold_warning",
+                                    "message": (
+                                        f"Tavily usage warning: this session is at {int(meta.get('calls') or 0) + 1}/"
+                                        f"{int(meta.get('max_calls') or max_calls)} searches."
+                                    ),
+                                    "meta": meta,
+                                }
+                            )
+                        except Exception:
+                            pass
 
         arguments2 = await _maybe_repair_historical_args(tool_name=tool_name, arguments=arguments)
         # Run an MCP tool through the Local Security Gateway.

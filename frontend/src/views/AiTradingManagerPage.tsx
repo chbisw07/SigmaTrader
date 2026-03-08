@@ -747,6 +747,7 @@ export function AiTradingManagerPage() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [softWarning, setSoftWarning] = useState<string | null>(null)
   const [pendingApproval, setPendingApproval] = useState<Record<string, any> | null>(null)
   const [approvalBusy, setApprovalBusy] = useState(false)
   const [autoscroll, setAutoscroll] = useState(true)
@@ -881,6 +882,8 @@ export function AiTradingManagerPage() {
           setMessages((prev) =>
             prev.map((m) => (m.message_id === localAsstId ? { ...m, content: (m.content || '') + ev.text } : m)),
           )
+        } else if (ev.type === 'warning') {
+          setSoftWarning(String((ev as any).message || ''))
         } else if (ev.type === 'tool_call') {
           const did = currentDecisionId
           if (!did) return
@@ -1289,6 +1292,11 @@ export function AiTradingManagerPage() {
         }}
       >
         <Stack spacing={1}>
+          {softWarning ? (
+            <Alert severity="warning" onClose={() => setSoftWarning(null)}>
+              {softWarning}
+            </Alert>
+          ) : null}
           {error && <Alert severity="error">{error}</Alert>}
           <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
             <Typography variant="caption" color="text.secondary">
