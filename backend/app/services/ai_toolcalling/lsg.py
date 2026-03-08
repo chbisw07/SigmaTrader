@@ -148,6 +148,35 @@ def _normalize_args_for_tool(
             out["query"] = q.strip()
             changed["query"] = {"from": "symbol/tradingsymbol"}
 
+    # get_historical_data expects instrument_token (int). Remote models commonly emit alternate key shapes.
+    if "instrument_token" in wanted:
+        if "instrument_token" not in out:
+            used_key = ""
+            cand: Any = None
+            for k in ("instrumentToken", "instrument_id", "instrumentId", "token", "instrument"):
+                if k in out:
+                    used_key = k
+                    cand = out.get(k)
+                    break
+            tok: int | None = None
+            if isinstance(cand, int) and not isinstance(cand, bool):
+                tok = cand
+            elif isinstance(cand, float) and cand.is_integer():
+                tok = int(cand)
+            elif isinstance(cand, str) and cand.strip().isdigit():
+                tok = int(cand.strip())
+            if tok is not None:
+                out["instrument_token"] = tok
+                changed["instrument_token"] = {"from": used_key or "unknown"}
+        else:
+            cand = out.get("instrument_token")
+            if isinstance(cand, float) and cand.is_integer():
+                out["instrument_token"] = int(cand)
+                changed["instrument_token"] = {"from": "float->int"}
+            elif isinstance(cand, str) and cand.strip().isdigit():
+                out["instrument_token"] = int(cand.strip())
+                changed["instrument_token"] = {"from": "str->int"}
+
     # Drop unknown keys (post-normalization) so strict schema validation can pass.
     if wanted:
         dropped = [k for k in list(out.keys()) if k not in wanted]
@@ -157,6 +186,20 @@ def _normalize_args_for_tool(
             changed["dropped_keys"] = dropped
 
     return out, changed
+
+
+def _invalid_args_hint(*, tool_name: str, err: str | None) -> str:
+    n = (tool_name or "").strip()
+    e = (err or "").strip()
+    if n == "get_historical_data" and "instrument_token" in e:
+        return (
+            "get_historical_data requires `instrument_token` (int). "
+            "If you only have a symbol, first call `search_instruments` with `query` (e.g. 'SBIN' or 'NSE:SBIN'), "
+            "then retry get_historical_data using the returned instrument_token."
+        )
+    if n in ("search_instruments", "get_ltp", "get_quotes", "get_ohlc", "get_historical_data"):
+        return "Fix args to match the MCP schema (required keys + correct types). For symbol lists, provide instruments like ['NSE:INFY']."
+    return "Fix args to match the MCP schema (required keys + correct types)."
 
 
 def _schema_type_ok(expected: str, v: Any) -> bool:
@@ -384,7 +427,7 @@ async def lsg_execute(
             denial_reason="invalid_args",
             data={
                 "error": err,
-                "hint": "Fix args to match the MCP schema (required keys + correct types). For market-data tools, provide instruments like ['NSE:INFY'].",
+                "hint": _invalid_args_hint(tool_name=str(req2.tool_name or ""), err=err),
                 "normalized_args": norm_meta or None,
             },
             sanitization=ToolSanitizationMeta(),
