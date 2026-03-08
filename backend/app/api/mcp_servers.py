@@ -439,7 +439,7 @@ async def generic_test(
     ok = False
     err: str | None = None
     try:
-        async with McpSseClient(server_url=server_url, timeout_seconds=20) as mcp:
+        async with McpSseClient(server_url=server_url, timeout_seconds=20, endpoint_required=False) as mcp:
             init = await mcp.initialize()
             cache["server_info"] = init.server_info
             cache["capabilities"] = init.capabilities
@@ -530,7 +530,8 @@ async def generic_tools_list(
         raise HTTPException(status_code=400, detail="Server URL is not configured.")
 
     try:
-        async with McpSseClient(server_url=server_url, timeout_seconds=20) as mcp:
+        async with McpSseClient(server_url=server_url, timeout_seconds=20, endpoint_required=False) as mcp:
+            await mcp.initialize()
             tools = await mcp.tools_list()
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "tools/list failed.") from exc
@@ -562,7 +563,8 @@ async def generic_tools_call(
         raise HTTPException(status_code=400, detail="Server URL is not configured.")
 
     try:
-        async with McpSseClient(server_url=server_url, timeout_seconds=30) as mcp:
+        async with McpSseClient(server_url=server_url, timeout_seconds=30, endpoint_required=False) as mcp:
+            await mcp.initialize()
             res = await mcp.tools_call(name=payload.name, arguments=payload.arguments or {})
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "tools/call failed.") from exc
