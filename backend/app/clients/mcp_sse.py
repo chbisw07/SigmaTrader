@@ -111,6 +111,7 @@ class McpSseClient:
         self._reader_task: asyncio.Task | None = None
 
         self._message_endpoint: str | None = None
+        self._http_post_only: bool = False
         self._connect_seq = 0
         self._next_id = 1
         self._pending: dict[int, asyncio.Future] = {}
@@ -175,6 +176,11 @@ class McpSseClient:
         self.initialize_result = None
 
     async def connect(self) -> None:
+        if self._http_post_only:
+            self._message_endpoint = self.server_url
+            self._connect_seq += 1
+            return
+
         # If the SSE stream died (Cloudflare idle timeout, network blip), the
         # reader task completes and we stop receiving responses. Treat that as
         # disconnected and transparently reconnect on the next request.
@@ -194,6 +200,27 @@ class McpSseClient:
         resp = await stream_cm.__aenter__()
         self._sse_stream_cm = stream_cm
         self._sse_response = resp
+
+        if not self._endpoint_required:
+            ct = str(resp.headers.get("content-type") or "").lower()
+            # Some MCP servers expose an HTTP JSON-RPC endpoint (POST) and do
+            # not support SSE (GET) at the same URL (e.g., return 405 on GET).
+            if resp.status_code != 200 or "text/event-stream" not in ct:
+                self._http_post_only = True
+                self._message_endpoint = self.server_url
+                self._connect_seq += 1
+                try:
+                    await resp.aclose()
+                except Exception:
+                    pass
+                try:
+                    await stream_cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                self._sse_response = None
+                self._sse_stream_cm = None
+                self._reader_task = None
+                return
 
         endpoint_fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
