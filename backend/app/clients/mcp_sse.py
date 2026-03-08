@@ -292,6 +292,11 @@ class McpSseClient:
         if not self._external_client:
             await self._client.aclose()
 
+    async def ensure_initialized(self) -> None:
+        await self.connect()
+        if self.initialize_result is None:
+            await self.initialize()
+
     def _alloc_id(self) -> int:
         rid = int(self._next_id)
         self._next_id += 1

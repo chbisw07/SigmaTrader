@@ -36,6 +36,15 @@ async def get_tools_cached(
         if c and (now - c.fetched_at_ts) < float(ttl_seconds):
             return c, False
 
+        # Some MCP servers require initialize before tools/list.
+        try:
+            ensure = getattr(session, "ensure_initialized", None)
+            if ensure is not None:
+                await ensure()
+        except Exception:
+            # Best-effort: downstream tools/list will raise with a useful error.
+            pass
+
         tools_resp = await session.tools_list()
         rows = tools_resp.get("tools") if isinstance(tools_resp, dict) else []
         mcp_tools = [t for t in rows if isinstance(t, dict)] if isinstance(rows, list) else []

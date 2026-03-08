@@ -46,6 +46,7 @@ def _env_defaults() -> McpSettings:
                 "enabled": False,
                 "transport": McpTransport.sse,
                 "url": None,
+                "ai_enabled": False,
                 "auth_method": "none",
                 "auth_profile_ref": None,
             }
@@ -126,4 +127,3 @@ __all__ = [
     "normalize_mcp_settings",
     "set_mcp_settings",
 ]
-

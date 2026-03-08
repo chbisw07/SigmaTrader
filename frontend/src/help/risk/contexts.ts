@@ -1353,6 +1353,20 @@ export const mcpToolsHelp: HelpContext = {
           ],
         },
         {
+          id: 'mcp-tavily-ai',
+          question: 'How do I enable Tavily web search for the AI?',
+          answer: [
+            {
+              type: 'bullets',
+              items: [
+                'Enable the Tavily server and set its URL.',
+                'Turn on “Allow AI to use Tavily tools (external web search)”.',
+                'Then the AI reasoner (REMOTE_ONLY/HYBRID uses remote; LOCAL_ONLY uses local) can call `tavily_search` when appropriate.',
+              ],
+            },
+          ],
+        },
+        {
           id: 'mcp-scopes',
           question: 'What do read-only vs trade scopes mean?',
           answer: [
@@ -1400,6 +1414,7 @@ export const mcpToolsHelp: HelpContext = {
   gettingStarted: [
     'Enable Kite MCP, set the server URL, and run Test Connection.',
     'Authorize Kite MCP if required.',
+    'Enable Tavily and allow AI use if you want external web search.',
     'Use the tool console to list tools and run test calls.',
   ],
   troubleshooting: [

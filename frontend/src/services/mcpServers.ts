@@ -56,6 +56,7 @@ export type GenericMcpServerConfig = {
   env?: Record<string, string>
   auth_method?: string
   auth_profile_ref?: string | null
+  ai_enabled?: boolean
   last_status?: KiteMcpStatus
   last_checked_ts?: string | null
   last_error?: string | null
@@ -221,4 +222,3 @@ export async function callMcpTool(payload: {
   const data = (await readJson<{ result: Record<string, unknown> }>(res)) as any
   return data.result ?? {}
 }
-

@@ -270,6 +270,7 @@ export function McpToolsPanel() {
   const monitoringEnabled = Boolean(kiteCfg?.monitoring_enabled)
 
   const tavilyEnabled = Boolean(tavilyCfg?.enabled)
+  const tavilyAiEnabled = Boolean(tavilyCfg?.ai_enabled)
   const tavilyTransport = (tavilyCfg?.transport || 'sse') as 'sse' | 'stdio'
   const tavilyUrl = tavilyCfg?.url ?? ''
   const tavilyCmd = tavilyCfg?.command ?? ''
@@ -519,6 +520,26 @@ export function McpToolsPanel() {
             }
             label="Enable Tavily server"
           />
+
+          <FormControlLabel
+            control={
+              <Switch
+                checked={tavilyAiEnabled}
+                onChange={(_, v) =>
+                  void patchTavily({ ...(tavilyCfg || { enabled: false, transport: 'sse' }), ai_enabled: v })
+                }
+                disabled={busy || !tavilyEnabled}
+              />
+            }
+            label="Allow AI to use Tavily tools (external web search)"
+          />
+
+          {!tavilyAiEnabled && (
+            <Alert severity="info">
+              Turn this on to let SigmaTrader’s AI orchestrator call Tavily tools. In HYBRID/REMOTE_ONLY modes, the remote
+              reasoner will decide when to use search; results are returned to the model via a sanitized summary.
+            </Alert>
+          )}
 
           <TextField
             size="small"

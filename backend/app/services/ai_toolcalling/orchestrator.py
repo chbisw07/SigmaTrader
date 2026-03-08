@@ -47,6 +47,8 @@ from app.services.kite_mcp.secrets import get_auth_session_id
 from app.services.kite_mcp.session_manager import kite_mcp_sessions
 from app.services.kite_mcp.snapshot import fetch_kite_mcp_snapshot
 from app.services.kite_mcp.trade import KiteMcpTradeClient
+from app.services.mcp.external_session_manager import external_mcp_sessions
+from app.services.mcp.mcp_settings_store import get_mcp_settings_with_source
 from app.services.system_events import record_system_event
 from app.models.ai_trading_manager import AiTmPositionShadow
 
@@ -565,9 +567,52 @@ async def run_chat(
     await session.ensure_initialized()
 
     cached, refreshed = await get_tools_cached(server_url=tm_cfg.kite_mcp.server_url, session=session, ttl_seconds=300)
-    # Only expose safe (read-only) MCP tools to the LLM; trade tools are routed
-    # exclusively through ST internal execution, gated by policy + flags.
-    safe_mcp_tools = [t for t in cached.mcp_tools if classify_tool(str(t.get("name") or ""), t) == "read"]
+
+    # Optional: external MCP servers (e.g., Tavily) that can be exposed as tools to the LLM.
+    mcp_cfg, _mcp_src = get_mcp_settings_with_source(db, settings)
+    tavily_cfg = (getattr(mcp_cfg, "servers", None) or {}).get("tavily") if mcp_cfg is not None else None
+    tavily_session = None
+    tavily_cached = None
+    tavily_refreshed = False
+    web_search_enabled = False
+    try:
+        if tavily_cfg is not None and bool(getattr(tavily_cfg, "enabled", False)) and bool(getattr(tavily_cfg, "ai_enabled", False)):
+            transport = str(getattr(getattr(tavily_cfg, "transport", None), "value", None) or getattr(tavily_cfg, "transport", "") or "")
+            tavily_url = str(getattr(tavily_cfg, "url", None) or "").strip()
+            if transport == "sse" and tavily_url:
+                tavily_session = await external_mcp_sessions.get_client(server_url=tavily_url)
+                tavily_cached, tavily_refreshed = await get_tools_cached(server_url=tavily_url, session=tavily_session, ttl_seconds=300)
+                web_search_enabled = True
+    except Exception:
+        tavily_session = None
+        tavily_cached = None
+        tavily_refreshed = False
+        web_search_enabled = False
+
+    all_mcp_tools: list[dict[str, Any]] = list(cached.mcp_tools)
+    tool_session_by_name: dict[str, Any] = {}
+    for t in cached.mcp_tools:
+        if not isinstance(t, dict):
+            continue
+        n = str(t.get("name") or "").strip()
+        if n:
+            tool_session_by_name[n] = session
+    if tavily_cached is not None and tavily_session is not None:
+        for t in tavily_cached.mcp_tools:
+            if not isinstance(t, dict):
+                continue
+            n = str(t.get("name") or "").strip()
+            if not n:
+                continue
+            if n in tool_session_by_name:
+                # Collision: do not override an existing tool name.
+                continue
+            all_mcp_tools.append(t)
+            tool_session_by_name[n] = tavily_session
+    # Only expose safe MCP tools to the LLM; trade tools are routed exclusively
+    # through ST internal execution, gated by policy + flags.
+    allowed_categories = {"read"} | ({"web"} if web_search_enabled else set())
+    safe_mcp_tools = [t for t in all_mcp_tools if classify_tool(str(t.get("name") or ""), t) in allowed_categories]
     # PII Safety Layer: only expose tools that have deterministic safe summaries.
     llm_mcp_tools = [t for t in safe_mcp_tools if tool_has_safe_summary(str(t.get("name") or ""))]
     allowlisted_mcp_tool_names = {str(t.get("name") or "") for t in llm_mcp_tools if isinstance(t, dict)}
@@ -575,6 +620,8 @@ async def run_chat(
     # Allowlist by tier policy rather than safe-summary registry so FULL_SANITIZED can request
     # Tier-2 raw account tools (still sanitized and policy-gated).
     hybrid_mcp_request_allowlist = set(REMOTE_MARKET_DATA_TOOLS) | set(REMOTE_DENY_RAW_ACCOUNT_READS)
+    if web_search_enabled:
+        hybrid_mcp_request_allowlist.add("tavily_search")
 
     internal_tools: list[dict[str, Any]] = [
         {
@@ -622,7 +669,7 @@ async def run_chat(
     openai_tools = mcp_tools_to_openai_tools(llm_mcp_tools) + internal_tools
     tools_hash = hash_tool_definitions(openai_tools)
     # Keep full lookup for policy checks; models may still hallucinate names.
-    tools_by_name = tool_lookup_map(cached.mcp_tools)
+    tools_by_name = tool_lookup_map(all_mcp_tools)
 
     if refreshed:
         record_system_event(
@@ -636,6 +683,20 @@ async def run_chat(
                 "tools_hash": tools_hash,
                 "safe_count": len(llm_mcp_tools),
                 "total_count": len(cached.mcp_tools),
+            },
+        )
+    if tavily_refreshed:
+        record_system_event(
+            db,
+            level="INFO",
+            category="AI_ORCH",
+            message="External MCP tool list refreshed.",
+            correlation_id=corr,
+            details={
+                "event_type": "AI_TOOL_LIST_REFRESHED",
+                "server": "tavily",
+                "safe_count": len([t for t in llm_mcp_tools if str(t.get("name") or "") == "tavily_search"]),
+                "total_count": len(tavily_cached.mcp_tools) if tavily_cached is not None else 0,
             },
         )
 
@@ -811,7 +872,7 @@ async def run_chat(
         source: str,
         mode: str,
     ):
-        # Run a Kite MCP tool through the Local Security Gateway.
+        # Run an MCP tool through the Local Security Gateway.
         req = build_tool_request(
             request_id=request_id,
             source=source,  # type: ignore[arg-type]
@@ -821,7 +882,14 @@ async def run_chat(
         )
 
         async def _exec(args: dict[str, Any]) -> Any:
-            res = await asyncio.wait_for(session.tools_call(name=tool_name, arguments=args or {}), timeout=10)
+            mcp_session = tool_session_by_name.get(tool_name) or session
+            try:
+                ensure = getattr(mcp_session, "ensure_initialized", None)
+                if ensure is not None:
+                    await ensure()
+            except Exception:
+                pass
+            res = await asyncio.wait_for(mcp_session.tools_call(name=tool_name, arguments=args or {}), timeout=20)
             if isinstance(res, dict) and res.get("isError") is True:
                 raise RuntimeError(_extract_tool_text(res) or f"{tool_name} failed.")
             payload = _extract_tool_json(res) if isinstance(res, dict) else None
@@ -2750,6 +2818,7 @@ async def run_chat(
                 tool_meta=meta,
                 user_message=user_message,
                 ai_execution_enabled=bool(tm_cfg.feature_flags.ai_execution_enabled),
+                web_search_enabled=bool(web_search_enabled),
             )
             if not pol.allowed:
                 out = {"isError": True, "blocked": True, "reason": pol.reason, "tool": tc.name}

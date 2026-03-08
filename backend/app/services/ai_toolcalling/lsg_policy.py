@@ -17,6 +17,11 @@ REMOTE_MARKET_DATA_TOOLS: Set[str] = {
     "get_historical_data",
 }
 
+REMOTE_WEB_SEARCH_TOOLS: Set[str] = {
+    # External web search tools (via MCP servers like Tavily).
+    "tavily_search",
+}
+
 REMOTE_HARD_DENY_IDENTITY_AUTH: Set[str] = {
     "get_profile",
     "login",
@@ -68,6 +73,8 @@ def capability_for_tool(tool_name: str) -> ToolCapability:
         return ToolCapability.TRADING_WRITE
     if n in REMOTE_MARKET_DATA_TOOLS:
         return ToolCapability.MARKET_DATA_READONLY
+    if n in REMOTE_WEB_SEARCH_TOOLS:
+        return ToolCapability.MARKET_DATA_READONLY
     if n in LOCAL_DIGEST_TOOLS:
         return ToolCapability.ACCOUNT_DIGEST
     if n in INTERNAL_TRADING_INTENT_TOOLS:
@@ -87,6 +94,8 @@ def telemetry_tier_for_tool(tool_name: str) -> TelemetryTier:
     if not n:
         return TelemetryTier.TIER_3
     if n in REMOTE_MARKET_DATA_TOOLS:
+        return TelemetryTier.TIER_1
+    if n in REMOTE_WEB_SEARCH_TOOLS:
         return TelemetryTier.TIER_1
     if n in LOCAL_DIGEST_TOOLS or n in REMOTE_DENY_RAW_ACCOUNT_READS:
         return TelemetryTier.TIER_2
@@ -176,6 +185,11 @@ def evaluate_lsg_policy(
             )
         return LsgPolicyDecision(allowed=True, capability=ToolCapability.MARKET_DATA_READONLY, telemetry_tier=TelemetryTier.TIER_1)
 
+    if n in REMOTE_WEB_SEARCH_TOOLS:
+        # Web search is treated as Tier-1 public data. Whether the LLM can call
+        # it is still gated by tool exposure + orchestrator allowlists.
+        return LsgPolicyDecision(allowed=True, capability=ToolCapability.MARKET_DATA_READONLY, telemetry_tier=TelemetryTier.TIER_1)
+
     if n in LOCAL_DIGEST_TOOLS:
         if detail == "OFF":
             return LsgPolicyDecision(
@@ -214,6 +228,7 @@ def lsg_policy_debug_map() -> Dict[str, Any]:
     """Expose the single policy map for debugging / audit."""
     return {
         "remote_market_data_tools": sorted(REMOTE_MARKET_DATA_TOOLS),
+        "remote_web_search_tools": sorted(REMOTE_WEB_SEARCH_TOOLS),
         "remote_hard_deny_identity_auth": sorted(REMOTE_HARD_DENY_IDENTITY_AUTH),
         "remote_hard_deny_trading_write": sorted(REMOTE_HARD_DENY_TRADING_WRITE),
         "remote_deny_raw_account_reads": sorted(REMOTE_DENY_RAW_ACCOUNT_READS),
@@ -232,6 +247,7 @@ __all__ = [
     "REMOTE_HARD_DENY_IDENTITY_AUTH",
     "REMOTE_HARD_DENY_TRADING_WRITE",
     "REMOTE_MARKET_DATA_TOOLS",
+    "REMOTE_WEB_SEARCH_TOOLS",
     "capability_for_tool",
     "evaluate_lsg_policy",
     "lsg_policy_debug_map",

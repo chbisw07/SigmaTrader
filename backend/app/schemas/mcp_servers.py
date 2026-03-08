@@ -32,6 +32,11 @@ class McpServerConfig(BaseModel):
     auth_method: str = "none"
     auth_profile_ref: Optional[str] = None
 
+    # Whether the AI orchestrator may expose this server's tools to LLMs.
+    # This is a user-facing safety toggle: when enabled, prompts/queries may be
+    # sent to the external MCP server as tool calls.
+    ai_enabled: bool = False
+
     # Cached status (updated via explicit Test / Refresh actions).
     last_status: KiteMcpStatus = KiteMcpStatus.unknown
     last_checked_ts: Optional[datetime] = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 from typing import Any, Callable
 
 from app.core.config import Settings
@@ -289,6 +290,51 @@ def execute_trade_plan_safe_summary(settings: Settings, raw_payload: Any) -> dic
         "orders": order_hashes,
     }
 
+def tavily_search_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    query = str(payload.get("query") or payload.get("q") or "") if isinstance(payload, dict) else ""
+    query = query.strip()
+    query_hash = hash_identifier(settings, query)[:16] if query else ""
+
+    results_raw: list[Any] = []
+    if isinstance(payload.get("results"), list):
+        results_raw = payload.get("results")  # type: ignore[assignment]
+    elif isinstance(payload.get("data"), dict) and isinstance((payload.get("data") or {}).get("results"), list):
+        results_raw = (payload.get("data") or {}).get("results")  # type: ignore[assignment]
+
+    out_rows: list[dict[str, Any]] = []
+    for r in results_raw[:8]:
+        if not isinstance(r, dict):
+            continue
+        title = str(r.get("title") or "").strip() or None
+        snippet = str(r.get("content") or r.get("snippet") or r.get("summary") or "").strip() or None
+        url = str(r.get("url") or r.get("link") or "").strip() or None
+        domain = None
+        if url:
+            try:
+                domain = (urlparse(url).netloc or "").lower() or None
+            except Exception:
+                domain = None
+        published = (
+            str(r.get("published_date") or r.get("published") or r.get("date") or r.get("publishedDate") or "").strip() or None
+        )
+        out_rows.append(
+            {
+                "title": title,
+                "snippet": (snippet[:400] + "…") if snippet and len(snippet) > 401 else snippet,
+                "source_domain": domain,
+                "published": published,
+            }
+        )
+
+    return {
+        "schema": "tavily_search_safe_summary.v1",
+        "as_of_ts": _now_iso(),
+        "query_hash": query_hash,
+        "results": out_rows,
+        "count": len(out_rows),
+    }
+
 
 Summarizer = Callable[[Settings, Any], dict[str, Any]]
 
@@ -301,6 +347,8 @@ _REGISTRY: dict[str, Summarizer] = {
     # Internal tools
     "propose_trade_plan": propose_trade_plan_safe_summary,
     "execute_trade_plan": execute_trade_plan_safe_summary,
+    # External tools
+    "tavily_search": tavily_search_safe_summary,
 }
 
 
