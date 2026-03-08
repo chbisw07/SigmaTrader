@@ -1,7 +1,7 @@
 """Add AI thread state.
 
 Revision ID: 0080
-Revises: 0079
+Revises: 0081
 Create Date: 2026-03-08
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 
 revision = "0080"
-down_revision = "0079"
+down_revision = "0081"
 branch_labels = None
 depends_on = None
 
@@ -47,4 +47,3 @@ def downgrade() -> None:
     op.drop_index("ix_ai_tm_thread_state_user_ts", table_name="ai_tm_thread_state")
     op.drop_index("ix_ai_tm_thread_state_account_ts", table_name="ai_tm_thread_state")
     op.drop_table("ai_tm_thread_state")
-
