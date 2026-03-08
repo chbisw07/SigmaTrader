@@ -318,14 +318,68 @@ class McpSseClient:
         if params is not None:
             payload["params"] = params
 
-        # MCP servers typically acknowledge with HTTP 202 and send the response on SSE.
-        post_resp = await self._client.post(
-            self._message_endpoint,
-            json=payload,
-            # Some MCP-over-HTTP servers require the client to accept both JSON
-            # and SSE, even when using POST-only flows.
-            headers={"Accept": "application/json, text/event-stream"},
-        )
+        accept_hdr = {"Accept": "application/json, text/event-stream"}
+
+        if self._http_post_only:
+            # POST-only mode: the server may respond with:
+            # - application/json JSON-RPC body (sync)
+            # - text/event-stream (SSE) containing the JSON-RPC response
+            async def _post_only() -> Any:
+                async with self._client.stream(
+                    "POST",
+                    self._message_endpoint,
+                    json=payload,
+                    headers=accept_hdr,
+                ) as post_resp:
+                    ct = str(post_resp.headers.get("content-type") or "").lower()
+                    if post_resp.status_code >= 400:
+                        body = ""
+                        try:
+                            body = (await post_resp.aread()).decode("utf-8", errors="replace")
+                        except Exception:
+                            body = ""
+                        raise McpError(f"MCP POST failed ({post_resp.status_code}){': ' + body if body else ''}")
+
+                    if "text/event-stream" in ct:
+                        async for ev, data in _iter_sse_events(post_resp):
+                            if (ev or "").lower() != "message":
+                                continue
+                            try:
+                                obj = json.loads(data)
+                            except Exception:
+                                continue
+                            if isinstance(obj, dict) and obj.get("id") == rid:
+                                if obj.get("error"):
+                                    raise McpError(str(obj["error"]))
+                                return obj.get("result")
+                        raise McpTimeoutError(f"MCP request timed out: {method}")
+
+                    # Non-SSE response: try JSON first, then raw text.
+                    raw = await post_resp.aread()
+                    try:
+                        obj_direct = json.loads(raw.decode("utf-8", errors="replace")) if raw else None
+                    except Exception:
+                        obj_direct = None
+                    if isinstance(obj_direct, dict):
+                        if obj_direct.get("id") == rid and (obj_direct.get("result") is not None or obj_direct.get("error")):
+                            if obj_direct.get("error"):
+                                raise McpError(str(obj_direct["error"]))
+                            return obj_direct.get("result")
+                        if obj_direct.get("result") is not None and obj_direct.get("id") in (rid, None):
+                            return obj_direct.get("result")
+                    return {"raw": raw.decode("utf-8", errors="replace") if raw else ""}
+
+            try:
+                res = await asyncio.wait_for(_post_only(), timeout=float(timeout_seconds or self._timeout_seconds))
+                self._pending.pop(rid, None)
+                return res
+            except Exception:
+                self._pending.pop(rid, None)
+                raise
+
+        # SSE session mode: servers typically ACK with HTTP 202 and send the
+        # response on the SSE `message` stream.
+        post_resp = await self._client.post(self._message_endpoint, json=payload, headers=accept_hdr)
         if post_resp.status_code >= 400:
             body = ""
             try:
@@ -335,24 +389,18 @@ class McpSseClient:
             self._pending.pop(rid, None)
             raise McpError(f"MCP POST failed ({post_resp.status_code}){': ' + body if body else ''}")
 
-        # Some MCP-over-HTTP servers return the JSON-RPC response directly in
-        # the POST response body (no SSE `message` event). Support both.
+        # Some servers return JSON-RPC responses directly even in SSE mode.
         obj_direct: Any | None = None
         try:
-            if post_resp.content:
+            if post_resp.content and "application/json" in str(post_resp.headers.get("content-type") or "").lower():
                 obj_direct = post_resp.json()
         except Exception:
             obj_direct = None
         if isinstance(obj_direct, dict):
-            # Common JSON-RPC response shape.
             if obj_direct.get("id") == rid and (obj_direct.get("result") is not None or obj_direct.get("error")):
                 self._pending.pop(rid, None)
                 if obj_direct.get("error"):
                     raise McpError(str(obj_direct["error"]))
-                return obj_direct.get("result")
-            # Some servers may wrap the result directly.
-            if obj_direct.get("result") is not None and obj_direct.get("id") in (rid, None):
-                self._pending.pop(rid, None)
                 return obj_direct.get("result")
 
         try:
