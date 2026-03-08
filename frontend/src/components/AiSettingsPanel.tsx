@@ -16,7 +16,6 @@ import Switch from '@mui/material/Switch'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import MenuItem from '@mui/material/MenuItem'
-
 import {
   fetchAiSettings,
   updateAiSettings,
@@ -40,10 +39,8 @@ export function AiSettingsPanel() {
     return Boolean(settings.feature_flags.kite_mcp_enabled && kite.server_url && kite.last_status === 'connected')
   }, [settings])
 
-  const lsg = settings?.hybrid_llm
   const guardrails = settings?.tool_guardrails ?? { tavily_max_calls_per_session: 10, tavily_warning_threshold: 8 }
-  const lsgMode = (lsg?.mode || 'AUTO') === 'HYBRID' ? 'REMOTE_ONLY' : (lsg?.mode || 'AUTO')
-  const showLocalProvider = Boolean(lsg?.enabled) && lsgMode !== 'REMOTE_ONLY'
+  const remotePolicy = settings?.hybrid_llm
 
   const load = async () => {
     setError(null)
@@ -147,7 +144,7 @@ export function AiSettingsPanel() {
       {success && <Alert severity="success">{success}</Alert>}
 
       <Paper sx={{ p: 2 }}>
-        <Typography variant="subtitle1">Feature Flags / Modes</Typography>
+        <Typography variant="subtitle1">Feature Flags</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ pt: 0.5 }}>
           These flags are persisted server-side and also mirrored locally to control UI visibility.
         </Typography>
@@ -199,99 +196,56 @@ export function AiSettingsPanel() {
         </Stack>
       </Paper>
 
-      <AiProviderSettingsPanel title="Model / Provider" />
+      <AiProviderSettingsPanel title="Assistant Model / Provider" />
 
       <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
         <Stack spacing={1.5}>
-          <Typography variant="h6">Local Security Gateway (LSG)</Typography>
+          <Typography variant="h6">Safety &amp; Privacy</Typography>
           <Typography variant="body2" color="text.secondary">
-            Safety layer for tool usage and sensitive data. Remote models do not receive tool handles and can only request
-            allowlisted capabilities.
+            SigmaTrader enforces least-privilege tool access, approval gates, and PII-safe summaries for remote providers.
           </Typography>
+
+          <TextField
+            select
+            size="small"
+            label="Remote portfolio detail level"
+            value={(remotePolicy as any)?.remote_portfolio_detail_level || 'DIGEST_ONLY'}
+            onChange={(e) => void patch({ hybrid_llm: { remote_portfolio_detail_level: e.target.value as any } } as any)}
+            disabled={busy}
+            helperText="Controls what Tier-2 portfolio telemetry (holdings/positions/orders/margins) can be shared with a remote model. Tier-3 PII/secrets are always blocked."
+          >
+            <MenuItem value="OFF">Off (OFF)</MenuItem>
+            <MenuItem value="DIGEST_ONLY">Digests only (DIGEST_ONLY)</MenuItem>
+            <MenuItem value="FULL_SANITIZED">Full sanitized (FULL_SANITIZED)</MenuItem>
+          </TextField>
 
           <FormControlLabel
             control={
               <Switch
-                checked={Boolean(lsg?.enabled)}
-                onChange={(_, v) => void patch({ hybrid_llm: { enabled: v } } as any)}
-                disabled={busy || !settings}
+                checked={Boolean((remotePolicy as any)?.allow_remote_market_data_tools)}
+                onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_market_data_tools: v } } as any)}
+                disabled={busy}
               />
             }
-            label="Enable LSG (recommended)"
+            label="Remote may request market-data tools"
           />
 
-          {lsg?.enabled && (
-            <>
-              <TextField
-                select
-                size="small"
-                label="Assistant model mode"
-                value={lsgMode}
-                onChange={(e) => void patch({ hybrid_llm: { mode: e.target.value as any } } as any)}
+          <FormControlLabel
+            control={
+              <Switch
+                checked={Boolean((remotePolicy as any)?.allow_remote_account_digests)}
+                onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_account_digests: v } } as any)}
                 disabled={busy}
-              >
-                <MenuItem value="AUTO">Auto (AUTO)</MenuItem>
-                <MenuItem value="LOCAL_ONLY">Local (LOCAL_ONLY)</MenuItem>
-                <MenuItem value="REMOTE_ONLY">Remote (REMOTE_ONLY)</MenuItem>
-              </TextField>
-
-              <TextField
-                select
-                size="small"
-                label="Remote portfolio detail level"
-                value={(lsg as any).remote_portfolio_detail_level || 'DIGEST_ONLY'}
-                onChange={(e) =>
-                  void patch({ hybrid_llm: { remote_portfolio_detail_level: e.target.value as any } } as any)
-                }
-                disabled={busy}
-                helperText="Controls what Tier-2 portfolio telemetry (holdings/positions/orders/margins) can be sent to a remote model. Tier-3 PII/secrets are always blocked."
-              >
-                <MenuItem value="OFF">Off (OFF)</MenuItem>
-                <MenuItem value="DIGEST_ONLY">Digests only (DIGEST_ONLY)</MenuItem>
-                <MenuItem value="FULL_SANITIZED">Full sanitized (FULL_SANITIZED)</MenuItem>
-              </TextField>
-
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={Boolean(lsg.allow_remote_market_data_tools)}
-                    onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_market_data_tools: v } } as any)}
-                    disabled={busy}
-                  />
-                }
-                label="Remote may request market-data tools"
               />
+            }
+            label="Remote may request account digests"
+          />
 
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={Boolean(lsg.allow_remote_account_digests)}
-                    onChange={(_, v) => void patch({ hybrid_llm: { allow_remote_account_digests: v } } as any)}
-                    disabled={busy}
-                  />
-                }
-                label="Remote may request account digests"
-              />
-
-              <Alert severity="info">
-                Remote requests are validated and audited. Trading write tools and identity/auth are always denied to
-                remote models; execution remains gated by explicit user authorization and kill switches.
-              </Alert>
-
-              <Alert severity="info">
-                When set to <b>Remote</b>, the assistant uses the <b>Model / Provider</b> configured above. When set to{' '}
-                <b>Local</b>, configure the <b>Local Model / Provider</b> below.
-              </Alert>
-            </>
-          )}
+          <Alert severity="info">
+            Detailed portfolio reads and Tavily over-limit searches may require explicit approval. Decisions are audit-logged.
+          </Alert>
         </Stack>
       </Paper>
-
-      {showLocalProvider && (
-        <Box sx={{ mt: 2 }}>
-          <AiProviderSettingsPanel slot="hybrid_local" title="Local Model / Provider" />
-        </Box>
-      )}
 
       <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
         <Stack spacing={1.5}>

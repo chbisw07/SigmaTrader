@@ -483,59 +483,16 @@ async def run_chat(
     direct_req = _parse_direct_portfolio_request(user_message)
 
     tm_cfg, _tm_src = get_ai_settings_with_source(db, settings)
-    hy_cfg = getattr(tm_cfg, "hybrid_llm", None)
-    hy_enabled = bool(getattr(hy_cfg, "enabled", False))
-    hy_mode = str(getattr(getattr(hy_cfg, "mode", None), "value", None) or getattr(hy_cfg, "mode", "") or "")
-
-    # Provider selection:
-    # - Legacy mode: use the default provider config slot.
-    # - Hybrid LOCAL_ONLY: prefer hybrid_local slot, else allow default if it is local.
-    # - Hybrid REMOTE_ONLY/HYBRID: prefer hybrid_remote slot, else fall back to default.
+    # Single assistant runtime: one configured model/provider (default slot).
+    # Note: legacy settings still exist for backwards compatibility of policy
+    # toggles (remote portfolio detail posture, etc.), but SigmaTrader runs ONE
+    # assistant model per request.
     default_cfg, _src = get_active_config(db, settings, slot="default")
-    remote_cfg, _rsrc = get_active_config(db, settings, slot="hybrid_remote")
-    local_cfg, _lsrc = get_active_config(db, settings, slot="hybrid_local")
-
-    def _provider_kind_for(cfg0) -> str | None:
-        try:
-            info0 = get_provider((getattr(cfg0, "provider", None) or "").strip().lower())
-            return str(getattr(info0, "kind", "")).lower() if info0 is not None else None
-        except Exception:
-            return None
-
-    remote_candidate = remote_cfg if bool(getattr(remote_cfg, "enabled", False)) else default_cfg
-    local_candidate = local_cfg if bool(getattr(local_cfg, "enabled", False)) else default_cfg
-
-    remote_kind = _provider_kind_for(remote_candidate)
-    local_kind = _provider_kind_for(local_candidate)
-    remote_available = bool(getattr(remote_candidate, "enabled", False)) and remote_kind == "remote"
-    local_available = bool(getattr(local_candidate, "enabled", False)) and local_kind == "local"
-
-    effective_hy_mode = (hy_mode or "AUTO").strip().upper()
-    if effective_hy_mode == "AUTO":
-        if remote_available and local_available:
-            effective_hy_mode = "HYBRID"
-        elif remote_available:
-            effective_hy_mode = "REMOTE_ONLY"
-        elif local_available:
-            effective_hy_mode = "LOCAL_ONLY"
-        else:
-            # Fall back; downstream will error if provider/model isn't configured.
-            effective_hy_mode = "REMOTE_ONLY"
-
     ai_cfg = default_cfg
     ai_cfg_slot = "default"
-    if hy_enabled:
-        if effective_hy_mode == "LOCAL_ONLY":
-            ai_cfg = local_candidate
-            ai_cfg_slot = "hybrid_local" if local_candidate is local_cfg else "default"
-            if local_kind != "local":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Local-only mode requires a local AI provider. Configure Local Model / Provider in Settings → AI.",
-                )
-        else:
-            ai_cfg = remote_candidate
-            ai_cfg_slot = "hybrid_remote" if remote_candidate is remote_cfg else "default"
+
+    # Deprecated: kept as a hard-off switch for the old two-model gateway flow.
+    hy_enabled = False
 
     if not ai_cfg.enabled:
         raise HTTPException(status_code=403, detail="AI provider is disabled. Enable it in Settings → AI.")
@@ -864,7 +821,6 @@ async def run_chat(
             "tools_hash": tools_hash,
             "kite_mcp_server_url": tm_cfg.kite_mcp.server_url,
             "hybrid_llm": tm_cfg.hybrid_llm.model_dump(mode="json") if getattr(tm_cfg, "hybrid_llm", None) else None,
-            "hybrid_llm_effective_mode": effective_hy_mode if hy_enabled else None,
             "authorization_message_id": authorization_message_id,
             "attachments": [
                 {
@@ -1089,7 +1045,7 @@ async def run_chat(
                         title="Remote portfolio access blocked",
                         message=(
                             "Remote model requested detailed portfolio data, but remote portfolio detail level is OFF. "
-                            "Enable remote portfolio detail level in Settings → AI (Local Security Gateway) to proceed."
+                            "Enable remote portfolio detail level in Settings → AI → Safety & Privacy to proceed."
                         ),
                         options=[ApprovalOption(id="deny", label="OK")],
                         meta={"tool_name": tool_name, "detail_level": detail},
