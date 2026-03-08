@@ -73,6 +73,7 @@ import { RiskSettingsBackupPanel } from '../components/RiskSettingsBackupPanel'
 import { RiskSourceOverridesPanel } from '../components/RiskSourceOverridesPanel'
 import { EffectiveRiskSummaryPanel } from '../components/EffectiveRiskSummaryPanel'
 import { AiSettingsPanel } from '../components/AiSettingsPanel'
+import { McpToolsPanel } from '../components/McpToolsPanel'
 import { useTimeSettings } from '../timeSettingsContext'
 import { getSystemTimeZone, isValidIanaTimeZone } from '../timeSettings'
 import { formatInTimeZone } from '../utils/datetime'
@@ -384,7 +385,7 @@ export function SettingsPage() {
   const { displayTimeZone, setDisplayTimeZone } = useTimeSettings()
   const systemTimeZone = getSystemTimeZone()
 
-  type SettingsTab = 'broker' | 'ai' | 'risk' | 'webhook' | 'market' | 'time' | 'notifications'
+  type SettingsTab = 'broker' | 'ai' | 'mcp' | 'risk' | 'webhook' | 'market' | 'time' | 'notifications'
   const [activeTab, setActiveTab] = useState<SettingsTab>('broker')
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabledState] = useState<boolean>(
     () => getDesktopAlertNotificationsEnabled(),
@@ -470,6 +471,7 @@ export function SettingsPage() {
     if (
       normalizedTab === 'broker' ||
       normalizedTab === 'ai' ||
+      normalizedTab === 'mcp' ||
       normalizedTab === 'risk' ||
       normalizedTab === 'webhook' ||
       normalizedTab === 'market' ||
@@ -551,6 +553,8 @@ export function SettingsPage() {
     const nextTab: SettingsTab =
       next === 'ai'
         ? 'ai'
+        : next === 'mcp'
+          ? 'mcp'
         : next === 'risk'
           ? 'risk'
           : next === 'webhook'
@@ -920,6 +924,7 @@ export function SettingsPage() {
         >
           <Tab value="broker" label="Broker settings" />
           <Tab value="ai" label="AI" />
+          <Tab value="mcp" label="MCP & Tools" />
           <Tab value="risk" label="Risk settings" />
           <Tab value="webhook" label="TradingView webhook" />
           <Tab value="market" label="Market configuration" />
@@ -1226,6 +1231,12 @@ export function SettingsPage() {
       {activeTab === 'ai' && (
         <Box sx={{ mb: 3 }}>
           <AiSettingsPanel />
+        </Box>
+      )}
+
+      {activeTab === 'mcp' && (
+        <Box sx={{ mb: 3 }}>
+          <McpToolsPanel />
         </Box>
       )}
 

@@ -557,7 +557,7 @@ async def run_chat(
     if not tm_cfg.feature_flags.kite_mcp_enabled or not tm_cfg.kite_mcp.server_url:
         raise HTTPException(
             status_code=400,
-            detail="Kite MCP is not enabled/configured. Configure it in Settings → AI.",
+            detail="Kite MCP is not enabled/configured. Configure it in Settings → MCP & Tools.",
         )
 
     auth_sid = get_auth_session_id(db, settings)

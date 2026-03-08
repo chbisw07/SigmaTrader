@@ -19,35 +19,11 @@ import MenuItem from '@mui/material/MenuItem'
 
 import {
   fetchAiSettings,
-  fetchAiSettingsAudit,
-  testKiteMcpConnection,
   updateAiSettings,
   type AiSettings,
 } from '../services/aiSettings'
 import { setAiTmFeatureFlag } from '../config/aiFeatures'
 import { AiProviderSettingsPanel } from './ai/AiProviderSettingsPanel'
-import {
-  fetchKiteMcpStatus,
-  fetchKiteMcpSnapshot,
-  startKiteMcpAuth,
-  type KiteMcpStatus,
-} from '../services/kiteMcp'
-import { KiteMcpConsolePanel } from './ai/KiteMcpConsolePanel'
-
-function statusChip(status: string) {
-  const s = (status || '').toLowerCase()
-  const label =
-    s === 'connected'
-      ? 'Connected'
-      : s === 'disconnected'
-        ? 'Disconnected'
-        : s === 'error'
-          ? 'Error'
-          : 'Unknown'
-  const color: 'default' | 'success' | 'warning' | 'error' =
-    s === 'connected' ? 'success' : s === 'error' ? 'error' : s === 'disconnected' ? 'warning' : 'default'
-  return <Chip size="small" label={label} color={color} />
-}
 
 export function AiSettingsPanel() {
   const [settings, setSettings] = useState<AiSettings | null>(null)
@@ -57,16 +33,6 @@ export function AiSettingsPanel() {
 
   const [confirmExecOpen, setConfirmExecOpen] = useState(false)
   const [confirmExecChecked, setConfirmExecChecked] = useState(false)
-
-  const [auditOpen, setAuditOpen] = useState(false)
-  const [auditRows, setAuditRows] = useState<any[]>([])
-  const [auditError, setAuditError] = useState<string | null>(null)
-
-  const [mcpStatus, setMcpStatus] = useState<KiteMcpStatus | null>(null)
-  const [authOpen, setAuthOpen] = useState(false)
-  const [authWarning, setAuthWarning] = useState<string>('')
-  const [authUrl, setAuthUrl] = useState<string>('')
-  const [snapshotSummary, setSnapshotSummary] = useState<string | null>(null)
 
   const connectedForExecution = useMemo(() => {
     if (!settings) return false
@@ -86,12 +52,6 @@ export function AiSettingsPanel() {
       setAiTmFeatureFlag('ai_execution_enabled', Boolean(s.feature_flags.ai_execution_enabled))
       setAiTmFeatureFlag('kite_mcp_enabled', Boolean(s.feature_flags.kite_mcp_enabled))
       setAiTmFeatureFlag('monitoring_enabled', Boolean(s.feature_flags.monitoring_enabled))
-      try {
-        const st = await fetchKiteMcpStatus()
-        setMcpStatus(st)
-      } catch {
-        setMcpStatus(null)
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load AI settings')
     }
@@ -99,16 +59,6 @@ export function AiSettingsPanel() {
 
   useEffect(() => {
     void load()
-  }, [])
-
-  useEffect(() => {
-    const handler = (ev: MessageEvent) => {
-      if (ev?.data?.type === 'kite_mcp_auth_complete') {
-        void refreshMcpStatus()
-      }
-    }
-    window.addEventListener('message', handler)
-    return () => window.removeEventListener('message', handler)
   }, [])
 
   const patch = async (partial: Partial<AiSettings>) => {
@@ -145,7 +95,7 @@ export function AiSettingsPanel() {
     if (!settings) return
     if (!confirmExecChecked) return
     if (!connectedForExecution) {
-      setError('Cannot enable execution: Kite MCP must be connected (Test Connection) and enabled.')
+      setError('Cannot enable execution: Kite MCP must be enabled and connected (run Test Connection in Settings → MCP & Tools).')
       setConfirmExecOpen(false)
       return
     }
@@ -161,84 +111,6 @@ export function AiSettingsPanel() {
     } as any)
   }
 
-  const handleTestKite = async (withCapabilities: boolean) => {
-    if (!settings) return
-    setBusy(true)
-    setError(null)
-    setSuccess(null)
-    try {
-      await testKiteMcpConnection({
-        server_url: settings.kite_mcp.server_url ?? undefined,
-        fetch_capabilities: withCapabilities,
-      })
-      await load()
-      setSuccess('Kite MCP test completed.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to test Kite MCP')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const refreshMcpStatus = async () => {
-    try {
-      const st = await fetchKiteMcpStatus()
-      setMcpStatus(st)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch Kite MCP status')
-    }
-  }
-
-  const startAuth = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await startKiteMcpAuth()
-      setAuthWarning(res.warning_text)
-      setAuthUrl(res.login_url)
-      setAuthOpen(true)
-      try {
-        window.open(res.login_url, '_blank', 'noopener,noreferrer')
-      } catch {
-        // ignore
-      }
-      await refreshMcpStatus()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to start Kite MCP auth')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const fetchSnapshot = async () => {
-    setBusy(true)
-    setError(null)
-    setSnapshotSummary(null)
-    try {
-      const snap = await fetchKiteMcpSnapshot('default')
-      const holdings = Array.isArray(snap?.holdings) ? snap.holdings.length : 0
-      const positions = Array.isArray(snap?.positions) ? snap.positions.length : 0
-      const orders = Array.isArray(snap?.orders) ? snap.orders.length : 0
-      setSnapshotSummary(`Snapshot fetched: holdings=${holdings}, positions=${positions}, orders=${orders}`)
-      await refreshMcpStatus()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Snapshot fetch failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const openAudit = async () => {
-    setAuditOpen(true)
-    setAuditRows([])
-    setAuditError(null)
-    try {
-      const data = await fetchAiSettingsAudit({ limit: 100, offset: 0 })
-      setAuditRows(data.items ?? [])
-    } catch (e) {
-      setAuditError(e instanceof Error ? e.message : 'Failed to load audit log')
-    }
-  }
 
   if (!settings) {
     return (
@@ -257,7 +129,6 @@ export function AiSettingsPanel() {
     )
   }
 
-  const kite = settings.kite_mcp
   const execKill = Boolean(settings.kill_switch.ai_execution_kill_switch)
 
   return (
@@ -291,31 +162,11 @@ export function AiSettingsPanel() {
             label="AI assistant enabled"
           />
 
-          <FormControlLabel
-            control={
-              <Switch
-                checked={settings.feature_flags.kite_mcp_enabled}
-                onChange={(_, v) =>
-                  void patch({ feature_flags: { ...settings.feature_flags, kite_mcp_enabled: v } } as any)
-                }
-              />
-            }
-            label="Kite MCP enabled (broker-truth access)"
-          />
-
-          <FormControlLabel
-            control={
-              <Switch
-                checked={settings.feature_flags.monitoring_enabled}
-                onChange={(_, v) =>
-                  void patch({ feature_flags: { ...settings.feature_flags, monitoring_enabled: v } } as any)
-                }
-              />
-            }
-            label="Monitoring enabled"
-          />
-
           <Divider />
+
+          <Alert severity="info">
+            MCP servers (Kite MCP and future tool servers) are configured in <b>Settings → MCP &amp; Tools</b>.
+          </Alert>
 
           <Alert severity="warning">
             Execution is policy-gated and audit-logged. Orchestrator is not fully integrated yet; enable with care.
@@ -342,186 +193,6 @@ export function AiSettingsPanel() {
               Disable all AI execution now
             </Button>
           </Stack>
-        </Stack>
-      </Paper>
-
-      <Paper sx={{ p: 2 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: 'wrap' }}>
-          <Typography variant="subtitle1" sx={{ flex: 1, minWidth: 200 }}>
-            Kite MCP
-          </Typography>
-          {statusChip(kite.last_status)}
-          {mcpStatus && (
-            <Chip
-              size="small"
-              label={mcpStatus.authorized ? 'Authorized' : 'Not authorized'}
-              color={mcpStatus.authorized ? 'success' : 'default'}
-            />
-          )}
-          <Button size="small" variant="outlined" onClick={() => void openAudit()}>
-            View Audit Log
-          </Button>
-        </Stack>
-
-        <Typography variant="body2" color="text.secondary" sx={{ pt: 0.75 }}>
-          Kite MCP provides broker-truth snapshots and (when enabled) broker execution. SigmaTrader still maintains an
-          expected ledger and reconciles.
-        </Typography>
-
-        {kite.last_error && (
-          <Alert severity="error" sx={{ mt: 1 }}>
-            {kite.last_error}
-          </Alert>
-        )}
-
-        {mcpStatus?.last_error && (
-          <Alert severity="warning" sx={{ mt: 1 }}>
-            {mcpStatus.last_error}
-          </Alert>
-        )}
-
-        <Stack spacing={1.25} sx={{ pt: 1.5 }}>
-          <TextField
-            label="MCP server URL"
-            value={kite.server_url ?? ''}
-            onChange={(e) =>
-              setSettings((prev) =>
-                prev
-                  ? { ...prev, kite_mcp: { ...prev.kite_mcp, server_url: e.target.value } }
-                  : prev,
-              )
-            }
-            onBlur={() => void patch({ kite_mcp: { server_url: kite.server_url ?? null } } as any)}
-            size="small"
-            placeholder="https://localhost:1234"
-            fullWidth
-          />
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-            <TextField
-              label="Transport mode"
-              value={kite.transport_mode}
-              onChange={(e) =>
-                void patch({ kite_mcp: { transport_mode: e.target.value } } as any)
-              }
-              size="small"
-              select
-              sx={{ width: 180 }}
-            >
-              <MenuItem value="local">local</MenuItem>
-              <MenuItem value="remote">remote</MenuItem>
-            </TextField>
-            <TextField
-              label="Auth method"
-              value={kite.auth_method}
-              onChange={(e) => void patch({ kite_mcp: { auth_method: e.target.value } } as any)}
-              size="small"
-              select
-              sx={{ width: 180 }}
-            >
-              <MenuItem value="none">none</MenuItem>
-              <MenuItem value="token">token</MenuItem>
-              <MenuItem value="oauth">oauth</MenuItem>
-              <MenuItem value="totp">totp</MenuItem>
-            </TextField>
-            <TextField
-              label="Auth profile ref"
-              value={kite.auth_profile_ref ?? ''}
-              onChange={(e) => void patch({ kite_mcp: { auth_profile_ref: e.target.value || null } } as any)}
-              size="small"
-              sx={{ minWidth: 240, flex: 1 }}
-            />
-          </Stack>
-
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={kite.scopes.read_only}
-                  onChange={(_, v) =>
-                    void patch({ kite_mcp: { scopes: { ...kite.scopes, read_only: v } } } as any)
-                  }
-                />
-              }
-              label="Read-only"
-            />
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={kite.scopes.trade}
-                  onChange={(_, v) =>
-                    void patch({ kite_mcp: { scopes: { ...kite.scopes, trade: v } } } as any)
-                  }
-                />
-              }
-              label="Trade"
-            />
-            <TextField
-              label="Adapter"
-              value={kite.broker_adapter}
-              onChange={(e) => void patch({ kite_mcp: { broker_adapter: e.target.value } } as any)}
-              size="small"
-              select
-              sx={{ width: 180 }}
-            >
-              <MenuItem value="zerodha">zerodha</MenuItem>
-              <MenuItem value="angelone">angelone</MenuItem>
-            </TextField>
-          </Stack>
-
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => void handleTestKite(false)}
-              disabled={busy || !kite.server_url}
-            >
-              Test Connection
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => void handleTestKite(true)}
-              disabled={busy || !kite.server_url || !mcpStatus?.connected}
-            >
-              Fetch Capabilities
-            </Button>
-            <Button
-              size="small"
-              variant="contained"
-              onClick={() => void startAuth()}
-              disabled={busy || !kite.server_url || !settings.feature_flags.kite_mcp_enabled}
-            >
-              Authorize
-            </Button>
-            <Button size="small" variant="outlined" onClick={() => void refreshMcpStatus()} disabled={busy}>
-              Refresh status
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => void fetchSnapshot()}
-              disabled={busy || !mcpStatus?.authorized}
-            >
-              Fetch snapshot
-            </Button>
-          </Stack>
-
-          {snapshotSummary && <Alert severity="success">{snapshotSummary}</Alert>}
-
-          {kite.capabilities_cache && Object.keys(kite.capabilities_cache).length > 0 && (
-            <Box sx={{ pt: 1 }}>
-              <Typography variant="subtitle2" color="text.secondary">
-                Capabilities (cached)
-              </Typography>
-              <Paper variant="outlined" sx={{ p: 1, mt: 0.5, bgcolor: 'background.default' }}>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
-                  {JSON.stringify(kite.capabilities_cache, null, 2)}
-                </Typography>
-              </Paper>
-            </Box>
-          )}
-
-          <KiteMcpConsolePanel disabled={busy || !settings.feature_flags.kite_mcp_enabled} />
         </Stack>
       </Paper>
 
@@ -631,7 +302,7 @@ export function AiSettingsPanel() {
             Requirements:
           </Typography>
           <Typography variant="body2" color={connectedForExecution ? 'text.primary' : 'error'} sx={{ pt: 0.5 }}>
-            - Kite MCP enabled + Connected: {connectedForExecution ? 'yes' : 'no'}
+            - Kite MCP enabled + Connected (Settings → MCP & Tools): {connectedForExecution ? 'yes' : 'no'}
           </Typography>
           <FormControlLabel
             control={<Checkbox checked={confirmExecChecked} onChange={(_, v) => setConfirmExecChecked(v)} />}
@@ -644,81 +315,6 @@ export function AiSettingsPanel() {
           <Button variant="contained" color="warning" disabled={!confirmExecChecked} onClick={() => void handleConfirmExecutionEnable()}>
             Enable
           </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={auditOpen} onClose={() => setAuditOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>AI Audit Log</DialogTitle>
-        <DialogContent>
-          {auditError && (
-            <Alert severity="error" sx={{ mb: 1 }}>
-              {auditError}
-            </Alert>
-          )}
-          {auditRows.length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
-              No audit events yet.
-            </Typography>
-          ) : (
-            <Stack spacing={1}>
-              {auditRows.map((r) => (
-                <Paper key={r.id} variant="outlined" sx={{ p: 1 }}>
-                  <Typography variant="caption" color="text.secondary">
-                    {r.created_at} • {r.level} • {r.category}
-                  </Typography>
-                  <Typography variant="body2">{r.message}</Typography>
-                  {r.details && (
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap', pt: 0.5 }}>
-                      {JSON.stringify(r.details, null, 2)}
-                    </Typography>
-                  )}
-                </Paper>
-              ))}
-            </Stack>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAuditOpen(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={authOpen} onClose={() => setAuthOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Kite MCP Authorization</DialogTitle>
-        <DialogContent>
-          <Alert severity="warning" sx={{ mb: 1 }}>
-            This authorization flow is handled by Kite MCP. SigmaTrader never sees your broker password.
-          </Alert>
-          {authWarning ? (
-            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-              {authWarning}
-            </Typography>
-          ) : (
-            <Typography variant="body2" color="text.secondary">
-              No details.
-            </Typography>
-          )}
-          {authUrl && (
-            <Box sx={{ pt: 2 }}>
-              <TextField
-                label="Login URL"
-                size="small"
-                value={authUrl}
-                fullWidth
-                inputProps={{ readOnly: true }}
-              />
-              <Stack direction="row" spacing={1} sx={{ pt: 1, flexWrap: 'wrap' }}>
-                <Button size="small" variant="outlined" onClick={() => window.open(authUrl, '_blank', 'noopener')}>
-                  Open login link
-                </Button>
-                <Button size="small" variant="outlined" onClick={() => void refreshMcpStatus()}>
-                  I completed login → check status
-                </Button>
-              </Stack>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAuthOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

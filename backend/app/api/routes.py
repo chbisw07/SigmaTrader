@@ -39,6 +39,7 @@ from . import (
     system_events,
     tv_alerts,
     kite_mcp,
+    mcp_servers,
     webhook,
     webhook_settings,
     zerodha,
@@ -286,6 +287,13 @@ router.include_router(
     prefix="/api/mcp/kite",
     dependencies=[Depends(require_admin)],
     tags=["kite-mcp"],
+)
+
+router.include_router(
+    mcp_servers.router,
+    prefix="/api/mcp",
+    dependencies=[Depends(require_admin)],
+    tags=["mcp"],
 )
 
 router.include_router(

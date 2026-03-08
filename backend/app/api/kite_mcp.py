@@ -49,7 +49,7 @@ def _require_kite_mcp_enabled(db: Session, settings: Settings) -> None:
     if not cfg.feature_flags.kite_mcp_enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Kite MCP is disabled. Enable it in Settings → AI.",
+            detail="Kite MCP is disabled. Enable it in Settings → MCP & Tools.",
         )
     if not cfg.kite_mcp.server_url:
         raise HTTPException(
@@ -296,7 +296,7 @@ async def kite_mcp_auth_callback(
   <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px;">
     <h2>Kite MCP authorization failed</h2>
     <p>Missing required parameters (session_id and/or request_token).</p>
-    <p>Close this tab and retry Authorization from SigmaTrader → Settings → AI.</p>
+    <p>Close this tab and retry Authorization from SigmaTrader → Settings → MCP &amp; Tools.</p>
   </body>
 </html>
 """.strip()
@@ -359,7 +359,7 @@ async def kite_mcp_auth_callback(
         )
 
     # Redirect back to the UI.
-    return RedirectResponse(url="/settings?tab=ai&kite=connected", status_code=303)
+    return RedirectResponse(url="/settings?tab=mcp&kite=connected", status_code=303)
 
 
 #
