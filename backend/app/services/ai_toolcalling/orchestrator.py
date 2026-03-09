@@ -760,6 +760,8 @@ async def run_chat(
             + "Note: get_historical_data requires `instrument_token` (int); resolve it via search_instruments first when needed. "
             + "Important: in Kite, 'holdings' (delivery/CNC) are different from 'positions' (net open/intraday). "
             + "If the user asks for 'positions' but expects their portfolio, you likely need get_holdings too. "
+            + "Do NOT claim a stock is (or is not) in the user's portfolio unless you actually checked via get_holdings/get_positions. "
+            + "If you didn't check, say you don't know and proceed with a general analysis; ask for entry price/time horizon if needed. "
             + "For trading intents, first call propose_trade_plan. "
             + "Only call execute_trade_plan when the user explicitly asks to execute.\n\n"
             + "Never call broker order tools directly. Execution is policy-gated and may be vetoed.\n\n"

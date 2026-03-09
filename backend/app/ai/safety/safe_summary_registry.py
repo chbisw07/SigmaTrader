@@ -81,6 +81,7 @@ def _normalize_holdings(payload: Any) -> list[dict[str, Any]]:
 
 def holdings_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
     rows = _normalize_holdings(raw_payload)
+    symbols_all = sorted({str(r.get("symbol") or "").strip().upper() for r in rows if str(r.get("symbol") or "").strip()})
     invested = sum(float(r.get("invested") or 0.0) for r in rows)
     current = sum(float(r.get("current") or 0.0) for r in rows)
     pnl_abs = current - invested
@@ -105,6 +106,9 @@ def holdings_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any
     return {
         "schema": "holdings_safe_summary.v1",
         "as_of_ts": _now_iso(),
+        # Symbols list helps the model avoid false negatives when a holding is not in "top".
+        # This is still Tier-2 portfolio telemetry (no identity/PII).
+        "symbols": symbols_all,
         "totals": {
             "invested": invested,
             "current": current,
@@ -156,6 +160,7 @@ def _normalize_positions(payload: Any) -> list[dict[str, Any]]:
 
 def positions_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
     rows = _normalize_positions(raw_payload)
+    symbols_all = sorted({str(r.get("symbol") or "").strip().upper() for r in rows if str(r.get("symbol") or "").strip()})
     exp: dict[str, float] = {}
     for r in rows:
         prod = str(r.get("product") or "CNC").upper()
@@ -186,6 +191,7 @@ def positions_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, An
     return {
         "schema": "positions_safe_summary.v1",
         "as_of_ts": _now_iso(),
+        "symbols": symbols_all,
         "exposure_by_product": exp,
         "top_risk_positions": top,
         "count": len(rows),
