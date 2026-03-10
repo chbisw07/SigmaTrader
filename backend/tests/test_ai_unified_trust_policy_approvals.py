@@ -154,33 +154,23 @@ def test_remote_portfolio_detail_requires_approval(monkeypatch: pytest.MonkeyPat
     _enable_ai_provider()
 
     from app.services.ai_toolcalling import orchestrator as orch
-    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn, OpenAiToolCall
 
-    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
-        # If tool_result is present, respond with a final message.
-        if any(isinstance(m, dict) and isinstance(m.get("content"), str) and "\"tool_result\"" in m.get("content") for m in (messages or [])):
-            return OpenAiAssistantTurn(content=json.dumps({"final_message": "OK"}), tool_calls=[], raw={})
+    async def fake_openai_chat_with_tools(*, api_key, model, messages, tools, **kwargs):  # noqa: ANN001, ARG001
+        # After tool execution, return a final message.
+        if any(isinstance(m, dict) and m.get("role") == "tool" for m in (messages or [])):
+            return OpenAiAssistantTurn(content="OK", tool_calls=[], raw={})
+        # First turn: request broker holdings.
         return OpenAiAssistantTurn(
-            content=json.dumps(
-                {
-                    "tool_requests": [
-                        {
-                            "request_id": "r1",
-                            "tool_name": "get_holdings",
-                            "args": {},
-                            "reason": "need holdings",
-                            "risk_tier": "LOW",
-                        }
-                    ]
-                }
-            ),
-            tool_calls=[],
+            content="",
+            tool_calls=[OpenAiToolCall(tool_call_id="r1", name="get_holdings", arguments={})],
             raw={},
         )
 
-    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+    monkeypatch.setattr(orch, "openai_chat_with_tools", fake_openai_chat_with_tools)
 
-    resp = client.post("/api/ai/chat", json={"account_id": "default", "thread_id": "t1", "message": "show holdings"})
+    # Avoid the direct "tables-only" shortcut; exercise the LLM toolcalling + approval path.
+    resp = client.post("/api/ai/chat", json={"account_id": "default", "thread_id": "t1", "message": "need holdings"})
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("assistant_message") == ""
@@ -218,30 +208,18 @@ def test_tavily_over_limit_requires_approval_and_cache(monkeypatch: pytest.Monke
         )
 
     from app.services.ai_toolcalling import orchestrator as orch
-    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn, OpenAiToolCall
 
-    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
-        if any(isinstance(m, dict) and isinstance(m.get("content"), str) and "\"tool_result\"" in m.get("content") for m in (messages or [])):
-            return OpenAiAssistantTurn(content=json.dumps({"final_message": "OK"}), tool_calls=[], raw={})
+    async def fake_openai_chat_with_tools(*, api_key, model, messages, tools, **kwargs):  # noqa: ANN001, ARG001
+        if any(isinstance(m, dict) and m.get("role") == "tool" for m in (messages or [])):
+            return OpenAiAssistantTurn(content="OK", tool_calls=[], raw={})
         return OpenAiAssistantTurn(
-            content=json.dumps(
-                {
-                    "tool_requests": [
-                        {
-                            "request_id": "r1",
-                            "tool_name": "tavily_search",
-                            "args": {"query": "what is INFY"},
-                            "reason": "need web context",
-                            "risk_tier": "LOW",
-                        }
-                    ]
-                }
-            ),
-            tool_calls=[],
+            content="",
+            tool_calls=[OpenAiToolCall(tool_call_id="r1", name="tavily_search", arguments={"query": "what is INFY"})],
             raw={},
         )
 
-    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+    monkeypatch.setattr(orch, "openai_chat_with_tools", fake_openai_chat_with_tools)
 
     r1 = client.post("/api/ai/chat", json={"account_id": "default", "thread_id": "t2", "message": "search INFY"})
     assert r1.status_code == 200
@@ -269,4 +247,3 @@ def test_tavily_over_limit_requires_approval_and_cache(monkeypatch: pytest.Monke
     )
     assert r3.status_code == 200
     assert r3.json().get("assistant_message") == "OK"
-

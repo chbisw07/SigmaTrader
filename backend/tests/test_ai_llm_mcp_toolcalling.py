@@ -24,17 +24,14 @@ def setup_module() -> None:  # type: ignore[override]
 
 
 def _enable_ai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Enable provider + create key + set config.
-    k = client.post(
-        "/api/ai/keys",
-        json={"provider": "openai", "key_name": "k1", "api_key_value": "sk-test-1234567890"},
-    ).json()
+    # Use a LOCAL OpenAI-compatible provider so restricted-trust (remote) approvals don't
+    # interfere with basic toolcalling tests.
     resp_cfg = client.put(
         "/api/ai/config",
         json={
             "enabled": True,
-            "provider": "openai",
-            "active_key_id": k["id"],
+            "provider": "local_lmstudio",
+            "base_url": "http://localhost:1234/v1",
             "model": "gpt-test",
             "do_not_send_pii": True,
         },

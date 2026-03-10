@@ -62,7 +62,7 @@ from .openai_toolcaller import (
 )
 from .policy import classify_tool, evaluate_tool_policy, tool_lookup_map
 from .redaction import redact_for_llm
-from .tools_cache import get_tools_cached
+from .tools_cache import CachedTools, get_tools_cached
 from .lsg import LsgContext, LsgExecution, build_tool_request, lsg_execute
 from .lsg_policy import (
     LsgPolicyDecision,
@@ -483,6 +483,8 @@ async def run_chat(
     direct_req = _parse_direct_portfolio_request(user_message)
 
     tm_cfg, _tm_src = get_ai_settings_with_source(db, settings)
+    # Legacy settings container (back-compat): used for digest-prefetch and remote posture toggles.
+    hy_cfg = getattr(tm_cfg, "hybrid_llm", None)
     # Single assistant runtime: one configured model/provider (default slot).
     # Note: legacy settings still exist for backwards compatibility of policy
     # toggles (remote portfolio detail posture, etc.), but SigmaTrader runs ONE
@@ -540,17 +542,41 @@ async def run_chat(
             if key_row is not None:
                 toolcall_api_key = decrypt_key_value(settings, key_row)
 
-    if not tm_cfg.feature_flags.kite_mcp_enabled or not tm_cfg.kite_mcp.server_url:
-        raise HTTPException(
-            status_code=400,
-            detail="Kite MCP is not enabled/configured. Configure it in Settings → MCP & Tools.",
-        )
-
-    auth_sid = get_auth_session_id(db, settings)
-    session = await kite_mcp_sessions.get_session(server_url=tm_cfg.kite_mcp.server_url, auth_session_id=auth_sid)
-    await session.ensure_initialized()
-
-    cached, refreshed = await get_tools_cached(server_url=tm_cfg.kite_mcp.server_url, session=session, ttl_seconds=300)
+    # Broker MCP (Kite) is optional: allow "search-only" / external-tools usage even when
+    # broker is not configured or not authorized.
+    empty_cached = CachedTools(
+        fetched_at_ts=time.time(),
+        mcp_tools=[],
+        openai_tools=[],
+        tools_hash=hash_tool_definitions([]),
+    )
+    kite_session = None
+    cached, refreshed = empty_cached, False
+    if bool(tm_cfg.feature_flags.kite_mcp_enabled) and bool(getattr(tm_cfg.kite_mcp, "server_url", "")):
+        try:
+            auth_sid = get_auth_session_id(db, settings)
+            kite_session = await kite_mcp_sessions.get_session(
+                server_url=tm_cfg.kite_mcp.server_url,
+                auth_session_id=auth_sid,
+            )
+            # Explicit init here so auth errors are visible and don't block external MCP servers.
+            await kite_session.ensure_initialized()
+            cached, refreshed = await get_tools_cached(
+                server_url=tm_cfg.kite_mcp.server_url,
+                session=kite_session,
+                ttl_seconds=300,
+            )
+        except Exception as exc:
+            kite_session = None
+            cached, refreshed = empty_cached, False
+            record_system_event(
+                db,
+                level="WARNING",
+                category="AI_ORCH",
+                message="Kite MCP unavailable; continuing without broker tools.",
+                correlation_id=corr,
+                details={"event_type": "KITE_MCP_UNAVAILABLE", "error": str(exc)[:600]},
+            )
 
     # Optional: external MCP servers (e.g., Tavily) that can be exposed as tools to the LLM.
     mcp_cfg, _mcp_src = get_mcp_settings_with_source(db, settings)
@@ -580,7 +606,8 @@ async def run_chat(
             continue
         n = str(t.get("name") or "").strip()
         if n:
-            tool_session_by_name[n] = session
+            if kite_session is not None:
+                tool_session_by_name[n] = kite_session
     if tavily_cached is not None and tavily_session is not None:
         for t in tavily_cached.mcp_tools:
             if not isinstance(t, dict):
@@ -707,6 +734,7 @@ async def run_chat(
         },
     )
 
+    broker_tools_available = bool(cached.mcp_tools)
     system_prompt = (
         (
             (  # Hybrid gateway (remote reasoner).
@@ -754,7 +782,11 @@ async def run_chat(
         if hy_enabled
         else (
             "You are SigmaTrader's AI Trading Manager. "
-            "You can call tools to read broker-truth portfolio data via Kite MCP. "
+            + (
+                "You can call tools to read broker-truth portfolio data via Kite MCP. "
+                if broker_tools_available
+                else "Broker tools are currently unavailable (Kite MCP not authorized/configured). "
+            )
             + ("If you need external web context, use tavily_search. " if web_search_enabled else "")
             + "Only call tools that help answer the user's question. "
             + "Note: get_historical_data requires `instrument_token` (int); resolve it via search_instruments first when needed. "
@@ -933,7 +965,9 @@ async def run_chat(
         q = (symbol or "").strip().upper()
         if not q:
             return None
-        mcp_session = tool_session_by_name.get("search_instruments") or session
+        mcp_session = tool_session_by_name.get("search_instruments") or kite_session
+        if mcp_session is None:
+            return None
         try:
             ensure = getattr(mcp_session, "ensure_initialized", None)
             if ensure is not None:
@@ -1241,7 +1275,12 @@ async def run_chat(
         tavily_meta: dict[str, Any] = {"attempted": False, "cache_hit": False, "query": None, "symbol": None}
 
         async def _exec(args: dict[str, Any]) -> Any:
-            mcp_session = tool_session_by_name.get(tool_name) or session
+            mcp_session = tool_session_by_name.get(tool_name) or kite_session
+            if mcp_session is None:
+                raise RuntimeError(
+                    f"No MCP session available for tool '{tool_name}'. "
+                    "If this is a broker tool, authorize Kite MCP; if this is an external tool, enable it in Settings → MCP & Tools."
+                )
             try:
                 ensure = getattr(mcp_session, "ensure_initialized", None)
                 if ensure is not None:
@@ -2602,9 +2641,9 @@ async def run_chat(
     if (
         bool(getattr(settings, "enable_remote_web_search", False))
         and is_remote_provider
-        and str(ai_cfg.provider) == "openai"
+        and provider_id == "openai"
         and bool(getattr(ai_cfg, "enable_web_search", False))
-        and not bool(getattr(hy_cfg, "enabled", False))
+        and not bool(hy_enabled)
     ):
         try:
             # Keep this payload minimal and safe. We do not inject full URLs.
