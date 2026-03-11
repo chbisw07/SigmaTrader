@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from app.ai.safety.payload_inspector import PayloadInspectionError, inspect_llm_payload
+from app.ai.safety.payload_inspector import PayloadInspectionError, inspect_llm_payload, sanitize_llm_payload
 from app.ai.safety.safe_summary_registry import (
     SafeSummaryError,
     summarize_tool_for_llm,
@@ -2678,6 +2678,14 @@ async def run_chat(
                     },
                     {"role": "user", "content": user_message},
                 ]
+                try:
+                    ws_messages2, ws_meta2 = sanitize_llm_payload(ws_messages)
+                    if isinstance(ws_messages2, list):
+                        ws_messages = ws_messages2  # type: ignore[assignment]
+                    if (ws_meta2.dropped_fields or ws_meta2.redacted_fields) and event_cb is not None:
+                        await event_cb({"type": "warning", "code": "pii_redacted", "message": "Redacted sensitive text before web search."})
+                except Exception:
+                    pass
 
                 timeouts = [float(llm_timeout_seconds), 60.0, 180.0]
                 ws_turn = None
@@ -2768,14 +2776,38 @@ async def run_chat(
     for _i in range(max_iters):
         # Enforce PII-safe outbound payload for remote providers (fail-closed).
         if is_remote_provider:
+            # Defense-in-depth: sanitize outbound messages (drop forbidden keys, redact secret-like patterns)
+            # before inspecting/sending them to a remote model.
+            try:
+                msgs2, meta2 = sanitize_llm_payload(messages)
+                if isinstance(msgs2, list):
+                    messages = msgs2  # keep sanitized copy for the rest of this run
+                if meta2.dropped_fields or meta2.redacted_fields:
+                    record_system_event(
+                        db,
+                        level="INFO",
+                        category="AI_ORCH",
+                        message="Outbound payload sanitized for remote provider.",
+                        correlation_id=corr,
+                        details={
+                            "event_type": "AI_PII_SANITIZED",
+                            "dropped_fields": meta2.dropped_fields[:50],
+                            "redacted_fields": meta2.redacted_fields[:50],
+                        },
+                    )
+            except Exception:
+                # Best-effort; inspection below is still fail-closed.
+                pass
             try:
                 inspect_llm_payload(_pii_inspection_payload(model=str(ai_cfg.model), messages=messages))
             except PayloadInspectionError as exc:
                 # Do not attempt a remote call if payload contains forbidden keys/patterns.
                 findings = [{"path": f.path, "kind": f.kind, "detail": f.detail} for f in (exc.findings or [])][:10]
+                details_s = ", ".join(sorted({str(f.get("detail") or "") for f in findings if str(f.get("detail") or "")}))[:6]
                 final_text = (
                     "Blocked sending sensitive data to a remote LLM by PII safety policy. "
                     "Use a local provider (Ollama/LM Studio) or remove sensitive content and retry."
+                    + (f" Detected: {details_s}." if details_s else "")
                 )
                 trace.final_outcome = {
                     "assistant_message": final_text,

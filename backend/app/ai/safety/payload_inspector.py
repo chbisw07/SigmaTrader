@@ -19,6 +19,12 @@ class PayloadInspectionError(RuntimeError):
         self.findings = findings
 
 
+@dataclass
+class PayloadSanitizationMeta:
+    dropped_fields: list[str]
+    redacted_fields: list[str]
+
+
 _FORBIDDEN_KEYS_EXACT = {
     # OAuth / session / secrets.
     "request_token",
@@ -119,6 +125,61 @@ def _walk(value: Any, *, path: str, findings: list[PayloadFinding]) -> None:
             findings.append(PayloadFinding(path=path, kind="pattern", detail=pat))
 
 
+def _sanitize_value(value: Any, *, path: str, meta: PayloadSanitizationMeta) -> Any:
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            ks = str(k)
+            p = f"{path}.{ks}" if path else ks
+            if _is_forbidden_key(ks):
+                meta.dropped_fields.append(p)
+                continue
+            out[ks] = _sanitize_value(v, path=p, meta=meta)
+        return out
+    if isinstance(value, list):
+        return [_sanitize_value(v, path=f"{path}[{i}]", meta=meta) for i, v in enumerate(value)]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_value(v, path=f"{path}[{i}]", meta=meta) for i, v in enumerate(value))
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return value
+        # If this string looks like JSON, sanitize structurally and re-serialize.
+        if (s.startswith("{") or s.startswith("[")) and len(s) <= 200_000:
+            try:
+                obj = json.loads(s)
+            except Exception:
+                obj = None
+            if obj is not None:
+                clean = _sanitize_value(obj, path=path, meta=meta)
+                try:
+                    return json.dumps(clean, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str)
+                except Exception:
+                    return value
+        # Redact secret/PII-like patterns in free text.
+        redacted = value
+        did = False
+        for rx in (_EMAIL_RE, _PHONE_RE, _JWT_RE, _API_KEY_LIKE_RE, _OPAQUE_SECRET_RE):
+            if rx.search(redacted):
+                did = True
+                redacted = rx.sub("[REDACTED]", redacted)
+        if did:
+            meta.redacted_fields.append(path or "$")
+        return redacted
+    return value
+
+
+def sanitize_llm_payload(payload: Any) -> tuple[Any, PayloadSanitizationMeta]:
+    """Best-effort sanitize an outbound payload so it can be sent to remote LLMs safely.
+
+    - Drops forbidden keys (tokens/session/account identifiers/etc.)
+    - Redacts email/phone/API-key/JWT/opaque-secret-like strings in free text.
+    - If a string looks like JSON, sanitizes it structurally to avoid leaking forbidden keys.
+    """
+    meta = PayloadSanitizationMeta(dropped_fields=[], redacted_fields=[])
+    return _sanitize_value(payload, path="", meta=meta), meta
+
+
 def inspect_llm_payload(payload: Any, *, fail_closed: bool = True) -> list[PayloadFinding]:
     findings: list[PayloadFinding] = []
     _walk(payload, path="", findings=findings)
@@ -130,4 +191,10 @@ def inspect_llm_payload(payload: Any, *, fail_closed: bool = True) -> list[Paylo
     return findings
 
 
-__all__ = ["PayloadFinding", "PayloadInspectionError", "inspect_llm_payload"]
+__all__ = [
+    "PayloadFinding",
+    "PayloadInspectionError",
+    "PayloadSanitizationMeta",
+    "inspect_llm_payload",
+    "sanitize_llm_payload",
+]
