@@ -341,6 +341,193 @@ def tavily_search_safe_summary(settings: Settings, raw_payload: Any) -> dict[str
         "count": len(out_rows),
     }
 
+def _normalize_quotes_map(payload: Any) -> dict[str, dict[str, Any]]:
+    """Normalize common broker quote payload shapes into a {symbol: quote_dict} mapping.
+
+    This MUST remain PII-safe: market data only.
+    """
+    p = payload
+    if isinstance(p, dict) and isinstance(p.get("data"), dict):
+        p = p.get("data") or {}
+
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(p, dict):
+        for k, v in p.items():
+            if not isinstance(v, dict):
+                continue
+            key = str(k or "").strip()
+            if not key:
+                # Try to recover from row-shaped payloads.
+                ex = str(v.get("exchange") or "").strip().upper()
+                ts = str(v.get("tradingsymbol") or v.get("symbol") or "").strip().upper()
+                if ex and ts:
+                    key = f"{ex}:{ts}"
+            if not key:
+                continue
+            out[key] = v
+        return out
+
+    if isinstance(p, list):
+        for r in p:
+            if not isinstance(r, dict):
+                continue
+            ex = str(r.get("exchange") or "").strip().upper()
+            ts = str(r.get("tradingsymbol") or r.get("symbol") or "").strip().upper()
+            if not (ex and ts):
+                continue
+            out[f"{ex}:{ts}"] = r
+    return out
+
+
+def quotes_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
+    quotes_map = _normalize_quotes_map(raw_payload)
+    symbols = sorted({s for s in quotes_map.keys() if s})
+
+    rows: list[dict[str, Any]] = []
+    for sym in symbols[:25]:
+        q = quotes_map.get(sym) or {}
+        ltp = _as_float(q.get("last_price")) or _as_float(q.get("ltp")) or _as_float(q.get("last")) or _as_float(q.get("price"))
+        close = None
+        if isinstance(q.get("ohlc"), dict):
+            close = _as_float((q.get("ohlc") or {}).get("close"))
+        close = close or _as_float(q.get("close")) or _as_float(q.get("prev_close")) or _as_float(q.get("previous_close"))
+        change = (float(ltp) - float(close)) if (ltp is not None and close is not None) else None
+        change_pct = (change / float(close) * 100.0) if (change is not None and close is not None and float(close) != 0.0) else None
+        rows.append(
+            {
+                "symbol": sym,
+                "ltp": float(ltp) if ltp is not None else None,
+                "prev_close": float(close) if close is not None else None,
+                "change": float(change) if change is not None else None,
+                "change_pct": float(change_pct) if change_pct is not None else None,
+            }
+        )
+
+    return {
+        "schema": "quotes_safe_summary.v1",
+        "as_of_ts": _now_iso(),
+        "symbols": symbols[:200],
+        "quotes": rows,
+        "count": len(rows),
+    }
+
+
+def ltp_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
+    # Most MCP servers reuse the same shape as get_quotes; keep it consistent.
+    out = quotes_safe_summary(settings, raw_payload)
+    out["schema"] = "ltp_safe_summary.v1"
+    return out
+
+
+def ohlc_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
+    quotes_map = _normalize_quotes_map(raw_payload)
+    symbols = sorted({s for s in quotes_map.keys() if s})
+
+    rows: list[dict[str, Any]] = []
+    for sym in symbols[:25]:
+        q = quotes_map.get(sym) or {}
+        ohlc = q.get("ohlc") if isinstance(q.get("ohlc"), dict) else {}
+        rows.append(
+            {
+                "symbol": sym,
+                "open": _as_float((ohlc or {}).get("open")) or _as_float(q.get("open")),
+                "high": _as_float((ohlc or {}).get("high")) or _as_float(q.get("high")),
+                "low": _as_float((ohlc or {}).get("low")) or _as_float(q.get("low")),
+                "close": _as_float((ohlc or {}).get("close")) or _as_float(q.get("close")),
+                "ltp": _as_float(q.get("last_price")) or _as_float(q.get("ltp")),
+            }
+        )
+
+    return {
+        "schema": "ohlc_safe_summary.v1",
+        "as_of_ts": _now_iso(),
+        "symbols": symbols[:200],
+        "ohlc": rows,
+        "count": len(rows),
+    }
+
+
+def historical_data_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
+    # Historical payloads can be large. Return compact summary + tail sample only.
+    p = raw_payload
+    if isinstance(p, dict) and isinstance(p.get("data"), (list, dict)):
+        p = p.get("data")
+    rows: list[dict[str, Any]] = []
+    if isinstance(p, list):
+        for r in p:
+            if isinstance(r, dict):
+                rows.append(r)
+            elif isinstance(r, (list, tuple)) and len(r) >= 5:
+                # Common OHLCV list format: [ts, o, h, l, c, v?]
+                rows.append({"ts": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5] if len(r) > 5 else None})
+    elif isinstance(p, dict) and isinstance(p.get("candles"), list):
+        for r in p.get("candles") or []:
+            if isinstance(r, dict):
+                rows.append(r)
+            elif isinstance(r, (list, tuple)) and len(r) >= 5:
+                rows.append({"ts": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5] if len(r) > 5 else None})
+
+    closes = [_as_float(r.get("close")) for r in rows if isinstance(r, dict)]
+    closes2 = [c for c in closes if c is not None]
+    last_close = closes2[-1] if closes2 else None
+    min_close = min(closes2) if closes2 else None
+    max_close = max(closes2) if closes2 else None
+
+    tail = []
+    for r in rows[-10:]:
+        if not isinstance(r, dict):
+            continue
+        tail.append(
+            {
+                "ts": str(r.get("ts") or r.get("date") or r.get("timestamp") or ""),
+                "open": _as_float(r.get("open")),
+                "high": _as_float(r.get("high")),
+                "low": _as_float(r.get("low")),
+                "close": _as_float(r.get("close")),
+                "volume": _as_float(r.get("volume")),
+            }
+        )
+
+    return {
+        "schema": "historical_data_safe_summary.v1",
+        "as_of_ts": _now_iso(),
+        "count": len(rows),
+        "stats": {"last_close": last_close, "min_close": min_close, "max_close": max_close},
+        "tail": tail,
+    }
+
+
+def search_instruments_safe_summary(settings: Settings, raw_payload: Any) -> dict[str, Any]:  # noqa: ARG001
+    p = raw_payload
+    if isinstance(p, dict) and isinstance(p.get("data"), list):
+        p = p.get("data") or []
+    elif isinstance(p, dict) and isinstance(p.get("data"), dict) and isinstance((p.get("data") or {}).get("instruments"), list):
+        p = (p.get("data") or {}).get("instruments") or []
+
+    rows: list[dict[str, Any]] = []
+    if isinstance(p, list):
+        for r in p[:20]:
+            if not isinstance(r, dict):
+                continue
+            ex = str(r.get("exchange") or "").strip().upper() or None
+            ts = str(r.get("tradingsymbol") or r.get("symbol") or "").strip().upper() or None
+            name = str(r.get("name") or "").strip() or None
+            seg = str(r.get("segment") or r.get("exchange_segment") or "").strip().upper() or None
+            if ex and ts:
+                sym = f"{ex}:{ts}"
+            else:
+                sym = ts or None
+            if not sym:
+                continue
+            rows.append({"symbol": sym, "name": name, "segment": seg})
+
+    return {
+        "schema": "search_instruments_safe_summary.v1",
+        "as_of_ts": _now_iso(),
+        "matches": rows,
+        "count": len(rows),
+    }
+
 
 Summarizer = Callable[[Settings, Any], dict[str, Any]]
 
@@ -350,6 +537,12 @@ _REGISTRY: dict[str, Summarizer] = {
     "get_positions": positions_safe_summary,
     "get_margins": margins_safe_summary,
     "get_orders": orders_safe_summary,
+    # Market data tools (read-only).
+    "get_quotes": quotes_safe_summary,
+    "get_ltp": ltp_safe_summary,
+    "get_ohlc": ohlc_safe_summary,
+    "get_historical_data": historical_data_safe_summary,
+    "search_instruments": search_instruments_safe_summary,
     # Internal tools
     "propose_trade_plan": propose_trade_plan_safe_summary,
     "execute_trade_plan": execute_trade_plan_safe_summary,

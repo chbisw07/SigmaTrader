@@ -3544,7 +3544,8 @@ async def run_chat(
                     tool_name=tc.name,
                     arguments=tc.arguments or {},
                     request_id=tc.tool_call_id,
-                    source="legacy_llm",
+                    # Treat remote providers as restricted-trust for LSG normalization + strict schema validation.
+                    source="remote" if is_remote_provider else "local",
                     mode="LEGACY_TOOLCALLING",
                 )
                 safe_args = redact_for_llm(tc.arguments or {})
