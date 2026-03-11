@@ -2663,10 +2663,30 @@ async def run_chat(
             include_sources = bool(getattr(settings, "remote_web_search_include_sources", True))
             live_access = bool(getattr(settings, "remote_web_search_live_access", True))
 
-            # Heuristic: only prefetch when user asks for "today/latest/news" or explicitly
-            # requests web search. This avoids unexpected extra cost.
+            # Heuristic: prefetch web context for queries that are likely time-sensitive or event-driven.
+            # This is intentionally conservative (cost control) but should still cover common cases
+            # like "why is X stock down" where fresh news context helps.
             um = str(user_message or "").lower()
-            wants_web = any(k in um for k in ("web search", "use web", "today", "latest", "news", "headline", "yesterday", "this week"))
+            explicit = any(k in um for k in ("web search", "use web", "search the web", "browse the web"))
+            timey = any(
+                k in um
+                for k in (
+                    "today",
+                    "latest",
+                    "recent",
+                    "currently",
+                    "now",
+                    "news",
+                    "headline",
+                    "yesterday",
+                    "this week",
+                    "this month",
+                )
+            )
+            market_event = any(k in um for k in ("war", "conflict", "attack", "strike", "sanction", "geopolit", "election", "budget"))
+            equity = any(k in um for k in ("stock", "share", "price", "earnings", "results", "quarter", "fy", "q1", "q2", "q3", "q4"))
+            whyish = any(k in um for k in ("why", "what happened", "reason", "since", "cause"))
+            wants_web = bool(explicit or timey or (equity and (whyish or market_event)))
             if wants_web:
                 ws_messages = [
                     {
@@ -2690,8 +2710,10 @@ async def run_chat(
                 timeouts = [float(llm_timeout_seconds), 60.0, 180.0]
                 ws_turn = None
                 ws_last: OpenAiChatError | None = None
+                used_timeouts: list[float] = []
                 for tmo in timeouts[:3]:
                     try:
+                        used_timeouts.append(float(tmo))
                         ws_turn = await openai_responses_plain(
                             api_key=toolcall_api_key,
                             model=str(ai_cfg.model),
@@ -2758,8 +2780,16 @@ async def run_chat(
                             "event_type": "AI_WEB_SEARCH_PREFETCH",
                             "domains_count": len(src_domains),
                             "chars": len(ws_turn.content.strip()),
+                            "timeout_attempts_sec": used_timeouts,
                         },
                     )
+                    trace.inputs_used["openai_web_search_prefetch"] = {
+                        "enabled": True,
+                        "domains_count": len(src_domains),
+                        "source_domains": src_domains[:25],
+                        "chars": len(ws_turn.content.strip()),
+                        "timeout_attempts_sec": used_timeouts,
+                    }
                 elif ws_last is not None:
                     record_system_event(
                         db,
@@ -2769,6 +2799,12 @@ async def run_chat(
                         correlation_id=corr,
                         details={"event_type": "AI_WEB_SEARCH_PREFETCH_FAILED", "error": str(ws_last)[:200]},
                     )
+                    trace.inputs_used["openai_web_search_prefetch"] = {
+                        "enabled": True,
+                        "failed": True,
+                        "error": str(ws_last)[:200],
+                        "timeout_attempts_sec": used_timeouts,
+                    }
         except Exception:
             # Best-effort only.
             pass
