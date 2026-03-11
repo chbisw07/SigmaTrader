@@ -18,6 +18,7 @@ _TOOL_DESC_HINTS: dict[str, str] = {
     ),
     "get_order_history": "Note: use this for order timeline/history; helpful for 'what did I do today' questions.",
     "get_trades": "Note: use this for executed trades/fills; helpful for 'today I bought/sold' questions.",
+    "tavily_search": "Note: use this for external web search (Tavily MCP). Prefer concise queries; cite source domains in answers.",
 }
 
 

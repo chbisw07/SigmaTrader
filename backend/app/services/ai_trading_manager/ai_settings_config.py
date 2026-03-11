@@ -85,6 +85,10 @@ def _env_defaults(settings: Settings) -> AiSettings:
             "allow_remote_account_digests": False,
             "rate_limits": {},
         },
+        tool_guardrails={
+            "tavily_max_calls_per_session": 10,
+            "tavily_warning_threshold": 8,
+        },
     )
 
 
@@ -208,11 +212,11 @@ def should_allow_execution_enable(config: AiSettings) -> tuple[bool, Optional[st
     flags = config.feature_flags
     kite = config.kite_mcp
     if not flags.kite_mcp_enabled:
-        return False, "Execution requires broker-truth (enable Kite MCP first)."
+        return False, "Execution requires broker-truth (enable Kite MCP in Settings → MCP & Tools first)."
     if not kite.server_url:
-        return False, "Kite MCP server URL is required before enabling execution."
+        return False, "Kite MCP server URL is required (configure it in Settings → MCP & Tools)."
     if kite.last_status != KiteMcpStatus.connected:
-        return False, "Kite MCP must be connected (run Test Connection) before enabling execution."
+        return False, "Kite MCP must be connected (run Test Connection in Settings → MCP & Tools) before enabling execution."
     return True, None
 
 

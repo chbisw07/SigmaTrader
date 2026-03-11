@@ -6,6 +6,11 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+# Hybrid two-model gateway is deprecated in the unified single-runtime architecture.
+# The behavior covered by this suite is replaced by trust-tier policies and approvals
+# (see test_ai_unified_trust_policy_approvals.py).
+pytestmark = pytest.mark.skip(reason="Hybrid LLM gateway deprecated (single assistant runtime).")
+
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine

@@ -77,6 +77,7 @@ class AiSettings(BaseModel):
     # Hybrid LLM (Local Security Gateway + Remote Reasoner). Default disabled for
     # backwards compatibility with the legacy OpenAI tool-calling loop.
     hybrid_llm: "HybridLlmConfig" = Field(default_factory=lambda: HybridLlmConfig())
+    tool_guardrails: "ToolGuardrailsConfig" = Field(default_factory=lambda: ToolGuardrailsConfig())
 
 
 class AiFeatureFlagsUpdate(BaseModel):
@@ -125,6 +126,7 @@ class AiSettingsUpdate(BaseModel):
     kite_mcp: Optional[KiteMcpConfigUpdate] = None
     llm_provider: Optional[LlmProviderConfigUpdate] = None
     hybrid_llm: Optional["HybridLlmConfigUpdate"] = None
+    tool_guardrails: Optional["ToolGuardrailsConfigUpdate"] = None
 
 
 class HybridLlmMode(str, Enum):
@@ -165,6 +167,17 @@ class HybridLlmConfigUpdate(BaseModel):
     allow_remote_account_digests: Optional[bool] = None
     remote_portfolio_detail_level: Optional[RemotePortfolioDetailLevel] = None
     rate_limits: Optional[Dict[str, Any]] = None
+
+
+class ToolGuardrailsConfig(BaseModel):
+    # External tool guardrails (session-scoped).
+    tavily_max_calls_per_session: int = Field(default=10, ge=0, le=10_000)
+    tavily_warning_threshold: int = Field(default=8, ge=0, le=10_000)
+
+
+class ToolGuardrailsConfigUpdate(BaseModel):
+    tavily_max_calls_per_session: Optional[int] = Field(default=None, ge=0, le=10_000)
+    tavily_warning_threshold: Optional[int] = Field(default=None, ge=0, le=10_000)
 
 
 class KiteMcpTestRequest(BaseModel):

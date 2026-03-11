@@ -9,7 +9,9 @@ import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 
-import { callKiteMcpTool, listKiteMcpTools, type KiteMcpTool } from '../../services/kiteMcp'
+import { callMcpTool, listMcpTools, type McpTool } from '../../services/mcpServers'
+
+type ServerOption = { id: string; label: string; enabled: boolean; configured: boolean }
 
 function tryParseJson(text: string): { ok: true; value: any } | { ok: false; error: string } {
   try {
@@ -23,8 +25,31 @@ function tryParseJson(text: string): { ok: true; value: any } | { ok: false; err
   }
 }
 
-export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
-  const [tools, setTools] = useState<KiteMcpTool[]>([])
+export function McpConsolePanel({
+  servers,
+  disabled,
+  defaultServerId,
+}: {
+  servers: ServerOption[]
+  disabled?: boolean
+  defaultServerId?: string
+}) {
+  const availableServers = useMemo(() => {
+    return (servers || []).filter((s) => Boolean(s.enabled && s.configured))
+  }, [servers])
+
+  const [serverId, setServerId] = useState<string>(() => {
+    const first = availableServers[0]?.id
+    return defaultServerId && availableServers.some((s) => s.id === defaultServerId)
+      ? defaultServerId
+      : first || ''
+  })
+
+  useEffect(() => {
+    if (!serverId && availableServers[0]?.id) setServerId(availableServers[0].id)
+  }, [availableServers, serverId])
+
+  const [tools, setTools] = useState<McpTool[]>([])
   const [toolsBusy, setToolsBusy] = useState(false)
   const [toolsError, setToolsError] = useState<string | null>(null)
 
@@ -40,10 +65,11 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
   }, [tools])
 
   const loadTools = async () => {
+    if (!serverId) return
     setToolsBusy(true)
     setToolsError(null)
     try {
-      const rows = await listKiteMcpTools()
+      const rows = await listMcpTools(serverId)
       setTools(rows)
       if (rows.length > 0 && !rows.some((t) => t.name === toolName)) {
         setToolName(rows[0].name)
@@ -57,12 +83,13 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
   }
 
   useEffect(() => {
-    // Lazy load only when user opens AI Settings; keep quiet.
+    if (!serverId) return
     void loadTools()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [serverId])
 
   const run = async () => {
+    if (!serverId) return
     setRunBusy(true)
     setRunError(null)
     setOutput(null)
@@ -73,7 +100,7 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
       return
     }
     try {
-      const res = await callKiteMcpTool({ name: toolName, arguments: parsed.value })
+      const res = await callMcpTool({ serverId, name: toolName, arguments: parsed.value })
       setOutput(res)
     } catch (e) {
       setRunError(e instanceof Error ? e.message : 'Tool call failed')
@@ -83,20 +110,40 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
   }
 
   return (
-    <Paper variant="outlined" sx={{ p: 1.5, mt: 1, bgcolor: 'background.default' }}>
-      <Typography variant="subtitle2">MCP Console</Typography>
+    <Paper sx={{ p: 2 }}>
+      <Typography variant="h6">Tool discovery & test console</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ pt: 0.5 }}>
         List tools and run `tools/call` with JSON arguments. Responses are shown verbatim.
       </Typography>
 
-      {toolsError && (
-        <Alert severity="warning" sx={{ mt: 1 }}>
-          {toolsError}
+      {availableServers.length === 0 && (
+        <Alert severity="info" sx={{ mt: 1 }}>
+          No enabled + configured MCP servers yet. Enable a server and configure its URL first.
         </Alert>
       )}
 
-      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', pt: 1 }}>
-        <Button size="small" variant="outlined" onClick={() => void loadTools()} disabled={disabled || toolsBusy}>
+      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', pt: 1.5 }} alignItems="center">
+        <TextField
+          label="Server"
+          select
+          size="small"
+          value={serverId}
+          onChange={(e) => setServerId(e.target.value)}
+          sx={{ minWidth: 240 }}
+          disabled={disabled || availableServers.length === 0}
+        >
+          {availableServers.length === 0 ? (
+            <MenuItem value="">(no servers)</MenuItem>
+          ) : (
+            availableServers.map((s) => (
+              <MenuItem key={s.id} value={s.id}>
+                {s.label}
+              </MenuItem>
+            ))
+          )}
+        </TextField>
+
+        <Button size="small" variant="outlined" onClick={() => void loadTools()} disabled={disabled || toolsBusy || !serverId}>
           {toolsBusy ? (
             <Stack direction="row" spacing={1} alignItems="center">
               <CircularProgress size={16} />
@@ -108,7 +155,13 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
         </Button>
       </Stack>
 
-      <Box sx={{ pt: 1 }}>
+      {toolsError && (
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          {toolsError}
+        </Alert>
+      )}
+
+      <Box sx={{ pt: 1.5 }}>
         <TextField
           label="Tool"
           select
@@ -116,7 +169,7 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
           value={toolName}
           onChange={(e) => setToolName(e.target.value)}
           fullWidth
-          disabled={disabled || toolOptions.length === 0}
+          disabled={disabled || toolOptions.length === 0 || !serverId}
         >
           {toolOptions.length === 0 ? (
             <MenuItem value="tools/list">(no tools)</MenuItem>
@@ -130,7 +183,7 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
         </TextField>
       </Box>
 
-      <Box sx={{ pt: 1 }}>
+      <Box sx={{ pt: 1.5 }}>
         <TextField
           label="Arguments (JSON object)"
           size="small"
@@ -139,14 +192,14 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
           value={argsText}
           onChange={(e) => setArgsText(e.target.value)}
           fullWidth
-          disabled={disabled}
-          placeholder='{}'
+          disabled={disabled || !serverId}
+          placeholder="{}"
           inputProps={{ style: { fontFamily: 'monospace' } }}
         />
       </Box>
 
-      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', pt: 1 }} alignItems="center">
-        <Button size="small" variant="contained" onClick={() => void run()} disabled={disabled || runBusy}>
+      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', pt: 1.5 }} alignItems="center">
+        <Button size="small" variant="contained" onClick={() => void run()} disabled={disabled || runBusy || !serverId}>
           {runBusy ? 'Running…' : 'Run tool'}
         </Button>
       </Stack>
@@ -158,7 +211,7 @@ export function KiteMcpConsolePanel({ disabled }: { disabled?: boolean }) {
       )}
 
       {output && (
-        <Paper variant="outlined" sx={{ p: 1, mt: 1, bgcolor: 'background.paper' }}>
+        <Paper variant="outlined" sx={{ p: 1, mt: 1.5, bgcolor: 'background.paper' }}>
           <Typography variant="body2" sx={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
             {JSON.stringify(output, null, 2)}
           </Typography>

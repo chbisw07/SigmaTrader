@@ -35,6 +35,7 @@ import ManageSearchIcon from '@mui/icons-material/ManageSearch'
 import ScienceIcon from '@mui/icons-material/Science'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
+import HandymanIcon from '@mui/icons-material/Handyman'
 import { NavLink } from 'react-router-dom'
 
 import { useHealth } from '../services/health'
@@ -80,6 +81,7 @@ const mainNavItems: NavItem[] = [
 const bottomNavItems: NavItem[] = [
   { label: 'Appearance', to: '/appearance', icon: <PaletteIcon /> },
   { label: 'AI Settings', to: '/settings?tab=ai', icon: <SmartToyIcon /> },
+  { label: 'MCP & Tools', to: '/settings?tab=mcp', icon: <HandymanIcon /> },
   { label: 'Settings', to: '/settings', icon: <SettingsIcon /> },
 ]
 

@@ -228,6 +228,33 @@ class AiTmChatMessage(Base):
     )
 
 
+class AiTmThreadState(Base):
+    __tablename__ = "ai_tm_thread_state"
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "thread_id", name="ux_ai_tm_thread_state_account_thread"),
+        Index("ix_ai_tm_thread_state_account_ts", "account_id", "updated_at"),
+        Index("ix_ai_tm_thread_state_user_ts", "user_id", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    state_json: Mapped[str] = mapped_column(Text(), nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class AiTmFile(Base):
     __tablename__ = "ai_tm_files"
 
@@ -623,6 +650,7 @@ class AiTmException(Base):
 __all__ = [
     "AiTmBrokerSnapshot",
     "AiTmChatMessage",
+    "AiTmThreadState",
     "AiTmDecisionTrace",
     "AiTmException",
     "AiTmIdempotencyRecord",

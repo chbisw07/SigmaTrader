@@ -45,11 +45,13 @@ def _enable_ai_provider() -> None:
 @pytest.fixture()
 def fake_kite_mcp_remote_quotes_schema(monkeypatch: pytest.MonkeyPatch):
     # Enable Kite MCP + hybrid gateway toggles (remote-only reasoner).
+    # Use a unique server_url to avoid cross-test contamination from the global tools cache.
+    server_url = "https://mcp.kite.trade/sse?test=remote_tool_arg_repair"
     resp = client.put(
         "/api/settings/ai",
         json={
             "feature_flags": {"kite_mcp_enabled": True},
-            "kite_mcp": {"server_url": "https://mcp.kite.trade/sse"},
+            "kite_mcp": {"server_url": server_url},
             "hybrid_llm": {
                 "enabled": True,
                 "mode": "REMOTE_ONLY",
@@ -101,6 +103,10 @@ def fake_kite_mcp_remote_quotes_schema(monkeypatch: pytest.MonkeyPatch):
             return FakeSession()
 
     mgr = FakeManager()
+    # Clear any cached tool lists for this URL (defensive).
+    from app.services.ai_toolcalling import tools_cache as _tools_cache
+
+    _tools_cache._CACHE.pop(server_url.strip().lower(), None)
     monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.kite_mcp_sessions", mgr)
     monkeypatch.setattr("app.services.ai_toolcalling.orchestrator.get_auth_session_id", lambda *a, **k: None)
     monkeypatch.setattr("app.api.kite_mcp.kite_mcp_sessions", mgr)
@@ -115,34 +121,28 @@ def test_remote_lsg_normalizes_symbols_to_instruments(monkeypatch: pytest.Monkey
     _enable_ai_provider()
 
     from app.services.ai_toolcalling import orchestrator as orch
-    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn, OpenAiToolCall
 
     calls = {"n": 0}
 
-    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
+    async def fake_openai_chat_with_tools(*, api_key, model, messages, tools, **kwargs):  # noqa: ANN001, ARG001
         calls["n"] += 1
         if calls["n"] == 1:
             # Intentionally use the common LLM key "symbols" instead of schema-key "instruments".
             return OpenAiAssistantTurn(
-                content=json.dumps(
-                    {
-                        "tool_requests": [
-                            {
-                                "request_id": "r1",
-                                "tool_name": "get_quotes",
-                                "args": {"symbols": ["INFY"], "exchange": "NSE"},
-                                "reason": "need current quote",
-                                "risk_tier": "LOW",
-                            }
-                        ]
-                    }
-                ),
-                tool_calls=[],
+                content="",
+                tool_calls=[
+                    OpenAiToolCall(
+                        tool_call_id="r1",
+                        name="get_quotes",
+                        arguments={"symbols": ["INFY"], "exchange": "NSE"},
+                    )
+                ],
                 raw={},
             )
-        return OpenAiAssistantTurn(content=json.dumps({"final_message": "OK"}), tool_calls=[], raw={})
+        return OpenAiAssistantTurn(content="OK", tool_calls=[], raw={})
 
-    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+    monkeypatch.setattr(orch, "openai_chat_with_tools", fake_openai_chat_with_tools)
 
     resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "What is INFY quote?"})
     assert resp.status_code == 200
@@ -155,35 +155,23 @@ def test_remote_fallback_includes_last_tool_error(monkeypatch: pytest.MonkeyPatc
     _enable_ai_provider()
 
     from app.services.ai_toolcalling import orchestrator as orch
-    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn
+    from app.services.ai_toolcalling.openai_toolcaller import OpenAiAssistantTurn, OpenAiToolCall
 
     calls = {"n": 0}
 
-    async def fake_openai_chat_plain(*, api_key, model, messages, **kwargs):  # noqa: ANN001, ARG001
+    async def fake_openai_chat_with_tools(*, api_key, model, messages, tools, **kwargs):  # noqa: ANN001, ARG001
         calls["n"] += 1
         if calls["n"] == 1:
             # Missing required args -> LSG invalid_args.
             return OpenAiAssistantTurn(
-                content=json.dumps(
-                    {
-                        "tool_requests": [
-                            {
-                                "request_id": "r1",
-                                "tool_name": "get_quotes",
-                                "args": {},
-                                "reason": "need quote",
-                                "risk_tier": "LOW",
-                            }
-                        ]
-                    }
-                ),
-                tool_calls=[],
+                content="",
+                tool_calls=[OpenAiToolCall(tool_call_id="r1", name="get_quotes", arguments={})],
                 raw={},
             )
         # Keep returning empty JSON so the orchestrator eventually hits the fallback.
-        return OpenAiAssistantTurn(content=json.dumps({}), tool_calls=[], raw={})
+        return OpenAiAssistantTurn(content="", tool_calls=[], raw={})
 
-    monkeypatch.setattr(orch, "openai_chat_plain", fake_openai_chat_plain)
+    monkeypatch.setattr(orch, "openai_chat_with_tools", fake_openai_chat_with_tools)
 
     resp = client.post("/api/ai/chat", json={"account_id": "default", "message": "What is INFY quote?"})
     assert resp.status_code == 200
@@ -191,4 +179,3 @@ def test_remote_fallback_includes_last_tool_error(monkeypatch: pytest.MonkeyPatc
     assert "get_quotes" in body["assistant_message"]
     assert "Missing required arg" in body["assistant_message"]
     assert body["assistant_message"] != "I couldn't complete that request right now."
-

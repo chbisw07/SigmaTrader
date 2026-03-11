@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends
 
 from ..core.config import Settings, get_settings
@@ -39,6 +41,7 @@ from . import (
     system_events,
     tv_alerts,
     kite_mcp,
+    mcp_servers,
     webhook,
     webhook_settings,
     zerodha,
@@ -64,10 +67,13 @@ def read_root(settings: Settings = Depends(get_settings)) -> dict[str, str]:
 def health_check(settings: Settings = Depends(get_settings)) -> dict[str, str]:
     """Basic health endpoint used by the frontend and monitoring."""
 
+    build_sha = str(os.getenv("ST_BUILD_SHA") or os.getenv("GIT_SHA") or "").strip()
     return {
         "status": "ok",
         "service": settings.app_name,
         "environment": settings.environment,
+        "version": str(settings.version or ""),
+        **({"build_sha": build_sha} if build_sha else {}),
     }
 
 
@@ -286,6 +292,13 @@ router.include_router(
     prefix="/api/mcp/kite",
     dependencies=[Depends(require_admin)],
     tags=["kite-mcp"],
+)
+
+router.include_router(
+    mcp_servers.router,
+    prefix="/api/mcp",
+    dependencies=[Depends(require_admin)],
+    tags=["mcp"],
 )
 
 router.include_router(

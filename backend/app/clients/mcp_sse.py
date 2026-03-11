@@ -40,9 +40,14 @@ async def _iter_sse_events(resp: httpx.Response) -> AsyncIterator[tuple[str, str
     event: str | None = None
     data_lines: list[str] = []
     async for line in resp.aiter_lines():
+        if line.startswith(":"):
+            # Comment/heartbeat.
+            continue
         if line == "":
-            if event is not None:
-                yield event, "\n".join(data_lines)
+            if data_lines:
+                # SSE spec: default event type is "message" when no explicit
+                # `event:` field is present.
+                yield (event or "message"), "\n".join(data_lines)
             event = None
             data_lines = []
             continue
@@ -76,9 +81,11 @@ class McpSseClient:
         client: httpx.AsyncClient | None = None,
         http2: bool = True,
         timeout_seconds: float = 30,
+        endpoint_required: bool = True,
     ) -> None:
         self.server_url = _normalize_sse_url(server_url)
         self._timeout_seconds = float(timeout_seconds)
+        self._endpoint_required = bool(endpoint_required)
         self._external_client = client is not None
         if client is not None:
             self._client = client
@@ -104,6 +111,7 @@ class McpSseClient:
         self._reader_task: asyncio.Task | None = None
 
         self._message_endpoint: str | None = None
+        self._http_post_only: bool = False
         self._connect_seq = 0
         self._next_id = 1
         self._pending: dict[int, asyncio.Future] = {}
@@ -168,6 +176,11 @@ class McpSseClient:
         self.initialize_result = None
 
     async def connect(self) -> None:
+        if self._http_post_only:
+            self._message_endpoint = self.server_url
+            self._connect_seq += 1
+            return
+
         # If the SSE stream died (Cloudflare idle timeout, network blip), the
         # reader task completes and we stop receiving responses. Treat that as
         # disconnected and transparently reconnect on the next request.
@@ -188,14 +201,44 @@ class McpSseClient:
         self._sse_stream_cm = stream_cm
         self._sse_response = resp
 
+        if not self._endpoint_required:
+            ct = str(resp.headers.get("content-type") or "").lower()
+            # Some MCP servers expose an HTTP JSON-RPC endpoint (POST) and do
+            # not support SSE (GET) at the same URL (e.g., return 405 on GET).
+            if resp.status_code != 200 or "text/event-stream" not in ct:
+                self._http_post_only = True
+                self._message_endpoint = self.server_url
+                self._connect_seq += 1
+                try:
+                    await resp.aclose()
+                except Exception:
+                    pass
+                try:
+                    await stream_cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                self._sse_response = None
+                self._sse_stream_cm = None
+                self._reader_task = None
+                return
+
         endpoint_fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
         async def _reader() -> None:
             try:
                 async for ev, data in _iter_sse_events(resp):
-                    if ev == "endpoint" and not endpoint_fut.done():
-                        endpoint_fut.set_result(data.strip())
-                        continue
+                    if not endpoint_fut.done():
+                        # Kite-style: `event: endpoint` with a relative POST endpoint.
+                        if (ev or "").lower() == "endpoint":
+                            endpoint_fut.set_result(data.strip())
+                            continue
+                        # Some servers may emit the endpoint as a default "message"
+                        # event (no explicit `event:` field).
+                        if (ev or "").lower() == "message":
+                            d = (data or "").strip()
+                            if d.startswith("/") or "sessionId=" in d or "session_id=" in d:
+                                endpoint_fut.set_result(d)
+                                continue
                     if ev != "message":
                         continue
                     try:
@@ -219,11 +262,19 @@ class McpSseClient:
         self._reader_task = asyncio.create_task(_reader())
 
         try:
+            # Some remote MCP servers do not emit an explicit `endpoint` event.
+            # When endpoint isn't required, keep this timeout short so requests
+            # don't block the API.
             endpoint_timeout = max(0.5, min(10.0, self._timeout_seconds))
+            if not self._endpoint_required:
+                endpoint_timeout = min(endpoint_timeout, 1.0)
             endpoint = await asyncio.wait_for(endpoint_fut, timeout=endpoint_timeout)
         except Exception as exc:
-            await self.disconnect()
-            raise McpError("Failed to establish MCP SSE session.") from exc
+            if self._endpoint_required:
+                await self.disconnect()
+                raise McpError("Failed to establish MCP SSE session.") from exc
+            # Fallback: treat the SSE URL itself as the message endpoint.
+            endpoint = self.server_url
 
         # Resolve relative endpoint against server origin.
         if endpoint.startswith("/"):
@@ -240,6 +291,11 @@ class McpSseClient:
 
         if not self._external_client:
             await self._client.aclose()
+
+    async def ensure_initialized(self) -> None:
+        await self.connect()
+        if self.initialize_result is None:
+            await self.initialize()
 
     def _alloc_id(self) -> int:
         rid = int(self._next_id)
@@ -267,8 +323,90 @@ class McpSseClient:
         if params is not None:
             payload["params"] = params
 
-        # MCP servers typically acknowledge with HTTP 202 and send the response on SSE.
-        await self._client.post(self._message_endpoint, json=payload)
+        accept_hdr = {"Accept": "application/json, text/event-stream"}
+
+        if self._http_post_only:
+            # POST-only mode: the server may respond with:
+            # - application/json JSON-RPC body (sync)
+            # - text/event-stream (SSE) containing the JSON-RPC response
+            async def _post_only() -> Any:
+                async with self._client.stream(
+                    "POST",
+                    self._message_endpoint,
+                    json=payload,
+                    headers=accept_hdr,
+                ) as post_resp:
+                    ct = str(post_resp.headers.get("content-type") or "").lower()
+                    if post_resp.status_code >= 400:
+                        body = ""
+                        try:
+                            body = (await post_resp.aread()).decode("utf-8", errors="replace")
+                        except Exception:
+                            body = ""
+                        raise McpError(f"MCP POST failed ({post_resp.status_code}){': ' + body if body else ''}")
+
+                    if "text/event-stream" in ct:
+                        async for ev, data in _iter_sse_events(post_resp):
+                            if (ev or "").lower() != "message":
+                                continue
+                            try:
+                                obj = json.loads(data)
+                            except Exception:
+                                continue
+                            if isinstance(obj, dict) and obj.get("id") == rid:
+                                if obj.get("error"):
+                                    raise McpError(str(obj["error"]))
+                                return obj.get("result")
+                        raise McpTimeoutError(f"MCP request timed out: {method}")
+
+                    # Non-SSE response: try JSON first, then raw text.
+                    raw = await post_resp.aread()
+                    try:
+                        obj_direct = json.loads(raw.decode("utf-8", errors="replace")) if raw else None
+                    except Exception:
+                        obj_direct = None
+                    if isinstance(obj_direct, dict):
+                        if obj_direct.get("id") == rid and (obj_direct.get("result") is not None or obj_direct.get("error")):
+                            if obj_direct.get("error"):
+                                raise McpError(str(obj_direct["error"]))
+                            return obj_direct.get("result")
+                        if obj_direct.get("result") is not None and obj_direct.get("id") in (rid, None):
+                            return obj_direct.get("result")
+                    return {"raw": raw.decode("utf-8", errors="replace") if raw else ""}
+
+            try:
+                res = await asyncio.wait_for(_post_only(), timeout=float(timeout_seconds or self._timeout_seconds))
+                self._pending.pop(rid, None)
+                return res
+            except Exception:
+                self._pending.pop(rid, None)
+                raise
+
+        # SSE session mode: servers typically ACK with HTTP 202 and send the
+        # response on the SSE `message` stream.
+        post_resp = await self._client.post(self._message_endpoint, json=payload, headers=accept_hdr)
+        if post_resp.status_code >= 400:
+            body = ""
+            try:
+                body = post_resp.text
+            except Exception:
+                body = ""
+            self._pending.pop(rid, None)
+            raise McpError(f"MCP POST failed ({post_resp.status_code}){': ' + body if body else ''}")
+
+        # Some servers return JSON-RPC responses directly even in SSE mode.
+        obj_direct: Any | None = None
+        try:
+            if post_resp.content and "application/json" in str(post_resp.headers.get("content-type") or "").lower():
+                obj_direct = post_resp.json()
+        except Exception:
+            obj_direct = None
+        if isinstance(obj_direct, dict):
+            if obj_direct.get("id") == rid and (obj_direct.get("result") is not None or obj_direct.get("error")):
+                self._pending.pop(rid, None)
+                if obj_direct.get("error"):
+                    raise McpError(str(obj_direct["error"]))
+                return obj_direct.get("result")
 
         try:
             obj = await asyncio.wait_for(

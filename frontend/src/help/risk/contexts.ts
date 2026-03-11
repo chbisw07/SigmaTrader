@@ -1241,8 +1241,8 @@ export const aiSettingsHelp: HelpContext = {
   id: 'settings-ai',
   title: 'AI settings help',
   overview: [
-    'This tab configures the AI Trading Manager subsystem (assistant UI, monitoring, and (future) broker-aware automation).',
-    'Broker is ultimate truth. SigmaTrader keeps an expected ledger and requires reconciliation for safety.',
+    'This tab configures AI provider settings and safety gating for execution (and future broker-aware automation).',
+    'MCP servers (Kite MCP and future tool servers) are configured separately under Settings → MCP & Tools.',
   ],
   sections: [
     {
@@ -1257,15 +1257,13 @@ export const aiSettingsHelp: HelpContext = {
               type: 'bullets',
               items: [
                 'AI assistant enabled: shows the assistant panel UI.',
-                'Kite MCP enabled: enables broker-truth access via a Kite MCP server (Phase 1 integration).',
-                'Monitoring enabled: enables background monitoring jobs (Phase 1+).',
                 'AI execution enabled: allows the subsystem to place orders (policy-gated and audit-logged).',
               ],
             },
             {
               type: 'callout',
               tone: 'warning',
-              text: 'Execution should remain OFF unless Kite MCP is connected and RiskGate/Orchestrator are fully wired.',
+              text: 'Execution should remain OFF unless Kite MCP is enabled + connected and your policy stack is fully wired.',
             },
           ],
         },
@@ -1276,32 +1274,6 @@ export const aiSettingsHelp: HelpContext = {
             {
               type: 'p',
               text: 'The kill switch disables all AI execution paths immediately, even if the execution flag is enabled.',
-            },
-          ],
-        },
-      ],
-    },
-    {
-      id: 'kite-mcp',
-      title: 'Kite MCP',
-      qas: [
-        {
-          id: 'kite-mcp-what',
-          question: 'What is Kite MCP?',
-          answer: [
-            {
-              type: 'p',
-              text: 'Kite MCP is a separate service that exposes broker data and broker actions via a controlled interface. SigmaTrader can test connectivity and cache capabilities.',
-            },
-          ],
-        },
-        {
-          id: 'kite-mcp-scopes',
-          question: 'What are scopes?',
-          answer: [
-            {
-              type: 'p',
-              text: 'Scopes describe the intended permission surface (read-only vs trade). SigmaTrader still enforces policy and may veto execution regardless of scope.',
             },
           ],
         },
@@ -1326,7 +1298,8 @@ export const aiSettingsHelp: HelpContext = {
   ],
   gettingStarted: [
     'Enable AI assistant to show the panel.',
-    'Configure Kite MCP server URL and run Test Connection.',
+    'Configure your AI provider and run a test prompt.',
+    'Configure Kite MCP in Settings → MCP & Tools and run Test Connection.',
     'Keep AI execution disabled until RiskGate and execution engine are fully integrated.',
   ],
   troubleshooting: [
@@ -1337,9 +1310,123 @@ export const aiSettingsHelp: HelpContext = {
         {
           type: 'bullets',
           items: [
-            'Kite MCP must be enabled and connected (run Test Connection).',
+            'Kite MCP must be enabled and connected (run Test Connection in Settings → MCP & Tools).',
             'If the kill switch is ON, execution remains blocked.',
-            'Check the Audit Log for the last Kite MCP test error.',
+            'Check System Events / audit logs for the last Kite MCP test error.',
+          ],
+        },
+      ],
+    },
+  ],
+}
+
+export const mcpToolsHelp: HelpContext = {
+  id: 'settings-mcp',
+  title: 'MCP & Tools help',
+  overview: [
+    'This tab manages MCP servers (tool integrations) as first-class resources: configure, enable/disable, test, authorize, and inspect.',
+    'MCP is the integration layer for current and future tool servers (broker MCP today; search/tools MCP later).',
+  ],
+  sections: [
+    {
+      id: 'mcp-servers',
+      title: 'Servers',
+      qas: [
+        {
+          id: 'mcp-servers-what',
+          question: 'What is an MCP server?',
+          answer: [
+            {
+              type: 'p',
+              text: 'An MCP server exposes tools (and optionally auth) over a transport such as remote SSE. SigmaTrader can discover tools and run test calls from the console.',
+            },
+          ],
+        },
+        {
+          id: 'mcp-kite-what',
+          question: 'What is Kite MCP used for?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Kite MCP provides broker-truth snapshots and authorization for broker access. SigmaTrader still applies policy gating and kill switches for execution.',
+            },
+          ],
+        },
+        {
+          id: 'mcp-tavily-ai',
+          question: 'How do I enable Tavily web search for the AI?',
+          answer: [
+            {
+              type: 'bullets',
+              items: [
+                'Enable the Tavily server and set its URL.',
+                'Turn on “Allow AI to use Tavily tools (external web search)”.',
+                'Then the AI reasoner (remote models use remote; local models use local) can call `tavily_search` when appropriate.',
+              ],
+            },
+          ],
+        },
+        {
+          id: 'mcp-scopes',
+          question: 'What do read-only vs trade scopes mean?',
+          answer: [
+            {
+              type: 'p',
+              text: 'Scopes describe intended permission surface (read vs write). SigmaTrader may still deny execution regardless of scope based on policy and safety gates.',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'mcp-console',
+      title: 'Console',
+      qas: [
+        {
+          id: 'mcp-console-what',
+          question: 'What is the tool console for?',
+          answer: [
+            {
+              type: 'p',
+              text: 'It lists tools (tools/list) and runs tools (tools/call) with JSON arguments. This is intended for integration testing and inspection.',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'mcp-advanced',
+      title: 'Advanced JSON',
+      qas: [
+        {
+          id: 'mcp-advanced-why',
+          question: 'Why is there an advanced JSON mode?',
+          answer: [
+            {
+              type: 'p',
+              text: 'It mirrors a simple mcp.json workflow for power users. You can paste LM Studio-style mcpServers (or VS Code-style servers) and apply in one step.',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  gettingStarted: [
+    'Enable Kite MCP, set the server URL, and run Test Connection.',
+    'Authorize Kite MCP if required.',
+    'Enable Tavily and allow AI use if you want external web search.',
+    'Use the tool console to list tools and run test calls.',
+  ],
+  troubleshooting: [
+    {
+      id: 'mcp-ts-auth',
+      question: 'I’m not authorized. What should I do?',
+      answer: [
+        {
+          type: 'bullets',
+          items: [
+            'Click Authorize on the Kite MCP card and complete the login flow.',
+            'Then click Refresh status to confirm Authorized.',
           ],
         },
       ],
@@ -1350,6 +1437,7 @@ export const aiSettingsHelp: HelpContext = {
 export const SETTINGS_HELP_BY_TAB = {
   broker: brokerSettingsHelp,
   ai: aiSettingsHelp,
+  mcp: mcpToolsHelp,
   risk: riskSettingsHelp,
   webhook: tradingViewWebhookHelp,
   market: marketConfigurationHelp,

@@ -15,8 +15,9 @@ from app.core.config import Settings, get_settings
 from app.core.logging import log_with_correlation
 from app.db.session import get_db
 from app.db.session import SessionLocal
-from app.schemas.ai_chat import AiChatRequest, AiChatResponse, AiToolCallRow
+from app.schemas.ai_chat import AiChatRequest, AiChatResumeRequest, AiChatResponse, AiToolCallRow
 from app.schemas.ai_trading_manager import AiTmAttachmentRef, AiTmMessage, AiTmMessageRole
+from app.models.ai_trading_manager import AiTmChatMessage
 from app.services.ai.active_config import get_active_config
 from app.services.ai.files_store import get_file_meta
 from app.services.ai_toolcalling.orchestrator import run_chat
@@ -87,6 +88,7 @@ async def ai_chat(
         db,
         settings,
         account_id=payload.account_id,
+        thread_id=payload.thread_id or "default",
         user_message=payload.message,
         authorization_message_id=auth_message_id,
         attachments=attachments_for_llm,
@@ -103,20 +105,26 @@ async def ai_chat(
         correlation_id=corr,
         attachments=attachments_for_thread,
     )
-    assistant_msg = AiTmMessage(
-        message_id=uuid4().hex,
-        role=AiTmMessageRole.assistant,
-        content=result.assistant_message,
-        created_at=datetime.now(UTC),
-        correlation_id=corr,
-        decision_id=result.decision_id,
-    )
     audit_store.append_chat_messages(
         db,
         user_id=None,
         account_id=payload.account_id,
         thread_id=payload.thread_id or "default",
-        messages=[user_msg, assistant_msg],
+        messages=(
+            [user_msg]
+            if result.approval_required is not None
+            else [
+                user_msg,
+                AiTmMessage(
+                    message_id=uuid4().hex,
+                    role=AiTmMessageRole.assistant,
+                    content=result.assistant_message,
+                    created_at=datetime.now(UTC),
+                    correlation_id=corr,
+                    decision_id=result.decision_id,
+                ),
+            ]
+        ),
     )
     thread = audit_store.get_thread(db, account_id=payload.account_id, thread_id=payload.thread_id or "default")
 
@@ -135,10 +143,109 @@ async def ai_chat(
             for t in result.tool_calls
         ],
         render_blocks=[],
+        approval_required=result.approval_required,
         attachments_used=[
             {"file_id": a.file_id, "summary_used": True} for a in (payload.attachments or [])
         ],
         thread=thread,
+    )
+
+
+@router.post("/chat/resume", response_model=AiChatResponse)
+async def ai_chat_resume(
+    payload: AiChatResumeRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_optional),
+) -> AiChatResponse:
+    corr = _correlation_id(request)
+    log_with_correlation(logger, request, logging.INFO, "ai.chat.resume_requested", account_id=payload.account_id)
+
+    # Validate that authorization_message_id references an existing user message in this thread.
+    msg = (
+        db.query(AiTmChatMessage)
+        .filter(
+            AiTmChatMessage.message_id == payload.authorization_message_id,
+            AiTmChatMessage.account_id == payload.account_id,
+            AiTmChatMessage.thread_id == payload.thread_id,
+        )
+        .one_or_none()
+    )
+    if msg is None or str(getattr(msg, "role", "")).lower() != "user":
+        raise HTTPException(status_code=400, detail="authorization_message_id must reference a user message in this thread.")
+
+    # Note: attachments are not re-sent on resume (approval flows are intended for tool-policy gates).
+    result = await run_chat(
+        db,
+        settings,
+        account_id=payload.account_id,
+        thread_id=payload.thread_id or "default",
+        user_message=str(getattr(msg, "content", "") or ""),
+        authorization_message_id=payload.authorization_message_id,
+        attachments=[],
+        ui_context={"page": "ai", "resume": True},
+        correlation_id=corr,
+    )
+
+    if result.approval_required is not None:
+        # Still blocked; return the approval payload without adding an assistant message.
+        thread = audit_store.get_thread(db, account_id=payload.account_id, thread_id=payload.thread_id or "default")
+        return AiChatResponse(
+            assistant_message="",
+            decision_id=result.decision_id,
+            tool_calls=[
+                AiToolCallRow(
+                    name=t.name,
+                    arguments=t.arguments,
+                    status=t.status,
+                    duration_ms=t.duration_ms,
+                    result_preview=t.result_preview,
+                    error=t.error,
+                )
+                for t in result.tool_calls
+            ],
+            render_blocks=[],
+            attachments_used=[],
+            thread=thread,
+            approval_required=result.approval_required,
+        )
+
+    assistant_msg = AiTmMessage(
+        message_id=uuid4().hex,
+        role=AiTmMessageRole.assistant,
+        content=result.assistant_message,
+        created_at=datetime.now(UTC),
+        correlation_id=corr,
+        decision_id=result.decision_id,
+    )
+    audit_store.append_chat_messages(
+        db,
+        user_id=int(user.id) if user is not None else None,
+        account_id=payload.account_id,
+        thread_id=payload.thread_id or "default",
+        messages=[assistant_msg],
+    )
+    thread = audit_store.get_thread(db, account_id=payload.account_id, thread_id=payload.thread_id or "default")
+
+    return AiChatResponse(
+        assistant_message=result.assistant_message,
+        decision_id=result.decision_id,
+        tool_calls=[
+            AiToolCallRow(
+                name=t.name,
+                arguments=t.arguments,
+                status=t.status,
+                duration_ms=t.duration_ms,
+                result_preview=t.result_preview,
+                error=t.error,
+            )
+            for t in result.tool_calls
+        ],
+        render_blocks=[],
+        attachments_used=[],
+        thread=thread,
+        approval_required=None,
     )
 
 
@@ -236,6 +343,7 @@ async def ai_chat_stream(
                     db2,
                     settings,
                     account_id=payload.account_id,
+                    thread_id=payload.thread_id or "default",
                     user_message=payload.message,
                     authorization_message_id=auth_message_id,
                     attachments=attachments_for_llm,
@@ -253,20 +361,26 @@ async def ai_chat_stream(
                     correlation_id=corr,
                     attachments=attachments_for_thread,
                 )
-                assistant_msg = AiTmMessage(
-                    message_id=uuid4().hex,
-                    role=AiTmMessageRole.assistant,
-                    content=result.assistant_message,
-                    created_at=datetime.now(UTC),
-                    correlation_id=corr,
-                    decision_id=result.decision_id,
-                )
                 audit_store.append_chat_messages(
                     db2,
                     user_id=None,
                     account_id=payload.account_id,
                     thread_id=payload.thread_id or "default",
-                    messages=[user_msg, assistant_msg],
+                    messages=(
+                        [user_msg]
+                        if result.approval_required is not None
+                        else [
+                            user_msg,
+                            AiTmMessage(
+                                message_id=uuid4().hex,
+                                role=AiTmMessageRole.assistant,
+                                content=result.assistant_message,
+                                created_at=datetime.now(UTC),
+                                correlation_id=corr,
+                                decision_id=result.decision_id,
+                            ),
+                        ]
+                    ),
                 )
 
                 # If the orchestrator didn't emit assistant deltas (common for
@@ -282,6 +396,7 @@ async def ai_chat_stream(
                         "type": "done",
                         "assistant_message": result.assistant_message,
                         "decision_id": result.decision_id,
+                        "approval_required": result.approval_required,
                     }
                 )
         except HTTPException as exc:
